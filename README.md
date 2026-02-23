@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/logo.svg" alt="Flyto2 AI" width="400">
+  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/logo.svg" alt="Flyto2 AI" width="120">
 </p>
+
+<h1 align="center">flyto-ai</h1>
 
 <h3 align="center">Natural language → executable automation workflows</h3>
 
@@ -50,6 +52,10 @@ flyto-ai chat "scrape the title from https://example.com"
 ```
 
 That's it. One install — includes OpenAI, Anthropic, Ollama, **412 automation modules**, browser automation, and self-learning blueprints.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
+</p>
 
 ## Why flyto-ai?
 

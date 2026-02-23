@@ -381,11 +381,19 @@ def _cmd_interactive(args):
                 label = "execute (run modules)" if mode == "execute" else "plan-only (YAML output)"
                 print("{}Switched to: {}{}".format(_DIM, label, _RESET))
                 continue
+            elif cmd == "/history":
+                msg_count = len(history) // 2
+                print("{}  {} message(s) in history{}".format(_DIM, msg_count, _RESET))
+                if history:
+                    for i in range(0, len(history), 2):
+                        user_msg = history[i]["content"][:60] if i < len(history) else ""
+                        print("  {}{}. {}{}".format(_DIM, i // 2 + 1, user_msg, _RESET))
+                continue
             elif cmd == "/help":
                 print()
                 print("  {}/clear{}   — Reset conversation".format(_CYAN, _RESET))
                 print("  {}/mode{}    — Toggle execute / plan-only".format(_CYAN, _RESET))
-                print("  {}/history{} — Show message count".format(_CYAN, _RESET))
+                print("  {}/history{} — Show conversation history".format(_CYAN, _RESET))
                 print("  {}/version{} — Show version info".format(_CYAN, _RESET))
                 print("  {}/exit{}    — Quit".format(_CYAN, _RESET))
                 print()
@@ -430,6 +438,9 @@ def _cmd_interactive(args):
         if result.ok:
             history.append({"role": "user", "content": user_input})
             history.append({"role": "assistant", "content": result.message})
+            # Keep last 40 messages (20 exchanges) to avoid unbounded growth
+            if len(history) > 40:
+                history[:] = history[-40:]
 
             # Show executed modules as compact list
             if result.execution_results:
@@ -531,6 +542,8 @@ def _cmd_serve(args):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    MAX_BODY_SIZE = 1_000_000  # 1 MB
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             if self.path not in ("/chat", "/api/chat"):
@@ -538,7 +551,14 @@ def _cmd_serve(args):
                 return
 
             length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            if length <= 0 or length > MAX_BODY_SIZE:
+                self._json_response(400, {"ok": False, "error": "Invalid Content-Length"})
+                return
+            try:
+                body = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, ValueError):
+                self._json_response(400, {"ok": False, "error": "Invalid JSON body"})
+                return
             message = body.get("message", "")
             if not message:
                 self._json_response(400, {"ok": False, "error": "Missing 'message' field"})
@@ -587,6 +607,8 @@ def _cmd_serve(args):
     except KeyboardInterrupt:
         print("\n  {}Shutting down.{}".format(_DIM, _RESET))
         server.server_close()
+    finally:
+        loop.close()
 
 
 if __name__ == "__main__":

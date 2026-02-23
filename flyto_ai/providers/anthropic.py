@@ -25,6 +25,7 @@ class AnthropicProvider(LLMProvider):
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._client = None
 
     async def chat(
         self,
@@ -34,9 +35,10 @@ class AnthropicProvider(LLMProvider):
         dispatch_fn: DispatchFn,
         max_rounds: int = 15,
     ) -> Tuple[str, List[Dict[str, Any]]]:
-        import anthropic
-
-        client = anthropic.AsyncAnthropic(api_key=self._api_key)
+        if self._client is None:
+            import anthropic
+            self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
+        client = self._client
 
         # Convert to Anthropic tool format
         anthropic_tools = [
@@ -74,7 +76,10 @@ class AnthropicProvider(LLMProvider):
 
             if not has_tool_use:
                 text_parts = [block.text for block in response.content if block.type == "text"]
-                return "\n".join(text_parts), tool_call_log
+                content = "\n".join(text_parts)
+                if response.stop_reason == "max_tokens":
+                    content += "\n\n[Note: Response was truncated due to token limit.]"
+                return content, tool_call_log
 
             claude_messages.append({"role": "assistant", "content": response.content})
 
@@ -117,11 +122,17 @@ class AnthropicProvider(LLMProvider):
 
             claude_messages.append({"role": "user", "content": tool_results})
 
-        # Force final answer
-        claude_messages.append({
-            "role": "user",
-            "content": [{"type": "text", "text": "Please summarize the results and provide your final answer."}],
-        })
+        # Force final answer — append to last user message to avoid consecutive user roles
+        summary_text = {"type": "text", "text": "Please summarize the results and provide your final answer."}
+        if claude_messages and claude_messages[-1]["role"] == "user":
+            content = claude_messages[-1]["content"]
+            if isinstance(content, list):
+                content.append(summary_text)
+            else:
+                claude_messages.append({"role": "assistant", "content": "I'll summarize now."})
+                claude_messages.append({"role": "user", "content": [summary_text]})
+        else:
+            claude_messages.append({"role": "user", "content": [summary_text]})
         response = await client.messages.create(
             model=self._model,
             system=system_prompt,

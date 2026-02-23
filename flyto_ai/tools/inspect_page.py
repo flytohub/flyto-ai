@@ -98,7 +98,7 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
             params={"headless": True},
             browser_sessions=sessions,
         )
-        if not launch_result.get("ok") and not launch_result.get("browser_session"):
+        if not launch_result.get("ok", False):
             return {"ok": False, "error": "Failed to launch browser: {}".format(
                 launch_result.get("error", "unknown")
             )}
@@ -108,7 +108,7 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
             params={"url": url, "wait_until": "domcontentloaded"},
             browser_sessions=sessions,
         )
-        if not goto_result.get("ok", True):
+        if not goto_result.get("ok", False):
             return {"ok": False, "error": "Failed to navigate: {}".format(
                 goto_result.get("error", "unknown")
             )}
@@ -126,7 +126,7 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
             browser_sessions=sessions,
         )
 
-        if not eval_result.get("ok", True):
+        if not eval_result.get("ok", False):
             return {"ok": False, "error": "Failed to inspect: {}".format(
                 eval_result.get("error", "unknown")
             )}

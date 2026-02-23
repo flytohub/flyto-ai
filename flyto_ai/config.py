@@ -1,9 +1,12 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Agent configuration."""
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,6 +70,17 @@ class AgentConfig:
             max_tokens=int(os.getenv("FLYTO_AI_MAX_TOKENS", "4096")),
             base_url=os.getenv("FLYTO_AI_BASE_URL") or None,
         )
+
+    def __post_init__(self):
+        """Validate base_url against SSRF allowlist if set."""
+        if self.base_url:
+            from flyto_ai.prompt.policies import validate_base_url
+            if not validate_base_url(self.base_url):
+                logger.warning(
+                    "base_url %s not in SSRF allowlist — clearing to prevent misuse",
+                    self.base_url,
+                )
+                self.base_url = None
 
     @property
     def resolved_model(self) -> str:

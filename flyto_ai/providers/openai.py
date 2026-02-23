@@ -27,13 +27,16 @@ class OpenAIProvider(LLMProvider):
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._base_url = base_url
+        self._client = None
 
     def _make_client(self):
-        import openai
-        kwargs = {"api_key": self._api_key}
-        if self._base_url:
-            kwargs["base_url"] = self._base_url
-        return openai.AsyncOpenAI(**kwargs)
+        if self._client is None:
+            import openai
+            kwargs = {"api_key": self._api_key}
+            if self._base_url:
+                kwargs["base_url"] = self._base_url
+            self._client = openai.AsyncOpenAI(**kwargs)
+        return self._client
 
     async def chat(
         self,
@@ -78,7 +81,10 @@ class OpenAIProvider(LLMProvider):
             choice = response.choices[0]
 
             if not choice.message.tool_calls:
-                return choice.message.content or "", tool_call_log
+                content = choice.message.content or ""
+                if choice.finish_reason == "length":
+                    content += "\n\n[Note: Response was truncated due to token limit.]"
+                return content, tool_call_log
 
             full_messages.append(choice.message)
 

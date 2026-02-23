@@ -64,12 +64,17 @@ def _blueprint_feedback(tool_calls: List[Dict[str, Any]], execution_results: Lis
     steps = []
     for i, r in enumerate(execution_results):
         mid = r.get("module_id", "")
+        if not mid:
+            continue  # skip entries with empty module_id
         params = r.get("arguments", {}).get("params", {})
         steps.append({
             "id": "step_{}".format(i + 1),
             "module": mid,
             "params": params,
         })
+
+    if len(steps) < 3:
+        return  # not enough meaningful steps to save
 
     workflow = {"name": user_message[:80], "steps": steps}
     categories = list({s["module"].split(".")[0] for s in steps if "." in s["module"]})
@@ -226,7 +231,10 @@ class Agent:
             _base = dispatch_fn
 
             async def _instrumented(func_name: str, func_args: dict) -> dict:
-                on_tool_call(func_name, func_args)
+                try:
+                    on_tool_call(func_name, func_args)
+                except Exception:
+                    pass  # callback failure must not break tool loop
                 return await _base(func_name, func_args)
 
             dispatch_fn = _instrumented

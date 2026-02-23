@@ -6,15 +6,30 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
-# Shared browser session store across tool calls within a chat session
+# Shared browser session store across tool calls within a chat session.
+# Keys are browser session IDs from browser.launch results.
+# Cleared via clear_browser_sessions() between independent chat sessions.
 _browser_sessions: Dict[str, Any] = {}
+
+
+def clear_browser_sessions() -> None:
+    """Clear the shared browser session store (call between independent chats)."""
+    _browser_sessions.clear()
+
+
+_cached_handler = None
+_handler_checked = False
 
 
 def _get_mcp_handler():
     """Lazily import mcp_handler to avoid circular imports.
 
-    Returns None if flyto-core is not installed.
+    Returns None if flyto-core is not installed. Result is cached.
     """
+    global _cached_handler, _handler_checked
+    if _handler_checked:
+        return _cached_handler
+    _handler_checked = True
     try:
         from core.mcp_handler import (
             TOOLS,
@@ -25,7 +40,7 @@ def _get_mcp_handler():
             execute_module,
             validate_params,
         )
-        return {
+        _cached_handler = {
             "TOOLS": TOOLS,
             "list_modules": list_modules,
             "search_modules": search_modules,
@@ -35,7 +50,8 @@ def _get_mcp_handler():
             "validate_params": validate_params,
         }
     except ImportError:
-        return None
+        _cached_handler = None
+    return _cached_handler
 
 
 def get_core_tool_defs():

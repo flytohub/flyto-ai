@@ -53,15 +53,25 @@ ALLOWED_MODULE_CATEGORIES = frozenset({
 
 
 def validate_base_url(url: str, policies: Dict[str, Any] = None) -> bool:
-    """Validate base_url against policy domain allowlist. HTTPS required."""
+    """Validate base_url against policy domain allowlist.
+
+    HTTPS required for remote hosts. localhost/127.0.0.1 are always allowed
+    (Ollama, vLLM, etc. run locally).
+    """
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower().rstrip(".")
         scheme = (parsed.scheme or "").lower()
 
-        if scheme != "https":
+        if not host or scheme not in ("http", "https"):
             return False
-        if not host:
+
+        # Local development: always allow localhost and loopback
+        if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+            return True
+
+        # Remote hosts: HTTPS required
+        if scheme != "https":
             return False
 
         allowed: Set[str] = set(

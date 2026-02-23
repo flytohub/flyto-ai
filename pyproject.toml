@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flyto-ai"
-version = "0.6.0"
-description = "AI agent that turns natural language into executable automation. 415 batteries included."
+version = "0.6.1"
+description = "AI agent that turns natural language into executable automation. 390+ batteries included."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -28,10 +28,12 @@ dependencies = [
 
 [project.optional-dependencies]
 lite = ["pyyaml>=6.0", "pydantic>=2.0.0"]
+serve = ["aiohttp>=3.8"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
 
 [project.scripts]
 flyto-ai = "flyto_ai.cli:main"
+flyto-ai-mcp = "flyto_ai.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/flytohub/flyto-ai"

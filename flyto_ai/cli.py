@@ -24,6 +24,7 @@ def main():
     chat_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
     chat_p.add_argument("--json", action="store_true", help="Output raw JSON")
     chat_p.add_argument("--plan", action="store_true", help="Only generate YAML workflow (don't execute)")
+    chat_p.add_argument("--max-rounds", type=int, help="Max tool call rounds (default: from config)")
     chat_p.add_argument("--webhook", "-w", help="POST result to this webhook URL")
 
     # flyto-ai version
@@ -42,6 +43,9 @@ def main():
     serve_p.add_argument("--model", "-m", help="Model name")
     serve_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
 
+    # flyto-ai mcp
+    sub.add_parser("mcp", help="Start MCP server (JSON-RPC 2.0 over STDIO)")
+
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
 
@@ -53,6 +57,8 @@ def main():
         _cmd_blueprints(args)
     elif args.command == "serve":
         _cmd_serve(args)
+    elif args.command == "mcp":
+        _cmd_mcp()
     elif args.command == "chat":
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
@@ -123,7 +129,7 @@ def _cmd_version():
         print("{}{}{}".format(color, line, _RESET))
 
     print()
-    print("  {}{}v{}{}  {}412 batteries included{}".format(
+    print("  {}{}v{}{}  {}390+ batteries included{}".format(
         _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
     ))
     print()
@@ -244,6 +250,12 @@ def _export_blueprints(blueprints):
     print("# Exported from flyto-ai — {} learned blueprint(s)".format(len(export)))
     print("# Submit as PR to https://github.com/flytohub/flyto-blueprint")
     print(yaml.dump(export, allow_unicode=True, sort_keys=False, default_flow_style=False))
+
+
+def _cmd_mcp():
+    """Start MCP server (JSON-RPC 2.0 over STDIO)."""
+    from flyto_ai.mcp_server import main as mcp_main
+    mcp_main()
 
 
 def _cmd_interactive(args):
@@ -504,6 +516,10 @@ def _cmd_interactive(args):
                 meta_parts.append("{} executed".format(len(result.execution_results)))
             if result.tool_calls:
                 meta_parts.append("{} tool calls".format(len(result.tool_calls)))
+            if result.usage and result.usage.total_tokens > 0:
+                meta_parts.append("{} tokens".format(result.usage.total_tokens))
+            if result.rounds_used > 0:
+                meta_parts.append("{} rounds".format(result.rounds_used))
             if meta_parts:
                 print()
                 print("  {}{}{}".format(_DIM, " \u00b7 ".join(meta_parts), _RESET))
@@ -549,6 +565,8 @@ def _cmd_chat(args):
         config.model = args.model
     if args.api_key:
         config.api_key = args.api_key
+    if getattr(args, "max_rounds", None):
+        config.max_tool_rounds = args.max_rounds
 
     agent = Agent(config=config)
     message = " ".join(args.message)
@@ -582,6 +600,14 @@ def _cmd_chat(args):
     elif result.ok:
         if not _streamed[0]:
             print(result.message)
+        # Show token usage + rounds as meta line
+        meta_parts = []
+        if result.usage and result.usage.total_tokens > 0:
+            meta_parts.append("{} tokens".format(result.usage.total_tokens))
+        if result.rounds_used > 0:
+            meta_parts.append("{} rounds".format(result.rounds_used))
+        if meta_parts:
+            print("{}{}{}".format(_DIM, " | ".join(meta_parts), _RESET), file=sys.stderr)
     else:
         print("Error: {}".format(result.error or result.message), file=sys.stderr)
         sys.exit(1)
@@ -603,7 +629,93 @@ def _post_webhook(url, result):
 
 
 def _cmd_serve(args):
-    """Start a lightweight HTTP server that accepts POST /chat to trigger the agent."""
+    """Start HTTP server. Uses aiohttp if installed, otherwise stdlib fallback."""
+    try:
+        import aiohttp  # noqa: F401
+        _cmd_serve_aiohttp(args)
+    except ImportError:
+        _cmd_serve_stdlib(args)
+
+
+def _cmd_serve_aiohttp(args):
+    """Async HTTP server using aiohttp — native async, supports concurrent requests."""
+    import aiohttp.web
+    from flyto_ai import Agent, AgentConfig
+
+    config = AgentConfig.from_env()
+    if args.provider:
+        config.provider = args.provider
+    if args.model:
+        config.model = args.model
+    if args.api_key:
+        config.api_key = args.api_key
+
+    agent = Agent(config=config)
+
+    MAX_BODY_SIZE = 1_000_000
+    _request_count = [0]
+    _CLEANUP_INTERVAL = 50
+
+    async def handle_chat(request):
+        _request_count[0] += 1
+        if _request_count[0] % _CLEANUP_INTERVAL == 0:
+            try:
+                from flyto_ai.tools.core_tools import clear_browser_sessions
+                clear_browser_sessions()
+            except Exception:
+                pass
+
+        try:
+            body = await request.json()
+        except Exception:
+            return aiohttp.web.json_response(
+                {"ok": False, "error": "Invalid JSON body"}, status=400,
+            )
+
+        from flyto_ai.models import ChatRequest
+        try:
+            req = ChatRequest.model_validate(body)
+        except Exception as e:
+            return aiohttp.web.json_response(
+                {"ok": False, "error": "Invalid request: {}".format(e)}, status=400,
+            )
+
+        history_dicts = None
+        if req.history:
+            history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
+
+        result = await agent.chat(
+            req.message,
+            history=history_dicts,
+            template_context=req.template_context,
+            mode=body.get("mode", "execute"),
+        )
+        return aiohttp.web.json_response(result.model_dump(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
+
+    async def handle_health(request):
+        return aiohttp.web.json_response({"ok": True, "status": "ready"})
+
+    app = aiohttp.web.Application(client_max_size=MAX_BODY_SIZE)
+    app.router.add_post("/chat", handle_chat)
+    app.router.add_post("/api/chat", handle_chat)
+    app.router.add_get("/health", handle_health)
+    app.router.add_get("/", handle_health)
+
+    print()
+    print("  {}{}Flyto2 AI Server{}  {}(aiohttp){}".format(_BOLD, _CYAN, _RESET, _DIM, _RESET))
+    print("  Listening on {}http://{}:{}{}".format(_GREEN, args.host, args.port, _RESET))
+    print()
+    print("  {}POST /chat{}  {}{\"message\": \"scrape example.com\"}{}".format(
+        _BOLD, _RESET, _DIM, _RESET,
+    ))
+    print("  {}GET  /health{}".format(_BOLD, _RESET))
+    print()
+
+    aiohttp.web.run_app(app, host=args.host, port=args.port, print=lambda *a: None)
+
+
+def _cmd_serve_stdlib(args):
+    """Synchronous HTTP server using stdlib — fallback when aiohttp not installed."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from flyto_ai import Agent, AgentConfig
 
@@ -689,7 +801,7 @@ def _cmd_serve(args):
 
     server = HTTPServer((args.host, args.port), Handler)
     print()
-    print("  {}{}Flyto2 AI Server{}".format(_BOLD, _CYAN, _RESET))
+    print("  {}{}Flyto2 AI Server{}  {}(stdlib){}".format(_BOLD, _CYAN, _RESET, _DIM, _RESET))
     print("  Listening on {}http://{}:{}{}".format(_GREEN, args.host, args.port, _RESET))
     print()
     print("  {}POST /chat{}  {}{\"message\": \"scrape example.com\"}{}".format(

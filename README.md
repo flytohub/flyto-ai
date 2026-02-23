@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/logo.svg" alt="Flyto2 AI" width="120">
+  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/logo.svg" alt="Flyto AI" width="120">
 </p>
 
 <h1 align="center">flyto-ai</h1>
@@ -7,7 +7,7 @@
 <h3 align="center">Natural language → executable automation workflows</h3>
 
 <p align="center">
-  <em>aider writes code. open-interpreter runs code. <strong>flyto-ai builds &amp; runs workflows.</strong></em>
+  <em>Most AI agents have the LLM write shell commands and pray. <strong>flyto-ai uses 390+ pre-built, schema-validated modules instead.</strong></em>
 </p>
 
 <p align="center">
@@ -18,17 +18,24 @@
 
 ---
 
-## What is flyto-ai?
+## The Problem
 
-An AI agent that turns natural language into **real results + reusable automation workflows**.
+AI agents like open-interpreter and OpenClaw have the LLM generate shell commands or raw code on every run. This means:
 
-Say "scrape the title from example.com" — the agent **executes it immediately** and gives you the result, plus a YAML workflow you can save, share, schedule, and run again.
+- **Non-deterministic** — the same prompt can produce different commands each time
+- **No validation** — wrong flags, hallucinated APIs, subtle bugs only found at runtime
+- **Not reusable** — each execution is ephemeral, nothing saved for next time
+- **Expensive** — LLM spends tokens figuring out *how* to execute, not just *what* to execute
+
+## The Fix
+
+flyto-ai flips the model: **the LLM never writes code.** It searches and selects from 390+ pre-built modules, fills in parameters (validated against schemas), and executes them deterministically. Every run produces a reusable YAML workflow.
 
 ```
 ❯ scrape the title from example.com
 
 Result: "Example Domain"
-
+```
 ```yaml
 name: Scrape Title
 params:
@@ -55,18 +62,42 @@ export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 
-One install, one command — interactive chat with **412 automation modules**, browser automation, and self-learning blueprints.
+One install, one command — interactive chat with **390+ automation modules**, browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
 </p>
+
+## How It's Different
+
+The core difference is **what the LLM does during execution**:
+
+| | open-interpreter / OpenClaw | flyto-ai |
+|---|---|---|
+| **LLM's job** | Write shell/Python code from scratch | Select modules + fill params |
+| **Execution** | `subprocess.run(llm_output)` | `execute_module("browser.extract", {validated_params})` |
+| **Validation** | None — errors at runtime | Schema validation before execution |
+| **Determinism** | Same prompt → different code | Same module + params → same result |
+| **Output** | One-time result | Result + reusable YAML workflow |
+| **Learning** | None | Self-learning blueprints (zero LLM replay) |
+| **Cost per replay** | Full LLM inference again | $0 (saved blueprint, no LLM) |
+
+### Benchmark: "Scrape the title from example.com"
+
+| | open-interpreter | flyto-ai |
+|---|---|---|
+| **Tokens used** | ~8K (writes Python + subprocess) | ~2K (search → schema → execute) |
+| **Execution time** | ~12s (LLM generates code + runs) | ~8s (LLM selects modules + runs) |
+| **Second run** | ~12s (same cost, regenerate code) | ~0.5s (blueprint replay, zero LLM) |
+| **Reusable output** | No | Yes (YAML workflow) |
+| **Deterministic** | No | Yes |
 
 ## Why flyto-ai?
 
 | | aider | open-interpreter | flyto-ai |
 |---|---|---|---|
 | **Output** | Code changes (git diff) | One-time code execution | **Results + reusable YAML workflows** |
-| **Tools** | Your codebase | Raw Python/JS/Shell | **412 pre-built modules** |
+| **Tools** | Your codebase | Raw Python/JS/Shell | **390+ pre-built modules** |
 | **Learns** | No | No | **Yes — self-learning blueprints** |
 | **Reusable** | Yes (code) | No (ephemeral) | **Yes (save, share, schedule)** |
 | **Webhook/API** | No | No | **Yes** |
@@ -153,20 +184,24 @@ steps:
     condition: "${{steps.check.status_code}} != 200"
 ```
 
-## 412 Batteries Included
+## 390+ Batteries Included
 
-Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 412 automation modules across 78 categories:
+Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 390+ automation modules across 55 categories:
 
 | Category | Modules | Examples |
 |----------|---------|---------|
-| Browser | 38 | launch, goto, click, type, extract, screenshot, wait |
-| HTTP / API | 15 | GET, POST, download, upload, GraphQL |
-| String | 12 | split, replace, template, regex, slugify |
-| Image | 10 | resize, crop, convert, watermark, compress |
-| File | 9 | read, write, copy, zip, CSV, JSON |
-| Database | 6 | query, insert, SQLite, PostgreSQL |
-| Notification | 5 | email, Slack, Telegram, webhook |
-| + 71 more | 317 | array, math, crypto, convert, flow, ... |
+| Browser | 39 | launch, goto, click, type, extract, screenshot, wait |
+| Atomic | 35 | reusable building-block operations |
+| Flow | 23 | conditionals, loops, branching, error handling |
+| Cloud | 14 | S3, GCS, cloud storage and APIs |
+| Data | 13 | JSON, CSV, parsing, transformation |
+| Array | 12 | filter, map, sort, flatten, unique |
+| String | 11 | split, replace, template, regex, slugify |
+| Productivity | 10 | email, calendar, document integrations |
+| Image | 9 | resize, crop, convert, watermark, compress |
+| HTTP / API | 9 | GET, POST, download, upload, GraphQL |
+| Notification | 9 | email, Slack, Telegram, webhook |
+| + 44 more | 200+ | database, crypto, docker, k8s, testing, ... |
 
 Browse available modules:
 
@@ -176,19 +211,19 @@ flyto-ai version   # Shows installed module count
 
 ## Self-Learning Blueprints
 
-The agent remembers what works. Good workflows are automatically saved as **blueprints** — reusable patterns that make future tasks faster.
+The agent remembers what works. Good workflows are automatically saved as **blueprints** — reusable patterns that make future tasks faster and free.
 
 ```
 First time:  "screenshot example.com" → 15s (discover modules, build from scratch)
-Second time: "screenshot another.com" → 3s  (reuse learned blueprint)
+Second time: "screenshot another.com" → 3s  (reuse learned blueprint, zero LLM cost)
 ```
 
-**When are blueprints saved?**
+How it works (closed-loop, no LLM involved):
 
-- Only after validation passes + execution succeeds
-- Trivial 1-2 step workflows are skipped
-- Each blueprint has a score based on success/fail ratio — bad ones decay naturally
-- Stored locally in `~/.flyto/blueprints.db`
+1. Execution succeeds with 3+ steps → auto-saved as blueprint (score 70)
+2. Blueprint reused successfully → score +5
+3. Blueprint fails → score -10
+4. Score < 10 → auto-retired, never suggested again
 
 ```bash
 flyto-ai blueprints                             # View learned blueprints
@@ -222,10 +257,10 @@ $ flyto-ai
  |_|   |_|\__, |\__\___/|_____|  /_/   \_\___|
            |___/
 
-  v0.4.4  Interactive Mode
-  Provider: openai  Model: gpt-4o  Tools: 412
+  v0.6.0  Interactive Mode
+  Provider: openai  Model: gpt-4o  Tools: 390+
 
-  ⏵⏵ execute · openai/gpt-4o · 412 tools
+  ⏵⏵ execute · openai/gpt-4o · 390+ tools
 ❯ scrape the title from example.com
 
   ○ browser.launch
@@ -236,7 +271,7 @@ $ flyto-ai
 
   3 executed · 5 tool calls
 
-  ⏵⏵ execute · openai/gpt-4o · 412 tools · 1 msgs
+  ⏵⏵ execute · openai/gpt-4o · 390+ tools · 1 msgs
 ❯ now also take a screenshot
 
 ❯ /mode
@@ -311,8 +346,8 @@ flyto-ai chat "..." --model <name>    # Any specific model
 User message
   → LLM (OpenAI / Anthropic / Ollama)
     → Function calling: search_modules, get_module_info, execute_module, ...
-      → 412 flyto-core modules
-      → Self-learning blueprints
+      → 390+ flyto-core modules (schema-validated, deterministic)
+      → Self-learning blueprints (closed-loop, zero LLM)
       → Browser page inspection
     → Execute mode: run modules, return results + YAML
     → Plan mode: YAML validation loop (auto-retry on errors)

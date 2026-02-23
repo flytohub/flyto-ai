@@ -8,6 +8,24 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Function calling quality ratings for known models.
+# Used by docs and model selection guidance.
+FUNCTION_CALLING_SUPPORT = {
+    # Cloud — excellent
+    "gpt-4o": "excellent",
+    "gpt-4o-mini": "good",
+    "claude-sonnet-4-5-20250929": "excellent",
+    "claude-haiku-4-5-20251001": "good",
+    # Ollama / local — varies
+    "qwen2.5:7b": "good",
+    "qwen2.5:14b": "good",
+    "qwen2.5-coder:7b": "good",
+    "llama3.1:8b": "fair",
+    "llama3.2": "poor",
+    "mistral": "fair",
+    "deepseek-r1:8b": "poor",
+}
+
 
 @dataclass
 class AgentConfig:

@@ -1,0 +1,177 @@
+# Copyright 2024 Flyto
+# Licensed under the Apache License, Version 2.0
+"""Tests for browser retry logic (Phase 3)."""
+import pytest
+
+from flyto_ai.tools.core_tools import (
+    _is_transient_error,
+    _is_session_dead,
+    dispatch_core_tool,
+    _dispatch_core_tool_inner,
+)
+
+
+class TestErrorClassification:
+    """Tests for transient/session-dead error classification."""
+
+    def test_timeout_is_transient(self):
+        assert _is_transient_error("Navigation timeout of 30000ms exceeded")
+
+    def test_timed_out_is_transient(self):
+        assert _is_transient_error("Request timed out after 30s")
+
+    def test_target_closed_is_transient(self):
+        assert _is_transient_error("Target closed")
+
+    def test_navigation_failed_is_transient(self):
+        assert _is_transient_error("Navigation failed because page crashed")
+
+    def test_context_destroyed_is_transient(self):
+        assert _is_transient_error("Execution context was destroyed")
+
+    def test_element_not_found_not_transient(self):
+        assert not _is_transient_error("Element not found: #submit-btn")
+
+    def test_invalid_selector_not_transient(self):
+        assert not _is_transient_error("Invalid selector: >>css=foo")
+
+    def test_module_not_found_not_transient(self):
+        assert not _is_transient_error("Module 'browser.foo' not found")
+
+    def test_target_closed_is_session_dead(self):
+        assert _is_session_dead("Target closed")
+
+    def test_session_closed_is_session_dead(self):
+        assert _is_session_dead("Session closed")
+
+    def test_browser_disconnected_is_session_dead(self):
+        assert _is_session_dead("browser disconnected")
+
+    def test_timeout_is_not_session_dead(self):
+        assert not _is_session_dead("Navigation timeout of 30000ms exceeded")
+
+
+@pytest.mark.asyncio
+async def test_transient_error_retried(monkeypatch):
+    """browser timeout → retry → succeeds on second attempt."""
+    call_count = [0]
+
+    async def mock_execute(module_id, params, context, browser_sessions):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return {"ok": False, "error": "Navigation timeout of 30000ms exceeded"}
+        return {"ok": True, "data": {"text": "Hello"}}
+
+    fake_handler = {
+        "execute_module": mock_execute,
+        "list_modules": lambda **kw: [],
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await dispatch_core_tool("execute_module", {
+        "module_id": "browser.goto",
+        "params": {"url": "https://example.com"},
+    })
+    assert result["ok"] is True
+    assert call_count[0] == 2
+
+
+@pytest.mark.asyncio
+async def test_permanent_error_not_retried(monkeypatch):
+    """'element not found' → no retry, return error immediately."""
+    call_count = [0]
+
+    async def mock_execute(module_id, params, context, browser_sessions):
+        call_count[0] += 1
+        return {"ok": False, "error": "Element not found: #submit-btn"}
+
+    fake_handler = {
+        "execute_module": mock_execute,
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await dispatch_core_tool("execute_module", {
+        "module_id": "browser.click",
+        "params": {"selector": "#submit-btn"},
+    })
+    assert result["ok"] is False
+    assert call_count[0] == 1  # No retry
+
+
+@pytest.mark.asyncio
+async def test_session_dead_relaunches(monkeypatch):
+    """'target closed' → relaunch browser → retry → success."""
+    calls = []
+
+    async def mock_execute(module_id, params, context, browser_sessions):
+        calls.append(module_id)
+        if module_id == "browser.launch":
+            return {"ok": True, "data": {"session_id": "new-session"}}
+        if len(calls) <= 2:
+            # First call to browser.extract fails
+            return {"ok": False, "error": "Target closed"}
+        return {"ok": True, "data": {"text": "Hello"}}
+
+    fake_handler = {
+        "execute_module": mock_execute,
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await dispatch_core_tool("execute_module", {
+        "module_id": "browser.extract",
+        "params": {"selector": "h1"},
+    })
+    assert result["ok"] is True
+    # Should have: 1) original call, 2) relaunch, 3) retry
+    assert "browser.launch" in calls
+    assert calls.count("browser.extract") == 2
+
+
+@pytest.mark.asyncio
+async def test_non_browser_not_retried(monkeypatch):
+    """string.uppercase error → no retry regardless of error message."""
+    call_count = [0]
+
+    async def mock_execute(module_id, params, context, browser_sessions):
+        call_count[0] += 1
+        return {"ok": False, "error": "timeout processing request"}
+
+    fake_handler = {
+        "execute_module": mock_execute,
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await dispatch_core_tool("execute_module", {
+        "module_id": "string.uppercase",
+        "params": {"text": "hello"},
+    })
+    assert result["ok"] is False
+    assert call_count[0] == 1  # No retry for non-browser modules
+
+
+@pytest.mark.asyncio
+async def test_relaunch_fail_returns_error(monkeypatch):
+    """If relaunch also fails, return the original error."""
+    calls = []
+
+    async def mock_execute(module_id, params, context, browser_sessions):
+        calls.append(module_id)
+        if module_id == "browser.launch":
+            return {"ok": False, "error": "Failed to launch browser"}
+        return {"ok": False, "error": "Target closed"}
+
+    fake_handler = {
+        "execute_module": mock_execute,
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await dispatch_core_tool("execute_module", {
+        "module_id": "browser.goto",
+        "params": {"url": "https://example.com"},
+    })
+    assert result["ok"] is False
+    assert "Target closed" in result["error"]
+    # Relaunch was attempted
+    assert "browser.launch" in calls
+    # No retry after failed relaunch — only 1 call to browser.goto
+    assert calls.count("browser.goto") == 1

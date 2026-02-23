@@ -67,7 +67,7 @@ async def test_toolless_chat_returns_response(monkeypatch):
     config = AgentConfig(provider="ollama", api_key="test")
 
     # Mock provider to avoid real LLM call
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
         return "Here is a sample workflow:\n```yaml\nname: test\nsteps: []\n```", []
 
     agent = Agent(config=config)

@@ -9,9 +9,126 @@ Layer C: GATES — quality checks, always on bottom
 Assembled by build_system_prompt(mode, has_tools, ...).
 """
 import logging
+import re
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Language detection — deterministic, no LLM involved
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Character ranges for deterministic CJK / Japanese / Korean detection
+# ---------------------------------------------------------------------------
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_HIRAGANA_KATAKANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff]")
+
+_TRAD_CHARS = frozenset(
+    "這個們對從與會國為來說學時經過還進當沒動種長點開請問題應該讓機關體書門車東號頭條區結電鄉親發間"
+    "幫搜尋資訊買賣圖檔確認設檢視訊號碼據處歷歲歐歸歡歲歎歌歷歸歡歲歎"
+    "網絡線練總統編緣績營聯職聽號獲環產畫當發監視覺記訪設許認識試語課請論證變讓負費資質較載辦過運達選遠邊還鄰鑰閃關難電響領頻題類顯風飛驗體點龍"
+)
+
+# langdetect code → human-readable label (non-CJK languages)
+_LANG_LABELS = {
+    "en": "English",
+    "fr": "French (fr)",
+    "de": "German (de)",
+    "es": "Spanish (es)",
+    "pt": "Portuguese (pt)",
+    "it": "Italian (it)",
+    "ru": "Russian (ru)",
+    "ar": "Arabic (ar)",
+    "th": "Thai (th)",
+    "vi": "Vietnamese (vi)",
+    "id": "Indonesian (id)",
+    "nl": "Dutch (nl)",
+    "pl": "Polish (pl)",
+    "tr": "Turkish (tr)",
+    "uk": "Ukrainian (uk)",
+    "hi": "Hindi (hi)",
+    "sv": "Swedish (sv)",
+    "da": "Danish (da)",
+    "fi": "Finnish (fi)",
+    "no": "Norwegian (no)",
+    "cs": "Czech (cs)",
+    "ro": "Romanian (ro)",
+    "hu": "Hungarian (hu)",
+    "el": "Greek (el)",
+    "he": "Hebrew (he)",
+    "bg": "Bulgarian (bg)",
+    "hr": "Croatian (hr)",
+    "sk": "Slovak (sk)",
+    "sl": "Slovenian (sl)",
+    "sr": "Serbian (sr)",
+    "lt": "Lithuanian (lt)",
+    "lv": "Latvian (lv)",
+    "et": "Estonian (et)",
+    "ms": "Malay (ms)",
+    "tl": "Filipino (tl)",
+    "bn": "Bengali (bn)",
+    "ta": "Tamil (ta)",
+    "te": "Telugu (te)",
+    "mr": "Marathi (mr)",
+    "af": "Afrikaans (af)",
+    "sw": "Swahili (sw)",
+    "ca": "Catalan (ca)",
+}
+
+
+def detect_language(text: str) -> str:
+    """Detect reply language from user message text.
+
+    Strategy (hybrid):
+    1. CJK / Japanese / Korean — **regex** (deterministic, short-text safe)
+    2. Everything else — ``langdetect`` (55+ languages, needs ~20 chars)
+    3. Fallback — ``"English"``
+
+    Returns a human-readable label like ``"English"``,
+    ``"Traditional Chinese (zh-TW)"``, ``"Japanese (ja)"``, etc.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return "English"
+
+    # --- Phase 1: deterministic CJK / JP / KR detection via regex ---
+    cjk_count = len(_CJK_RE.findall(stripped))
+    jp_count = len(_HIRAGANA_KATAKANA_RE.findall(stripped))
+    kr_count = len(_HANGUL_RE.findall(stripped))
+
+    # Japanese: has hiragana/katakana (even if mixed with kanji)
+    if jp_count > 0:
+        return "Japanese (ja)"
+
+    # Korean: has hangul
+    if kr_count > 0:
+        return "Korean (ko)"
+
+    # Chinese: significant CJK ratio (>10% of text)
+    total = len(stripped)
+    if total > 0 and cjk_count / total >= 0.1:
+        has_trad = any(c in _TRAD_CHARS for c in stripped)
+        return (
+            "Traditional Chinese (zh-TW)" if has_trad
+            else "Simplified Chinese (zh-CN)"
+        )
+
+    # --- Phase 2: non-CJK → langdetect (needs ~20+ chars for accuracy) ---
+    # Short Latin text is unreliable in langdetect; fall back to English.
+    if len(stripped) < 15:
+        return "English"
+
+    try:
+        from langdetect import detect
+        from langdetect import DetectorFactory
+        DetectorFactory.seed = 0  # reproducible results
+        code = detect(stripped)
+        return _LANG_LABELS.get(code, code.capitalize())
+    except Exception:
+        return "English"
 
 # ---------------------------------------------------------------------------
 # Layer A: POLICY — always enforced, never override
@@ -83,7 +200,8 @@ You EXECUTE tasks directly. Do NOT only plan.
 - NEVER guess selectors → run browser.snapshot FIRST, then pick selectors from real DOM
 - Return actual data (text, numbers). NEVER just return a URL.
 - Do NOT call browser.close — the runtime handles cleanup.
-- On session error: launch fresh session, retry ONCE, then stop with error"""
+- On session error: the runtime auto-retries transient failures (timeout, disconnect). \
+If still failing after retry, report the error clearly and stop."""
 
 LAYER_B_YAML = """\
 You are flyto-ai, a workflow generator with {module_count}+ modules.
@@ -157,6 +275,7 @@ def build_system_prompt(
     admin_addition: Optional[str] = None,
     has_tools: bool = True,
     mode: str = "execute",
+    reply_language: Optional[str] = None,
 ) -> str:
     """Build the full system prompt.
 
@@ -176,6 +295,10 @@ def build_system_prompt(
     mode : str
         ``"execute"`` (default) — run modules directly.
         ``"yaml"`` — only generate workflow YAML.
+    reply_language : str, optional
+        Forced reply language (e.g. ``"English"``).
+        When set, a hard override is prepended to the prompt.
+        Use :func:`detect_language` to compute this from user input.
     """
     if mode not in _VALID_MODES:
         logger.warning("Unknown mode %r, falling back to 'yaml'", mode)
@@ -192,6 +315,12 @@ def build_system_prompt(
         + "\n\n"
         + LAYER_C_GATES
     )
+
+    # Deterministic language override — prepend at very top
+    if reply_language:
+        prompt = "⛔ REPLY IN {}. All non-code text must be in {}.\n\n".format(
+            reply_language, reply_language
+        ) + prompt
 
     if context:
         prompt += _build_context_suffix(context)

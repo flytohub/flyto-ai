@@ -407,11 +407,39 @@ def _cmd_interactive(args):
 
         # ── Response ──────────────────────────────────────────
 
-        # Live tool progress
-        _tool_count = [0]
+        # Streaming state
+        _streamed_any = [False]  # did we receive at least one TOKEN?
+        _stream_buf = []         # collect streamed tokens for dedup
 
+        def _on_stream(event):
+            from flyto_ai.models import StreamEventType
+            if event.type == StreamEventType.TOKEN:
+                if not _streamed_any[0]:
+                    # First token replaces "Thinking..."
+                    sys.stdout.write("\r\033[K  ")
+                    _streamed_any[0] = True
+                sys.stdout.write(event.content)
+                sys.stdout.flush()
+                _stream_buf.append(event.content)
+            elif event.type == StreamEventType.TOOL_START:
+                label = event.tool_args.get("module_id", event.tool_name) if event.tool_args else event.tool_name
+                if event.tool_name == "execute_module" and event.tool_args:
+                    label = event.tool_args.get("module_id", event.tool_name)
+                else:
+                    label = event.tool_name or ""
+                # Clear current line and show tool indicator
+                sys.stdout.write("\r\033[K")
+                sys.stdout.write(
+                    "  {}\u25cb {}{}".format(_DIM, label, _RESET),
+                )
+                sys.stdout.flush()
+            elif event.type == StreamEventType.DONE:
+                if _streamed_any[0]:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+
+        # Live tool progress (fallback when streaming not emitting TOOL_START)
         def _on_tool_call(func_name, func_args):
-            _tool_count[0] += 1
             if func_name == "execute_module":
                 label = func_args.get("module_id", func_name)
             else:
@@ -430,10 +458,12 @@ def _cmd_interactive(args):
         result = loop.run_until_complete(agent.chat(
             user_input, history=history, mode=mode,
             on_tool_call=_on_tool_call,
+            on_stream=_on_stream,
         ))
 
-        # Clear progress line
-        sys.stdout.write("\r\033[K")
+        # Clear progress line (if no streaming happened)
+        if not _streamed_any[0]:
+            sys.stdout.write("\r\033[K")
 
         if result.ok:
             history.append({"role": "user", "content": user_input})
@@ -451,16 +481,17 @@ def _cmd_interactive(args):
                     print("  {} {}".format(icon, mid))
                 print()
 
-            # Show response (truncate verbose error dumps)
-            msg_lines = result.message.split("\n")
-            if len(msg_lines) > 20:
-                for line in msg_lines[:5]:
-                    print("  {}".format(line))
-                print("  {}... ({} lines truncated){}".format(
-                    _DIM, len(msg_lines) - 5, _RESET))
-            else:
-                for line in msg_lines:
-                    print("  {}".format(line))
+            # Show response — skip if already streamed
+            if not _streamed_any[0]:
+                msg_lines = result.message.split("\n")
+                if len(msg_lines) > 20:
+                    for line in msg_lines[:5]:
+                        print("  {}".format(line))
+                    print("  {}... ({} lines truncated){}".format(
+                        _DIM, len(msg_lines) - 5, _RESET))
+                else:
+                    for line in msg_lines:
+                        print("  {}".format(line))
 
             meta_parts = []
             if result.execution_results:
@@ -497,12 +528,35 @@ def _cmd_chat(args):
     agent = Agent(config=config)
     message = " ".join(args.message)
     mode = "yaml" if getattr(args, "plan", False) else "execute"
-    result = asyncio.run(agent.chat(message, mode=mode))
+
+    # Streaming callback for non-JSON output
+    _streamed = [False]
+
+    def _on_stream(event):
+        if args.json:
+            return  # JSON mode: no streaming output
+        from flyto_ai.models import StreamEventType
+        if event.type == StreamEventType.TOKEN:
+            sys.stdout.write(event.content)
+            sys.stdout.flush()
+            _streamed[0] = True
+        elif event.type == StreamEventType.TOOL_START:
+            label = event.tool_name or ""
+            if event.tool_name == "execute_module" and event.tool_args:
+                label = event.tool_args.get("module_id", label)
+            sys.stderr.write("{}\u25cb {}{}\n".format(_DIM, label, _RESET))
+        elif event.type == StreamEventType.DONE:
+            if _streamed[0]:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+    result = asyncio.run(agent.chat(message, mode=mode, on_stream=_on_stream))
 
     if args.json:
         print(result.model_dump_json(indent=2))
     elif result.ok:
-        print(result.message)
+        if not _streamed[0]:
+            print(result.message)
     else:
         print("Error: {}".format(result.error or result.message), file=sys.stderr)
         sys.exit(1)

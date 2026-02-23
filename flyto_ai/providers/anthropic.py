@@ -3,12 +3,23 @@
 """Anthropic provider (tool use loop)."""
 import json
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from flyto_ai.models import StreamCallback, StreamEvent, StreamEventType
 from flyto_ai.providers.base import DispatchFn, LLMProvider
 from flyto_ai.redaction import redact_args
 
 logger = logging.getLogger(__name__)
+
+
+def _fire(on_stream: Optional[StreamCallback], event: StreamEvent) -> None:
+    """Safely invoke the stream callback."""
+    if on_stream is None:
+        return
+    try:
+        on_stream(event)
+    except Exception:
+        pass
 
 
 class AnthropicProvider(LLMProvider):
@@ -34,6 +45,7 @@ class AnthropicProvider(LLMProvider):
         tools: List[Dict],
         dispatch_fn: DispatchFn,
         max_rounds: int = 15,
+        on_stream: Optional[StreamCallback] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         if self._client is None:
             import anthropic
@@ -70,7 +82,19 @@ class AnthropicProvider(LLMProvider):
             if anthropic_tools:
                 create_kwargs["tools"] = anthropic_tools
                 create_kwargs["tool_choice"] = {"type": "auto"}
-            response = await client.messages.create(**create_kwargs)
+
+            # ── Streaming path ──────────────────────────────────
+            if on_stream is not None:
+                async with client.messages.stream(**create_kwargs) as stream:
+                    async for text in stream.text_stream:
+                        _fire(on_stream, StreamEvent(
+                            type=StreamEventType.TOKEN,
+                            content=text,
+                        ))
+                    response = await stream.get_final_message()
+            else:
+                # ── Non-streaming path (unchanged) ──────────────
+                response = await client.messages.create(**create_kwargs)
 
             has_tool_use = any(block.type == "tool_use" for block in response.content)
 
@@ -79,6 +103,7 @@ class AnthropicProvider(LLMProvider):
                 content = "\n".join(text_parts)
                 if response.stop_reason == "max_tokens":
                     content += "\n\n[Note: Response was truncated due to token limit.]"
+                _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
                 return content, tool_call_log
 
             claude_messages.append({"role": "assistant", "content": response.content})
@@ -97,11 +122,23 @@ class AnthropicProvider(LLMProvider):
                     json.dumps(redact_args(func_args))[:200],
                 )
 
+                _fire(on_stream, StreamEvent(
+                    type=StreamEventType.TOOL_START,
+                    tool_name=func_name,
+                    tool_args=func_args,
+                ))
+
                 result = await dispatch_fn(func_name, func_args)
                 result_str = json.dumps(result, ensure_ascii=False, default=str)
 
                 if len(result_str) > 8000:
                     result_str = result_str[:8000] + "...(truncated)"
+
+                _fire(on_stream, StreamEvent(
+                    type=StreamEventType.TOOL_END,
+                    tool_name=func_name,
+                    tool_result=result if isinstance(result, dict) else {"raw": result_str[:500]},
+                ))
 
                 log_entry: Dict[str, Any] = {
                     "function": func_name,
@@ -141,4 +178,5 @@ class AnthropicProvider(LLMProvider):
             temperature=self._temperature,
         )
         text_parts = [block.text for block in response.content if block.type == "text"]
+        _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
         return "\n".join(text_parts), tool_call_log

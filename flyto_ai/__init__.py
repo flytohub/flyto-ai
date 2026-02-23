@@ -3,10 +3,15 @@
 """flyto-ai — Natural language automation agent."""
 from flyto_ai.agent import Agent
 from flyto_ai.config import AgentConfig
-from flyto_ai.models import ChatMessage, ChatRequest, ChatResponse
+from flyto_ai.models import ChatMessage, ChatRequest, ChatResponse, StreamEvent, StreamEventType
 
 __version__ = "0.5.7"
-__all__ = ["Agent", "AgentConfig", "ChatMessage", "ChatRequest", "ChatResponse", "__version__"]
+__all__ = [
+    "Agent", "AgentConfig",
+    "ChatMessage", "ChatRequest", "ChatResponse",
+    "StreamEvent", "StreamEventType",
+    "__version__",
+]
 
 
 def create_agent(

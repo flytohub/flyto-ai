@@ -3,6 +3,7 @@
 """Tests for three-layer system prompt architecture."""
 from flyto_ai.prompt.system_prompt import (
     build_system_prompt,
+    detect_language,
     LAYER_A_POLICY,
     LAYER_B_EXECUTE,
     LAYER_B_YAML,
@@ -203,3 +204,205 @@ class TestBackwardCompat:
 
     def test_valid_modes_unchanged(self):
         assert _VALID_MODES == {"execute", "yaml"}
+
+
+class TestDetectLanguage:
+    """Deterministic language detection from user message."""
+
+    # --- Basic single-language ---
+
+    def test_english(self):
+        assert detect_language("Help me search for Taylor Swift") == "English"
+
+    def test_english_with_code(self):
+        assert detect_language("Create a workflow for image.resize") == "English"
+
+    def test_traditional_chinese(self):
+        result = detect_language("幫我搜尋泰勒絲的相關資訊")
+        assert "Traditional Chinese" in result
+
+    def test_simplified_chinese(self):
+        result = detect_language("帮我搜索泰勒丝的信息")
+        assert "Chinese" in result
+
+    def test_japanese(self):
+        result = detect_language("テイラー・スウィフトを検索してください")
+        assert "Japanese" in result
+
+    def test_korean(self):
+        result = detect_language("테일러 스위프트를 검색해 주세요")
+        assert "Korean" in result
+
+    def test_french(self):
+        result = detect_language("Veuillez rechercher les dernières nouvelles sur le concert")
+        assert "French" in result
+
+    def test_spanish(self):
+        result = detect_language("Por favor busca las últimas noticias sobre el concierto")
+        assert "Spanish" in result
+
+    def test_german(self):
+        result = detect_language("Bitte suchen Sie nach den neuesten Nachrichten über das Konzert")
+        assert "German" in result
+
+    def test_russian(self):
+        result = detect_language("Пожалуйста, найдите последние новости о концерте Тейлор Свифт")
+        # langdetect may confuse Russian/Bulgarian (both Cyrillic) — either is acceptable
+        assert "Russian" in result or "Bulgarian" in result
+
+    # --- Mixed language (CJK + English) ---
+
+    def test_mixed_chinese_english_mostly_chinese(self):
+        """Chinese dominates → should detect Chinese."""
+        result = detect_language("幫我搜尋 Taylor Swift")
+        assert "Chinese" in result
+
+    def test_mixed_chinese_english_mostly_english(self):
+        """English dominates → should detect English."""
+        result = detect_language("Search for Taylor Swift on Google right now please")
+        assert result == "English"
+
+    def test_japanese_with_kanji(self):
+        """Japanese with kanji (CJK shared) → hiragana wins."""
+        result = detect_language("東京タワーの近くのレストランを探して")
+        assert "Japanese" in result
+
+    def test_japanese_kanji_only(self):
+        """Pure kanji without kana → detected as Chinese (expected ambiguity)."""
+        result = detect_language("東京大学")
+        assert "Chinese" in result  # no kana → regex falls to CJK
+
+    def test_korean_with_english(self):
+        result = detect_language("Taylor Swift 의 최신 앨범을 검색해 주세요")
+        assert "Korean" in result
+
+    # --- Short text edge cases ---
+
+    def test_single_chinese_char(self):
+        """Single character still gets detected."""
+        result = detect_language("好")
+        assert "Chinese" in result
+
+    def test_single_english_word(self):
+        """Short Latin text (<15 chars) → fallback to English."""
+        assert detect_language("hello") == "English"
+
+    def test_two_chinese_words(self):
+        result = detect_language("搜尋泰勒絲")
+        assert "Chinese" in result
+
+    def test_single_japanese_word(self):
+        result = detect_language("ありがとう")
+        assert "Japanese" in result
+
+    def test_single_korean_word(self):
+        result = detect_language("감사합니다")
+        assert "Korean" in result
+
+    # --- Code / URL heavy inputs ---
+
+    def test_mostly_url(self):
+        """URL-heavy input with English words → English."""
+        result = detect_language("Open https://www.google.com/search?q=test and extract results")
+        assert result == "English"
+
+    def test_code_snippet(self):
+        result = detect_language("Run browser.goto then browser.extract to get the data")
+        assert result == "English"
+
+    def test_chinese_with_url(self):
+        """Chinese instruction with URL → still Chinese."""
+        result = detect_language("幫我打開 https://google.com 然後擷取資料")
+        assert "Chinese" in result
+
+    # --- Edge cases ---
+
+    def test_empty_string(self):
+        assert detect_language("") == "English"
+
+    def test_whitespace_only(self):
+        assert detect_language("   ") == "English"
+
+    def test_numbers_only(self):
+        """Pure numbers → fallback to English."""
+        assert detect_language("12345") == "English"
+
+    def test_emoji_only(self):
+        """Emoji → fallback to English."""
+        result = detect_language("👍🎉🔥")
+        assert result == "English"
+
+    def test_punctuation_only(self):
+        result = detect_language("...")
+        assert result == "English"
+
+    # --- Determinism ---
+
+    def test_repeated_calls_same_result(self):
+        """Same input → same output, no randomness."""
+        text = "幫我搜尋泰勒絲的相關資訊"
+        results = [detect_language(text) for _ in range(10)]
+        assert len(set(results)) == 1
+
+
+class TestDetectLanguageEndToEnd:
+    """Full pipeline: detect_language → build_system_prompt → verify injection."""
+
+    def test_english_input_gets_english_prompt(self):
+        lang = detect_language("Help me search for Taylor Swift")
+        prompt = build_system_prompt(module_count=300, reply_language=lang)
+        assert "REPLY IN English" in prompt
+
+    def test_chinese_input_gets_chinese_prompt(self):
+        lang = detect_language("幫我搜尋泰勒絲的相關資訊")
+        prompt = build_system_prompt(module_count=300, reply_language=lang)
+        assert "REPLY IN Traditional Chinese" in prompt
+
+    def test_japanese_input_gets_japanese_prompt(self):
+        lang = detect_language("テイラー・スウィフトを検索してください")
+        prompt = build_system_prompt(module_count=300, reply_language=lang)
+        assert "REPLY IN Japanese" in prompt
+
+    def test_korean_input_gets_korean_prompt(self):
+        lang = detect_language("테일러 스위프트를 검색해 주세요")
+        prompt = build_system_prompt(module_count=300, reply_language=lang)
+        assert "REPLY IN Korean" in prompt
+
+    def test_override_appears_before_everything(self):
+        """Language override is the very first line of the prompt."""
+        lang = detect_language("幫我搜尋泰勒絲")
+        prompt = build_system_prompt(module_count=300, reply_language=lang)
+        first_line = prompt.split("\n")[0]
+        assert "⛔ REPLY IN" in first_line
+
+    def test_policy_still_present_with_override(self):
+        lang = detect_language("Search something")
+        prompt = build_system_prompt(module_count=300, reply_language=lang)
+        assert "POLICY" in prompt
+        assert "EXECUTION LOOP" in prompt
+        assert "QUALITY GATES" in prompt
+
+
+class TestReplyLanguageInjection:
+    """reply_language parameter injects hard override at prompt top."""
+
+    def test_english_override(self):
+        prompt = build_system_prompt(module_count=300, reply_language="English")
+        assert prompt.startswith("⛔ REPLY IN English")
+
+    def test_chinese_override(self):
+        prompt = build_system_prompt(
+            module_count=300,
+            reply_language="Traditional Chinese (zh-TW)",
+        )
+        assert "REPLY IN Traditional Chinese" in prompt
+
+    def test_no_override_when_none(self):
+        prompt = build_system_prompt(module_count=300, reply_language=None)
+        assert not prompt.startswith("⛔ REPLY IN")
+
+    def test_override_before_policy(self):
+        prompt = build_system_prompt(module_count=300, reply_language="English")
+        reply_pos = prompt.index("REPLY IN English")
+        policy_pos = prompt.index("POLICY")
+        assert reply_pos < policy_pos

@@ -1,9 +1,31 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Pydantic models for AI chat."""
-from typing import Any, Dict, List, Optional
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+
+class StreamEventType(str, Enum):
+    """Types of streaming events."""
+    TOKEN = "token"
+    TOOL_START = "tool_start"
+    TOOL_END = "tool_end"
+    DONE = "done"
+
+
+class StreamEvent(BaseModel):
+    """A single streaming event emitted during chat."""
+    type: StreamEventType
+    content: str = ""
+    tool_name: Optional[str] = None
+    tool_args: Optional[Dict[str, Any]] = None
+    tool_result: Optional[Dict[str, Any]] = None
+
+
+# Type alias for the stream callback
+StreamCallback = Callable[["StreamEvent"], None]
 
 
 class ChatMessage(BaseModel):

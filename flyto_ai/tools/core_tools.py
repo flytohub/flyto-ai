@@ -60,8 +60,88 @@ def get_core_tool_defs():
     return handler["TOOLS"] if handler else []
 
 
+# ---------------------------------------------------------------------------
+# Browser retry — transient error detection + smart retry at dispatch level
+# ---------------------------------------------------------------------------
+
+_TRANSIENT_PATTERNS = [
+    "timeout", "timed out", "target closed", "session closed",
+    "navigation failed", "browser disconnected",
+    "execution context was destroyed", "connection refused",
+    "net::err_", "page crashed",
+]
+
+# Patterns that indicate the browser session itself is dead (needs relaunch)
+_SESSION_DEAD_PATTERNS = [
+    "target closed", "session closed", "browser disconnected",
+    "browser has been closed", "browser.close",
+]
+
+
+def _is_transient_error(error_msg: str) -> bool:
+    """Check if an error message indicates a transient browser failure."""
+    lower = error_msg.lower()
+    return any(p in lower for p in _TRANSIENT_PATTERNS)
+
+
+def _is_session_dead(error_msg: str) -> bool:
+    """Check if an error message indicates the browser session is dead."""
+    lower = error_msg.lower()
+    return any(p in lower for p in _SESSION_DEAD_PATTERNS)
+
+
+async def _relaunch_browser() -> Dict[str, Any]:
+    """Attempt to relaunch a fresh browser session."""
+    handler = _get_mcp_handler()
+    if handler is None:
+        return {"ok": False, "error": "flyto-core not installed"}
+    try:
+        result = await handler["execute_module"](
+            module_id="browser.launch",
+            params={},
+            context=None,
+            browser_sessions=_browser_sessions,
+        )
+        return result
+    except Exception as e:
+        return {"ok": False, "error": "Relaunch failed: {}".format(e)}
+
+
 async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Dispatch a tool call to the flyto-core MCP handler."""
+    """Dispatch a tool call to the flyto-core MCP handler.
+
+    For browser.* modules, transient errors trigger one automatic retry.
+    If the session is dead, a fresh browser.launch is attempted before retrying.
+    """
+    result = await _dispatch_core_tool_inner(name, arguments)
+
+    # Smart retry — only for browser module execute_module calls
+    if (
+        name == "execute_module"
+        and isinstance(result, dict)
+        and not result.get("ok", True)
+    ):
+        module_id = arguments.get("module_id", "")
+        error_msg = str(result.get("error", ""))
+
+        if module_id.startswith("browser.") and _is_transient_error(error_msg):
+            logger.info("Browser transient error on %s, retrying: %s", module_id, error_msg[:100])
+
+            # Session dead → relaunch first
+            if _is_session_dead(error_msg):
+                relaunch = await _relaunch_browser()
+                if not relaunch.get("ok", False):
+                    logger.warning("Browser relaunch failed: %s", relaunch.get("error", ""))
+                    return result  # return original error
+
+            # Retry once
+            result = await _dispatch_core_tool_inner(name, arguments)
+
+    return result
+
+
+async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Core dispatch logic (no retry)."""
     handler = _get_mcp_handler()
     if handler is None:
         return {"ok": False, "error": "flyto-core not installed. Run: pip install flyto-core"}

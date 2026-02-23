@@ -48,7 +48,7 @@ async def test_ollama_chat_no_api_key_error(monkeypatch):
     agent = Agent(config=config)
 
     # Mock provider to avoid real LLM call
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
         return "Hello! I'm running on Ollama.", []
 
     monkeypatch.setattr(agent._provider, "chat", mock_chat)

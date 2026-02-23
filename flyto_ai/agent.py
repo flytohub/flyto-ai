@@ -5,9 +5,9 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.config import AgentConfig
-from flyto_ai.models import ChatResponse
+from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
-from flyto_ai.prompt.system_prompt import build_system_prompt
+from flyto_ai.prompt.system_prompt import build_system_prompt, detect_language
 from flyto_ai.providers.base import LLMProvider
 from flyto_ai.validation import extract_yaml_from_response, validate_workflow_steps
 
@@ -201,6 +201,7 @@ class Agent:
         template_context: Optional[Dict[str, Any]] = None,
         mode: str = "execute",
         on_tool_call=None,
+        on_stream: Optional[StreamCallback] = None,
     ) -> ChatResponse:
         """Run one chat turn: send message → tool loop → validation → response.
 
@@ -212,6 +213,10 @@ class Agent:
         on_tool_call : callable, optional
             ``on_tool_call(func_name, func_args)`` — called before each tool
             dispatch.  Use for progress display.
+        on_stream : callable, optional
+            ``on_stream(StreamEvent)`` — called for each streaming event
+            (tokens, tool start/end, done).  When set, providers enable
+            streaming for LLM responses.
         """
         if not self._config.api_key and self._config.provider != "ollama":
             return ChatResponse(
@@ -225,32 +230,53 @@ class Agent:
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
 
-        # Build dispatch (with optional progress callback)
+        # Build dispatch (with optional progress + stream callbacks)
         dispatch_fn = self._make_safe_dispatch()
-        if dispatch_fn and on_tool_call:
+        if dispatch_fn and (on_tool_call or on_stream):
             _base = dispatch_fn
 
             async def _instrumented(func_name: str, func_args: dict) -> dict:
-                try:
-                    on_tool_call(func_name, func_args)
-                except Exception:
-                    pass  # callback failure must not break tool loop
-                return await _base(func_name, func_args)
+                if on_tool_call:
+                    try:
+                        on_tool_call(func_name, func_args)
+                    except Exception:
+                        pass  # callback failure must not break tool loop
+                if on_stream:
+                    try:
+                        on_stream(StreamEvent(
+                            type=StreamEventType.TOOL_START,
+                            tool_name=func_name,
+                            tool_args=func_args,
+                        ))
+                    except Exception:
+                        pass
+                result = await _base(func_name, func_args)
+                if on_stream:
+                    try:
+                        on_stream(StreamEvent(
+                            type=StreamEventType.TOOL_END,
+                            tool_name=func_name,
+                            tool_result=result if isinstance(result, dict) else None,
+                        ))
+                    except Exception:
+                        pass
+                return result
 
             dispatch_fn = _instrumented
         has_tools = bool(self._tools and dispatch_fn)
 
-        # Build system prompt
+        # Build system prompt (with deterministic language detection)
+        reply_language = detect_language(message)
         system_prompt = self._system_prompt or build_system_prompt(
             module_count=300, context=template_context, has_tools=has_tools,
-            mode=mode,
+            mode=mode, reply_language=reply_language,
         )
 
         # Call LLM (toolless mode if no tools available)
         if has_tools:
-            response_content, tool_calls = await self._call_llm(messages, system_prompt, dispatch_fn)
+            response_content, tool_calls = await self._call_llm(messages, system_prompt, dispatch_fn, on_stream=on_stream)
         else:
-            response_content, tool_calls = await self._call_llm_toolless(messages, system_prompt)
+            response_content, tool_calls = await self._call_llm_toolless(messages, system_prompt, on_stream=on_stream)
 
         if not response_content:
             return ChatResponse(
@@ -327,12 +353,14 @@ class Agent:
         messages: List[Dict[str, Any]],
         system_prompt: str,
         dispatch_fn,
+        on_stream: Optional[StreamCallback] = None,
     ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """Call the LLM provider with tools. Returns (content, tool_call_log)."""
         try:
             return await self._provider.chat(
                 messages, system_prompt, self._tools,
                 dispatch_fn, self._config.max_tool_rounds,
+                on_stream=on_stream,
             )
         except Exception as e:
             logger.warning("LLM call failed: %s", e)
@@ -342,6 +370,7 @@ class Agent:
         self,
         messages: List[Dict[str, Any]],
         system_prompt: str,
+        on_stream: Optional[StreamCallback] = None,
     ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """Call the LLM provider without tools (pure conversation)."""
         try:
@@ -350,6 +379,7 @@ class Agent:
 
             return await self._provider.chat(
                 messages, system_prompt, [], _noop_dispatch, max_rounds=1,
+                on_stream=on_stream,
             )
         except Exception as e:
             logger.warning("LLM call failed: %s", e)

@@ -23,6 +23,7 @@ dependencies = [
     "anthropic>=0.20.0",
     "flyto-core[browser]>=2.12.18",
     "flyto-blueprint>=0.1.0",
+    "langdetect>=1.0.9",
 ]
 
 [project.optional-dependencies]

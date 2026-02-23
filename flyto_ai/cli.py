@@ -322,22 +322,24 @@ def _cmd_interactive(args):
         bot = "{}╰{}╯{}".format(_P4, "─" * (w - 2), _RESET)
         status = "  {}".format(_status_text())
         try:
-            # Pre-print: top, then bottom border, then status below box
-            print(top)
-            sys.stdout.write("{}\n".format(bot))
-            sys.stdout.write("{}\n".format(status))
-            sys.stdout.write("\033[2A\r")  # up 2 lines to input row
+            # Layout: top → (blank for input) → bottom → status
+            # Then cursor back up to the blank input line
+            print(top)                          # line A: ╭───╮
+            sys.stdout.write("\n")              # line B: (reserved for input)
+            sys.stdout.write("{}\n".format(bot))     # line C: ╰───╯
+            sys.stdout.write("{}\n".format(status))  # line D: status
+            sys.stdout.write("\033[3A\r")       # cursor → line B
             sys.stdout.flush()
             user_input = input(
                 "{}│{} {}❯{} ".format(_P2, _RESET, _CYAN, _RESET),
             ).strip()
         except (EOFError, KeyboardInterrupt):
-            sys.stdout.write("\n\033[K\033[1B\033[K\n")
+            sys.stdout.write("\n\033[K\033[1B\033[K\033[1B\033[K\n")
             print("{}Bye!{}".format(_DIM, _RESET))
             _save_history()
             break
 
-        # After Enter, cursor is on bottom border line. Skip past status.
+        # After Enter: cursor on line C (bottom border). Skip past D (status).
         sys.stdout.write("\033[1B\n")
         sys.stdout.flush()
 

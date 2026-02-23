@@ -5,7 +5,7 @@ from flyto_ai.agent import Agent
 from flyto_ai.config import AgentConfig
 from flyto_ai.models import ChatMessage, ChatRequest, ChatResponse
 
-__version__ = "0.4.7"
+__version__ = "0.4.8"
 __all__ = ["Agent", "AgentConfig", "ChatMessage", "ChatRequest", "ChatResponse", "__version__"]
 
 

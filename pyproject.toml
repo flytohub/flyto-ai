@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flyto-ai"
-version = "0.5.3"
+version = "0.5.4"
 description = "AI agent that turns natural language into executable automation. 415 batteries included."
 readme = "README.md"
 license = "Apache-2.0"

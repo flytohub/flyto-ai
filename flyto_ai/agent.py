@@ -24,6 +24,63 @@ def _init_blueprint_storage():
         pass
 
 
+def _blueprint_feedback(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str):
+    """Closed-loop blueprint learning. Pure code — zero LLM involvement.
+
+    1. If a blueprint was used (use_blueprint in tool_calls):
+       - All executions OK  → report_outcome(success=True)  → score +5
+       - Any execution FAIL → report_outcome(success=False) → score -10
+       - Score < 10 → auto-retired, never suggested again
+    2. If execution succeeded with 3+ steps (no blueprint):
+       - learn_from_execution() → save as verified blueprint (score 70)
+       - Duplicate workflow → boosted_existing → score +3
+    """
+    try:
+        from flyto_blueprint import get_engine
+    except ImportError:
+        return
+
+    engine = get_engine()
+    all_ok = all(r.get("ok", False) for r in execution_results)
+
+    # --- Phase 1: Report outcome if a blueprint was used ---
+    used_blueprint_id = None
+    for tc in tool_calls:
+        if tc.get("function") == "use_blueprint":
+            used_blueprint_id = tc.get("arguments", {}).get("blueprint_id", "")
+            break
+
+    if used_blueprint_id:
+        try:
+            engine.report_outcome(used_blueprint_id, success=all_ok)
+            logger.info("Blueprint outcome: %s %s", used_blueprint_id, "OK" if all_ok else "FAIL")
+        except Exception as e:
+            logger.debug("Blueprint report_outcome failed: %s", e)
+
+    # --- Phase 2: Learn new blueprint from successful execution ---
+    if not all_ok or len(execution_results) < 3:
+        return
+
+    steps = []
+    for i, r in enumerate(execution_results):
+        mid = r.get("module_id", "")
+        params = r.get("arguments", {}).get("params", {})
+        steps.append({
+            "id": "step_{}".format(i + 1),
+            "module": mid,
+            "params": params,
+        })
+
+    workflow = {"name": user_message[:80], "steps": steps}
+    categories = list({s["module"].split(".")[0] for s in steps if "." in s["module"]})
+
+    try:
+        engine.learn_from_execution(workflow=workflow, name=user_message[:80], tags=categories)
+        logger.info("Blueprint learned: %s (%d steps)", user_message[:40], len(steps))
+    except Exception as e:
+        logger.debug("Blueprint learn failed: %s", e)
+
+
 class Agent:
     """High-level AI agent that translates natural language to Flyto workflows.
 
@@ -242,6 +299,10 @@ class Agent:
             tc for tc in tool_calls
             if tc.get("function") == "execute_module"
         ]
+
+        # Closed-loop blueprint feedback (no LLM involved)
+        if mode == "execute" and execution_results:
+            _blueprint_feedback(tool_calls, execution_results, message)
 
         return ChatResponse(
             ok=True,

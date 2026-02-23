@@ -320,25 +320,24 @@ def _cmd_interactive(args):
         w = _term_width()
         top = "{}╭{}╮{}".format(_P1, "─" * (w - 2), _RESET)
         bot = "{}╰{}╯{}".format(_P4, "─" * (w - 2), _RESET)
+        status = "  {}".format(_status_text())
         try:
-            # Draw top border
+            # Pre-print: top, then bottom border, then status below box
             print(top)
-            # Pre-print status + bottom below, then cursor back up
-            sys.stdout.write("{}│{} {}\n".format(_P3, _RESET, _status_text()))
             sys.stdout.write("{}\n".format(bot))
+            sys.stdout.write("{}\n".format(status))
             sys.stdout.write("\033[2A\r")  # up 2 lines to input row
             sys.stdout.flush()
             user_input = input(
                 "{}│{} {}❯{} ".format(_P2, _RESET, _CYAN, _RESET),
             ).strip()
         except (EOFError, KeyboardInterrupt):
-            # Clear pre-printed lines and exit
             sys.stdout.write("\n\033[K\033[1B\033[K\n")
             print("{}Bye!{}".format(_DIM, _RESET))
             _save_history()
             break
 
-        # After Enter, cursor is on status line. Skip past bottom border.
+        # After Enter, cursor is on bottom border line. Skip past status.
         sys.stdout.write("\033[1B\n")
         sys.stdout.flush()
 

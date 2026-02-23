@@ -92,43 +92,20 @@ _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
 _CYAN = "\033[36m"
 
-# Box drawing
+# UI helpers
 import re as _re
+import shutil as _shutil
 _ANSI_RE = _re.compile(r'\033\[[0-9;]*m')
-_BOX_INNER = 50  # visible content width inside box
-_BOX_ACCENT = "\033[38;5;75m"   # bright blue for header box
-_BOX_BORDER = "\033[38;5;243m"  # subtle gray for input/response
+_BORDER = "\033[38;5;243m"  # subtle gray
 
 
-def _vlen(s):
-    """Visible length without ANSI escape codes."""
-    return len(_ANSI_RE.sub('', s))
+def _term_width():
+    return _shutil.get_terminal_size((80, 24)).columns
 
 
-def _box_top(label=None, color=_DIM):
-    w = _BOX_INNER + 2
-    if label:
-        lbl = " {} ".format(label)
-        dashes = w - 1 - _vlen(lbl)
-        return "  {}╭─{}{}{}╮{}".format(color, lbl, color, "─" * max(0, dashes), _RESET)
-    return "  {}╭{}╮{}".format(color, "─" * w, _RESET)
-
-
-def _box_bottom(color=_DIM):
-    return "  {}╰{}╯{}".format(color, "─" * (_BOX_INNER + 2), _RESET)
-
-
-def _box_mid(content="", color=_DIM):
-    """Line with left + right border: │ content   │"""
-    pad = _BOX_INNER - _vlen(content)
-    return "  {}│{} {}{}{}│{}".format(
-        color, _RESET, content, " " * max(0, pad), color, _RESET,
-    )
-
-
-def _box_left(content="", color=_DIM):
-    """Line with left border only: │ content"""
-    return "  {}│{} {}".format(color, _RESET, content)
+def _hr(color=_BORDER):
+    """Full-width horizontal rule."""
+    return "{}{}{}".format(color, "─" * _term_width(), _RESET)
 
 
 def _cmd_version():
@@ -283,33 +260,21 @@ def _cmd_interactive(args):
     history = []
     tool_count = len(agent._tools) if agent._tools else 0
 
-    # ── Welcome box ──────────────────────────────────────────
+    # ── Welcome ────────────────────────────────────────────────
     print()
-    print(_box_top(color=_BOX_ACCENT))
-    print(_box_mid("", _BOX_ACCENT))
     for i, line in enumerate(_LOGO_LINES):
-        colored = _GRADIENT[i % len(_GRADIENT)] + line.rstrip() + _RESET
-        print(_box_mid(colored, _BOX_ACCENT))
-    print(_box_mid("", _BOX_ACCENT))
-    print(_box_mid(
-        "{}{}v{}{}  {}Interactive Mode{}".format(_BOLD, _CYAN, __version__, _RESET, _DIM, _RESET),
-        _BOX_ACCENT,
+        color = _GRADIENT[i % len(_GRADIENT)]
+        print("  {}{}{}".format(color, line, _RESET))
+    print()
+    print("  {}{}v{}{}  {}Interactive Mode{}".format(
+        _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
     ))
-    print(_box_mid(
-        "{}Type a message to automate tasks. /help{}".format(_DIM, _RESET),
-        _BOX_ACCENT,
+    print("  {}Provider: {}{}{}  Model: {}{}{}  Tools: {}{}{}".format(
+        _DIM, _RESET, config.provider or "openai", _DIM,
+        _RESET, config.resolved_model, _DIM,
+        _RESET, tool_count, _RESET,
     ))
-    print(_box_mid("", _BOX_ACCENT))
-    print(_box_mid(
-        "{}Provider: {}{}{}  Model: {}{}{}  Tools: {}{}{}".format(
-            _DIM, _RESET, config.provider or "openai", _DIM,
-            _RESET, config.resolved_model, _DIM,
-            _RESET, tool_count, _RESET,
-        ),
-        _BOX_ACCENT,
-    ))
-    print(_box_mid("", _BOX_ACCENT))
-    print(_box_bottom(_BOX_ACCENT))
+    print()
 
     # readline support — up/down arrow history recall
     try:
@@ -335,24 +300,15 @@ def _cmd_interactive(args):
                 pass
 
     while True:
-        # ── Input box ────────────────────────────────────────
-        print()
-        print(_box_top(
-            label="{}{}>{}".format(_BOLD, _CYAN, _RESET),
-            color=_BOX_BORDER,
-        ))
+        # ── Input ─────────────────────────────────────────────
         try:
             user_input = input(
-                "  {}│{} ".format(_BOX_BORDER, _RESET),
+                "{}❯{} ".format(_CYAN, _RESET),
             ).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
-            print(_box_bottom(_BOX_BORDER))
-            print("\n{}  Bye!{}".format(_DIM, _RESET))
+            print("\n{}Bye!{}".format(_DIM, _RESET))
             _save_history()
             break
-
-        print(_box_bottom(_BOX_BORDER))
 
         if not user_input:
             continue
@@ -361,40 +317,35 @@ def _cmd_interactive(args):
         if user_input.startswith("/"):
             cmd = user_input.lower().split()[0]
             if cmd in ("/exit", "/quit", "/q"):
-                print("{}  Bye!{}".format(_DIM, _RESET))
+                print("{}Bye!{}".format(_DIM, _RESET))
                 _save_history()
                 break
             elif cmd in ("/clear", "/reset"):
                 history.clear()
-                print("  {}Conversation cleared.{}".format(_DIM, _RESET))
+                print("{}Conversation cleared.{}".format(_DIM, _RESET))
                 continue
             elif cmd == "/history":
-                print("  {}Messages in context: {}{}".format(_DIM, len(history), _RESET))
+                print("{}Messages in context: {}{}".format(_DIM, len(history), _RESET))
                 continue
             elif cmd == "/help":
                 print()
-                print(_box_top(label="{}help{}".format(_DIM, _RESET), color=_BOX_BORDER))
-                print(_box_mid("{}/clear{}   — Reset conversation".format(_CYAN, _RESET), _BOX_BORDER))
-                print(_box_mid("{}/history{} — Show message count".format(_CYAN, _RESET), _BOX_BORDER))
-                print(_box_mid("{}/version{} — Show version info".format(_CYAN, _RESET), _BOX_BORDER))
-                print(_box_mid("{}/exit{}    — Quit".format(_CYAN, _RESET), _BOX_BORDER))
-                print(_box_bottom(_BOX_BORDER))
+                print("  {}/clear{}   — Reset conversation".format(_CYAN, _RESET))
+                print("  {}/history{} — Show message count".format(_CYAN, _RESET))
+                print("  {}/version{} — Show version info".format(_CYAN, _RESET))
+                print("  {}/exit{}    — Quit".format(_CYAN, _RESET))
+                print()
                 continue
             elif cmd == "/version":
                 _cmd_version()
                 continue
             else:
-                print("  {}Unknown command: {}{}".format(_DIM, cmd, _RESET))
+                print("{}Unknown command: {}{}".format(_DIM, cmd, _RESET))
                 continue
 
-        # ── Response box ─────────────────────────────────────
+        # ── Response ──────────────────────────────────────────
         print()
-        print(_box_top(
-            label="{}flyto{}".format(_CYAN, _RESET),
-            color=_BOX_BORDER,
-        ))
 
-        # Live tool progress (left-border style)
+        # Live tool progress
         _tool_count = [0]
 
         def _on_tool_call(func_name, func_args):
@@ -405,12 +356,12 @@ def _cmd_interactive(args):
                 label = func_name
             sys.stdout.write("\r\033[K")
             sys.stdout.write(
-                "  {}│{} {}\u25cb {}{}".format(_BOX_BORDER, _RESET, _DIM, label, _RESET),
+                "  {}\u25cb {}{}".format(_DIM, label, _RESET),
             )
             sys.stdout.flush()
 
         sys.stdout.write(
-            "  {}│{} {}\u25cb Thinking...{}".format(_BOX_BORDER, _RESET, _DIM, _RESET),
+            "  {}\u25cb Thinking...{}".format(_DIM, _RESET),
         )
         sys.stdout.flush()
 
@@ -426,9 +377,9 @@ def _cmd_interactive(args):
             history.append({"role": "user", "content": user_input})
             history.append({"role": "assistant", "content": result.message})
 
-            # Print response lines with left border
+            # Print response
             for line in result.message.split("\n"):
-                print(_box_left(line, _BOX_BORDER))
+                print("  {}".format(line))
 
             # Metadata
             meta_parts = []
@@ -437,18 +388,14 @@ def _cmd_interactive(args):
             if result.tool_calls:
                 meta_parts.append("{} tool calls".format(len(result.tool_calls)))
             if meta_parts:
-                print(_box_left("", _BOX_BORDER))
-                print(_box_left(
-                    "{}{}{}".format(_DIM, " \u00b7 ".join(meta_parts), _RESET),
-                    _BOX_BORDER,
-                ))
+                print()
+                print("  {}{}{}".format(_DIM, " \u00b7 ".join(meta_parts), _RESET))
         else:
-            print(_box_left(
-                "{}Error: {}{}".format(_YELLOW, result.error or result.message, _RESET),
-                _BOX_BORDER,
+            print("  {}Error: {}{}".format(
+                _YELLOW, result.error or result.message, _RESET,
             ))
 
-        print(_box_bottom(_BOX_BORDER))
+        print()
 
 
 def _cmd_chat(args):

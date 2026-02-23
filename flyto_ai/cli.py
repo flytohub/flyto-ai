@@ -96,16 +96,16 @@ _CYAN = "\033[36m"
 import re as _re
 import shutil as _shutil
 _ANSI_RE = _re.compile(r'\033\[[0-9;]*m')
-_BORDER = "\033[38;5;243m"  # subtle gray
+
+# Purple gradient for input box (light → deep)
+_P1 = "\033[38;5;147m"  # light lavender — top
+_P2 = "\033[38;5;141m"  # medium purple — input │
+_P3 = "\033[38;5;135m"  # deeper purple — status │
+_P4 = "\033[38;5;99m"   # deep purple — bottom
 
 
 def _term_width():
     return _shutil.get_terminal_size((80, 24)).columns
-
-
-def _hr(color=_BORDER):
-    """Full-width horizontal rule."""
-    return "{}{}{}".format(color, "─" * _term_width(), _RESET)
 
 
 def _cmd_version():
@@ -300,11 +300,9 @@ def _cmd_interactive(args):
                 pass
 
     mode = "execute"
-    _UP1 = "\033[1A\r"  # cursor up 1 line + carriage return
-    _CLR = "\r\033[K"   # clear current line
 
-    def _status_line():
-        """Build colored status line shown below the prompt."""
+    def _status_text():
+        """Build colored status content."""
         sep = " {}\u00b7{} ".format(_DIM, _RESET)
         if mode == "execute":
             mode_part = "{}\u23f5\u23f5 execute{}".format(_GREEN, _RESET)
@@ -315,24 +313,34 @@ def _cmd_interactive(args):
         parts = [mode_part, provider_part, tools_part]
         if history:
             parts.append("{}{} msgs{}".format(_DIM, len(history) // 2, _RESET))
-        return "  {}".format(sep.join(parts))
+        return sep.join(parts)
 
     while True:
-        # ── Input (status line below prompt via cursor trick) ─
+        # ── Input box (purple gradient, full terminal width) ──
+        w = _term_width()
+        top = "{}╭{}╮{}".format(_P1, "─" * (w - 2), _RESET)
+        bot = "{}╰{}╯{}".format(_P4, "─" * (w - 2), _RESET)
         try:
-            # Print status on next line, then move cursor back up
-            sys.stdout.write("\n{}{}\r".format(_status_line(), _UP1))
+            # Draw top border
+            print(top)
+            # Pre-print status + bottom below, then cursor back up
+            sys.stdout.write("{}│{} {}\n".format(_P3, _RESET, _status_text()))
+            sys.stdout.write("{}\n".format(bot))
+            sys.stdout.write("\033[2A\r")  # up 2 lines to input row
             sys.stdout.flush()
             user_input = input(
-                "{}❯{} ".format(_CYAN, _RESET),
+                "{}│{} {}❯{} ".format(_P2, _RESET, _CYAN, _RESET),
             ).strip()
         except (EOFError, KeyboardInterrupt):
-            sys.stdout.write("{}\n{}Bye!{}".format(_CLR, _DIM, _RESET))
+            # Clear pre-printed lines and exit
+            sys.stdout.write("\n\033[K\033[1B\033[K\n")
+            print("{}Bye!{}".format(_DIM, _RESET))
             _save_history()
             break
 
-        # Clear the status line (cursor landed on it after Enter)
-        sys.stdout.write(_CLR)
+        # After Enter, cursor is on status line. Skip past bottom border.
+        sys.stdout.write("\033[1B\n")
+        sys.stdout.flush()
 
         if not user_input:
             continue

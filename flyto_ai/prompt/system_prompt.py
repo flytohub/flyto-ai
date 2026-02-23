@@ -149,10 +149,11 @@ to save the workflow for future reuse. This makes the system smarter over time.*
 - Launch browser ONCE per task with execute_module("browser.launch", {{}})
 - Pass session handle via context: {{"browser_session": "..."}} to ALL subsequent browser calls
 - Never spawn multiple sessions in parallel
-- **CRITICAL: NEVER guess CSS selectors. After browser.goto, ALWAYS run browser.snapshot \
-or inspect_page FIRST to discover the real DOM selectors before any click/type/extract.**
-- After browser.type, ALWAYS submit with browser.press(key="Enter") or browser.click
-- Use browser.extract / browser.snapshot to read results after navigation
+- **NEVER type into search engines. Go directly to the results URL**: \
+`browser.goto("https://www.google.com/search?q=...")`. Then `browser.extract` to read results.
+- **NEVER guess CSS selectors.** After browser.goto, ALWAYS run browser.snapshot \
+or inspect_page FIRST to discover the real DOM selectors before any click/type/extract.
+- Use browser.extract / browser.snapshot to read results — return actual data, NEVER just a link
 - Do NOT call browser.close — the runtime handles cleanup
 - Do NOT repeat the same action unnecessarily
 - On session error: stop, launch a fresh session, retry the last step ONCE. \

@@ -55,8 +55,8 @@ class TestIsModuleAllowed:
     def test_browser_allowed(self):
         assert is_module_allowed("browser.click") is True
 
-    def test_file_not_allowed(self):
-        assert is_module_allowed("file.read") is False
+    def test_file_allowed(self):
+        assert is_module_allowed("file.read") is True
 
     def test_api_allowed(self):
         assert is_module_allowed("api.get") is True

@@ -87,6 +87,8 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
     from flyto_ai.tools.core_tools import _get_mcp_handler
 
     handler = _get_mcp_handler()
+    if not handler:
+        return {"ok": False, "error": "flyto-core not installed. Run: pip install flyto-core"}
     execute = handler["execute_module"]
     sessions: Dict[str, Any] = {}
 

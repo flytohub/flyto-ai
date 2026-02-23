@@ -101,11 +101,16 @@ class OpenAIProvider(LLMProvider):
                 if len(result_str) > 8000:
                     result_str = result_str[:8000] + "...(truncated)"
 
-                tool_call_log.append({
-                    "tool": func_name,
-                    "args": redact_args(func_args),
+                log_entry: Dict[str, Any] = {
+                    "function": func_name,
+                    "arguments": func_args,
                     "result_preview": result_str[:500],
-                })
+                }
+                # Structured result for execute_module tracking
+                if func_name == "execute_module":
+                    log_entry["module_id"] = func_args.get("module_id", "")
+                    log_entry["ok"] = result.get("ok", False) if isinstance(result, dict) else False
+                tool_call_log.append(log_entry)
 
                 full_messages.append({
                     "role": "tool",

@@ -50,7 +50,7 @@ class AgentConfig:
                 api_key = os.getenv("OPENAI_API_KEY", "")
                 if api_key and not provider:
                     provider = "openai"
-            if not api_key:
+            if not api_key and provider != "openai":
                 api_key = os.getenv("ANTHROPIC_API_KEY", "")
                 if api_key and not provider:
                     provider = "anthropic"

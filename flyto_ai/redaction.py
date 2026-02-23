@@ -3,17 +3,21 @@
 """Sensitive key detection and log redaction."""
 from typing import Any
 
-_SENSITIVE_KEYWORDS = frozenset({
+_SENSITIVE_SUBSTRINGS = frozenset({
     "password", "passwd", "api_key", "apikey", "token", "secret",
-    "credential", "authorization", "auth", "bearer", "cookie",
+    "credential", "authorization", "bearer", "cookie",
     "access_token", "refresh_token", "session_token",
 })
 
+_SENSITIVE_EXACT = frozenset({"auth"})
+
 
 def is_sensitive_key(key: str) -> bool:
-    """Check if a key name looks sensitive (partial match)."""
+    """Check if a key name looks sensitive."""
     lower = key.lower()
-    return any(kw in lower for kw in _SENSITIVE_KEYWORDS)
+    if lower in _SENSITIVE_EXACT:
+        return True
+    return any(kw in lower for kw in _SENSITIVE_SUBSTRINGS)
 
 
 def redact_args(obj: Any) -> Any:

@@ -63,6 +63,7 @@ class SessionStore:
             self._evict_oldest(user_id)
         self._sessions[session_id] = []
         self._owners[session_id] = user_id
+        self._timestamps[session_id] = time.time()
 
     def get_messages(self, session_id: str) -> List[ChatMessage]:
         return self._sessions.get(session_id, [])

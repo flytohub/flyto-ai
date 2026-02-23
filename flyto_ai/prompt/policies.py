@@ -29,18 +29,26 @@ ALLOWED_TOOLS = frozenset({
 
 # Module categories allowed for execute_module
 ALLOWED_MODULE_CATEGORIES = frozenset({
-    "browser", "element",
+    "browser", "element", "stealth",
     "string", "text", "regex",
     "array", "object", "set",
     "data", "convert", "format", "template",
     "math", "stats", "random",
     "logic", "compare", "check", "validate", "verify",
     "flow", "meta", "error",
-    "http", "api",
-    "image",
+    "http", "api", "graphql", "webhook",
+    "image", "pdf", "archive",
     "encode", "hash", "crypto",
-    "path",
-    "notification",
+    "file", "path", "env",
+    "database", "cache", "queue",
+    "datetime", "date", "time",
+    "json", "csv", "xml", "yaml",
+    "git", "docker", "k8s", "shell", "process",
+    "dns", "network", "port", "ssh",
+    "email", "notification", "notify",
+    "llm", "ai", "agent",
+    "output", "sandbox",
+    "utility", "training",
 })
 
 

@@ -341,7 +341,12 @@ def _cmd_interactive(args):
         sys.stdout.write("\n\033[K")                  # → D, clear status
         sys.stdout.flush()
 
-    while True:
+    # Persistent event loop — keeps browser sessions alive across messages
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+      while True:
         # ── Draw input box ────────────────────────────────────
         _draw_box()
         try:
@@ -414,7 +419,7 @@ def _cmd_interactive(args):
         )
         sys.stdout.flush()
 
-        result = asyncio.run(agent.chat(
+        result = loop.run_until_complete(agent.chat(
             user_input, history=history, mode=mode,
             on_tool_call=_on_tool_call,
         ))
@@ -443,6 +448,8 @@ def _cmd_interactive(args):
             ))
 
         print()
+    finally:
+        loop.close()
 
 
 def _cmd_chat(args):
@@ -500,6 +507,10 @@ def _cmd_serve(args):
 
     agent = Agent(config=config)
 
+    # Persistent event loop — keeps browser sessions alive across requests
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             if self.path not in ("/chat", "/api/chat"):
@@ -513,7 +524,7 @@ def _cmd_serve(args):
                 self._json_response(400, {"ok": False, "error": "Missing 'message' field"})
                 return
 
-            result = asyncio.run(agent.chat(
+            result = loop.run_until_complete(agent.chat(
                 message,
                 history=body.get("history"),
                 template_context=body.get("template_context"),

@@ -48,10 +48,10 @@ You describe what you want. The agent calls tools, validates parameters, and pro
 ```bash
 pip install flyto-ai
 export OPENAI_API_KEY=sk-...
-flyto-ai chat "scrape the title from https://example.com"
+flyto-ai
 ```
 
-That's it. One install — includes OpenAI, Anthropic, Ollama, **412 automation modules**, browser automation, and self-learning blueprints.
+That's it. One install, one command — interactive chat with **412 automation modules**, browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
@@ -103,14 +103,44 @@ flyto-ai blueprints --export > blueprints.yaml  # Export for sharing
 ## CLI
 
 ```bash
-flyto-ai chat "scrape example.com"           # Generate a workflow
+flyto-ai                                     # Interactive chat (default)
+flyto-ai chat "scrape example.com"           # One-shot mode
 flyto-ai chat "take screenshot" -p ollama    # Use Ollama (no API key)
-flyto-ai chat "hello" --json                 # Raw JSON output
 flyto-ai chat "..." --webhook https://...    # POST result to webhook
 flyto-ai serve --port 8080                   # HTTP server for triggers
 flyto-ai blueprints                          # List learned blueprints
 flyto-ai version                             # Version + dependency status
 ```
+
+### Interactive Mode
+
+Just run `flyto-ai` — enter an interactive session with multi-turn conversation:
+
+```
+$ flyto-ai
+
+  _____ _       _        ____       _    ___
+ |  ___| |_   _| |_ ___ |___ \     / \  |_ _|
+ | |_  | | | | | __/ _ \  __) |   / _ \  | |
+ |  _| | | |_| | || (_) |/ __/   / ___ \ | |
+ |_|   |_|\__, |\__\___/|_____|  /_/   \_\___|
+           |___/
+
+  v0.2.0  Interactive Mode
+
+ > scrape the title from example.com
+ (generates YAML workflow)
+
+ > now also take a screenshot
+ (builds on previous context)
+
+ > /clear
+ Conversation cleared.
+
+ > /exit
+```
+
+Commands: `/clear`, `/history`, `/version`, `/help`, `/exit`
 
 ## Webhook & HTTP Server
 

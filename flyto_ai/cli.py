@@ -41,6 +41,9 @@ def main():
     serve_p.add_argument("--model", "-m", help="Model name")
     serve_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
 
+    # flyto-ai (interactive mode, no subcommand)
+    sub.add_parser("interactive", help="Start interactive chat (default when no args)")
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -51,6 +54,10 @@ def main():
         _cmd_serve(args)
     elif args.command == "chat":
         _cmd_chat(args)
+    elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
+        _cmd_interactive(args)
+    elif args.command is None:
+        parser.print_help()
     elif len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         # Shortcut: flyto-ai "scrape example.com" → treat as chat
         args.message = sys.argv[1:]
@@ -214,6 +221,125 @@ def _export_blueprints(blueprints):
     print("# Exported from flyto-ai — {} learned blueprint(s)".format(len(export)))
     print("# Submit as PR to https://github.com/flytohub/flyto-blueprint")
     print(yaml.dump(export, allow_unicode=True, sort_keys=False, default_flow_style=False))
+
+
+def _cmd_interactive(args):
+    """Interactive chat REPL — like Claude Code but for automation workflows."""
+    from flyto_ai import Agent, AgentConfig, __version__
+
+    # Welcome screen
+    print()
+    for i, line in enumerate(_LOGO_LINES):
+        color = _GRADIENT[i % len(_GRADIENT)]
+        print("{}{}{}".format(color, line, _RESET))
+    print()
+    print("  {}{}v{}{}  {}Interactive Mode{}".format(
+        _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
+    ))
+    print("  {}Type a message to generate workflows. /help for commands.{}".format(_DIM, _RESET))
+    print()
+
+    # Init agent
+    config = AgentConfig.from_env()
+    provider = getattr(args, "provider", None)
+    model = getattr(args, "model", None)
+    api_key = getattr(args, "api_key", None)
+    if provider:
+        config.provider = provider
+    if model:
+        config.model = model
+    if api_key:
+        config.api_key = api_key
+
+    agent = Agent(config=config)
+    history = []
+    tool_count = len(agent._tools) if agent._tools else 0
+
+    print("  {}Provider: {}{}{}  Model: {}{}{}  Tools: {}{}{}".format(
+        _DIM,
+        _RESET, config.provider or "openai", _DIM,
+        _RESET, config.resolved_model, _DIM,
+        _RESET, tool_count, _RESET,
+    ))
+    print()
+
+    # readline support
+    try:
+        import readline
+        readline.parse_and_bind("tab: complete")
+    except ImportError:
+        pass
+
+    _PURPLE = "\033[35m"
+    prompt = "{}{} > {}".format(_PURPLE, _BOLD, _RESET)
+
+    while True:
+        try:
+            user_input = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n{}  Bye!{}".format(_DIM, _RESET))
+            break
+
+        if not user_input:
+            continue
+
+        # Slash commands
+        if user_input.startswith("/"):
+            cmd = user_input.lower().split()[0]
+            if cmd in ("/exit", "/quit", "/q"):
+                print("{}  Bye!{}".format(_DIM, _RESET))
+                break
+            elif cmd in ("/clear", "/reset"):
+                history.clear()
+                print("  {}Conversation cleared.{}".format(_DIM, _RESET))
+                continue
+            elif cmd == "/history":
+                print("  {}Messages in context: {}{}".format(_DIM, len(history), _RESET))
+                continue
+            elif cmd == "/help":
+                print()
+                print("  {}Commands:{}".format(_BOLD, _RESET))
+                print("  {}/clear{}   — Reset conversation history".format(_CYAN, _RESET))
+                print("  {}/history{} — Show message count".format(_CYAN, _RESET))
+                print("  {}/version{} — Show version info".format(_CYAN, _RESET))
+                print("  {}/exit{}    — Quit".format(_CYAN, _RESET))
+                print()
+                continue
+            elif cmd == "/version":
+                _cmd_version()
+                continue
+            else:
+                print("  {}Unknown command: {}{}".format(_DIM, cmd, _RESET))
+                continue
+
+        # Send to agent
+        print()
+        sys.stdout.write("  {}Thinking...{}".format(_DIM, _RESET))
+        sys.stdout.flush()
+
+        result = asyncio.run(agent.chat(user_input, history=history))
+
+        # Clear "Thinking..." line
+        sys.stdout.write("\r\033[K")
+
+        if result.ok:
+            # Add to history for multi-turn
+            history.append({"role": "user", "content": user_input})
+            history.append({"role": "assistant", "content": result.message})
+
+            # Print response
+            print(result.message)
+
+            # Show tool calls summary
+            if result.tool_calls:
+                print()
+                print("  {}Tools called: {}{}".format(
+                    _DIM, len(result.tool_calls), _RESET,
+                ))
+        else:
+            print("  {}Error: {}{}".format(_YELLOW, result.error or result.message, _RESET))
+
+        print()
 
 
 def _cmd_chat(args):

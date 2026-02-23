@@ -129,7 +129,7 @@ def _cmd_version():
         print("{}{}{}".format(color, line, _RESET))
 
     print()
-    print("  {}{}v{}{}  {}390+ batteries included{}".format(
+    print("  {}{}v{}{}  {}412 batteries included{}".format(
         _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
     ))
     print()

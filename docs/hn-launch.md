@@ -3,7 +3,7 @@
 ## Post Title
 
 ```
-Show HN: 390+ deterministic modules so AI agents stop hallucinating shell commands
+Show HN: 412 deterministic modules so AI agents stop hallucinating shell commands
 ```
 
 ## Post URL
@@ -26,7 +26,7 @@ that almost work. Wrong curl flags, hallucinated Python APIs,
 slightly different output every time. The fix felt obvious in
 hindsight: don't let the LLM write code at all.
 
-flyto-ai has 390+ pre-built modules (browser, HTTP, file, database,
+flyto-ai has 412 pre-built modules (browser, HTTP, file, database,
 image, notifications, etc.). The LLM's only job is to search for the
 right module and fill in the parameters — which are validated against
 the module's schema before execution. If the params are wrong, it
@@ -58,7 +58,7 @@ The agent loop is simple:
 3. execute_module("browser.extract", {selector: "h1"}) → runs it
 4. LLM never writes code — only picks modules and fills params
 
-The 390+ modules come from flyto-core (separate PyPI package, also
+The 412 modules come from flyto-core (separate PyPI package, also
 Apache-2.0). Categories include browser (39 modules), HTTP/API, file
 ops, database, image processing, cloud storage, notifications, flow
 control, and more.
@@ -102,7 +102,7 @@ flyto-ai also works as an MCP server:
     flyto-ai mcp
 
 This lets Claude Desktop, ChatGPT, or any MCP-compatible host use
-the 390+ modules as tools. There's also an OpenClaw plugin
+the 412 modules as tools. There's also an OpenClaw plugin
 (flyto-openclaw) if you want to add deterministic execution to
 OpenClaw agents.
 

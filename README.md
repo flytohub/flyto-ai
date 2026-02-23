@@ -7,7 +7,7 @@
 <h3 align="center">Natural language → executable automation workflows</h3>
 
 <p align="center">
-  <em>Most AI agents have the LLM write shell commands and pray. <strong>flyto-ai uses 390+ pre-built, schema-validated modules instead.</strong></em>
+  <em>Most AI agents have the LLM write shell commands and pray. <strong>flyto-ai uses 412 pre-built, schema-validated modules instead.</strong></em>
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@ AI agents like open-interpreter and OpenClaw have the LLM generate shell command
 
 ## The Fix
 
-flyto-ai flips the model: **the LLM never writes code.** It searches and selects from 390+ pre-built modules, fills in parameters (validated against schemas), and executes them deterministically. Every run produces a reusable YAML workflow.
+flyto-ai flips the model: **the LLM never writes code.** It searches and selects from 412 pre-built modules, fills in parameters (validated against schemas), and executes them deterministically. Every run produces a reusable YAML workflow.
 
 ```
 ❯ scrape the title from example.com
@@ -62,7 +62,7 @@ export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 
-One install, one command — interactive chat with **390+ automation modules**, browser automation, and self-learning blueprints.
+One install, one command — interactive chat with **412 automation modules**, browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
@@ -97,7 +97,7 @@ The core difference is **what the LLM does during execution**:
 | | aider | open-interpreter | flyto-ai |
 |---|---|---|---|
 | **Output** | Code changes (git diff) | One-time code execution | **Results + reusable YAML workflows** |
-| **Tools** | Your codebase | Raw Python/JS/Shell | **390+ pre-built modules** |
+| **Tools** | Your codebase | Raw Python/JS/Shell | **412 pre-built modules** |
 | **Learns** | No | No | **Yes — self-learning blueprints** |
 | **Reusable** | Yes (code) | No (ephemeral) | **Yes (save, share, schedule)** |
 | **Webhook/API** | No | No | **Yes** |
@@ -184,9 +184,9 @@ steps:
     condition: "${{steps.check.status_code}} != 200"
 ```
 
-## 390+ Batteries Included
+## 412 Batteries Included
 
-Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 390+ automation modules across 55 categories:
+Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 412 automation modules across 55 categories:
 
 | Category | Modules | Examples |
 |----------|---------|---------|
@@ -258,9 +258,9 @@ $ flyto-ai
            |___/
 
   v0.6.0  Interactive Mode
-  Provider: openai  Model: gpt-4o  Tools: 390+
+  Provider: openai  Model: gpt-4o  Tools: 412
 
-  ⏵⏵ execute · openai/gpt-4o · 390+ tools
+  ⏵⏵ execute · openai/gpt-4o · 412 tools
 ❯ scrape the title from example.com
 
   ○ browser.launch
@@ -271,7 +271,7 @@ $ flyto-ai
 
   3 executed · 5 tool calls
 
-  ⏵⏵ execute · openai/gpt-4o · 390+ tools · 1 msgs
+  ⏵⏵ execute · openai/gpt-4o · 412 tools · 1 msgs
 ❯ now also take a screenshot
 
 ❯ /mode
@@ -346,7 +346,7 @@ flyto-ai chat "..." --model <name>    # Any specific model
 User message
   → LLM (OpenAI / Anthropic / Ollama)
     → Function calling: search_modules, get_module_info, execute_module, ...
-      → 390+ flyto-core modules (schema-validated, deterministic)
+      → 412 flyto-core modules (schema-validated, deterministic)
       → Self-learning blueprints (closed-loop, zero LLM)
       → Browser page inspection
     → Execute mode: run modules, return results + YAML

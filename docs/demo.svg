@@ -67,7 +67,7 @@
     <!-- Status bar -->
     <g class="l1">
       <text class="status" y="0">&#9655;&#9655; execute</text>
-      <text class="dim" x="90" y="0">&#183; openai/gpt-4o &#183; 390+ tools</text>
+      <text class="dim" x="90" y="0">&#183; openai/gpt-4o &#183; 412 tools</text>
     </g>
 
     <!-- Prompt: user types -->
@@ -171,7 +171,7 @@
     <!-- Second prompt -->
     <g class="l20">
       <text class="status" y="418">&#9655;&#9655; execute</text>
-      <text class="dim" x="90" y="418">&#183; openai/gpt-4o &#183; 390+ tools &#183; 1 msg</text>
+      <text class="dim" x="90" y="418">&#183; openai/gpt-4o &#183; 412 tools &#183; 1 msg</text>
     </g>
     <g class="l21">
       <text class="prompt" y="440">&#10095;</text>

@@ -299,9 +299,24 @@ def _cmd_interactive(args):
             except Exception:
                 pass
 
+    mode = "execute"
+
+    def _status_line():
+        """Build status info line shown above the prompt."""
+        parts = []
+        mode_icon = "\u23f5\u23f5" if mode == "execute" else "\u25b7\u25b7"
+        mode_label = "execute" if mode == "execute" else "plan-only"
+        parts.append("{} {}".format(mode_icon, mode_label))
+        parts.append("{}/{}".format(config.provider or "openai", config.resolved_model))
+        parts.append("{} tools".format(tool_count))
+        if history:
+            parts.append("{} msgs".format(len(history) // 2))
+        return "  {}{}{}\n".format(_DIM, " \u00b7 ".join(parts), _RESET)
+
     while True:
         # ── Input ─────────────────────────────────────────────
         try:
+            sys.stdout.write(_status_line())
             user_input = input(
                 "{}❯{} ".format(_CYAN, _RESET),
             ).strip()
@@ -327,9 +342,15 @@ def _cmd_interactive(args):
             elif cmd == "/history":
                 print("{}Messages in context: {}{}".format(_DIM, len(history), _RESET))
                 continue
+            elif cmd == "/mode":
+                mode = "yaml" if mode == "execute" else "execute"
+                label = "execute (run modules)" if mode == "execute" else "plan-only (YAML output)"
+                print("{}Switched to: {}{}".format(_DIM, label, _RESET))
+                continue
             elif cmd == "/help":
                 print()
                 print("  {}/clear{}   — Reset conversation".format(_CYAN, _RESET))
+                print("  {}/mode{}    — Toggle execute / plan-only".format(_CYAN, _RESET))
                 print("  {}/history{} — Show message count".format(_CYAN, _RESET))
                 print("  {}/version{} — Show version info".format(_CYAN, _RESET))
                 print("  {}/exit{}    — Quit".format(_CYAN, _RESET))
@@ -366,7 +387,7 @@ def _cmd_interactive(args):
         sys.stdout.flush()
 
         result = asyncio.run(agent.chat(
-            user_input, history=history, mode="execute",
+            user_input, history=history, mode=mode,
             on_tool_call=_on_tool_call,
         ))
 

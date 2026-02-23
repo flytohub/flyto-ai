@@ -1,0 +1,331 @@
+# Copyright 2024 Flyto
+# Licensed under the Apache License, Version 2.0
+"""flyto-ai CLI — natural language automation from the terminal."""
+import argparse
+import asyncio
+import json
+import sys
+from urllib.request import Request, urlopen
+from urllib.error import URLError
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="flyto-ai",
+        description="AI agent that turns natural language into executable automation workflows.",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # flyto-ai chat "scrape example.com"
+    chat_p = sub.add_parser("chat", help="Send a message to the agent")
+    chat_p.add_argument("message", nargs="+", help="What you want to automate")
+    chat_p.add_argument("--provider", "-p", help="LLM provider (openai, anthropic, ollama)")
+    chat_p.add_argument("--model", "-m", help="Model name")
+    chat_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
+    chat_p.add_argument("--json", action="store_true", help="Output raw JSON")
+    chat_p.add_argument("--webhook", "-w", help="POST result to this webhook URL")
+
+    # flyto-ai version
+    sub.add_parser("version", help="Show version and optional dependency status")
+
+    # flyto-ai blueprints
+    bp_p = sub.add_parser("blueprints", help="List and export learned blueprints")
+    bp_p.add_argument("--export", action="store_true", help="Export top blueprints as YAML")
+    bp_p.add_argument("--min-score", type=int, default=0, help="Minimum score to show (default: 0)")
+
+    # flyto-ai serve
+    serve_p = sub.add_parser("serve", help="Start HTTP server for webhook triggers")
+    serve_p.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    serve_p.add_argument("--port", type=int, default=7411, help="Bind port (default: 7411)")
+    serve_p.add_argument("--provider", "-p", help="LLM provider")
+    serve_p.add_argument("--model", "-m", help="Model name")
+    serve_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
+
+    args = parser.parse_args()
+
+    if args.command == "version":
+        _cmd_version()
+    elif args.command == "blueprints":
+        _cmd_blueprints(args)
+    elif args.command == "serve":
+        _cmd_serve(args)
+    elif args.command == "chat":
+        _cmd_chat(args)
+    elif len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        # Shortcut: flyto-ai "scrape example.com" → treat as chat
+        args.message = sys.argv[1:]
+        args.provider = None
+        args.model = None
+        args.api_key = None
+        args.json = False
+        args.webhook = None
+        _cmd_chat(args)
+    else:
+        parser.print_help()
+
+
+_LOGO_LINES = [
+    r"  _____ _       _        ____       _    ___  ",
+    r" |  ___| |_   _| |_ ___ |___ \     / \  |_ _| ",
+    r" | |_  | | | | | __/ _ \  __) |   / _ \  | |  ",
+    r" |  _| | | |_| | || (_) |/ __/   / ___ \ | |  ",
+    r" |_|   |_|\__, |\__\___/|_____|  /_/   \_\___| ",
+    r"           |___/                                ",
+]
+
+# 256-color gradient: cyan → blue → purple
+_GRADIENT = ["\033[38;5;87m", "\033[38;5;81m", "\033[38;5;75m",
+             "\033[38;5;69m", "\033[38;5;63m", "\033[38;5;99m"]
+_RESET = "\033[0m"
+_DIM = "\033[90m"
+_BOLD = "\033[1m"
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_CYAN = "\033[36m"
+
+
+def _cmd_version():
+    from flyto_ai import __version__
+
+    print()
+    for i, line in enumerate(_LOGO_LINES):
+        color = _GRADIENT[i % len(_GRADIENT)]
+        print("{}{}{}".format(color, line, _RESET))
+
+    print()
+    print("  {}{}v{}{}  {}412 batteries included{}".format(
+        _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
+    ))
+    print()
+
+    # Show optional deps status with versions
+    deps = [
+        ("openai", "openai", "openai"),
+        ("anthropic", "anthropic", "anthropic"),
+        ("flyto-core", "core", "flyto-core"),
+        ("flyto-blueprint", "flyto_blueprint", "flyto-blueprint"),
+    ]
+    for label, module, pkg_name in deps:
+        try:
+            mod = __import__(module)
+            ver = getattr(mod, "__version__", None) or getattr(mod, "VERSION", None)
+            if not ver:
+                ver = _get_pkg_version(pkg_name)
+            if ver:
+                print("  {}\u2714{} {} {}{}{}".format(_GREEN, _RESET, label, _DIM, ver, _RESET))
+            else:
+                print("  {}\u2714{} {}".format(_GREEN, _RESET, label))
+        except ImportError:
+            print("  {}\u2718 {}{}".format(_DIM, label, _RESET))
+    print()
+
+
+def _get_pkg_version(pkg_name):
+    """Get package version from importlib.metadata."""
+    try:
+        from importlib.metadata import version
+        return version(pkg_name)
+    except Exception:
+        return None
+
+
+def _cmd_blueprints(args):
+    try:
+        from flyto_blueprint import get_engine
+        from flyto_blueprint.storage.sqlite import SQLiteBackend
+    except ImportError:
+        print("{}flyto-blueprint not installed. Run: pip install flyto-ai[blueprint]{}".format(
+            _DIM, _RESET,
+        ), file=sys.stderr)
+        sys.exit(1)
+
+    engine = get_engine(storage=SQLiteBackend())
+    all_bp = engine.list_blueprints()
+
+    learned = [bp for bp in all_bp if bp.get("_source") == "learned"]
+    builtins = [bp for bp in all_bp if bp.get("_source") != "learned"]
+
+    if args.min_score:
+        learned = [bp for bp in learned if bp.get("score", 0) >= args.min_score]
+
+    if args.export:
+        _export_blueprints(learned)
+        return
+
+    # Summary
+    print()
+    print("  {}Blueprints{}".format(_BOLD, _RESET))
+    print("  builtin: {}{}{}  learned: {}{}{}".format(
+        _CYAN, len(builtins), _RESET, _GREEN, len(learned), _RESET,
+    ))
+    print()
+
+    if not learned:
+        print("  {}No learned blueprints yet.{}".format(_DIM, _RESET))
+        print("  {}Use the agent to build workflows — good ones auto-save as blueprints.{}".format(
+            _DIM, _RESET,
+        ))
+        print()
+        return
+
+    # Table
+    print("  {}{:<30} {:>5}  {:>4}/{:<4}  {}{}".format(
+        _DIM, "NAME", "SCORE", "OK", "FAIL", "TAGS", _RESET,
+    ))
+    print("  {}{}{}".format(_DIM, "-" * 65, _RESET))
+    for bp in sorted(learned, key=lambda b: b.get("score", 0), reverse=True):
+        name = bp.get("name", bp.get("id", "?"))[:30]
+        score = bp.get("score", 0)
+        ok = bp.get("success_count", 0)
+        fail = bp.get("fail_count", 0)
+        tags = ", ".join(bp.get("tags", [])[:3])
+        score_color = _GREEN if score >= 50 else (_YELLOW if score >= 20 else _DIM)
+        print("  {:<30} {}{:>5}{}  {:>4}/{:<4}  {}{}{}".format(
+            name, score_color, score, _RESET, ok, fail, _DIM, tags, _RESET,
+        ))
+    print()
+    print("  {}Tip: flyto-ai blueprints --export > my-blueprints.yaml{}".format(_DIM, _RESET))
+    print()
+
+
+def _export_blueprints(blueprints):
+    """Export learned blueprints as YAML to stdout."""
+    import yaml
+
+    if not blueprints:
+        print("# No learned blueprints to export.", file=sys.stderr)
+        sys.exit(0)
+
+    export = []
+    for bp in sorted(blueprints, key=lambda b: b.get("score", 0), reverse=True):
+        clean = {
+            "id": bp.get("id"),
+            "name": bp.get("name"),
+            "description": bp.get("description", ""),
+            "tags": bp.get("tags", []),
+            "score": bp.get("score", 0),
+            "success_count": bp.get("success_count", 0),
+            "steps": bp.get("steps", []),
+        }
+        if bp.get("params"):
+            clean["params"] = bp["params"]
+        export.append(clean)
+
+    print("# Exported from flyto-ai — {} learned blueprint(s)".format(len(export)))
+    print("# Submit as PR to https://github.com/flytohub/flyto-blueprint")
+    print(yaml.dump(export, allow_unicode=True, sort_keys=False, default_flow_style=False))
+
+
+def _cmd_chat(args):
+    from flyto_ai import Agent, AgentConfig
+
+    config = AgentConfig.from_env()
+    if args.provider:
+        config.provider = args.provider
+    if args.model:
+        config.model = args.model
+    if args.api_key:
+        config.api_key = args.api_key
+
+    agent = Agent(config=config)
+    message = " ".join(args.message)
+    result = asyncio.run(agent.chat(message))
+
+    if args.json:
+        print(result.model_dump_json(indent=2))
+    elif result.ok:
+        print(result.message)
+    else:
+        print("Error: {}".format(result.error or result.message), file=sys.stderr)
+        sys.exit(1)
+
+    # Webhook: POST result
+    if args.webhook:
+        _post_webhook(args.webhook, result)
+
+
+def _post_webhook(url, result):
+    """POST chat result to a webhook URL."""
+    payload = json.dumps(result.model_dump(), ensure_ascii=False, default=str).encode("utf-8")
+    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        resp = urlopen(req, timeout=10)
+        print("{}Webhook: {} {}{}".format(_DIM, resp.status, url, _RESET), file=sys.stderr)
+    except URLError as e:
+        print("{}Webhook failed: {} — {}{}".format(_YELLOW, url, e, _RESET), file=sys.stderr)
+
+
+def _cmd_serve(args):
+    """Start a lightweight HTTP server that accepts POST /chat to trigger the agent."""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from flyto_ai import Agent, AgentConfig
+
+    config = AgentConfig.from_env()
+    if args.provider:
+        config.provider = args.provider
+    if args.model:
+        config.model = args.model
+    if args.api_key:
+        config.api_key = args.api_key
+
+    agent = Agent(config=config)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path not in ("/chat", "/api/chat"):
+                self.send_error(404)
+                return
+
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            message = body.get("message", "")
+            if not message:
+                self._json_response(400, {"ok": False, "error": "Missing 'message' field"})
+                return
+
+            result = asyncio.run(agent.chat(
+                message,
+                history=body.get("history"),
+                template_context=body.get("template_context"),
+            ))
+            self._json_response(200, result.model_dump())
+
+        def do_GET(self):
+            if self.path in ("/health", "/"):
+                self._json_response(200, {"ok": True, "status": "ready"})
+            else:
+                self.send_error(404)
+
+        def _json_response(self, code, data):
+            payload = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, fmt, *a):
+            # Colorized request log
+            sys.stderr.write("  {}[{}]{} {}\n".format(
+                _DIM, self.log_date_time_string(), _RESET, fmt % a,
+            ))
+
+    server = HTTPServer((args.host, args.port), Handler)
+    print()
+    print("  {}{}Flyto2 AI Server{}".format(_BOLD, _CYAN, _RESET))
+    print("  Listening on {}http://{}:{}{}".format(_GREEN, args.host, args.port, _RESET))
+    print()
+    print("  {}POST /chat{}  {}{\"message\": \"scrape example.com\"}{}".format(
+        _BOLD, _RESET, _DIM, _RESET,
+    ))
+    print("  {}GET  /health{}".format(_BOLD, _RESET))
+    print()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  {}Shutting down.{}".format(_DIM, _RESET))
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flyto-ai"
+version = "0.2.0"
+description = "AI agent that turns natural language into executable automation. 412 batteries included."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+keywords = ["ai-agent", "automation", "llm", "workflow", "mcp", "openai", "anthropic", "ollama"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "pydantic>=2.0.0",
+    "openai>=1.0.0",
+    "anthropic>=0.20.0",
+    "flyto-core[browser]>=2.12.0",
+    "flyto-blueprint>=0.1.0",
+]
+
+[project.optional-dependencies]
+lite = ["pyyaml>=6.0", "pydantic>=2.0.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+
+[project.scripts]
+flyto-ai = "flyto_ai.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/flytohub/flyto-ai"
+Repository = "https://github.com/flytohub/flyto-ai.git"
+Issues = "https://github.com/flytohub/flyto-ai/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["flyto_ai"]

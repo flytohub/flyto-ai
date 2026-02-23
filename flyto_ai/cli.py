@@ -315,33 +315,47 @@ def _cmd_interactive(args):
             parts.append("{}{} msgs{}".format(_DIM, len(history) // 2, _RESET))
         return sep.join(parts)
 
-    while True:
-        # ── Input box (purple gradient, full terminal width) ──
+    def _draw_box():
+        """Draw input box + status. Returns after cursor is positioned for input."""
         w = _term_width()
-        top = "{}╭{}╮{}".format(_P1, "─" * (w - 2), _RESET)
-        bot = "{}╰{}╯{}".format(_P4, "─" * (w - 2), _RESET)
-        status = "  {}".format(_status_text())
+        # Layout: top → (blank) → bottom → status, then cursor back to blank
+        sys.stdout.write("{}╭{}╮{}\n".format(_P1, "─" * (w - 2), _RESET))
+        sys.stdout.write("\n")  # blank line for input
+        sys.stdout.write("{}╰{}╯{}\n".format(_P4, "─" * (w - 2), _RESET))
+        sys.stdout.write("  {}\n".format(_status_text()))
+        sys.stdout.write("\033[3A\r")  # cursor back up to blank input line
+        sys.stdout.flush()
+
+    def _erase_box(user_text=""):
+        """After Enter: erase box frame, leave user text as chat message."""
+        # Cursor is on bottom border line (C). Lines:
+        # A(top)  B(input)  C(bottom=cursor)  D(status)
+        sys.stdout.write("\033[2A\r\033[K")          # → A, clear top border
+        if user_text:
+            sys.stdout.write("{}❯{} {}\n".format(    # rewrite A as user msg
+                _CYAN, _RESET, user_text))
+            sys.stdout.write("\033[K")                # clear B (old input)
+        else:
+            sys.stdout.write("\n\033[K")              # A blank, clear B
+        sys.stdout.write("\n\033[K")                  # → C, clear bottom
+        sys.stdout.write("\n\033[K")                  # → D, clear status
+        sys.stdout.flush()
+
+    while True:
+        # ── Draw input box ────────────────────────────────────
+        _draw_box()
         try:
-            # Layout: top → (blank for input) → bottom → status
-            # Then cursor back up to the blank input line
-            print(top)                          # line A: ╭───╮
-            sys.stdout.write("\n")              # line B: (reserved for input)
-            sys.stdout.write("{}\n".format(bot))     # line C: ╰───╯
-            sys.stdout.write("{}\n".format(status))  # line D: status
-            sys.stdout.write("\033[3A\r")       # cursor → line B
-            sys.stdout.flush()
             user_input = input(
                 "{}│{} {}❯{} ".format(_P2, _RESET, _CYAN, _RESET),
             ).strip()
         except (EOFError, KeyboardInterrupt):
-            sys.stdout.write("\n\033[K\033[1B\033[K\033[1B\033[K\n")
+            _erase_box()
             print("{}Bye!{}".format(_DIM, _RESET))
             _save_history()
             break
 
-        # After Enter: cursor on line C (bottom border). Skip past D (status).
-        sys.stdout.write("\033[1B\n")
-        sys.stdout.flush()
+        # Erase box, keep user text as chat message (or blank if empty)
+        _erase_box(user_input)
 
         if not user_input:
             continue
@@ -356,9 +370,6 @@ def _cmd_interactive(args):
             elif cmd in ("/clear", "/reset"):
                 history.clear()
                 print("{}Conversation cleared.{}".format(_DIM, _RESET))
-                continue
-            elif cmd == "/history":
-                print("{}Messages in context: {}{}".format(_DIM, len(history), _RESET))
                 continue
             elif cmd == "/mode":
                 mode = "yaml" if mode == "execute" else "execute"
@@ -382,7 +393,6 @@ def _cmd_interactive(args):
                 continue
 
         # ── Response ──────────────────────────────────────────
-        print()
 
         # Live tool progress
         _tool_count = [0]
@@ -416,11 +426,9 @@ def _cmd_interactive(args):
             history.append({"role": "user", "content": user_input})
             history.append({"role": "assistant", "content": result.message})
 
-            # Print response
             for line in result.message.split("\n"):
                 print("  {}".format(line))
 
-            # Metadata
             meta_parts = []
             if result.execution_results:
                 meta_parts.append("{} executed".format(len(result.execution_results)))

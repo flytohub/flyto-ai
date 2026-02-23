@@ -14,7 +14,8 @@ def test_version_output(capsys):
     sys.argv = ["flyto-ai", "version"]
     main()
     out = capsys.readouterr().out
-    assert "v0.5.7" in out
+    from flyto_ai import __version__
+    assert "v{}".format(__version__) in out
     assert "___" in out  # ASCII art present
 
 

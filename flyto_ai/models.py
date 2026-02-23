@@ -42,6 +42,15 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = Field(None, max_length=50)
 
 
+class UsageStats(BaseModel):
+    """Token usage statistics from a chat interaction."""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 class ChatResponse(BaseModel):
     """Chat response."""
     ok: bool
@@ -53,3 +62,5 @@ class ChatResponse(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     error: Optional[str] = None
+    rounds_used: int = 0
+    usage: Optional[UsageStats] = None

@@ -26,13 +26,13 @@ async def test_on_stream_receives_tokens(monkeypatch):
     """on_stream callback receives TOKEN events from the provider."""
     events = []
 
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=30, on_stream=None):
         # Simulate provider emitting tokens
         if on_stream:
             on_stream(StreamEvent(type=StreamEventType.TOKEN, content="Hello"))
             on_stream(StreamEvent(type=StreamEventType.TOKEN, content=" world"))
             on_stream(StreamEvent(type=StreamEventType.DONE))
-        return "Hello world", []
+        return "Hello world", [], 1, {}
 
     agent = _make_agent(monkeypatch, mock_chat)
 
@@ -53,9 +53,9 @@ async def test_on_stream_receives_tokens(monkeypatch):
 @pytest.mark.asyncio
 async def test_on_stream_none_backward_compat(monkeypatch):
     """on_stream=None preserves existing behaviour — no errors."""
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=30, on_stream=None):
         assert on_stream is None
-        return "Result", []
+        return "Result", [], 1, {}
 
     agent = _make_agent(monkeypatch, mock_chat)
     result = await agent.chat("hi", mode="execute")
@@ -69,14 +69,14 @@ async def test_tool_events_emitted(monkeypatch):
     """Agent dispatch wrapper emits TOOL_START and TOOL_END events."""
     events = []
 
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=30, on_stream=None):
         # Simulate the provider calling dispatch_fn (which is instrumented)
         await dispatch_fn("search_modules", {"query": "browser"})
         await dispatch_fn("execute_module", {"module_id": "browser.goto"})
         return "Done!", [
             {"function": "search_modules"},
             {"function": "execute_module"},
-        ]
+        ], 1, {}
 
     agent = _make_agent(monkeypatch, mock_chat)
 
@@ -100,7 +100,7 @@ async def test_callback_crash_safe(monkeypatch):
 
     Also verifies agent-level dispatch wrapper catches callback crashes.
     """
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=30, on_stream=None):
         # Real providers use _fire() which catches exceptions.
         # Simulate that: try/except around callback invocation.
         if on_stream:
@@ -110,7 +110,7 @@ async def test_callback_crash_safe(monkeypatch):
                 pass  # provider _fire() catches this
         # Dispatch to trigger agent-level wrapper (tests TOOL_START/END crash safety)
         await dispatch_fn("search_modules", {"query": "test"})
-        return "Done!", [{"function": "search_modules"}]
+        return "Done!", [{"function": "search_modules"}], 1, {}
 
     agent = _make_agent(monkeypatch, mock_chat)
 
@@ -128,9 +128,9 @@ async def test_coexists_with_on_tool_call(monkeypatch):
     stream_events = []
     tool_calls = []
 
-    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15, on_stream=None):
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=30, on_stream=None):
         await dispatch_fn("search_modules", {"query": "test"})
-        return "Done!", [{"function": "search_modules"}]
+        return "Done!", [{"function": "search_modules"}], 1, {}
 
     agent = _make_agent(monkeypatch, mock_chat)
 

@@ -3,6 +3,7 @@
 """Tool registry — aggregates MCP tools, AI-exclusive tools, and blueprint tools."""
 import contextvars
 import logging
+import time
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -53,12 +54,16 @@ class ToolRegistry:
             return {"ok": False, "error": "Unknown tool: {}".format(name)}
 
         token = _dispatch_depth.set(depth + 1)
+        t0 = time.monotonic()
         try:
-            return await handler(name, arguments)
+            result = await handler(name, arguments)
+            return result
         except Exception as e:
             logger.warning("Tool call failed (%s): %s", name, e)
             return {"ok": False, "error": str(e)}
         finally:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.debug("Tool %s completed in %d ms", name, elapsed_ms)
             _dispatch_depth.reset(token)
 
     def to_openai_format(self) -> List[Dict]:

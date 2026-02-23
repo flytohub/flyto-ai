@@ -335,7 +335,7 @@ class TestServeSchemaValidation:
 
     def test_serve_uses_chat_request_validation(self):
         from flyto_ai import cli
-        src = inspect.getsource(cli._cmd_serve)
+        src = inspect.getsource(cli._cmd_serve_stdlib)
         assert "ChatRequest" in src
         assert "model_validate" in src
 
@@ -348,7 +348,7 @@ class TestServeSessionCleanup:
 
     def test_serve_has_cleanup(self):
         from flyto_ai import cli
-        src = inspect.getsource(cli._cmd_serve)
+        src = inspect.getsource(cli._cmd_serve_stdlib)
         assert "clear_browser_sessions" in src
         assert "CLEANUP_INTERVAL" in src
 

@@ -1,13 +1,13 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Anthropic provider (tool use loop)."""
-import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.models import StreamCallback, StreamEvent, StreamEventType
-from flyto_ai.providers.base import DispatchFn, LLMProvider, fire_stream as _fire
-from flyto_ai.redaction import redact_args
+from flyto_ai.providers.base import (
+    DispatchFn, LLMProvider, dispatch_and_log_tool, fire_stream as _fire,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +38,9 @@ class AnthropicProvider(LLMProvider):
         system_prompt: str,
         tools: List[Dict],
         dispatch_fn: DispatchFn,
-        max_rounds: int = 15,
+        max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[str, List[Dict[str, Any]]]:
+    ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         if self._client is None:
             import anthropic
             self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
@@ -64,6 +64,19 @@ class AnthropicProvider(LLMProvider):
         ]
 
         tool_call_log: List[Dict[str, Any]] = []
+        total_usage = {
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+        }
+
+        def _accumulate_usage(response):
+            if hasattr(response, "usage") and response.usage:
+                u = response.usage
+                total_usage["prompt_tokens"] += getattr(u, "input_tokens", 0) or 0
+                total_usage["completion_tokens"] += getattr(u, "output_tokens", 0) or 0
+                total_usage["total_tokens"] += (getattr(u, "input_tokens", 0) or 0) + (getattr(u, "output_tokens", 0) or 0)
+                total_usage["cache_creation_input_tokens"] += getattr(u, "cache_creation_input_tokens", 0) or 0
+                total_usage["cache_read_input_tokens"] += getattr(u, "cache_read_input_tokens", 0) or 0
 
         for round_num in range(max_rounds):
             create_kwargs = {
@@ -87,8 +100,10 @@ class AnthropicProvider(LLMProvider):
                         ))
                     response = await stream.get_final_message()
             else:
-                # ── Non-streaming path (unchanged) ──────────────
+                # ── Non-streaming path ──────────────────────────
                 response = await client.messages.create(**create_kwargs)
+
+            _accumulate_usage(response)
 
             has_tool_use = any(block.type == "tool_use" for block in response.content)
 
@@ -98,7 +113,7 @@ class AnthropicProvider(LLMProvider):
                 if response.stop_reason == "max_tokens":
                     content += "\n\n[Note: Response was truncated due to token limit.]"
                 _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
-                return content, tool_call_log
+                return content, tool_call_log, round_num + 1, total_usage
 
             claude_messages.append({"role": "assistant", "content": response.content})
 
@@ -110,39 +125,9 @@ class AnthropicProvider(LLMProvider):
                 func_name = block.name
                 func_args = block.input if isinstance(block.input, dict) else {}
 
-                logger.info(
-                    "Tool call [%d]: %s(%s)",
-                    round_num + 1, func_name,
-                    json.dumps(redact_args(func_args))[:200],
+                result_str, log_entry = await dispatch_and_log_tool(
+                    func_name, func_args, dispatch_fn, round_num, on_stream,
                 )
-
-                _fire(on_stream, StreamEvent(
-                    type=StreamEventType.TOOL_START,
-                    tool_name=func_name,
-                    tool_args=func_args,
-                ))
-
-                result = await dispatch_fn(func_name, func_args)
-                result_str = json.dumps(result, ensure_ascii=False, default=str)
-
-                if len(result_str) > 8000:
-                    result_str = result_str[:8000] + "...(truncated)"
-
-                _fire(on_stream, StreamEvent(
-                    type=StreamEventType.TOOL_END,
-                    tool_name=func_name,
-                    tool_result=result if isinstance(result, dict) else {"raw": result_str[:500]},
-                ))
-
-                log_entry: Dict[str, Any] = {
-                    "function": func_name,
-                    "arguments": func_args,
-                    "result_preview": result_str[:500],
-                }
-                # Structured result for execute_module tracking
-                if func_name == "execute_module":
-                    log_entry["module_id"] = func_args.get("module_id", "")
-                    log_entry["ok"] = result.get("ok", False) if isinstance(result, dict) else False
                 tool_call_log.append(log_entry)
 
                 tool_results.append({
@@ -153,8 +138,21 @@ class AnthropicProvider(LLMProvider):
 
             claude_messages.append({"role": "user", "content": tool_results})
 
-        # Force final answer — append to last user message to avoid consecutive user roles
-        summary_text = {"type": "text", "text": "Please summarize the results and provide your final answer."}
+        # Force final answer with improved prompt
+        completed = [tc["function"] for tc in tool_call_log if tc.get("ok", True)]
+        failed = [tc["function"] for tc in tool_call_log if not tc.get("ok", True)]
+        summary_parts = [
+            "You have used all {} tool rounds.".format(max_rounds),
+            "Completed: {}".format(", ".join(completed[-5:]) if completed else "none"),
+        ]
+        if failed:
+            summary_parts.append("Failed: {}".format(", ".join(failed[-3:])))
+        summary_parts.append(
+            "Please summarize what was accomplished, what remains incomplete, "
+            "and suggest next steps."
+        )
+        summary_text = {"type": "text", "text": " ".join(summary_parts)}
+
         if claude_messages and claude_messages[-1]["role"] == "user":
             content = claude_messages[-1]["content"]
             if isinstance(content, list):
@@ -164,6 +162,7 @@ class AnthropicProvider(LLMProvider):
                 claude_messages.append({"role": "user", "content": [summary_text]})
         else:
             claude_messages.append({"role": "user", "content": [summary_text]})
+
         response = await client.messages.create(
             model=self._model,
             system=system_prompt,
@@ -171,6 +170,7 @@ class AnthropicProvider(LLMProvider):
             max_tokens=self._max_tokens,
             temperature=self._temperature,
         )
+        _accumulate_usage(response)
         text_parts = [block.text for block in response.content if block.type == "text"]
         _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
-        return "\n".join(text_parts), tool_call_log
+        return "\n".join(text_parts), tool_call_log, max_rounds, total_usage

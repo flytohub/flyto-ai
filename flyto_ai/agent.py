@@ -2,10 +2,11 @@
 # Licensed under the Apache License, Version 2.0
 """Agent class — chat loop orchestrator."""
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.config import AgentConfig
-from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType
+from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
 from flyto_ai.prompt.system_prompt import build_system_prompt, detect_language
 from flyto_ai.providers.base import LLMProvider
@@ -84,6 +85,15 @@ def _blueprint_feedback(tool_calls: List[Dict[str, Any]], execution_results: Lis
         logger.info("Blueprint learned: %s (%d steps)", user_message[:40], len(steps))
     except Exception as e:
         logger.debug("Blueprint learn failed: %s", e)
+
+
+def _merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None:
+    """Merge new usage stats into accumulated dict (in-place)."""
+    accumulated["prompt_tokens"] += new.prompt_tokens
+    accumulated["completion_tokens"] += new.completion_tokens
+    accumulated["total_tokens"] += new.total_tokens
+    accumulated["cache_creation_input_tokens"] += new.cache_creation_input_tokens
+    accumulated["cache_read_input_tokens"] += new.cache_read_input_tokens
 
 
 class Agent:
@@ -207,6 +217,8 @@ class Agent:
             (tokens, tool start/end, done).  When set, providers enable
             streaming for LLM responses.
         """
+        t0 = time.monotonic()
+
         if not self._config.api_key and self._config.provider != "ollama":
             return ChatResponse(
                 ok=False,
@@ -261,13 +273,29 @@ class Agent:
             mode=mode, reply_language=reply_language,
         )
 
+        # Accumulated usage across all LLM calls
+        total_usage = {
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+        }
+        total_rounds = 0
+
         # Call LLM (toolless mode if no tools available)
         if has_tools:
-            response_content, tool_calls = await self._call_llm(messages, system_prompt, dispatch_fn, on_stream=on_stream)
+            response_content, tool_calls, rounds_used, usage_dict = await self._call_llm(
+                messages, system_prompt, dispatch_fn, on_stream=on_stream,
+            )
         else:
-            response_content, tool_calls = await self._call_llm_toolless(messages, system_prompt, on_stream=on_stream)
+            response_content, tool_calls, rounds_used, usage_dict = await self._call_llm_toolless(
+                messages, system_prompt, on_stream=on_stream,
+            )
+        total_rounds += rounds_used
+        for k in total_usage:
+            total_usage[k] += usage_dict.get(k, 0)
 
         if not response_content:
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            self._emit_audit(message, mode, tool_calls, [], False, "provider_call_failed", duration_ms, total_usage)
             return ChatResponse(
                 ok=False,
                 message="AI provider call failed. Please try again.",
@@ -286,7 +314,10 @@ class Agent:
                         "Please generate the workflow YAML now using the modules and blueprints available."
                     )},
                 ]
-                nudge_content, nudge_tc = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
+                nudge_content, nudge_tc, nudge_rounds, nudge_usage = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
+                total_rounds += nudge_rounds
+                for k in total_usage:
+                    total_usage[k] += nudge_usage.get(k, 0)
                 if nudge_content and extract_yaml_from_response(nudge_content):
                     response_content = nudge_content
                     tool_calls.extend(nudge_tc)
@@ -310,7 +341,10 @@ class Agent:
                         "verify the correct param names, then regenerate the YAML.".format(error_list)
                     )},
                 ]
-                retry_content, retry_tc = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
+                retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
+                total_rounds += retry_rounds
+                for k in total_usage:
+                    total_usage[k] += retry_usage.get(k, 0)
                 if retry_content:
                     response_content = retry_content
                     tool_calls.extend(retry_tc)
@@ -327,6 +361,11 @@ class Agent:
         if mode == "execute" and execution_results:
             _blueprint_feedback(tool_calls, execution_results, message)
 
+        usage = UsageStats(**total_usage) if any(v > 0 for v in total_usage.values()) else None
+
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        self._emit_audit(message, mode, tool_calls, execution_results, True, None, duration_ms, total_usage)
+
         return ChatResponse(
             ok=True,
             message=response_content,
@@ -335,7 +374,41 @@ class Agent:
             execution_results=execution_results,
             provider=self._config.provider,
             model=self._config.resolved_model,
+            rounds_used=total_rounds,
+            usage=usage,
         )
+
+    def _emit_audit(
+        self,
+        user_message: str,
+        mode: str,
+        tool_calls: List[Dict],
+        execution_results: List[Dict],
+        ok: bool,
+        error: Optional[str],
+        duration_ms: int,
+        usage: Dict[str, int],
+    ) -> None:
+        """Emit a structured audit log entry (best-effort)."""
+        try:
+            from flyto_ai.audit import ChatAuditEntry
+            entry = ChatAuditEntry(
+                user_message=user_message[:200],
+                provider=self._config.provider or "openai",
+                model=self._config.resolved_model,
+                mode=mode,
+                tool_calls_count=len(tool_calls),
+                execution_count=len(execution_results),
+                duration_ms=duration_ms,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+                ok=ok,
+                error=error,
+            )
+            entry.emit()
+        except Exception:
+            pass  # audit must never break main flow
 
     async def _call_llm(
         self,
@@ -343,8 +416,8 @@ class Agent:
         system_prompt: str,
         dispatch_fn,
         on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-        """Call the LLM provider with tools. Returns (content, tool_call_log)."""
+    ) -> Tuple[Optional[str], List[Dict[str, Any]], int, Dict[str, int]]:
+        """Call the LLM provider with tools. Returns (content, tool_call_log, rounds_used, usage_dict)."""
         try:
             return await self._provider.chat(
                 messages, system_prompt, self._tools,
@@ -353,14 +426,14 @@ class Agent:
             )
         except Exception as e:
             logger.warning("LLM call failed: %s", e)
-            return None, []
+            return None, [], 0, {}
 
     async def _call_llm_toolless(
         self,
         messages: List[Dict[str, Any]],
         system_prompt: str,
         on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    ) -> Tuple[Optional[str], List[Dict[str, Any]], int, Dict[str, int]]:
         """Call the LLM provider without tools (pure conversation)."""
         try:
             async def _noop_dispatch(name: str, args: dict) -> dict:
@@ -372,4 +445,4 @@ class Agent:
             )
         except Exception as e:
             logger.warning("LLM call failed: %s", e)
-            return None, []
+            return None, [], 0, {}

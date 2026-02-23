@@ -39,7 +39,7 @@ class AgentConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     base_url: Optional[str] = None
-    max_tool_rounds: int = 15
+    max_tool_rounds: int = 30
     max_validation_rounds: int = 2
 
     @classmethod
@@ -51,7 +51,7 @@ class AgentConfig:
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 4096),
             base_url=data.get("base_url") or None,
-            max_tool_rounds=data.get("max_tool_rounds", 15),
+            max_tool_rounds=data.get("max_tool_rounds", 30),
             max_validation_rounds=data.get("max_validation_rounds", 2),
         )
 
@@ -87,6 +87,7 @@ class AgentConfig:
             temperature=float(os.getenv("FLYTO_AI_TEMPERATURE", "0.7")),
             max_tokens=int(os.getenv("FLYTO_AI_MAX_TOKENS", "4096")),
             base_url=os.getenv("FLYTO_AI_BASE_URL") or None,
+            max_tool_rounds=int(os.getenv("FLYTO_AI_MAX_TOOL_ROUNDS", "30")),
         )
 
     def __post_init__(self):

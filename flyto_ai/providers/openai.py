@@ -6,8 +6,9 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.models import StreamCallback, StreamEvent, StreamEventType
-from flyto_ai.providers.base import DispatchFn, LLMProvider, fire_stream as _fire
-from flyto_ai.redaction import redact_args
+from flyto_ai.providers.base import (
+    DispatchFn, LLMProvider, dispatch_and_log_tool, fire_stream as _fire,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +44,21 @@ class OpenAIProvider(LLMProvider):
             self._client = openai.AsyncOpenAI(**kwargs)
         return self._client
 
+    def _is_native_openai(self) -> bool:
+        """True if talking to real OpenAI API (not Ollama / custom base_url)."""
+        if not self._base_url:
+            return True
+        return "api.openai.com" in self._base_url
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
         system_prompt: str,
         tools: List[Dict],
         dispatch_fn: DispatchFn,
-        max_rounds: int = 15,
+        max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[str, List[Dict[str, Any]]]:
+    ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         client = self._make_client()
 
         # Convert to OpenAI function format
@@ -71,6 +78,7 @@ class OpenAIProvider(LLMProvider):
         full_messages.extend(messages)
 
         tool_call_log: List[Dict[str, Any]] = []
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for round_num in range(max_rounds):
             create_kwargs = {
@@ -86,12 +94,22 @@ class OpenAIProvider(LLMProvider):
             # ── Streaming path ──────────────────────────────────
             if on_stream is not None:
                 create_kwargs["stream"] = True
+                # Request usage in stream (native OpenAI only)
+                if self._is_native_openai():
+                    create_kwargs["stream_options"] = {"include_usage": True}
+
                 content_parts: List[str] = []
                 collected_tool_calls: Dict[int, Dict[str, Any]] = {}
                 finish_reason = None
 
                 stream = await client.chat.completions.create(**create_kwargs)
                 async for chunk in stream:
+                    # Accumulate usage from stream (last chunk)
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        total_usage["prompt_tokens"] += chunk.usage.prompt_tokens or 0
+                        total_usage["completion_tokens"] += chunk.usage.completion_tokens or 0
+                        total_usage["total_tokens"] += chunk.usage.total_tokens or 0
+
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue
@@ -133,7 +151,7 @@ class OpenAIProvider(LLMProvider):
                     if finish_reason == "length":
                         content += "\n\n[Note: Response was truncated due to token limit.]"
                     _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
-                    return content, tool_call_log
+                    return content, tool_call_log, round_num + 1, total_usage
 
                 # Reconstruct assistant message for conversation history
                 tc_list = []
@@ -168,7 +186,7 @@ class OpenAIProvider(LLMProvider):
                 )
                 full_messages.append(assistant_msg)
 
-                # Dispatch each tool call
+                # Dispatch each tool call via shared helper
                 for tc in tc_list:
                     func_name = tc["function"]["name"]
                     try:
@@ -176,38 +194,9 @@ class OpenAIProvider(LLMProvider):
                     except json.JSONDecodeError:
                         func_args = {}
 
-                    logger.info(
-                        "Tool call [%d]: %s(%s)",
-                        round_num + 1, func_name,
-                        json.dumps(redact_args(func_args))[:200],
+                    result_str, log_entry = await dispatch_and_log_tool(
+                        func_name, func_args, dispatch_fn, round_num, on_stream,
                     )
-
-                    _fire(on_stream, StreamEvent(
-                        type=StreamEventType.TOOL_START,
-                        tool_name=func_name,
-                        tool_args=func_args,
-                    ))
-
-                    result = await dispatch_fn(func_name, func_args)
-                    result_str = json.dumps(result, ensure_ascii=False, default=str)
-
-                    if len(result_str) > 8000:
-                        result_str = result_str[:8000] + "...(truncated)"
-
-                    _fire(on_stream, StreamEvent(
-                        type=StreamEventType.TOOL_END,
-                        tool_name=func_name,
-                        tool_result=result if isinstance(result, dict) else {"raw": result_str[:500]},
-                    ))
-
-                    log_entry: Dict[str, Any] = {
-                        "function": func_name,
-                        "arguments": func_args,
-                        "result_preview": result_str[:500],
-                    }
-                    if func_name == "execute_module":
-                        log_entry["module_id"] = func_args.get("module_id", "")
-                        log_entry["ok"] = result.get("ok", False) if isinstance(result, dict) else False
                     tool_call_log.append(log_entry)
 
                     full_messages.append({
@@ -218,8 +207,14 @@ class OpenAIProvider(LLMProvider):
 
                 continue  # next round
 
-            # ── Non-streaming path (unchanged) ──────────────────
+            # ── Non-streaming path ──────────────────────────────
             response = await client.chat.completions.create(**create_kwargs)
+
+            # Accumulate usage
+            if response.usage:
+                total_usage["prompt_tokens"] += response.usage.prompt_tokens or 0
+                total_usage["completion_tokens"] += response.usage.completion_tokens or 0
+                total_usage["total_tokens"] += response.usage.total_tokens or 0
 
             choice = response.choices[0]
 
@@ -227,7 +222,7 @@ class OpenAIProvider(LLMProvider):
                 content = choice.message.content or ""
                 if choice.finish_reason == "length":
                     content += "\n\n[Note: Response was truncated due to token limit.]"
-                return content, tool_call_log
+                return content, tool_call_log, round_num + 1, total_usage
 
             full_messages.append(choice.message)
 
@@ -238,27 +233,9 @@ class OpenAIProvider(LLMProvider):
                 except json.JSONDecodeError:
                     func_args = {}
 
-                logger.info(
-                    "Tool call [%d]: %s(%s)",
-                    round_num + 1, func_name,
-                    json.dumps(redact_args(func_args))[:200],
+                result_str, log_entry = await dispatch_and_log_tool(
+                    func_name, func_args, dispatch_fn, round_num,
                 )
-
-                result = await dispatch_fn(func_name, func_args)
-                result_str = json.dumps(result, ensure_ascii=False, default=str)
-
-                if len(result_str) > 8000:
-                    result_str = result_str[:8000] + "...(truncated)"
-
-                log_entry: Dict[str, Any] = {
-                    "function": func_name,
-                    "arguments": func_args,
-                    "result_preview": result_str[:500],
-                }
-                # Structured result for execute_module tracking
-                if func_name == "execute_module":
-                    log_entry["module_id"] = func_args.get("module_id", "")
-                    log_entry["ok"] = result.get("ok", False) if isinstance(result, dict) else False
                 tool_call_log.append(log_entry)
 
                 full_messages.append({
@@ -267,10 +244,22 @@ class OpenAIProvider(LLMProvider):
                     "content": result_str,
                 })
 
-        # Hit max rounds — ask for summary
+        # Hit max rounds — force summary with improved prompt
+        completed = [tc["function"] for tc in tool_call_log if tc.get("ok", True)]
+        failed = [tc["function"] for tc in tool_call_log if not tc.get("ok", True)]
+        summary_parts = [
+            "You have used all {} tool rounds.".format(max_rounds),
+            "Completed: {}".format(", ".join(completed[-5:]) if completed else "none"),
+        ]
+        if failed:
+            summary_parts.append("Failed: {}".format(", ".join(failed[-3:])))
+        summary_parts.append(
+            "Please summarize what was accomplished, what remains incomplete, "
+            "and suggest next steps."
+        )
         full_messages.append({
             "role": "user",
-            "content": "Please summarize the results so far and provide your final answer.",
+            "content": " ".join(summary_parts),
         })
         response = await client.chat.completions.create(
             model=self._model,
@@ -278,5 +267,10 @@ class OpenAIProvider(LLMProvider):
             max_tokens=self._max_tokens,
             temperature=self._temperature,
         )
+        if response.usage:
+            total_usage["prompt_tokens"] += response.usage.prompt_tokens or 0
+            total_usage["completion_tokens"] += response.usage.completion_tokens or 0
+            total_usage["total_tokens"] += response.usage.total_tokens or 0
+
         _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
-        return response.choices[0].message.content or "", tool_call_log
+        return response.choices[0].message.content or "", tool_call_log, max_rounds, total_usage

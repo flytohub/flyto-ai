@@ -33,47 +33,48 @@ from flyto_ai.providers.anthropic import AnthropicProvider
 # =========================================================================
 
 class TestProviderLogFormatSource:
-    """Verify providers build log entries with {function, arguments} not {tool, args}.
+    """Verify shared dispatch_and_log_tool builds log entries with {function, arguments}.
 
-    Instead of mocking, we read the actual provider source code and verify
-    the literal field names used in log_entry construction.
+    Log entry construction has been extracted to providers/base.py dispatch_and_log_tool.
     """
 
-    def test_openai_provider_uses_function_field(self):
-        src = inspect.getsource(OpenAIProvider.chat)
+    def test_shared_dispatch_uses_function_field(self):
+        from flyto_ai.providers.base import dispatch_and_log_tool
+        src = inspect.getsource(dispatch_and_log_tool)
         assert '"function": func_name' in src or "'function': func_name" in src
-        assert '"tool":' not in src
 
-    def test_openai_provider_uses_arguments_field(self):
-        src = inspect.getsource(OpenAIProvider.chat)
+    def test_shared_dispatch_uses_arguments_field(self):
+        from flyto_ai.providers.base import dispatch_and_log_tool
+        src = inspect.getsource(dispatch_and_log_tool)
         assert '"arguments": func_args' in src or "'arguments': func_args" in src
-        assert '"args":' not in src
 
-    def test_openai_provider_tracks_module_id(self):
-        src = inspect.getsource(OpenAIProvider.chat)
+    def test_shared_dispatch_tracks_module_id(self):
+        from flyto_ai.providers.base import dispatch_and_log_tool
+        src = inspect.getsource(dispatch_and_log_tool)
         assert 'log_entry["module_id"]' in src
 
-    def test_openai_provider_tracks_ok(self):
+    def test_shared_dispatch_tracks_ok(self):
+        from flyto_ai.providers.base import dispatch_and_log_tool
+        src = inspect.getsource(dispatch_and_log_tool)
+        assert 'log_entry["ok"]' in src
+
+    def test_openai_uses_shared_dispatch(self):
         src = inspect.getsource(OpenAIProvider.chat)
-        assert 'log_entry["ok"]' in src
+        assert "dispatch_and_log_tool" in src
 
-    def test_anthropic_provider_uses_function_field(self):
+    def test_anthropic_uses_shared_dispatch(self):
         src = inspect.getsource(AnthropicProvider.chat)
-        assert '"function": func_name' in src or "'function': func_name" in src
-        assert '"tool":' not in src
+        assert "dispatch_and_log_tool" in src
 
-    def test_anthropic_provider_uses_arguments_field(self):
-        src = inspect.getsource(AnthropicProvider.chat)
-        assert '"arguments": func_args' in src or "'arguments': func_args" in src
-        assert '"args":' not in src
+    def test_openai_no_inline_log_entry(self):
+        """OpenAI should not build log_entry inline (moved to shared function)."""
+        src = inspect.getsource(OpenAIProvider.chat)
+        assert 'log_entry: Dict' not in src
 
-    def test_anthropic_provider_tracks_module_id(self):
+    def test_anthropic_no_inline_log_entry(self):
+        """Anthropic should not build log_entry inline (moved to shared function)."""
         src = inspect.getsource(AnthropicProvider.chat)
-        assert 'log_entry["module_id"]' in src
-
-    def test_anthropic_provider_tracks_ok(self):
-        src = inspect.getsource(AnthropicProvider.chat)
-        assert 'log_entry["ok"]' in src
+        assert 'log_entry: Dict' not in src
 
 
 class TestExecutionResultsFilter:
@@ -507,19 +508,19 @@ class TestServeHardening:
     def test_serve_source_validates_content_length(self):
         """Serve handler must check Content-Length bounds."""
         from flyto_ai import cli
-        src = inspect.getsource(cli._cmd_serve)
+        src = inspect.getsource(cli._cmd_serve_stdlib)
         assert "MAX_BODY_SIZE" in src or "Content-Length" in src
 
     def test_serve_source_catches_json_errors(self):
         """Serve handler must catch JSON parse errors."""
         from flyto_ai import cli
-        src = inspect.getsource(cli._cmd_serve)
+        src = inspect.getsource(cli._cmd_serve_stdlib)
         assert "JSONDecodeError" in src or "json.loads" in src
 
     def test_serve_max_body_constant(self):
         """MAX_BODY_SIZE should be defined and reasonable."""
         from flyto_ai import cli
-        src = inspect.getsource(cli._cmd_serve)
+        src = inspect.getsource(cli._cmd_serve_stdlib)
         assert "1_000_000" in src or "1000000" in src
 
 
@@ -596,9 +597,9 @@ class TestHistoryTrim:
 class TestServeLoopClosure:
 
     def test_serve_closes_loop(self):
-        """_cmd_serve must close the event loop in finally block."""
+        """_cmd_serve_stdlib must close the event loop in finally block."""
         from flyto_ai import cli
-        src = inspect.getsource(cli._cmd_serve)
+        src = inspect.getsource(cli._cmd_serve_stdlib)
         assert "loop.close()" in src
         assert "finally" in src
 

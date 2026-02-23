@@ -25,7 +25,7 @@ An AI agent that turns natural language into **real results + reusable automatio
 Say "scrape the title from example.com" — the agent **executes it immediately** and gives you the result, plus a YAML workflow you can save, share, schedule, and run again.
 
 ```
-> scrape the title from example.com
+❯ scrape the title from example.com
 
 Result: "Example Domain"
 
@@ -78,7 +78,7 @@ One install, one command — interactive chat with **412 automation modules**, b
 ### Web Scraping
 
 ```
-> extract all product names and prices from example-shop.com/products
+❯ extract all product names and prices from example-shop.com/products
 ```
 
 ```yaml
@@ -104,7 +104,7 @@ steps:
 ### Form Automation
 
 ```
-> log in to staging.example.com, fill the contact form, and take a screenshot
+❯ log in to staging.example.com, fill the contact form, and take a screenshot
 ```
 
 ```yaml
@@ -133,7 +133,7 @@ steps:
 ### API Monitoring + Notification
 
 ```
-> check if https://api.example.com/health returns 200, if not send a Slack message
+❯ check if https://api.example.com/health returns 200, if not send a Slack message
 ```
 
 ```yaml
@@ -222,23 +222,28 @@ $ flyto-ai
  |_|   |_|\__, |\__\___/|_____|  /_/   \_\___|
            |___/
 
-  v0.4.0  Interactive Mode
+  v0.4.4  Interactive Mode
+  Provider: openai  Model: gpt-4o  Tools: 412
 
- > scrape the title from example.com
- (executes browser.launch → browser.goto → browser.extract)
+  ⏵⏵ execute · openai/gpt-4o · 412 tools
+❯ scrape the title from example.com
 
- Result: "Example Domain"
+  ○ browser.launch
+  ○ browser.goto
+  ○ browser.extract
 
-   2 executed · 5 tool calls
+  The title of example.com is: **Example Domain**
 
- > now also take a screenshot
- (builds on previous context)
+  3 executed · 5 tool calls
 
- > /clear
- Conversation cleared.
+  ⏵⏵ execute · openai/gpt-4o · 412 tools · 1 msgs
+❯ now also take a screenshot
+
+❯ /mode
+Switched to: plan-only (YAML output)
 ```
 
-Commands: `/clear`, `/history`, `/version`, `/help`, `/exit`
+Commands: `/clear`, `/mode`, `/history`, `/version`, `/help`, `/exit`
 
 ## Webhook & HTTP Server
 

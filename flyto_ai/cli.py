@@ -332,14 +332,30 @@ def _cmd_interactive(args):
                 print("  {}Unknown command: {}{}".format(_DIM, cmd, _RESET))
                 continue
 
-        # Send to agent
+        # Send to agent with live tool progress
         print()
-        sys.stdout.write("  {}Thinking...{}".format(_DIM, _RESET))
+        _tool_count = [0]
+
+        def _on_tool_call(func_name, func_args):
+            _tool_count[0] += 1
+            # Show tool name (for execute_module show the module_id)
+            if func_name == "execute_module":
+                label = func_args.get("module_id", func_name)
+            else:
+                label = func_name
+            sys.stdout.write("\r\033[K")
+            sys.stdout.write("  {}\u25cb {}{}".format(_DIM, label, _RESET))
+            sys.stdout.flush()
+
+        sys.stdout.write("  {}\u25cb Thinking...{}".format(_DIM, _RESET))
         sys.stdout.flush()
 
-        result = asyncio.run(agent.chat(user_input, history=history, mode="execute"))
+        result = asyncio.run(agent.chat(
+            user_input, history=history, mode="execute",
+            on_tool_call=_on_tool_call,
+        ))
 
-        # Clear "Thinking..." line
+        # Clear progress line
         sys.stdout.write("\r\033[K")
 
         if result.ok:

@@ -132,3 +132,28 @@ async def test_custom_system_prompt_ignores_mode(monkeypatch):
 
     await agent.chat("hello", mode="yaml")
     assert captured_prompt["value"] == custom
+
+
+@pytest.mark.asyncio
+async def test_on_tool_call_callback(monkeypatch):
+    """on_tool_call callback is invoked for each tool dispatch."""
+    calls = []
+
+    async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=15):
+        # Simulate the provider calling dispatch_fn (which is instrumented)
+        await dispatch_fn("search_modules", {"query": "browser"})
+        await dispatch_fn("execute_module", {"module_id": "browser.goto"})
+        return "Done!", [
+            {"function": "search_modules"},
+            {"function": "execute_module"},
+        ]
+
+    agent = _make_agent(monkeypatch, mock_chat)
+
+    def _cb(func_name, func_args):
+        calls.append(func_name)
+
+    result = await agent.chat("test", mode="execute", on_tool_call=_cb)
+
+    assert result.ok
+    assert calls == ["search_modules", "execute_module"]

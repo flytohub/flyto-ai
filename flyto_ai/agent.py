@@ -138,6 +138,7 @@ class Agent:
         history: Optional[List[Dict[str, Any]]] = None,
         template_context: Optional[Dict[str, Any]] = None,
         mode: str = "execute",
+        on_tool_call=None,
     ) -> ChatResponse:
         """Run one chat turn: send message → tool loop → validation → response.
 
@@ -146,6 +147,9 @@ class Agent:
         mode : str
             ``"execute"`` — run modules directly, skip YAML nudge/validation.
             ``"yaml"`` — only generate workflow YAML (original behaviour).
+        on_tool_call : callable, optional
+            ``on_tool_call(func_name, func_args)`` — called before each tool
+            dispatch.  Use for progress display.
         """
         if not self._config.api_key and self._config.provider != "ollama":
             return ChatResponse(
@@ -159,8 +163,16 @@ class Agent:
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
 
-        # Build dispatch
+        # Build dispatch (with optional progress callback)
         dispatch_fn = self._make_safe_dispatch()
+        if dispatch_fn and on_tool_call:
+            _base = dispatch_fn
+
+            async def _instrumented(func_name: str, func_args: dict) -> dict:
+                on_tool_call(func_name, func_args)
+                return await _base(func_name, func_args)
+
+            dispatch_fn = _instrumented
         has_tools = bool(self._tools and dispatch_fn)
 
         # Build system prompt

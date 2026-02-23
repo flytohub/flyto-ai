@@ -148,6 +148,8 @@ ALWAYS EXECUTE using tools. Do NOT only plan.
 - Launch browser ONCE per task with execute_module("browser.launch", {{}})
 - Pass session handle via context: {{"browser_session": "..."}} to ALL subsequent browser calls
 - Never spawn multiple sessions in parallel
+- **CRITICAL: NEVER guess CSS selectors. After browser.goto, ALWAYS run browser.snapshot \
+or inspect_page FIRST to discover the real DOM selectors before any click/type/extract.**
 - After browser.type, ALWAYS submit with browser.press(key="Enter") or browser.click
 - Use browser.extract / browser.snapshot to read results after navigation
 - Do NOT call browser.close — the runtime handles cleanup

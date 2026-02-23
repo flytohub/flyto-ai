@@ -6,20 +6,10 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.models import StreamCallback, StreamEvent, StreamEventType
-from flyto_ai.providers.base import DispatchFn, LLMProvider
+from flyto_ai.providers.base import DispatchFn, LLMProvider, fire_stream as _fire
 from flyto_ai.redaction import redact_args
 
 logger = logging.getLogger(__name__)
-
-
-def _fire(on_stream: Optional[StreamCallback], event: StreamEvent) -> None:
-    """Safely invoke the stream callback."""
-    if on_stream is None:
-        return
-    try:
-        on_stream(event)
-    except Exception:
-        pass
 
 
 class AnthropicProvider(LLMProvider):
@@ -37,6 +27,10 @@ class AnthropicProvider(LLMProvider):
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._client = None
+
+    def __repr__(self) -> str:
+        key_hint = "{}...".format(self._api_key[:4]) if self._api_key and len(self._api_key) > 4 else "***"
+        return "AnthropicProvider(model={!r}, api_key={!r})".format(self._model, key_hint)
 
     async def chat(
         self,

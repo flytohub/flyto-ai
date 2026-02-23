@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """flyto-core MCP tool bridge — lazily imports core handler."""
 import logging
+import threading
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -10,11 +11,13 @@ logger = logging.getLogger(__name__)
 # Keys are browser session IDs from browser.launch results.
 # Cleared via clear_browser_sessions() between independent chat sessions.
 _browser_sessions: Dict[str, Any] = {}
+_browser_sessions_lock = threading.Lock()
 
 
 def clear_browser_sessions() -> None:
     """Clear the shared browser session store (call between independent chats)."""
-    _browser_sessions.clear()
+    with _browser_sessions_lock:
+        _browser_sessions.clear()
 
 
 _cached_handler = None
@@ -131,8 +134,14 @@ async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, 
             if _is_session_dead(error_msg):
                 relaunch = await _relaunch_browser()
                 if not relaunch.get("ok", False):
-                    logger.warning("Browser relaunch failed: %s", relaunch.get("error", ""))
-                    return result  # return original error
+                    relaunch_err = relaunch.get("error", "unknown")
+                    logger.warning("Browser relaunch failed: %s", relaunch_err)
+                    return {
+                        "ok": False,
+                        "error": "Browser session dead ({}). Relaunch also failed: {}".format(
+                            error_msg[:100], relaunch_err,
+                        ),
+                    }
 
             # Retry once
             result = await _dispatch_core_tool_inner(name, arguments)

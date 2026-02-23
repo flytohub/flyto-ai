@@ -6,20 +6,10 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.models import StreamCallback, StreamEvent, StreamEventType
-from flyto_ai.providers.base import DispatchFn, LLMProvider
+from flyto_ai.providers.base import DispatchFn, LLMProvider, fire_stream as _fire
 from flyto_ai.redaction import redact_args
 
 logger = logging.getLogger(__name__)
-
-
-def _fire(on_stream: Optional[StreamCallback], event: StreamEvent) -> None:
-    """Safely invoke the stream callback."""
-    if on_stream is None:
-        return
-    try:
-        on_stream(event)
-    except Exception:
-        pass  # callback crash must never break the chat loop
 
 
 class OpenAIProvider(LLMProvider):
@@ -39,6 +29,10 @@ class OpenAIProvider(LLMProvider):
         self._max_tokens = max_tokens
         self._base_url = base_url
         self._client = None
+
+    def __repr__(self) -> str:
+        key_hint = "{}...".format(self._api_key[:4]) if self._api_key and len(self._api_key) > 4 else "***"
+        return "OpenAIProvider(model={!r}, api_key={!r})".format(self._model, key_hint)
 
     def _make_client(self):
         if self._client is None:

@@ -148,8 +148,10 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
                 params={},
                 browser_sessions=sessions,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("inspect_page browser cleanup failed: %s", e)
+        finally:
+            sessions.clear()
 
 
 async def dispatch_inspect_page(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

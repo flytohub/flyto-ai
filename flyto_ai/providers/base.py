@@ -1,13 +1,26 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Abstract LLM provider interface."""
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple
 
-from flyto_ai.models import StreamCallback
+from flyto_ai.models import StreamCallback, StreamEvent
+
+logger = logging.getLogger(__name__)
 
 # Type alias for the dispatch function
 DispatchFn = Callable[[str, dict], Coroutine[Any, Any, dict]]
+
+
+def fire_stream(on_stream: Optional[StreamCallback], event: StreamEvent) -> None:
+    """Safely invoke the stream callback. Shared across all providers."""
+    if on_stream is None:
+        return
+    try:
+        on_stream(event)
+    except Exception as e:
+        logger.debug("Stream callback error: %s", e)
 
 
 class LLMProvider(ABC):

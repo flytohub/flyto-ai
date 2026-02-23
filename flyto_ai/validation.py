@@ -29,12 +29,15 @@ def validate_workflow_steps(yaml_str: str) -> List[str]:
     except Exception as e:
         return ["YAML parse error: {}".format(e)]
 
-    if not isinstance(workflow, dict) or "steps" not in workflow:
-        return []
+    if not isinstance(workflow, dict):
+        return ["Workflow must be a YAML mapping (dict), got {}".format(type(workflow).__name__)]
+
+    if "steps" not in workflow:
+        return ["Workflow missing required 'steps' key"]
 
     steps = workflow.get("steps", [])
     if not isinstance(steps, list):
-        return []
+        return ["'steps' must be a list, got {}".format(type(steps).__name__)]
 
     try:
         from core.mcp_handler import get_module_info

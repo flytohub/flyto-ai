@@ -57,6 +57,12 @@ def main():
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
         _cmd_interactive(args)
+    elif args.command is None and not sys.stdin.isatty() and not sys.stdin.closed:
+        # Pipe mode: echo "scrape example.com" | flyto-ai
+        try:
+            _cmd_pipe(args)
+        except OSError:
+            parser.print_help()
     elif args.command is None:
         parser.print_help()
     elif len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
@@ -514,6 +520,25 @@ def _cmd_interactive(args):
         loop.close()
 
 
+def _cmd_pipe(args):
+    """Handle piped stdin: echo "scrape example.com" | flyto-ai"""
+    from flyto_ai import Agent, AgentConfig
+
+    message = sys.stdin.read().strip()
+    if not message:
+        return
+
+    config = AgentConfig.from_env()
+    agent = Agent(config=config)
+    result = asyncio.run(agent.chat(message, mode="execute"))
+
+    if result.ok:
+        print(result.message)
+    else:
+        print("Error: {}".format(result.error or result.message), file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_chat(args):
     from flyto_ai import Agent, AgentConfig
 
@@ -573,7 +598,7 @@ def _post_webhook(url, result):
     try:
         resp = urlopen(req, timeout=10)
         print("{}Webhook: {} {}{}".format(_DIM, resp.status, url, _RESET), file=sys.stderr)
-    except URLError as e:
+    except (URLError, ValueError, OSError) as e:
         print("{}Webhook failed: {} — {}{}".format(_YELLOW, url, e, _RESET), file=sys.stderr)
 
 
@@ -597,9 +622,17 @@ def _cmd_serve(args):
     asyncio.set_event_loop(loop)
 
     MAX_BODY_SIZE = 1_000_000  # 1 MB
+    _request_count = [0]
+    _CLEANUP_INTERVAL = 50  # run session cleanup every N requests
+
+    from flyto_ai.tools.core_tools import clear_browser_sessions
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            # Periodic cleanup of stale browser sessions
+            _request_count[0] += 1
+            if _request_count[0] % _CLEANUP_INTERVAL == 0:
+                clear_browser_sessions()
             if self.path not in ("/chat", "/api/chat"):
                 self.send_error(404)
                 return
@@ -613,15 +646,23 @@ def _cmd_serve(args):
             except (json.JSONDecodeError, ValueError):
                 self._json_response(400, {"ok": False, "error": "Invalid JSON body"})
                 return
-            message = body.get("message", "")
-            if not message:
-                self._json_response(400, {"ok": False, "error": "Missing 'message' field"})
+
+            # Schema validation via Pydantic
+            from flyto_ai.models import ChatRequest
+            try:
+                req = ChatRequest.model_validate(body)
+            except Exception as e:
+                self._json_response(400, {"ok": False, "error": "Invalid request: {}".format(e)})
                 return
 
+            history_dicts = None
+            if req.history:
+                history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
+
             result = loop.run_until_complete(agent.chat(
-                message,
-                history=body.get("history"),
-                template_context=body.get("template_context"),
+                req.message,
+                history=history_dicts,
+                template_context=req.template_context,
                 mode=body.get("mode", "execute"),
             ))
             self._json_response(200, result.model_dump())

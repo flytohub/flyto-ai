@@ -122,8 +122,8 @@ class Agent:
             defs = get_core_tool_defs()
             if defs:
                 registry.register_many(defs, dispatch_core_tool)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to load core tools: %s", e)
 
         try:
             from flyto_ai.tools.blueprint_tools import get_blueprint_tool_defs, dispatch_blueprint_tool
@@ -131,48 +131,37 @@ class Agent:
             defs = get_blueprint_tool_defs()
             if defs:
                 registry.register_many(defs, dispatch_blueprint_tool)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to load blueprint tools: %s", e)
 
         try:
             from flyto_ai.tools.inspect_page import INSPECT_PAGE_TOOL, dispatch_inspect_page
             registry.register(INSPECT_PAGE_TOOL, dispatch_inspect_page)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to load inspect_page tool: %s", e)
 
         if registry.tools:
             self._tools = registry.tools
             self._dispatch_fn = registry.dispatch
 
     def _make_provider(self) -> LLMProvider:
-        """Create the LLM provider from config."""
+        """Create the LLM provider from config using the provider registry."""
+        from flyto_ai.providers import create_provider
+
         cfg = self._config
-        if cfg.provider == "anthropic":
-            from flyto_ai.providers.anthropic import AnthropicProvider
-            return AnthropicProvider(
-                api_key=cfg.api_key,
-                model=cfg.resolved_model,
-                temperature=cfg.temperature,
-                max_tokens=cfg.max_tokens,
-            )
-        elif cfg.provider == "ollama":
-            from flyto_ai.providers.ollama import OllamaProvider
-            return OllamaProvider(
-                model=cfg.resolved_model,
-                base_url=cfg.base_url or "http://localhost:11434/v1",
-                temperature=cfg.temperature,
-                max_tokens=cfg.max_tokens,
-            )
+        kwargs = {
+            "model": cfg.resolved_model,
+            "temperature": cfg.temperature,
+            "max_tokens": cfg.max_tokens,
+        }
+        if cfg.provider == "ollama":
+            kwargs["base_url"] = cfg.base_url or "http://localhost:11434/v1"
         else:
-            # openai, openai-compatible, or default
-            from flyto_ai.providers.openai import OpenAIProvider
-            return OpenAIProvider(
-                api_key=cfg.api_key,
-                model=cfg.resolved_model,
-                temperature=cfg.temperature,
-                max_tokens=cfg.max_tokens,
-                base_url=cfg.base_url,
-            )
+            kwargs["api_key"] = cfg.api_key
+            if cfg.base_url:
+                kwargs["base_url"] = cfg.base_url
+
+        return create_provider(cfg.provider or "openai", **kwargs)
 
     def _make_safe_dispatch(self):
         """Create a dispatch function that enforces policies."""

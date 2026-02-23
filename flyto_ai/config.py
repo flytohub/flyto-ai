@@ -90,7 +90,23 @@ class AgentConfig:
         )
 
     def __post_init__(self):
-        """Validate base_url against SSRF allowlist if set."""
+        """Validate config values."""
+        # Bounds check temperature and max_tokens
+        if self.temperature < 0.0:
+            logger.warning("temperature %s < 0, clamping to 0.0", self.temperature)
+            self.temperature = 0.0
+        elif self.temperature > 2.0:
+            logger.warning("temperature %s > 2.0, clamping to 2.0", self.temperature)
+            self.temperature = 2.0
+
+        if self.max_tokens < 1:
+            logger.warning("max_tokens %s < 1, setting to 1", self.max_tokens)
+            self.max_tokens = 1
+        elif self.max_tokens > 200_000:
+            logger.warning("max_tokens %s > 200000, clamping to 200000", self.max_tokens)
+            self.max_tokens = 200_000
+
+        # Validate base_url against SSRF allowlist if set
         if self.base_url:
             from flyto_ai.prompt.policies import validate_base_url
             if not validate_base_url(self.base_url):

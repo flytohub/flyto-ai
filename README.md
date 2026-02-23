@@ -50,6 +50,7 @@ steps:
 
 ```bash
 pip install flyto-ai
+playwright install chromium     # download browser for web automation
 export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```

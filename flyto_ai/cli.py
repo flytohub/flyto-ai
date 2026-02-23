@@ -3,8 +3,10 @@
 """flyto-ai CLI — natural language automation from the terminal."""
 import argparse
 import asyncio
+import importlib.resources
 import json
 import sys
+import time
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -699,7 +701,9 @@ def _cmd_serve(args):
 def _cmd_serve_aiohttp(args):
     """Async HTTP server using aiohttp — native async, supports concurrent requests."""
     import aiohttp.web
+    from aiohttp import web
     from flyto_ai import Agent, AgentConfig
+    from flyto_ai.models import ChatRequest
 
     config = AgentConfig.from_env()
     if args.provider:
@@ -715,7 +719,28 @@ def _cmd_serve_aiohttp(args):
     _request_count = [0]
     _CLEANUP_INTERVAL = 50
 
-    async def handle_chat(request):
+    # --- Rate limiter (token bucket per IP, 10 req/min, burst 3) ---
+    _rate_buckets = {}  # ip -> [tokens, last_refill_time]
+    _RATE_LIMIT = 10
+    _RATE_BURST = 3
+    _RATE_WINDOW = 60  # seconds
+
+    def _check_rate_limit(ip):
+        now = time.monotonic()
+        if ip not in _rate_buckets:
+            _rate_buckets[ip] = [_RATE_BURST - 1, now]
+            return True
+        bucket = _rate_buckets[ip]
+        elapsed = now - bucket[1]
+        refill = elapsed * (_RATE_LIMIT / _RATE_WINDOW)
+        bucket[0] = min(_RATE_BURST, bucket[0] + refill)
+        bucket[1] = now
+        if bucket[0] < 1:
+            return False
+        bucket[0] -= 1
+        return True
+
+    def _cleanup_old(request):
         _request_count[0] += 1
         if _request_count[0] % _CLEANUP_INTERVAL == 0:
             try:
@@ -724,18 +749,46 @@ def _cmd_serve_aiohttp(args):
             except Exception:
                 pass
 
+    # --- CORS middleware ---
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            resp = web.Response()
+        else:
+            resp = await handler(request)
+        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    # --- Serve demo.html ---
+    async def handle_demo(request):
+        html_path = importlib.resources.files("flyto_ai").joinpath("static/demo.html")
+        return web.Response(
+            text=html_path.read_text("utf-8"),
+            content_type="text/html",
+        )
+
+    # --- Chat (batch) ---
+    async def handle_chat(request):
+        _cleanup_old(request)
+        ip = request.remote or "unknown"
+        if not _check_rate_limit(ip):
+            return web.json_response(
+                {"ok": False, "error": "Rate limited — try again in a moment"}, status=429,
+            )
+
         try:
             body = await request.json()
         except Exception:
-            return aiohttp.web.json_response(
+            return web.json_response(
                 {"ok": False, "error": "Invalid JSON body"}, status=400,
             )
 
-        from flyto_ai.models import ChatRequest
         try:
             req = ChatRequest.model_validate(body)
         except Exception as e:
-            return aiohttp.web.json_response(
+            return web.json_response(
                 {"ok": False, "error": "Invalid request: {}".format(e)}, status=400,
             )
 
@@ -749,34 +802,111 @@ def _cmd_serve_aiohttp(args):
             template_context=req.template_context,
             mode=body.get("mode", "execute"),
         )
-        return aiohttp.web.json_response(result.model_dump(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
+        return web.json_response(result.model_dump(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
+
+    # --- Chat SSE streaming ---
+    async def handle_chat_stream(request):
+        _cleanup_old(request)
+        ip = request.remote or "unknown"
+        if not _check_rate_limit(ip):
+            return web.json_response(
+                {"ok": False, "error": "Rate limited — try again in a moment"}, status=429,
+            )
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"ok": False, "error": "Invalid JSON body"}, status=400,
+            )
+
+        try:
+            req = ChatRequest.model_validate(body)
+        except Exception as e:
+            return web.json_response(
+                {"ok": False, "error": "Invalid request: {}".format(e)}, status=400,
+            )
+
+        response = web.StreamResponse(headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+
+        # Queue bridges sync on_stream callback → async SSE writer
+        queue = asyncio.Queue()
+
+        def on_stream(event):
+            data = json.dumps({
+                "type": event.type.value,
+                "content": event.content,
+                "tool_name": event.tool_name,
+                "tool_args": event.tool_args,
+                "tool_result": event.tool_result,
+            }, ensure_ascii=False, default=str)
+            queue.put_nowait("event: {}\ndata: {}\n\n".format(event.type.value, data))
+
+        async def sse_writer():
+            while True:
+                sse = await queue.get()
+                if sse is None:
+                    break
+                await response.write(sse.encode("utf-8"))
+
+        writer_task = asyncio.ensure_future(sse_writer())
+
+        history_dicts = None
+        if req.history:
+            history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
+
+        result = await agent.chat(
+            req.message,
+            history=history_dicts,
+            template_context=req.template_context,
+            mode=body.get("mode", "execute"),
+            on_stream=on_stream,
+        )
+
+        # Signal writer to stop, then send final result
+        queue.put_nowait(None)
+        await writer_task
+
+        result_data = json.dumps(result.model_dump(), ensure_ascii=False, default=str)
+        await response.write("event: result\ndata: {}\n\n".format(result_data).encode("utf-8"))
+        await response.write_eof()
+        return response
 
     async def handle_health(request):
-        return aiohttp.web.json_response({"ok": True, "status": "ready"})
+        return web.json_response({"ok": True, "status": "ready"})
 
-    app = aiohttp.web.Application(client_max_size=MAX_BODY_SIZE)
+    app = web.Application(client_max_size=MAX_BODY_SIZE, middlewares=[cors_middleware])
+    app.router.add_get("/", handle_demo)
+    app.router.add_get("/demo", handle_demo)
     app.router.add_post("/chat", handle_chat)
     app.router.add_post("/api/chat", handle_chat)
+    app.router.add_post("/chat/stream", handle_chat_stream)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/", handle_health)
 
     print()
     print("  {}{}Flyto2 AI Server{}  {}(aiohttp){}".format(_BOLD, _CYAN, _RESET, _DIM, _RESET))
     print("  Listening on {}http://{}:{}{}".format(_GREEN, args.host, args.port, _RESET))
     print()
-    print("  {}POST /chat{}  {}{\"message\": \"scrape example.com\"}{}".format(
-        _BOLD, _RESET, _DIM, _RESET,
-    ))
-    print("  {}GET  /health{}".format(_BOLD, _RESET))
+    print("  {}GET  /{}            Demo page".format(_BOLD, _RESET))
+    print("  {}POST /chat{}        Chat API".format(_BOLD, _RESET))
+    print("  {}POST /chat/stream{} Streaming SSE".format(_BOLD, _RESET))
+    print("  {}GET  /health{}      Health check".format(_BOLD, _RESET))
     print()
 
-    aiohttp.web.run_app(app, host=args.host, port=args.port, print=lambda *a: None)
+    web.run_app(app, host=args.host, port=args.port, print=lambda *a: None)
 
 
 def _cmd_serve_stdlib(args):
     """Synchronous HTTP server using stdlib — fallback when aiohttp not installed."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from flyto_ai import Agent, AgentConfig
+    from flyto_ai.models import ChatRequest
 
     config = AgentConfig.from_env()
     if args.provider:
@@ -796,7 +926,31 @@ def _cmd_serve_stdlib(args):
     _request_count = [0]
     _CLEANUP_INTERVAL = 50  # run session cleanup every N requests
 
+    # Rate limiter (token bucket per IP, 10 req/min, burst 3)
+    _rate_buckets = {}
+    _RATE_LIMIT = 10
+    _RATE_BURST = 3
+    _RATE_WINDOW = 60
+
+    def _check_rate_limit(ip):
+        now = time.monotonic()
+        if ip not in _rate_buckets:
+            _rate_buckets[ip] = [_RATE_BURST - 1, now]
+            return True
+        bucket = _rate_buckets[ip]
+        elapsed = now - bucket[1]
+        refill = elapsed * (_RATE_LIMIT / _RATE_WINDOW)
+        bucket[0] = min(_RATE_BURST, bucket[0] + refill)
+        bucket[1] = now
+        if bucket[0] < 1:
+            return False
+        bucket[0] -= 1
+        return True
+
     from flyto_ai.tools.core_tools import clear_browser_sessions
+
+    # Load demo HTML once
+    _demo_html = importlib.resources.files("flyto_ai").joinpath("static/demo.html").read_text("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -804,7 +958,14 @@ def _cmd_serve_stdlib(args):
             _request_count[0] += 1
             if _request_count[0] % _CLEANUP_INTERVAL == 0:
                 clear_browser_sessions()
-            if self.path not in ("/chat", "/api/chat"):
+
+            # Rate limit
+            ip = self.client_address[0]
+            if not _check_rate_limit(ip):
+                self._json_response(429, {"ok": False, "error": "Rate limited — try again in a moment"})
+                return
+
+            if self.path not in ("/chat", "/api/chat", "/chat/stream"):
                 self.send_error(404)
                 return
 
@@ -818,8 +979,6 @@ def _cmd_serve_stdlib(args):
                 self._json_response(400, {"ok": False, "error": "Invalid JSON body"})
                 return
 
-            # Schema validation via Pydantic
-            from flyto_ai.models import ChatRequest
             try:
                 req = ChatRequest.model_validate(body)
             except Exception as e:
@@ -830,6 +989,11 @@ def _cmd_serve_stdlib(args):
             if req.history:
                 history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
 
+            # SSE streaming for /chat/stream
+            if self.path == "/chat/stream":
+                self._handle_stream(req, body, history_dicts)
+                return
+
             result = loop.run_until_complete(agent.chat(
                 req.message,
                 history=history_dicts,
@@ -838,16 +1002,74 @@ def _cmd_serve_stdlib(args):
             ))
             self._json_response(200, result.model_dump())
 
+        def _handle_stream(self, req, body, history_dicts):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+            self.end_headers()
+
+            def on_stream(event):
+                data = json.dumps({
+                    "type": event.type.value,
+                    "content": event.content,
+                    "tool_name": event.tool_name,
+                    "tool_args": event.tool_args,
+                    "tool_result": event.tool_result,
+                }, ensure_ascii=False, default=str)
+                sse = "event: {}\ndata: {}\n\n".format(event.type.value, data)
+                try:
+                    self.wfile.write(sse.encode("utf-8"))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+            result = loop.run_until_complete(agent.chat(
+                req.message,
+                history=history_dicts,
+                template_context=req.template_context,
+                mode=body.get("mode", "execute"),
+                on_stream=on_stream,
+            ))
+
+            result_data = json.dumps(result.model_dump(), ensure_ascii=False, default=str)
+            try:
+                self.wfile.write("event: result\ndata: {}\n\n".format(result_data).encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
         def do_GET(self):
-            if self.path in ("/health", "/"):
+            if self.path == "/health":
                 self._json_response(200, {"ok": True, "status": "ready"})
+            elif self.path in ("/", "/demo"):
+                self._html_response(_demo_html)
             else:
                 self.send_error(404)
+
+        def do_OPTIONS(self):
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _json_response(self, code, data):
             payload = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _html_response(self, html):
+            payload = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -863,10 +1085,10 @@ def _cmd_serve_stdlib(args):
     print("  {}{}Flyto2 AI Server{}  {}(stdlib){}".format(_BOLD, _CYAN, _RESET, _DIM, _RESET))
     print("  Listening on {}http://{}:{}{}".format(_GREEN, args.host, args.port, _RESET))
     print()
-    print("  {}POST /chat{}  {}{\"message\": \"scrape example.com\"}{}".format(
-        _BOLD, _RESET, _DIM, _RESET,
-    ))
-    print("  {}GET  /health{}".format(_BOLD, _RESET))
+    print("  {}GET  /{}            Demo page".format(_BOLD, _RESET))
+    print("  {}POST /chat{}        Chat API".format(_BOLD, _RESET))
+    print("  {}POST /chat/stream{} Streaming SSE".format(_BOLD, _RESET))
+    print("  {}GET  /health{}      Health check".format(_BOLD, _RESET))
     print()
     try:
         server.serve_forever()

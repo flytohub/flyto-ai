@@ -3,6 +3,7 @@
 """Agent class — chat loop orchestrator."""
 import logging
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.config import AgentConfig
@@ -122,6 +123,7 @@ class Agent:
         self._summarizer = None
         self._memory_search = None
         self._memory_initialized = False
+        self._session_id = uuid.uuid4().hex[:12]
 
         # Sandbox
         if config.enable_sandbox:
@@ -441,7 +443,7 @@ class Agent:
             _blueprint_feedback(tool_calls, execution_results, message)
 
         # Memory: persist conversation + summarize + index
-        session_id = "default"
+        session_id = self._session_id
         if self._memory_store:
             try:
                 await self._memory_store.add_message(session_id, "user", message)

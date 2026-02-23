@@ -431,8 +431,25 @@ def _cmd_interactive(args):
             history.append({"role": "user", "content": user_input})
             history.append({"role": "assistant", "content": result.message})
 
-            for line in result.message.split("\n"):
-                print("  {}".format(line))
+            # Show executed modules as compact list
+            if result.execution_results:
+                for er in result.execution_results:
+                    mid = er.get("module_id", "")
+                    ok = er.get("ok", True)
+                    icon = "{}\u2713{}".format(_GREEN, _RESET) if ok else "{}\u2717{}".format(_YELLOW, _RESET)
+                    print("  {} {}".format(icon, mid))
+                print()
+
+            # Show response (truncate verbose error dumps)
+            msg_lines = result.message.split("\n")
+            if len(msg_lines) > 20:
+                for line in msg_lines[:5]:
+                    print("  {}".format(line))
+                print("  {}... ({} lines truncated){}".format(
+                    _DIM, len(msg_lines) - 5, _RESET))
+            else:
+                for line in msg_lines:
+                    print("  {}".format(line))
 
             meta_parts = []
             if result.execution_results:
@@ -443,9 +460,12 @@ def _cmd_interactive(args):
                 print()
                 print("  {}{}{}".format(_DIM, " \u00b7 ".join(meta_parts), _RESET))
         else:
-            print("  {}Error: {}{}".format(
-                _YELLOW, result.error or result.message, _RESET,
-            ))
+            err_msg = result.error or result.message
+            # Truncate long error messages
+            err_lines = err_msg.split("\n")
+            if len(err_lines) > 3:
+                err_msg = "\n".join(err_lines[:3]) + "\n..."
+            print("  {}Error: {}{}".format(_YELLOW, err_msg, _RESET))
 
         print()
     finally:

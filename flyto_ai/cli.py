@@ -300,30 +300,39 @@ def _cmd_interactive(args):
                 pass
 
     mode = "execute"
+    _UP1 = "\033[1A\r"  # cursor up 1 line + carriage return
+    _CLR = "\r\033[K"   # clear current line
 
     def _status_line():
-        """Build status info line shown above the prompt."""
-        parts = []
-        mode_icon = "\u23f5\u23f5" if mode == "execute" else "\u25b7\u25b7"
-        mode_label = "execute" if mode == "execute" else "plan-only"
-        parts.append("{} {}".format(mode_icon, mode_label))
-        parts.append("{}/{}".format(config.provider or "openai", config.resolved_model))
-        parts.append("{} tools".format(tool_count))
+        """Build colored status line shown below the prompt."""
+        sep = " {}\u00b7{} ".format(_DIM, _RESET)
+        if mode == "execute":
+            mode_part = "{}\u23f5\u23f5 execute{}".format(_GREEN, _RESET)
+        else:
+            mode_part = "{}\u25b7\u25b7 plan-only{}".format(_YELLOW, _RESET)
+        provider_part = "{}/{}".format(config.provider or "openai", config.resolved_model)
+        tools_part = "{}{} tools{}".format(_YELLOW, tool_count, _RESET)
+        parts = [mode_part, provider_part, tools_part]
         if history:
-            parts.append("{} msgs".format(len(history) // 2))
-        return "  {}{}{}\n".format(_DIM, " \u00b7 ".join(parts), _RESET)
+            parts.append("{}{} msgs{}".format(_DIM, len(history) // 2, _RESET))
+        return "  {}".format(sep.join(parts))
 
     while True:
-        # ── Input ─────────────────────────────────────────────
+        # ── Input (status line below prompt via cursor trick) ─
         try:
-            sys.stdout.write(_status_line())
+            # Print status on next line, then move cursor back up
+            sys.stdout.write("\n{}{}\r".format(_status_line(), _UP1))
+            sys.stdout.flush()
             user_input = input(
                 "{}❯{} ".format(_CYAN, _RESET),
             ).strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n{}Bye!{}".format(_DIM, _RESET))
+            sys.stdout.write("{}\n{}Bye!{}".format(_CLR, _DIM, _RESET))
             _save_history()
             break
+
+        # Clear the status line (cursor landed on it after Enter)
+        sys.stdout.write(_CLR)
 
         if not user_input:
             continue

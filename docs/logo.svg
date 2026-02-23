@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="120" viewBox="0 0 400 120">
+  <defs>
+    <linearGradient id="fg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+
+  <!-- F icon (potrace vector) -->
+  <g transform="translate(15, 8) scale(0.029, -0.029) translate(0, -3400)">
+    <path fill="url(#fg)" stroke="none" d="M2820 2915 c-118 -18 -473 -72 -789 -120 -558 -84 -626 -97 -703
+-136 -51 -26 -150 -120 -187 -177 -55 -86 -50 -63 -286 -1212 -57 -278 -116
+-562 -131 -632 -28 -136 -26 -158 18 -158 18 0 225 124 384 231 126 84 158
+140 203 349 18 80 36 160 42 178 13 41 53 88 89 107 16 8 211 44 434 79 224
+36 422 73 442 82 19 9 46 30 61 48 23 28 190 361 207 412 15 48 3 47 -507 -26
+-507 -73 -555 -78 -575 -58 -35 35 9 183 78 261 69 79 69 79 636 173 548 91
+585 100 630 158 37 47 215 426 212 450 -2 13 -11 22 -23 23 -11 1 -117 -14
+-235 -32z"/>
+  </g>
+
+  <!-- Flyto2 text -->
+  <text x="125" y="65" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="52" font-weight="800" fill="#1F2937" letter-spacing="-2">flyto<tspan font-size="36" dy="-14" fill="#7C3AED">2</tspan><tspan font-size="52" dy="14" dx="4" font-weight="300" fill="#7C3AED">AI</tspan></text>
+
+  <!-- Tagline -->
+  <text x="126" y="95" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="13.5" font-weight="400" fill="#9CA3AF" letter-spacing="0.5">Natural language → executable automation</text>
+</svg>

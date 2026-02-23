@@ -149,6 +149,15 @@ async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, 
     return result
 
 
+_sandbox_mgr = None
+
+
+def set_sandbox_manager(mgr) -> None:
+    """Set the sandbox manager for sandboxed module execution."""
+    global _sandbox_mgr
+    _sandbox_mgr = mgr
+
+
 async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Core dispatch logic (no retry)."""
     handler = _get_mcp_handler()
@@ -172,8 +181,14 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         return handler["get_module_examples"](module_id=arguments.get("module_id", ""))
 
     elif name == "execute_module":
+        module_id = arguments.get("module_id", "")
+        # Sandbox: route dangerous categories to Docker container
+        if _sandbox_mgr and _sandbox_mgr.needs_sandbox(module_id):
+            return await _sandbox_mgr.execute(
+                module_id, arguments.get("params", {}), arguments.get("context"),
+            )
         return await handler["execute_module"](
-            module_id=arguments.get("module_id", ""),
+            module_id=module_id,
             params=arguments.get("params", {}),
             context=arguments.get("context"),
             browser_sessions=_browser_sessions,

@@ -26,6 +26,8 @@ def main():
     chat_p.add_argument("--plan", action="store_true", help="Only generate YAML workflow (don't execute)")
     chat_p.add_argument("--max-rounds", type=int, help="Max tool call rounds (default: from config)")
     chat_p.add_argument("--webhook", "-w", help="POST result to this webhook URL")
+    chat_p.add_argument("--no-memory", action="store_true", help="Disable memory system")
+    chat_p.add_argument("--sandbox", action="store_true", help="Enable Docker sandbox for dangerous modules")
 
     # flyto-ai version
     sub.add_parser("version", help="Show version and optional dependency status")
@@ -258,6 +260,53 @@ def _cmd_mcp():
     mcp_main()
 
 
+def _handle_memory_cmd(subcmd, args_list, agent, loop):
+    """Handle /memory subcommands: list, search <query>, clear."""
+    store = agent._memory_store
+    if not store:
+        print("  {}Memory not enabled.{}".format(_DIM, _RESET))
+        return
+
+    if subcmd == "list":
+        sessions = loop.run_until_complete(store.list_sessions())
+        if not sessions:
+            print("  {}No memory sessions.{}".format(_DIM, _RESET))
+            return
+        print()
+        for s in sessions:
+            print("  {}{}{}  {} msgs  {}last: {:.0f}s ago{}".format(
+                _CYAN, s["session_id"], _RESET,
+                s["message_count"],
+                _DIM, __import__("time").time() - s["updated_at"], _RESET,
+            ))
+        print()
+
+    elif subcmd == "search" and args_list:
+        query = " ".join(args_list)
+        search = agent._memory_search
+        if not search:
+            print("  {}Memory search not available.{}".format(_DIM, _RESET))
+            return
+        results = loop.run_until_complete(search.search(query, top_k=5))
+        if not results:
+            print("  {}No results for: {}{}".format(_DIM, query, _RESET))
+            return
+        print()
+        for r in results:
+            content = r["content"][:100].replace("\n", " ")
+            print("  {:.4f}  {}{}{}".format(r["score"], _DIM, content, _RESET))
+        print()
+
+    elif subcmd == "clear":
+        sessions = loop.run_until_complete(store.list_sessions())
+        for s in sessions:
+            loop.run_until_complete(store.delete_session(s["session_id"]))
+        print("  {}Memory cleared ({} sessions).{}".format(_DIM, len(sessions), _RESET))
+
+    else:
+        print("  {}Usage: /memory [list|search <query>|clear]{}".format(_DIM, _RESET))
+
+
 def _cmd_interactive(args):
     """Interactive chat REPL — like Claude Code but for automation workflows."""
     from flyto_ai import Agent, AgentConfig, __version__
@@ -407,11 +456,17 @@ def _cmd_interactive(args):
                         user_msg = history[i]["content"][:60] if i < len(history) else ""
                         print("  {}{}. {}{}".format(_DIM, i // 2 + 1, user_msg, _RESET))
                 continue
+            elif cmd == "/memory":
+                parts = user_input.split()
+                subcmd = parts[1] if len(parts) > 1 else "list"
+                _handle_memory_cmd(subcmd, parts[2:] if len(parts) > 2 else [], agent, loop)
+                continue
             elif cmd == "/help":
                 print()
                 print("  {}/clear{}   — Reset conversation".format(_CYAN, _RESET))
                 print("  {}/mode{}    — Toggle execute / plan-only".format(_CYAN, _RESET))
                 print("  {}/history{} — Show conversation history".format(_CYAN, _RESET))
+                print("  {}/memory{}  — List, search, or clear memory".format(_CYAN, _RESET))
                 print("  {}/version{} — Show version info".format(_CYAN, _RESET))
                 print("  {}/exit{}    — Quit".format(_CYAN, _RESET))
                 print()
@@ -567,6 +622,10 @@ def _cmd_chat(args):
         config.api_key = args.api_key
     if getattr(args, "max_rounds", None):
         config.max_tool_rounds = args.max_rounds
+    if getattr(args, "no_memory", False):
+        config.enable_memory = False
+    if getattr(args, "sandbox", False):
+        config.enable_sandbox = True
 
     agent = Agent(config=config)
     message = " ".join(args.message)

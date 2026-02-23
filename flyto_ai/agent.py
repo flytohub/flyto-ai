@@ -117,6 +117,16 @@ class Agent:
         self._system_prompt = system_prompt
         self._policies = policies
 
+        # Memory system (lazy init)
+        self._memory_store = None
+        self._summarizer = None
+        self._memory_search = None
+        self._memory_initialized = False
+
+        # Sandbox
+        if config.enable_sandbox:
+            self._init_sandbox()
+
         # Auto-discover tools when nothing injected
         if not self._tools and not self._dispatch_fn:
             self._auto_discover_tools()
@@ -153,6 +163,57 @@ class Agent:
         if registry.tools:
             self._tools = registry.tools
             self._dispatch_fn = registry.dispatch
+
+    def _init_sandbox(self):
+        """Initialize Docker sandbox manager."""
+        try:
+            from flyto_ai.sandbox.manager import SandboxManager
+            from flyto_ai.tools.core_tools import set_sandbox_manager
+            mgr = SandboxManager(
+                image=self._config.sandbox_image,
+                timeout=self._config.sandbox_timeout,
+            )
+            set_sandbox_manager(mgr)
+            logger.info("Sandbox enabled: image=%s", self._config.sandbox_image)
+        except Exception as e:
+            logger.warning("Failed to init sandbox: %s", e)
+
+    async def _init_memory(self):
+        """Lazy-init memory system (SQLite store + summarizer + search)."""
+        if self._memory_initialized:
+            return
+        self._memory_initialized = True
+
+        if not self._config.enable_memory:
+            return
+
+        try:
+            from flyto_ai.memory.sqlite_store import SQLiteSessionStore
+            from flyto_ai.memory.summarizer import ConversationSummarizer
+
+            self._memory_store = SQLiteSessionStore(db_path=self._config.memory_db_path)
+            await self._memory_store.init()
+            self._summarizer = ConversationSummarizer(
+                provider=self._provider, threshold=20, keep_recent=10,
+            )
+
+            # Init search (best-effort — embeddings need API key)
+            try:
+                import aiosqlite
+                from flyto_ai.memory.embeddings import EmbeddingStore
+                from flyto_ai.memory.bm25 import BM25Index
+                from flyto_ai.memory.search import MemorySearch
+
+                db = self._memory_store._db
+                emb = EmbeddingStore(db, model=self._config.embedding_model)
+                await emb.init()
+                bm25 = BM25Index(db)
+                await bm25.init()
+                self._memory_search = MemorySearch(emb, bm25)
+            except Exception as e:
+                logger.debug("Memory search init failed (BM25-only fallback): %s", e)
+        except Exception as e:
+            logger.warning("Memory system init failed: %s", e)
 
     def _make_provider(self) -> LLMProvider:
         """Create the LLM provider from config using the provider registry."""
@@ -227,6 +288,9 @@ class Agent:
                 error="no_api_key",
             )
 
+        # Lazy-init memory
+        await self._init_memory()
+
         # Build messages
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
@@ -268,9 +332,24 @@ class Agent:
 
         # Build system prompt (with deterministic language detection)
         reply_language = detect_language(message)
+
+        # Memory: search for relevant past context
+        memory_addition = None
+        if self._memory_search:
+            try:
+                relevant = await self._memory_search.search(message, top_k=3)
+                if relevant:
+                    memory_lines = ["## Relevant Memory (from past conversations):"]
+                    for r in relevant:
+                        memory_lines.append("- {}".format(r["content"][:300]))
+                    memory_addition = "\n".join(memory_lines)
+            except Exception as e:
+                logger.debug("Memory search failed: %s", e)
+
         system_prompt = self._system_prompt or build_system_prompt(
             module_count=300, context=template_context, has_tools=has_tools,
             mode=mode, reply_language=reply_language,
+            admin_addition=memory_addition,
         )
 
         # Accumulated usage across all LLM calls
@@ -360,6 +439,28 @@ class Agent:
         # Closed-loop blueprint feedback (no LLM involved)
         if mode == "execute" and execution_results:
             _blueprint_feedback(tool_calls, execution_results, message)
+
+        # Memory: persist conversation + summarize + index
+        session_id = "default"
+        if self._memory_store:
+            try:
+                await self._memory_store.add_message(session_id, "user", message)
+                await self._memory_store.add_message(session_id, "assistant", response_content)
+            except Exception as e:
+                logger.debug("Memory store failed: %s", e)
+        if self._summarizer and self._memory_store:
+            try:
+                await self._summarizer.maybe_summarize(session_id, self._memory_store)
+            except Exception as e:
+                logger.debug("Summarization failed: %s", e)
+        if self._memory_search:
+            try:
+                exchange = "User: {}\nAssistant: {}".format(
+                    message[:200], response_content[:200],
+                )
+                await self._memory_search.index_content(session_id, exchange)
+            except Exception as e:
+                logger.debug("Memory indexing failed: %s", e)
 
         usage = UsageStats(**total_usage) if any(v > 0 for v in total_usage.values()) else None
 

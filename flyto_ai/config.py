@@ -42,6 +42,16 @@ class AgentConfig:
     max_tool_rounds: int = 30
     max_validation_rounds: int = 2
 
+    # Memory system
+    memory_db_path: str = "~/.flyto/memory.db"
+    enable_memory: bool = True
+    embedding_model: str = "text-embedding-3-small"
+
+    # Docker sandbox
+    enable_sandbox: bool = False
+    sandbox_image: str = "flyto-sandbox:latest"
+    sandbox_timeout: int = 60
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         return cls(
@@ -53,6 +63,12 @@ class AgentConfig:
             base_url=data.get("base_url") or None,
             max_tool_rounds=data.get("max_tool_rounds", 30),
             max_validation_rounds=data.get("max_validation_rounds", 2),
+            memory_db_path=data.get("memory_db_path", "~/.flyto/memory.db"),
+            enable_memory=data.get("enable_memory", True),
+            embedding_model=data.get("embedding_model", "text-embedding-3-small"),
+            enable_sandbox=data.get("enable_sandbox", False),
+            sandbox_image=data.get("sandbox_image", "flyto-sandbox:latest"),
+            sandbox_timeout=data.get("sandbox_timeout", 60),
         )
 
     @classmethod
@@ -88,6 +104,12 @@ class AgentConfig:
             max_tokens=int(os.getenv("FLYTO_AI_MAX_TOKENS", "4096")),
             base_url=os.getenv("FLYTO_AI_BASE_URL") or None,
             max_tool_rounds=int(os.getenv("FLYTO_AI_MAX_TOOL_ROUNDS", "30")),
+            memory_db_path=os.getenv("FLYTO_AI_MEMORY_DB", "~/.flyto/memory.db"),
+            enable_memory=os.getenv("FLYTO_AI_ENABLE_MEMORY", "true").lower() != "false",
+            embedding_model=os.getenv("FLYTO_AI_EMBEDDING_MODEL", "text-embedding-3-small"),
+            enable_sandbox=os.getenv("FLYTO_AI_ENABLE_SANDBOX", "false").lower() == "true",
+            sandbox_image=os.getenv("FLYTO_AI_SANDBOX_IMAGE", "flyto-sandbox:latest"),
+            sandbox_timeout=int(os.getenv("FLYTO_AI_SANDBOX_TIMEOUT", "60")),
         )
 
     def __post_init__(self):

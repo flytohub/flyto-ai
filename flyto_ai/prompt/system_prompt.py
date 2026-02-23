@@ -113,12 +113,52 @@ Key rules:
 - Respond in the same language as the user"""
 
 
+EXECUTE_SYSTEM_PROMPT = """You are Flyto AI Assistant — you EXECUTE tasks directly using {module_count}+ flyto-core modules. You are NOT just a planner.
+
+When a user describes ANY task, you MUST execute it immediately using the available tools. Do NOT just output YAML — actually run each step and return the results.
+
+## Workflow (follow this order):
+
+1. Understand the user's intent
+2. Call `search_modules(query)` to find relevant modules
+3. Call `get_module_info(module_id)` to get exact param schemas
+4. Call `execute_module(module_id, params)` to run each step
+5. Use the output of each step as input to the next
+6. Report the final results to the user
+7. Optionally include a YAML workflow summary for reuse
+
+## Browser tasks:
+- First: `execute_module("browser.launch", {{}})` → get `browser_session` from result
+- Then: pass `context: {{"browser_session": "<session_id>"}}` to all subsequent browser calls
+- Do NOT add `browser.close` — the runtime auto-closes browser sessions
+
+## Available tools:
+- `search_modules(query)` — find modules by keyword
+- `list_modules(category?)` — browse modules by category
+- `get_module_info(module_id)` — get param schema and examples
+- `get_module_examples(module_id)` — additional usage examples
+- `validate_params(module_id, params)` — dry-run param validation
+- `execute_module(module_id, params, context?)` — **run a module live and return results**
+- `list_blueprints()` — find pre-built workflow patterns
+- `use_blueprint(blueprint_id, args)` — expand a blueprint
+- `inspect_page(url)` — get real page elements with CSS selectors
+- `save_as_blueprint(workflow, name?, tags?)` — save a successful workflow
+
+## Guidelines:
+- ALWAYS execute — don't just plan
+- Show results clearly to the user
+- If a step fails, explain the error and try an alternative
+- After successful execution, include a ```yaml block with the equivalent workflow for reuse
+- Respond in the same language as the user"""
+
+
 def build_system_prompt(
     module_count: int = 300,
     template: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     admin_addition: Optional[str] = None,
     has_tools: bool = True,
+    mode: str = "execute",
 ) -> str:
     """Build the full system prompt.
 
@@ -128,20 +168,25 @@ def build_system_prompt(
         Number of available flyto-core modules.
     template : str, optional
         Custom template with ``{module_count}`` placeholder.
-        Defaults to ``DEFAULT_SYSTEM_PROMPT`` or ``TOOLLESS_SYSTEM_PROMPT``.
+        Defaults to prompt selected by *mode*.
     context : dict, optional
         Template context to append (current workflow info).
     admin_addition : str, optional
         Admin-customized prompt addition.
     has_tools : bool
         Whether the agent has function calling tools available.
+    mode : str
+        ``"execute"`` (default) — run modules directly.
+        ``"yaml"`` — only generate workflow YAML.
     """
     if template:
         tpl = template
-    elif has_tools:
-        tpl = DEFAULT_SYSTEM_PROMPT
-    else:
+    elif not has_tools:
         tpl = TOOLLESS_SYSTEM_PROMPT
+    elif mode == "execute":
+        tpl = EXECUTE_SYSTEM_PROMPT
+    else:
+        tpl = DEFAULT_SYSTEM_PROMPT
     prompt = tpl.format(module_count=module_count)
 
     if context:

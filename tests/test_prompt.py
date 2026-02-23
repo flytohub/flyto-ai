@@ -1,7 +1,7 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for system prompt rendering."""
-from flyto_ai.prompt.system_prompt import build_system_prompt, DEFAULT_SYSTEM_PROMPT
+from flyto_ai.prompt.system_prompt import build_system_prompt, DEFAULT_SYSTEM_PROMPT, EXECUTE_SYSTEM_PROMPT
 
 
 class TestBuildSystemPrompt:

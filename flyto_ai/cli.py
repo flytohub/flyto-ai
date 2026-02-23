@@ -23,6 +23,7 @@ def main():
     chat_p.add_argument("--model", "-m", help="Model name")
     chat_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
     chat_p.add_argument("--json", action="store_true", help="Output raw JSON")
+    chat_p.add_argument("--plan", action="store_true", help="Only generate YAML workflow (don't execute)")
     chat_p.add_argument("--webhook", "-w", help="POST result to this webhook URL")
 
     # flyto-ai version
@@ -65,6 +66,7 @@ def main():
         args.model = None
         args.api_key = None
         args.json = False
+        args.plan = False
         args.webhook = None
         _cmd_chat(args)
     else:
@@ -236,7 +238,7 @@ def _cmd_interactive(args):
     print("  {}{}v{}{}  {}Interactive Mode{}".format(
         _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
     ))
-    print("  {}Type a message to generate workflows. /help for commands.{}".format(_DIM, _RESET))
+    print("  {}Type a message to automate tasks. /help for commands.{}".format(_DIM, _RESET))
     print()
 
     # Init agent
@@ -317,7 +319,7 @@ def _cmd_interactive(args):
         sys.stdout.write("  {}Thinking...{}".format(_DIM, _RESET))
         sys.stdout.flush()
 
-        result = asyncio.run(agent.chat(user_input, history=history))
+        result = asyncio.run(agent.chat(user_input, history=history, mode="execute"))
 
         # Clear "Thinking..." line
         sys.stdout.write("\r\033[K")
@@ -329,6 +331,13 @@ def _cmd_interactive(args):
 
             # Print response
             print(result.message)
+
+            # Show execution results summary
+            if result.execution_results:
+                print()
+                print("  {}Executed: {} module(s){}".format(
+                    _GREEN, len(result.execution_results), _RESET,
+                ))
 
             # Show tool calls summary
             if result.tool_calls:
@@ -355,7 +364,8 @@ def _cmd_chat(args):
 
     agent = Agent(config=config)
     message = " ".join(args.message)
-    result = asyncio.run(agent.chat(message))
+    mode = "yaml" if getattr(args, "plan", False) else "execute"
+    result = asyncio.run(agent.chat(message, mode=mode))
 
     if args.json:
         print(result.model_dump_json(indent=2))
@@ -413,6 +423,7 @@ def _cmd_serve(args):
                 message,
                 history=body.get("history"),
                 template_context=body.get("template_context"),
+                mode=body.get("mode", "execute"),
             ))
             self._json_response(200, result.model_dump())
 

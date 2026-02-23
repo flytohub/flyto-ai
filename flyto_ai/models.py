@@ -27,6 +27,7 @@ class ChatResponse(BaseModel):
     session_id: str
     suggestions: List[Dict[str, Any]] = Field(default_factory=list)
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_results: List[Dict[str, Any]] = Field(default_factory=list)
     provider: Optional[str] = None
     model: Optional[str] = None
     error: Optional[str] = None

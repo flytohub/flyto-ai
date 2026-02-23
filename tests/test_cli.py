@@ -14,7 +14,7 @@ def test_version_output(capsys):
     sys.argv = ["flyto-ai", "version"]
     main()
     out = capsys.readouterr().out
-    assert "v0.2.0" in out
+    assert "v0.3.0" in out
     assert "___" in out  # ASCII art present
 
 
@@ -77,7 +77,7 @@ def test_help_no_crash(capsys):
 
 
 def test_help_shows_serve(capsys):
-    """Help mentions serve subcommand."""
+    """Help mentions serve subcommand and chat has --plan flag."""
     sys.argv = ["flyto-ai", "-h"]
     try:
         main()
@@ -85,6 +85,15 @@ def test_help_shows_serve(capsys):
         pass
     out = capsys.readouterr().out
     assert "serve" in out
+
+    # Verify --plan flag exists on chat subcommand
+    sys.argv = ["flyto-ai", "chat", "-h"]
+    try:
+        main()
+    except SystemExit:
+        pass
+    out = capsys.readouterr().out
+    assert "--plan" in out
 
 
 def test_webhook_post():

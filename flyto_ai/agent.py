@@ -137,8 +137,16 @@ class Agent:
         message: str,
         history: Optional[List[Dict[str, Any]]] = None,
         template_context: Optional[Dict[str, Any]] = None,
+        mode: str = "execute",
     ) -> ChatResponse:
-        """Run one chat turn: send message → tool loop → validation → response."""
+        """Run one chat turn: send message → tool loop → validation → response.
+
+        Parameters
+        ----------
+        mode : str
+            ``"execute"`` — run modules directly, skip YAML nudge/validation.
+            ``"yaml"`` — only generate workflow YAML (original behaviour).
+        """
         if not self._config.api_key and self._config.provider != "ollama":
             return ChatResponse(
                 ok=False,
@@ -158,6 +166,7 @@ class Agent:
         # Build system prompt
         system_prompt = self._system_prompt or build_system_prompt(
             module_count=300, context=template_context, has_tools=has_tools,
+            mode=mode,
         )
 
         # Call LLM (toolless mode if no tools available)
@@ -174,51 +183,60 @@ class Agent:
                 error="provider_call_failed",
             )
 
-        # No-YAML nudge
-        if not extract_yaml_from_response(response_content):
-            nudge_messages = messages + [
-                {"role": "assistant", "content": response_content},
-                {"role": "user", "content": (
-                    "You must always output a Flyto Workflow YAML. "
-                    "Please generate the workflow YAML now using the modules and blueprints available."
-                )},
-            ]
-            nudge_content, nudge_tc = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
-            if nudge_content and extract_yaml_from_response(nudge_content):
-                response_content = nudge_content
-                tool_calls.extend(nudge_tc)
+        # --- yaml mode: nudge + validation (original behaviour) ---
+        if mode == "yaml":
+            # No-YAML nudge
+            if not extract_yaml_from_response(response_content):
+                nudge_messages = messages + [
+                    {"role": "assistant", "content": response_content},
+                    {"role": "user", "content": (
+                        "You must always output a Flyto Workflow YAML. "
+                        "Please generate the workflow YAML now using the modules and blueprints available."
+                    )},
+                ]
+                nudge_content, nudge_tc = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
+                if nudge_content and extract_yaml_from_response(nudge_content):
+                    response_content = nudge_content
+                    tool_calls.extend(nudge_tc)
 
-        # YAML validation loop
-        for _attempt in range(self._config.max_validation_rounds):
-            yaml_str = extract_yaml_from_response(response_content)
-            if not yaml_str:
-                break
-            errors = validate_workflow_steps(yaml_str)
-            if not errors:
-                break
+            # YAML validation loop
+            for _attempt in range(self._config.max_validation_rounds):
+                yaml_str = extract_yaml_from_response(response_content)
+                if not yaml_str:
+                    break
+                errors = validate_workflow_steps(yaml_str)
+                if not errors:
+                    break
 
-            error_list = "\n".join("- {}".format(e) for e in errors)
-            retry_messages = messages + [
-                {"role": "assistant", "content": response_content},
-                {"role": "user", "content": (
-                    "The workflow YAML you generated has validation errors:\n"
-                    "{}\n\n"
-                    "Please call get_module_info() for each failing module to "
-                    "verify the correct param names, then regenerate the YAML.".format(error_list)
-                )},
-            ]
-            retry_content, retry_tc = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
-            if retry_content:
-                response_content = retry_content
-                tool_calls.extend(retry_tc)
-            else:
-                break
+                error_list = "\n".join("- {}".format(e) for e in errors)
+                retry_messages = messages + [
+                    {"role": "assistant", "content": response_content},
+                    {"role": "user", "content": (
+                        "The workflow YAML you generated has validation errors:\n"
+                        "{}\n\n"
+                        "Please call get_module_info() for each failing module to "
+                        "verify the correct param names, then regenerate the YAML.".format(error_list)
+                    )},
+                ]
+                retry_content, retry_tc = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
+                if retry_content:
+                    response_content = retry_content
+                    tool_calls.extend(retry_tc)
+                else:
+                    break
+
+        # Collect execute_module results from tool calls
+        execution_results = [
+            tc for tc in tool_calls
+            if tc.get("function") == "execute_module"
+        ]
 
         return ChatResponse(
             ok=True,
             message=response_content,
             session_id="",
             tool_calls=tool_calls,
+            execution_results=execution_results,
             provider=self._config.provider,
             model=self._config.resolved_model,
         )

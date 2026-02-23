@@ -7,7 +7,7 @@
 <h3 align="center">Natural language → executable automation workflows</h3>
 
 <p align="center">
-  <em>aider writes code. open-interpreter runs code. <strong>flyto-ai builds workflows.</strong></em>
+  <em>aider writes code. open-interpreter runs code. <strong>flyto-ai builds &amp; runs workflows.</strong></em>
 </p>
 
 <p align="center">
@@ -20,38 +20,41 @@
 
 ## What is flyto-ai?
 
-An AI agent that turns natural language into **reusable, structured automation workflows** — not throwaway scripts, not chat responses.
+An AI agent that turns natural language into **real results + reusable automation workflows**.
 
-You describe what you want. The agent calls tools, validates parameters, and produces a **YAML workflow** you can save, share, schedule, and run again.
+Say "scrape the title from example.com" — the agent **executes it immediately** and gives you the result, plus a YAML workflow you can save, share, schedule, and run again.
 
 ```
-"scrape the title from example.com"
-         ↓
-┌─────────────────────────────────────┐
-│ name: Scrape Title                  │
-│ steps:                              │
-│   - id: launch                      │
-│     module: browser.launch          │
-│   - id: goto                        │
-│     module: browser.goto            │
-│     params:                         │
-│       url: "https://example.com"    │
-│   - id: extract                     │
-│     module: browser.extract         │
-│     params:                         │
-│       selector: "h1"               │
-└─────────────────────────────────────┘
+> scrape the title from example.com
+
+Result: "Example Domain"
+
+```yaml
+name: Scrape Title
+params:
+  url: "https://example.com"
+steps:
+  - id: launch
+    module: browser.launch
+  - id: goto
+    module: browser.goto
+    params:
+      url: "${{params.url}}"
+  - id: extract
+    module: browser.extract
+    params:
+      selector: "h1"
 ```
 
 ## Quick Start
 
 ```bash
 pip install flyto-ai
-export OPENAI_API_KEY=sk-...
+export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 
-That's it. One install, one command — interactive chat with **412 automation modules**, browser automation, and self-learning blueprints.
+One install, one command — interactive chat with **412 automation modules**, browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
@@ -61,13 +64,93 @@ That's it. One install, one command — interactive chat with **412 automation m
 
 | | aider | open-interpreter | flyto-ai |
 |---|---|---|---|
-| **Output** | Code changes (git diff) | One-time code execution | **Reusable YAML workflows** |
+| **Output** | Code changes (git diff) | One-time code execution | **Results + reusable YAML workflows** |
 | **Tools** | Your codebase | Raw Python/JS/Shell | **412 pre-built modules** |
 | **Learns** | No | No | **Yes — self-learning blueprints** |
 | **Reusable** | Yes (code) | No (ephemeral) | **Yes (save, share, schedule)** |
 | **Webhook/API** | No | No | **Yes** |
-| **For** | Developers | Power users | **Anyone** |
+| **For** | Developers | Power users | **Developers & ops automation** |
 | **License** | Apache-2.0 | AGPL-3.0 | **Apache-2.0** |
+
+## Use Cases
+
+### Web Scraping
+
+```
+> extract all product names and prices from example-shop.com/products
+```
+
+```yaml
+name: Scrape Products
+params:
+  url: "https://example-shop.com/products"
+steps:
+  - id: launch
+    module: browser.launch
+  - id: goto
+    module: browser.goto
+    params:
+      url: "${{params.url}}"
+  - id: extract
+    module: browser.extract
+    params:
+      selector: ".product"
+      fields:
+        name: ".product-name"
+        price: ".product-price"
+```
+
+### Form Automation
+
+```
+> log in to staging.example.com, fill the contact form, and take a screenshot
+```
+
+```yaml
+name: Fill Contact Form
+steps:
+  - id: launch
+    module: browser.launch
+  - id: login
+    module: browser.login
+    params:
+      url: "https://staging.example.com/login"
+      username_selector: "#email"
+      password_selector: "#password"
+      submit_selector: "button[type=submit]"
+  - id: fill
+    module: browser.form
+    params:
+      url: "https://staging.example.com/contact"
+      fields:
+        name: "Test User"
+        message: "Hello from flyto-ai"
+  - id: proof
+    module: browser.screenshot
+```
+
+### API Monitoring + Notification
+
+```
+> check if https://api.example.com/health returns 200, if not send a Slack message
+```
+
+```yaml
+name: Health Check Alert
+params:
+  endpoint: "https://api.example.com/health"
+steps:
+  - id: check
+    module: http.get
+    params:
+      url: "${{params.endpoint}}"
+  - id: notify
+    module: notification.slack
+    params:
+      webhook_url: "${{params.slack_webhook}}"
+      message: "Health check failed: ${{steps.check.status_code}}"
+    condition: "${{steps.check.status_code}} != 200"
+```
 
 ## 412 Batteries Included
 
@@ -82,7 +165,13 @@ Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 412 automation
 | File | 9 | read, write, copy, zip, CSV, JSON |
 | Database | 6 | query, insert, SQLite, PostgreSQL |
 | Notification | 5 | email, Slack, Telegram, webhook |
-| + 71 more categories | 317 | array, math, crypto, convert, flow, ... |
+| + 71 more | 317 | array, math, crypto, convert, flow, ... |
+
+Browse available modules:
+
+```bash
+flyto-ai version   # Shows installed module count
+```
 
 ## Self-Learning Blueprints
 
@@ -93,7 +182,12 @@ First time:  "screenshot example.com" → 15s (discover modules, build from scra
 Second time: "screenshot another.com" → 3s  (reuse learned blueprint)
 ```
 
-Blueprints are stored locally (`~/.flyto/blueprints.db`) and scored by success rate. Export and share your best ones:
+**When are blueprints saved?**
+
+- Only after validation passes + execution succeeds
+- Trivial 1-2 step workflows are skipped
+- Each blueprint has a score based on success/fail ratio — bad ones decay naturally
+- Stored locally in `~/.flyto/blueprints.db`
 
 ```bash
 flyto-ai blueprints                             # View learned blueprints
@@ -103,9 +197,10 @@ flyto-ai blueprints --export > blueprints.yaml  # Export for sharing
 ## CLI
 
 ```bash
-flyto-ai                                     # Interactive chat (default)
-flyto-ai chat "scrape example.com"           # One-shot mode
-flyto-ai chat "take screenshot" -p ollama    # Use Ollama (no API key)
+flyto-ai                                     # Interactive chat — executes tasks directly
+flyto-ai chat "scrape example.com"           # One-shot execute mode
+flyto-ai chat "scrape example.com" --plan    # YAML-only mode (don't execute)
+flyto-ai chat "take screenshot" -p ollama    # Use Ollama (no API key needed)
 flyto-ai chat "..." --webhook https://...    # POST result to webhook
 flyto-ai serve --port 8080                   # HTTP server for triggers
 flyto-ai blueprints                          # List learned blueprints
@@ -114,7 +209,7 @@ flyto-ai version                             # Version + dependency status
 
 ### Interactive Mode
 
-Just run `flyto-ai` — enter an interactive session with multi-turn conversation:
+Just run `flyto-ai` — multi-turn conversation with up/down arrow history:
 
 ```
 $ flyto-ai
@@ -126,18 +221,20 @@ $ flyto-ai
  |_|   |_|\__, |\__\___/|_____|  /_/   \_\___|
            |___/
 
-  v0.2.0  Interactive Mode
+  v0.4.0  Interactive Mode
 
  > scrape the title from example.com
- (generates YAML workflow)
+ (executes browser.launch → browser.goto → browser.extract)
+
+ Result: "Example Domain"
+
+   2 executed · 5 tool calls
 
  > now also take a screenshot
  (builds on previous context)
 
  > /clear
  Conversation cleared.
-
- > /exit
 ```
 
 Commands: `/clear`, `/history`, `/version`, `/help`, `/exit`
@@ -155,10 +252,15 @@ flyto-ai chat "scrape example.com" --webhook https://hook.site/xxx
 ```bash
 flyto-ai serve --port 8080
 
-# Then from Slack, n8n, Make, or any HTTP client:
+# From Slack, n8n, Make, or any HTTP client:
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "take a screenshot of example.com"}'
+
+# Execute mode (default) or plan-only:
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "scrape example.com", "mode": "yaml"}'
 ```
 
 ## Python API
@@ -166,35 +268,49 @@ curl -X POST http://localhost:8080/chat \
 ```python
 from flyto_ai import Agent, AgentConfig
 
-# Auto-detects API keys from environment
 agent = Agent(config=AgentConfig.from_env())
+
+# Execute mode (default) — runs modules and returns results
 result = await agent.chat("extract all links from https://example.com")
-print(result.message)    # YAML workflow
-print(result.tool_calls) # Tool call log
+print(result.message)            # Result + YAML workflow
+print(result.execution_results)  # Module execution results
+
+# Plan-only mode — generates YAML without executing
+result = await agent.chat("extract all links from example.com", mode="yaml")
+print(result.message)            # YAML workflow only
 ```
 
 ## Multi-Provider
 
-Works with any LLM:
+Works with any LLM provider:
 
 ```bash
-export OPENAI_API_KEY=sk-...          # GPT-4o, GPT-4o-mini
-export ANTHROPIC_API_KEY=sk-ant-...   # Claude Sonnet, Opus
-flyto-ai chat "..." -p ollama         # Llama, Mistral, local models
-flyto-ai chat "..." -p openai --model gpt-4o
+export OPENAI_API_KEY=sk-...          # OpenAI models
+export ANTHROPIC_API_KEY=sk-ant-...   # Anthropic models
+flyto-ai chat "..." -p ollama         # Local models (Llama, Mistral, etc.)
+flyto-ai chat "..." --model <name>    # Any specific model
 ```
+
+## Security
+
+- **Workflows are auditable** — YAML is human-readable, reviewable, and version-controllable
+- **Module policies** — whitelist/denylist categories (e.g. block `file.*` or `database.*`)
+- **Sensitive param redaction** — API keys and passwords are masked in tool call logs
+- **Local-first** — blueprints stored in local SQLite, nothing sent to third parties
+- **Webhook output** — structured JSON only, no raw credentials in payload
 
 ## Architecture
 
 ```
 User message
   → LLM (OpenAI / Anthropic / Ollama)
-    → Function calling: search_modules, get_module_info, validate_params, ...
+    → Function calling: search_modules, get_module_info, execute_module, ...
       → 412 flyto-core modules
       → Self-learning blueprints
       → Browser page inspection
-    → YAML validation loop (auto-retry on errors)
-  → Structured workflow output
+    → Execute mode: run modules, return results + YAML
+    → Plan mode: YAML validation loop (auto-retry on errors)
+  → Structured output (results + reusable workflow)
 ```
 
 ## Environment Variables

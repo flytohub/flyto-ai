@@ -265,21 +265,38 @@ def _cmd_interactive(args):
     ))
     print()
 
-    # readline support
+    # readline support — up/down arrow history recall
     try:
         import readline
+        import os as _os
+        _history_dir = _os.path.expanduser("~/.flyto-ai")
+        _os.makedirs(_history_dir, exist_ok=True)
+        _history_file = _os.path.join(_history_dir, "history")
+        try:
+            readline.read_history_file(_history_file)
+        except FileNotFoundError:
+            pass
+        readline.set_history_length(500)
         readline.parse_and_bind("tab: complete")
     except ImportError:
-        pass
+        _history_file = None
 
     _PURPLE = "\033[35m"
     prompt = "{}{} > {}".format(_PURPLE, _BOLD, _RESET)
+
+    def _save_history():
+        if _history_file:
+            try:
+                readline.write_history_file(_history_file)
+            except Exception:
+                pass
 
     while True:
         try:
             user_input = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n{}  Bye!{}".format(_DIM, _RESET))
+            _save_history()
             break
 
         if not user_input:
@@ -290,6 +307,7 @@ def _cmd_interactive(args):
             cmd = user_input.lower().split()[0]
             if cmd in ("/exit", "/quit", "/q"):
                 print("{}  Bye!{}".format(_DIM, _RESET))
+                _save_history()
                 break
             elif cmd in ("/clear", "/reset"):
                 history.clear()
@@ -332,19 +350,15 @@ def _cmd_interactive(args):
             # Print response
             print(result.message)
 
-            # Show execution results summary
+            # Compact metadata line (dim)
+            meta_parts = []
             if result.execution_results:
-                print()
-                print("  {}Executed: {} module(s){}".format(
-                    _GREEN, len(result.execution_results), _RESET,
-                ))
-
-            # Show tool calls summary
+                meta_parts.append("{} executed".format(len(result.execution_results)))
             if result.tool_calls:
+                meta_parts.append("{} tool calls".format(len(result.tool_calls)))
+            if meta_parts:
                 print()
-                print("  {}Tools called: {}{}".format(
-                    _DIM, len(result.tool_calls), _RESET,
-                ))
+                print("  {}{}{}".format(_DIM, " · ".join(meta_parts), _RESET))
         else:
             print("  {}Error: {}{}".format(_YELLOW, result.error or result.message, _RESET))
 

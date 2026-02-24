@@ -264,10 +264,24 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
                 ),
             }
 
-        # Reset cascade flag on new browser.launch attempt
+        # On new browser.launch: close existing sessions to avoid
+        # "Multiple browser sessions active" errors.
         if module_id == "browser.launch":
             _browser_launch_failed = False
             _browser_launch_error = ""
+            if _browser_sessions:
+                for sid in list(_browser_sessions.keys()):
+                    try:
+                        await handler["execute_module"](
+                            module_id="browser.close",
+                            params={},
+                            context={"browser_session": sid},
+                            browser_sessions=_browser_sessions,
+                        )
+                    except Exception:
+                        pass
+                with _browser_sessions_lock:
+                    _browser_sessions.clear()
 
         # Sandbox: route dangerous categories to Docker container
         if _sandbox_mgr and _sandbox_mgr.needs_sandbox(module_id):

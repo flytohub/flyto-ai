@@ -1,6 +1,7 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Agent class — chat loop orchestrator."""
+import json
 import logging
 import time
 import uuid
@@ -467,6 +468,40 @@ class Agent:
             tc for tc in tool_calls
             if tc.get("function") == "execute_module"
         ]
+
+        # Guard: if ALL executions failed, force the LLM to acknowledge failure
+        if execution_results and all(not er.get("ok", False) for er in execution_results):
+            failed_modules = [er.get("module_id", "?") for er in execution_results]
+            errors = []
+            for er in execution_results:
+                preview = er.get("result_preview", "")
+                try:
+                    err_data = json.loads(preview) if preview.startswith("{") else {}
+                    err_msg = err_data.get("error", "")
+                except Exception:
+                    err_msg = ""
+                errors.append("{}: {}".format(er.get("module_id", "?"), err_msg or "failed"))
+
+            error_detail = "\n".join(errors)
+            correction_messages = messages + [
+                {"role": "assistant", "content": response_content},
+                {"role": "user", "content": (
+                    "STOP. All {} module executions FAILED:\n{}\n\n"
+                    "Your previous response is WRONG — you must NOT claim success. "
+                    "Rewrite your response: (1) state which modules failed and why, "
+                    "(2) suggest what the user can do to fix it. "
+                    "Do NOT fabricate results or URLs."
+                ).format(len(execution_results), error_detail)},
+            ]
+            corrected, _, corr_rounds, corr_usage = await self._call_llm_toolless(
+                correction_messages, system_prompt,
+                on_stream=on_stream,
+            )
+            if corrected:
+                response_content = corrected
+                total_rounds += corr_rounds
+                for k in total_usage:
+                    total_usage[k] += corr_usage.get(k, 0)
 
         # Closed-loop blueprint feedback (no LLM involved)
         if mode == "execute" and execution_results:

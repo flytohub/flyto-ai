@@ -41,7 +41,7 @@ def main():
 
     # flyto-ai serve
     serve_p = sub.add_parser("serve", help="Start HTTP server for webhook triggers")
-    serve_p.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    serve_p.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     serve_p.add_argument("--port", type=int, default=7411, help="Bind port (default: 7411)")
     serve_p.add_argument("--provider", "-p", help="LLM provider")
     serve_p.add_argument("--model", "-m", help="Model name")
@@ -112,6 +112,74 @@ _CYAN = "\033[36m"
 import re as _re
 import shutil as _shutil
 _ANSI_RE = _re.compile(r'\033\[[0-9;]*m')
+
+# ---------------------------------------------------------------------------
+# Shared server helpers — rate limiter, auth, CORS
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT = 10     # requests per window
+_RATE_BURST = 3      # max burst
+_RATE_WINDOW = 60    # seconds
+_RATE_STALE = 600    # cleanup entries older than 10 min
+
+
+class _RateLimiter:
+    """Token bucket rate limiter per IP with periodic cleanup."""
+
+    def __init__(self):
+        self._buckets = {}  # ip -> [tokens, last_refill_time]
+
+    def check(self, ip: str) -> bool:
+        now = time.monotonic()
+        if ip not in self._buckets:
+            self._buckets[ip] = [_RATE_BURST - 1, now]
+            return True
+        bucket = self._buckets[ip]
+        elapsed = now - bucket[1]
+        refill = elapsed * (_RATE_LIMIT / _RATE_WINDOW)
+        bucket[0] = min(_RATE_BURST, bucket[0] + refill)
+        bucket[1] = now
+        if bucket[0] < 1:
+            return False
+        bucket[0] -= 1
+        return True
+
+    def cleanup(self):
+        """Remove stale entries to prevent memory leak."""
+        now = time.monotonic()
+        stale = [ip for ip, (_, ts) in self._buckets.items() if now - ts > _RATE_STALE]
+        for ip in stale:
+            del self._buckets[ip]
+
+
+# Server API key auth (optional — set FLYTO_AI_SERVER_KEY to enable)
+import os as _os
+_SERVER_KEY = _os.getenv("FLYTO_AI_SERVER_KEY", "")
+
+# CORS allowed origins (set FLYTO_AI_CORS_ORIGINS=http://localhost:3000,https://app.flyto.dev)
+_CORS_ORIGINS_RAW = _os.getenv("FLYTO_AI_CORS_ORIGINS", "")
+_CORS_ORIGINS = frozenset(o.strip() for o in _CORS_ORIGINS_RAW.split(",") if o.strip()) if _CORS_ORIGINS_RAW else None
+
+
+def _check_server_auth(auth_header: str) -> bool:
+    """Check Bearer token against FLYTO_AI_SERVER_KEY. Returns True if auth passes."""
+    if not _SERVER_KEY:
+        return True  # no key configured = open access
+    if not auth_header:
+        return False
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:] == _SERVER_KEY
+    return auth_header == _SERVER_KEY
+
+
+def _get_cors_origin(request_origin: str) -> str:
+    """Return allowed CORS origin. Uses whitelist if configured, else '*'."""
+    if _CORS_ORIGINS is None:
+        return "*"
+    if request_origin in _CORS_ORIGINS:
+        return request_origin
+    return ""
+
 
 # Purple gradient for input box (light → deep)
 _P1 = "\033[38;5;147m"  # light lavender — top
@@ -264,7 +332,7 @@ def _cmd_mcp():
 
 def _handle_memory_cmd(subcmd, args_list, agent, loop):
     """Handle /memory subcommands: list, search <query>, clear."""
-    store = agent._memory_store
+    store = agent.memory_store
     if not store:
         print("  {}Memory not enabled.{}".format(_DIM, _RESET))
         return
@@ -285,7 +353,7 @@ def _handle_memory_cmd(subcmd, args_list, agent, loop):
 
     elif subcmd == "search" and args_list:
         query = " ".join(args_list)
-        search = agent._memory_search
+        search = agent.memory_search
         if not search:
             print("  {}Memory search not available.{}".format(_DIM, _RESET))
             return
@@ -327,7 +395,7 @@ def _cmd_interactive(args):
 
     agent = Agent(config=config)
     history = []
-    tool_count = len(agent._tools) if agent._tools else 0
+    tool_count = len(agent.tools)
 
     # ── Welcome ────────────────────────────────────────────────
     print()
@@ -553,7 +621,22 @@ def _cmd_interactive(args):
                     mid = er.get("module_id", "")
                     ok = er.get("ok", True)
                     icon = "{}\u2713{}".format(_GREEN, _RESET) if ok else "{}\u2717{}".format(_YELLOW, _RESET)
-                    print("  {} {}".format(icon, mid))
+                    if ok:
+                        print("  {} {}".format(icon, mid))
+                    else:
+                        err_preview = er.get("result_preview", "")
+                        # Try to extract error message from result_preview JSON
+                        err_msg = ""
+                        if err_preview:
+                            try:
+                                err_data = json.loads(err_preview) if err_preview.startswith("{") else {}
+                                err_msg = err_data.get("error", "")
+                            except Exception:
+                                pass
+                        if err_msg:
+                            print("  {} {}  {}{}{}".format(icon, mid, _DIM, err_msg[:80], _RESET))
+                        else:
+                            print("  {} {}".format(icon, mid))
                 print()
 
             # Show response — skip if already streamed
@@ -679,7 +762,7 @@ def _cmd_chat(args):
 
 
 def _post_webhook(url, result):
-    """POST chat result to a webhook URL."""
+    """POST chat result to a webhook URL (user-specified, not SSRF-protected)."""
     payload = json.dumps(result.model_dump(), ensure_ascii=False, default=str).encode("utf-8")
     req = Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
@@ -718,31 +801,12 @@ def _cmd_serve_aiohttp(args):
     MAX_BODY_SIZE = 1_000_000
     _request_count = [0]
     _CLEANUP_INTERVAL = 50
-
-    # --- Rate limiter (token bucket per IP, 10 req/min, burst 3) ---
-    _rate_buckets = {}  # ip -> [tokens, last_refill_time]
-    _RATE_LIMIT = 10
-    _RATE_BURST = 3
-    _RATE_WINDOW = 60  # seconds
-
-    def _check_rate_limit(ip):
-        now = time.monotonic()
-        if ip not in _rate_buckets:
-            _rate_buckets[ip] = [_RATE_BURST - 1, now]
-            return True
-        bucket = _rate_buckets[ip]
-        elapsed = now - bucket[1]
-        refill = elapsed * (_RATE_LIMIT / _RATE_WINDOW)
-        bucket[0] = min(_RATE_BURST, bucket[0] + refill)
-        bucket[1] = now
-        if bucket[0] < 1:
-            return False
-        bucket[0] -= 1
-        return True
+    _limiter = _RateLimiter()
 
     def _cleanup_old(request):
         _request_count[0] += 1
         if _request_count[0] % _CLEANUP_INTERVAL == 0:
+            _limiter.cleanup()
             try:
                 from flyto_ai.tools.core_tools import clear_browser_sessions
                 clear_browser_sessions()
@@ -756,9 +820,11 @@ def _cmd_serve_aiohttp(args):
             resp = web.Response()
         else:
             resp = await handler(request)
-        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        origin = _get_cors_origin(request.headers.get("Origin", ""))
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         return resp
 
     # --- Serve demo.html ---
@@ -772,8 +838,12 @@ def _cmd_serve_aiohttp(args):
     # --- Chat (batch) ---
     async def handle_chat(request):
         _cleanup_old(request)
+        if not _check_server_auth(request.headers.get("Authorization", "")):
+            return web.json_response(
+                {"ok": False, "error": "Unauthorized. Set Authorization: Bearer <key>"}, status=401,
+            )
         ip = request.remote or "unknown"
-        if not _check_rate_limit(ip):
+        if not _limiter.check(ip):
             return web.json_response(
                 {"ok": False, "error": "Rate limited — try again in a moment"}, status=429,
             )
@@ -807,8 +877,12 @@ def _cmd_serve_aiohttp(args):
     # --- Chat SSE streaming ---
     async def handle_chat_stream(request):
         _cleanup_old(request)
+        if not _check_server_auth(request.headers.get("Authorization", "")):
+            return web.json_response(
+                {"ok": False, "error": "Unauthorized. Set Authorization: Bearer <key>"}, status=401,
+            )
         ip = request.remote or "unknown"
-        if not _check_rate_limit(ip):
+        if not _limiter.check(ip):
             return web.json_response(
                 {"ok": False, "error": "Rate limited — try again in a moment"}, status=429,
             )
@@ -925,27 +999,7 @@ def _cmd_serve_stdlib(args):
     MAX_BODY_SIZE = 1_000_000  # 1 MB
     _request_count = [0]
     _CLEANUP_INTERVAL = 50  # run session cleanup every N requests
-
-    # Rate limiter (token bucket per IP, 10 req/min, burst 3)
-    _rate_buckets = {}
-    _RATE_LIMIT = 10
-    _RATE_BURST = 3
-    _RATE_WINDOW = 60
-
-    def _check_rate_limit(ip):
-        now = time.monotonic()
-        if ip not in _rate_buckets:
-            _rate_buckets[ip] = [_RATE_BURST - 1, now]
-            return True
-        bucket = _rate_buckets[ip]
-        elapsed = now - bucket[1]
-        refill = elapsed * (_RATE_LIMIT / _RATE_WINDOW)
-        bucket[0] = min(_RATE_BURST, bucket[0] + refill)
-        bucket[1] = now
-        if bucket[0] < 1:
-            return False
-        bucket[0] -= 1
-        return True
+    _limiter = _RateLimiter()
 
     from flyto_ai.tools.core_tools import clear_browser_sessions
 
@@ -954,14 +1008,20 @@ def _cmd_serve_stdlib(args):
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            # Periodic cleanup of stale browser sessions
+            # Periodic cleanup of stale browser sessions and rate limiter
             _request_count[0] += 1
             if _request_count[0] % _CLEANUP_INTERVAL == 0:
+                _limiter.cleanup()
                 clear_browser_sessions()
+
+            # Auth check
+            if not _check_server_auth(self.headers.get("Authorization", "")):
+                self._json_response(401, {"ok": False, "error": "Unauthorized. Set Authorization: Bearer <key>"})
+                return
 
             # Rate limit
             ip = self.client_address[0]
-            if not _check_rate_limit(ip):
+            if not _limiter.check(ip):
                 self._json_response(429, {"ok": False, "error": "Rate limited — try again in a moment"})
                 return
 
@@ -1008,7 +1068,9 @@ def _cmd_serve_stdlib(args):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
-            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+            origin = _get_cors_origin(self.headers.get("Origin", ""))
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
 
             def on_stream(event):
@@ -1051,9 +1113,11 @@ def _cmd_serve_stdlib(args):
 
         def do_OPTIONS(self):
             self.send_response(200)
-            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+            origin = _get_cors_origin(self.headers.get("Origin", ""))
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -1062,7 +1126,9 @@ def _cmd_serve_stdlib(args):
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+            origin = _get_cors_origin(self.headers.get("Origin", ""))
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
             self.wfile.write(payload)
 

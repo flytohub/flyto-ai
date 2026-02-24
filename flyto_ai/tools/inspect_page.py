@@ -84,7 +84,11 @@ _INSPECT_JS = """
 
 async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
     """Launch browser, go to URL, extract interactive elements, close browser."""
+    from flyto_ai.prompt.policies import is_safe_url
     from flyto_ai.tools.core_tools import _get_mcp_handler
+
+    if not is_safe_url(url):
+        return {"ok": False, "error": "URL blocked by SSRF policy: {}".format(url[:100])}
 
     handler = _get_mcp_handler()
     if not handler:

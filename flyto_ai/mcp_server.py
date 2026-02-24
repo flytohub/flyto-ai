@@ -21,7 +21,7 @@ SERVER_INFO = {
     "capabilities": {"tools": {"listChanged": False}},
     "serverInfo": {
         "name": "flyto-ai",
-        "version": "0.7.1",
+        "version": "0.8.1",
     },
 }
 
@@ -81,7 +81,7 @@ class MCPServer:
             return
         self._ensure_agent()
         # Build tool list from agent's registered tools
-        self._registry = {t["name"]: t for t in (self._agent._tools or [])}
+        self._registry = {t["name"]: t for t in self._agent.tools}
 
     async def handle(self, request: Dict) -> Optional[Dict]:
         """Handle a single JSON-RPC request. Returns response dict or None for notifications."""
@@ -133,17 +133,18 @@ class MCPServer:
 
         # Regular tool dispatch
         self._ensure_registry()
-        if name not in self._registry and self._agent._dispatch_fn:
-            result = await self._agent._dispatch_fn(name, arguments)
+        dispatch = self._agent.dispatch_fn
+        if name not in self._registry and dispatch:
+            result = await dispatch(name, arguments)
             text = json.dumps(result, ensure_ascii=False, default=str)
             return _make_result(req_id, {
                 "content": [{"type": "text", "text": text}],
             })
 
-        if not self._agent._dispatch_fn:
+        if not dispatch:
             return _make_error(req_id, -32602, "No tools available")
 
-        result = await self._agent._dispatch_fn(name, arguments)
+        result = await dispatch(name, arguments)
         text = json.dumps(result, ensure_ascii=False, default=str)
         return _make_result(req_id, {
             "content": [{"type": "text", "text": text}],

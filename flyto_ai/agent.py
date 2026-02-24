@@ -133,6 +133,36 @@ class Agent:
         if not self._tools and not self._dispatch_fn:
             self._auto_discover_tools()
 
+    @property
+    def config(self) -> AgentConfig:
+        """Agent configuration."""
+        return self._config
+
+    @property
+    def tools(self) -> List[Dict]:
+        """Registered tool definitions."""
+        return list(self._tools) if self._tools else []
+
+    @property
+    def dispatch_fn(self):
+        """The tool dispatch function."""
+        return self._dispatch_fn
+
+    @property
+    def memory_store(self):
+        """The memory store (may be None if not initialized)."""
+        return self._memory_store
+
+    @property
+    def memory_search(self):
+        """The memory search engine (may be None if not initialized)."""
+        return self._memory_search
+
+    @property
+    def session_id(self) -> str:
+        """Current session ID."""
+        return self._session_id
+
     def _auto_discover_tools(self):
         """Auto-detect and register available tools (core, blueprint, inspect)."""
         from flyto_ai.tools.registry import ToolRegistry
@@ -286,7 +316,7 @@ class Agent:
             return ChatResponse(
                 ok=False,
                 message="No API key configured.",
-                session_id="",
+                session_id=self._session_id,
                 error="no_api_key",
             )
 
@@ -380,7 +410,7 @@ class Agent:
             return ChatResponse(
                 ok=False,
                 message="AI provider call failed. Please try again.",
-                session_id="",
+                session_id=self._session_id,
                 error="provider_call_failed",
             )
 
@@ -472,7 +502,7 @@ class Agent:
         return ChatResponse(
             ok=True,
             message=response_content,
-            session_id="",
+            session_id=self._session_id,
             tool_calls=tool_calls,
             execution_results=execution_results,
             provider=self._config.provider,

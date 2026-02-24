@@ -1,6 +1,8 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tool/module/URL allowlists and validation — pure logic, no I/O."""
+import ipaddress
+import socket
 from typing import Any, Dict, Set
 from urllib.parse import urlparse
 
@@ -116,3 +118,43 @@ def get_default_policies() -> Dict[str, Any]:
         "allowed_tools": sorted(ALLOWED_TOOLS),
         "allowed_categories": sorted(ALLOWED_MODULE_CATEGORIES),
     }
+
+
+def is_safe_url(url: str) -> bool:
+    """Validate a URL against SSRF patterns.
+
+    Blocks: private IPs, loopback, link-local, file:// and other non-http schemes.
+    Used by inspect_page and similar browser-facing tools.
+    """
+    try:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "").lower()
+
+        if scheme not in ("http", "https"):
+            return False
+
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if not host:
+            return False
+
+        # Resolve hostname to check actual IP
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            # It's a hostname — resolve it
+            try:
+                resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                if not resolved:
+                    return False
+                addr = ipaddress.ip_address(resolved[0][4][0])
+            except (socket.gaierror, OSError):
+                # DNS resolution failed — allow (might be valid external domain)
+                return True
+
+        # Block private, loopback, link-local, reserved
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return False
+
+        return True
+    except Exception:
+        return False

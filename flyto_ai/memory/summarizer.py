@@ -56,11 +56,14 @@ class ConversationSummarizer:
 
         try:
             # Use the provider's chat method with minimal settings
+            async def _noop(n, a):
+                return {"ok": False, "error": "no tools"}
+
             content, _, _, _ = await self._provider.chat(
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt="You are a concise summarizer. Output only the summary.",
                 tools=[],
-                dispatch_fn=lambda n, a: {"ok": False, "error": "no tools"},
+                dispatch_fn=_noop,
                 max_rounds=1,
             )
             return content

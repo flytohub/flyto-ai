@@ -50,7 +50,7 @@ class SandboxManager:
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "run", "--rm", "-i",
-                "--network=host",
+                "--network=none",
                 "--memory=512m",
                 "--cpus=1",
                 self._image,

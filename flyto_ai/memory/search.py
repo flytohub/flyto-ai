@@ -1,6 +1,7 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Hybrid memory search — vector + BM25 with Reciprocal Rank Fusion."""
+import hashlib
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -92,7 +93,7 @@ class MemorySearch:
         """Index content in both vector and BM25 stores."""
         if not content or not content.strip():
             return
-        _doc_id = doc_id or "{}:{}".format(session_id, hash(content))
+        _doc_id = doc_id or "{}:{}".format(session_id, hashlib.sha256(content.encode()).hexdigest()[:16])
 
         # BM25 — always index (no API needed)
         try:

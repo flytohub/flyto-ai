@@ -196,7 +196,7 @@ class OpenAIProvider(LLMProvider):
                     except json.JSONDecodeError:
                         func_args = {}
 
-                    result_str, log_entry = await dispatch_and_log_tool(
+                    result_str, log_entry, images = await dispatch_and_log_tool(
                         func_name, func_args, dispatch_fn, round_num, on_stream,
                     )
                     tool_call_log.append(log_entry)
@@ -206,6 +206,19 @@ class OpenAIProvider(LLMProvider):
                         "tool_call_id": tc["id"],
                         "content": result_str,
                     })
+
+                    # Inject vision user message for native OpenAI (tool messages don't support images)
+                    if images and self._is_native_openai():
+                        vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
+                        for img in images:
+                            vision_content.append({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "data:{};base64,{}".format(img.get("media_type", "image/png"), img["base64"]),
+                                    "detail": "low",
+                                },
+                            })
+                        full_messages.append({"role": "user", "content": vision_content})
 
                 continue  # next round
 
@@ -255,7 +268,7 @@ class OpenAIProvider(LLMProvider):
                 except json.JSONDecodeError:
                     func_args = {}
 
-                result_str, log_entry = await dispatch_and_log_tool(
+                result_str, log_entry, images = await dispatch_and_log_tool(
                     func_name, func_args, dispatch_fn, round_num,
                 )
                 tool_call_log.append(log_entry)
@@ -265,6 +278,19 @@ class OpenAIProvider(LLMProvider):
                     "tool_call_id": tc.id,
                     "content": result_str,
                 })
+
+                # Inject vision user message for native OpenAI (tool messages don't support images)
+                if images and self._is_native_openai():
+                    vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
+                    for img in images:
+                        vision_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:{};base64,{}".format(img.get("media_type", "image/png"), img["base64"]),
+                                "detail": "low",
+                            },
+                        })
+                    full_messages.append({"role": "user", "content": vision_content})
 
         # Hit max rounds — force summary with improved prompt
         completed = [tc["function"] for tc in tool_call_log if tc.get("ok", True)]

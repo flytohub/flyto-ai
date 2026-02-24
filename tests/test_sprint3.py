@@ -46,9 +46,10 @@ class TestDispatchAndLogTool:
         async def real_dispatch(name, args):
             return {"ok": True, "data": args.get("x", 0) * 2}
 
-        result_str, log_entry = await dispatch_and_log_tool(
+        result_str, log_entry, images = await dispatch_and_log_tool(
             "double", {"x": 21}, real_dispatch, round_num=0,
         )
+        assert images == []
         parsed = json.loads(result_str)
         assert parsed["ok"] is True
         assert parsed["data"] == 42
@@ -64,7 +65,7 @@ class TestDispatchAndLogTool:
         async def big_dispatch(name, args):
             return {"ok": True, "data": "x" * 20000}
 
-        result_str, _ = await dispatch_and_log_tool("big", {}, big_dispatch, round_num=0)
+        result_str, _, _ = await dispatch_and_log_tool("big", {}, big_dispatch, round_num=0)
         assert len(result_str) <= MAX_RESULT_LEN + len(TRUNCATION_NOTE) + 10
         assert TRUNCATION_NOTE in result_str
 
@@ -76,7 +77,7 @@ class TestDispatchAndLogTool:
         async def medium_dispatch(name, args):
             return {"ok": True, "data": "y" * 2000}
 
-        _, log_entry = await dispatch_and_log_tool("med", {}, medium_dispatch, round_num=0)
+        _, log_entry, _ = await dispatch_and_log_tool("med", {}, medium_dispatch, round_num=0)
         assert len(log_entry["result_preview"]) <= MAX_PREVIEW_LEN
 
     @pytest.mark.asyncio
@@ -87,7 +88,7 @@ class TestDispatchAndLogTool:
         async def ok_dispatch(name, args):
             return {"ok": True}
 
-        _, log_entry = await dispatch_and_log_tool(
+        _, log_entry, _ = await dispatch_and_log_tool(
             "execute_module", {"module_id": "browser.goto"}, ok_dispatch, round_num=2,
         )
         assert log_entry["module_id"] == "browser.goto"
@@ -101,7 +102,7 @@ class TestDispatchAndLogTool:
         async def fail_dispatch(name, args):
             return {"ok": False, "error": "not found"}
 
-        _, log_entry = await dispatch_and_log_tool(
+        _, log_entry, _ = await dispatch_and_log_tool(
             "execute_module", {"module_id": "bad.module"}, fail_dispatch, round_num=0,
         )
         assert log_entry["ok"] is False

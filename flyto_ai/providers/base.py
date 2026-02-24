@@ -35,10 +35,12 @@ async def dispatch_and_log_tool(
     dispatch_fn: DispatchFn,
     round_num: int,
     on_stream: Optional[StreamCallback] = None,
-) -> Tuple[str, Dict[str, Any]]:
+) -> Tuple[str, Dict[str, Any], List[Dict[str, str]]]:
     """Dispatch a tool call, log it, truncate result. Shared by all providers.
 
-    Returns (result_str, log_entry).
+    Returns (result_str, log_entry, images).
+    ``images`` is a list of ``{"base64": ..., "media_type": ...}`` dicts
+    extracted from the ``_images`` sideband before JSON serialization.
     """
     from flyto_ai.redaction import redact_args
 
@@ -55,6 +57,12 @@ async def dispatch_and_log_tool(
     ))
 
     result = await dispatch_fn(func_name, func_args)
+
+    # Extract _images sideband before serialization to avoid truncation
+    images: List[Dict[str, str]] = []
+    if isinstance(result, dict):
+        images = result.pop("_images", [])
+
     result_str = json.dumps(result, ensure_ascii=False, default=str)
 
     if len(result_str) > MAX_RESULT_LEN:
@@ -80,7 +88,7 @@ async def dispatch_and_log_tool(
         else:
             log_entry["ok"] = False
 
-    return result_str, log_entry
+    return result_str, log_entry, images
 
 
 class LLMProvider(ABC):

@@ -130,16 +130,33 @@ class AnthropicProvider(LLMProvider):
                 func_name = block.name
                 func_args = block.input if isinstance(block.input, dict) else {}
 
-                result_str, log_entry = await dispatch_and_log_tool(
+                result_str, log_entry, images = await dispatch_and_log_tool(
                     func_name, func_args, dispatch_fn, round_num, on_stream,
                 )
                 tool_call_log.append(log_entry)
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_str,
-                })
+                if images:
+                    content_parts = [{"type": "text", "text": result_str}]
+                    for img in images:
+                        content_parts.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.get("media_type", "image/png"),
+                                "data": img["base64"],
+                            },
+                        })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": content_parts,
+                    })
+                else:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
 
             claude_messages.append({"role": "user", "content": tool_results})
 

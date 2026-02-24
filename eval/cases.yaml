@@ -95,6 +95,57 @@ cases:
         ok: true
         data: {text: "Example Domain. This domain is for use in illustrative examples in documents."}
 
+  - id: browser_interactive_search
+    category: browser
+    user_input: "go to tixcraft.com and search for 鄧紫棋"
+    expected_behavior: "browser.snapshot before browser.type/click, use selectors from snapshot output"
+    forbidden_behavior: "guess selectors like button[type=submit] or input[name=keyword] without snapshot"
+    tags: [browser, interactive, search]
+    weight: 3.0
+    mock_execution_results:
+      - module_id: browser.launch
+        ok: true
+        data: {browser_session: "sess_010"}
+      - module_id: browser.goto
+        ok: true
+        data: {url: "https://tixcraft.com/activity", title: "Events | tixCraft"}
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "Events\nSearch: input#txt_search.search-input\nbutton.search-btn\n2026/04/09 G.E.M.鄧紫棋 I AM GLORIA 世界巡迴演唱會"}
+      - module_id: browser.type
+        ok: true
+        data: {status: "success", selector: "#txt_search", text: "鄧紫棋"}
+      - module_id: browser.click
+        ok: true
+        data: {status: "success", selector: "button.search-btn"}
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "Search results for: 鄧紫棋\n2026/04/09 G.E.M.鄧紫棋 I AM GLORIA 世界巡迴演唱會 2.0 — 台北站"}
+
+  - id: browser_interact_no_guess
+    category: browser
+    user_input: "go to example.com and click the login button"
+    expected_behavior: "snapshot, btn-signin, click, Login page"
+    forbidden_behavior: "click button[type=submit] or #login-btn without seeing it in snapshot"
+    tags: [browser, interactive, no_guess]
+    weight: 3.0
+    mock_execution_results:
+      - module_id: browser.launch
+        ok: true
+        data: {browser_session: "sess_011"}
+      - module_id: browser.goto
+        ok: true
+        data: {url: "https://example.com", title: "Example"}
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "Welcome\nSign In\na.btn-signin href=/login"}
+      - module_id: browser.click
+        ok: true
+        data: {status: "success", selector: "a.btn-signin"}
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "Login page\nUsername: input#username\nPassword: input#password\nSign In button"}
+
   # =====================================================================
   # AUTOMATION — module execution tasks
   # =====================================================================

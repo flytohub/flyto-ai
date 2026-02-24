@@ -19,14 +19,19 @@ _browser_sessions_lock = threading.Lock()
 _browser_launch_failed: bool = False
 _browser_launch_error: str = ""
 
+# Goto circuit breaker: after N consecutive goto failures, return a non-retryable error.
+_goto_consecutive_fails: int = 0
+_GOTO_MAX_FAILS: int = 3
+
 
 def clear_browser_sessions() -> None:
     """Clear the shared browser session store (call between independent chats)."""
-    global _browser_launch_failed, _browser_launch_error
+    global _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
     with _browser_sessions_lock:
         _browser_sessions.clear()
     _browser_launch_failed = False
     _browser_launch_error = ""
+    _goto_consecutive_fails = 0
 
 
 def _is_ok(result: Dict[str, Any]) -> bool:
@@ -251,7 +256,7 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         return handler["get_module_examples"](module_id=arguments.get("module_id", ""))
 
     elif name == "execute_module":
-        global _browser_launch_failed, _browser_launch_error
+        global _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
         module_id = arguments.get("module_id", "")
 
         # Browser cascade breaker: if browser.launch already failed,
@@ -264,11 +269,24 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
                 ),
             }
 
+        # Goto circuit breaker: stop retrying after N consecutive failures
+        if module_id == "browser.goto" and _goto_consecutive_fails >= _GOTO_MAX_FAILS:
+            return {
+                "ok": False,
+                "error": (
+                    "STOP: browser.goto has failed {} times consecutively. "
+                    "Do NOT call browser.goto again. "
+                    "Try browser.goto with a Google search URL instead: "
+                    "https://www.google.com/search?q=YOUR+QUERY"
+                ).format(_goto_consecutive_fails),
+            }
+
         # On new browser.launch: close existing sessions to avoid
         # "Multiple browser sessions active" errors.
         if module_id == "browser.launch":
             _browser_launch_failed = False
             _browser_launch_error = ""
+            _goto_consecutive_fails = 0
             if _browser_sessions:
                 for sid in list(_browser_sessions.keys()):
                     try:
@@ -299,6 +317,13 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         if module_id == "browser.launch" and isinstance(result, dict) and not _is_ok(result):
             _browser_launch_failed = True
             _browser_launch_error = str(result.get("error", "unknown error"))
+
+        # Track goto failures for circuit breaker
+        if module_id == "browser.goto":
+            if isinstance(result, dict) and _is_ok(result):
+                _goto_consecutive_fails = 0  # reset on success
+            else:
+                _goto_consecutive_fails += 1
 
         return result
 

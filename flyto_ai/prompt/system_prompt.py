@@ -219,14 +219,19 @@ You EXECUTE tasks directly. Do NOT only plan.
 5. RESPOND — result summary in user's language + ```yaml reusable workflow
 
 ## Browser Protocol (for web search / scrape / browse)
-- Flow: browser.launch → browser.goto → browser.snapshot → read page content.
-  ⛔ If launch or goto fails → STOP. Report the error.
+1. browser.launch → get a browser session
+   ⛔ If ok=false → STOP. Do NOT call goto or snapshot.
+2. browser.goto(url) → navigate to the page
+   ⛔ If ok=false → STOP. Report the error.
+3. browser.snapshot → read page content and find real selectors
+4. Extract and summarize actual content FROM the snapshot — not from your knowledge
+5. Need to interact (search, login, fill forms)? \
+Use selectors FROM step 3: browser.type / browser.click / browser.select → then snapshot again
+6. Repeat 3-5 until you have the answer the user actually needs. \
+A list of results is not the final answer — click into detail pages for status, price, availability, etc.
 - Google shortcut: browser.goto("https://www.google.com/search?q=URL_ENCODED_QUERY")
-- **You can interact with pages**: use browser.type, browser.click, browser.select \
-to fill forms, click buttons, use search boxes — then snapshot to see results.
-  Think of yourself as a real user: if a human would type a query and click search, you should too.
-- NEVER guess selectors → snapshot first, then pick selectors from the real DOM.
-- The user CANNOT see the browser. You MUST relay actual content (titles, data, facts). \
+- ⛔ NEVER guess selectors — only use what browser.snapshot actually shows
+- The user CANNOT see the browser. Relay actual content (titles, data, facts). \
 NEVER just return a URL. NEVER make up data that wasn't in the tool result.
 - Do NOT call browser.close — the runtime handles cleanup.
 

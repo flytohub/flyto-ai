@@ -179,9 +179,11 @@ class OpenAIProvider(LLMProvider):
                     )
                     for tc in tc_list
                 ]
+                # Strip text content from intermediate rounds with tool calls.
+                # Fabricated text alongside tool calls pollutes conversation history.
                 assistant_msg = _cht.ChatCompletionMessage(
                     role="assistant",
-                    content="".join(content_parts) or None,
+                    content=None,
                     tool_calls=assistant_tc_objs,
                 )
                 full_messages.append(assistant_msg)
@@ -224,7 +226,27 @@ class OpenAIProvider(LLMProvider):
                     content += "\n\n[Note: Response was truncated due to token limit.]"
                 return content, tool_call_log, round_num + 1, total_usage
 
-            full_messages.append(choice.message)
+            # Strip text content from intermediate rounds to prevent fabrication.
+            # Reconstruct message with content=None so the LLM generates text
+            # only AFTER seeing actual tool results.
+            import openai.types.chat as _cht2
+            stripped_tc_objs = [
+                _cht2.ChatCompletionMessageToolCall(
+                    id=tc.id,
+                    type="function",
+                    function=_cht2.chat_completion_message_tool_call.Function(
+                        name=tc.function.name,
+                        arguments=tc.function.arguments,
+                    ),
+                )
+                for tc in choice.message.tool_calls
+            ]
+            stripped_msg = _cht2.ChatCompletionMessage(
+                role="assistant",
+                content=None,
+                tool_calls=stripped_tc_objs,
+            )
+            full_messages.append(stripped_msg)
 
             for tc in choice.message.tool_calls:
                 func_name = tc.function.name

@@ -115,7 +115,12 @@ class AnthropicProvider(LLMProvider):
                 _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
                 return content, tool_call_log, round_num + 1, total_usage
 
-            claude_messages.append({"role": "assistant", "content": response.content})
+            # Strip text blocks from intermediate rounds to prevent fabrication.
+            # When the LLM generates text alongside tool_use, the text often contains
+            # fabricated results. Removing it forces the LLM to generate text AFTER
+            # seeing actual tool results.
+            tool_only_content = [block for block in response.content if block.type == "tool_use"]
+            claude_messages.append({"role": "assistant", "content": tool_only_content})
 
             tool_results = []
             for block in response.content:

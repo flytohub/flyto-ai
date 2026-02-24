@@ -215,6 +215,127 @@ class TestModuleQueryDetection:
         assert _looks_like_module_query("parse json")
 
 
+class TestBrowserCascadeBreaker:
+    """Tests for browser cascade breaker — skip browser.* after launch fails."""
+
+    @pytest.mark.asyncio
+    async def test_cascade_blocks_goto_after_launch_fail(self, monkeypatch):
+        """browser.goto should be short-circuited after browser.launch fails."""
+        import flyto_ai.tools.core_tools as ct
+
+        async def mock_execute(module_id, params, context=None, browser_sessions=None):
+            if module_id == "browser.launch":
+                return {"ok": False, "error": "chromium not installed"}
+            return {"ok": True, "data": {}}
+
+        fake_handler = {
+            "execute_module": mock_execute,
+        }
+        monkeypatch.setattr(ct, "_get_mcp_handler", lambda: fake_handler)
+
+        # Reset cascade state
+        ct._browser_launch_failed = False
+        ct._browser_launch_error = ""
+
+        # browser.launch fails
+        result = await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "browser.launch", "params": {}},
+        )
+        assert result["ok"] is False
+        assert ct._browser_launch_failed is True
+
+        # browser.goto should be blocked immediately
+        result = await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "browser.goto", "params": {"url": "https://google.com"}},
+        )
+        assert result["ok"] is False
+        assert "browser.launch failed earlier" in result["error"]
+
+        # browser.snapshot should also be blocked
+        result = await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "browser.snapshot", "params": {}},
+        )
+        assert result["ok"] is False
+        assert "browser.launch failed earlier" in result["error"]
+
+        # Cleanup
+        ct._browser_launch_failed = False
+        ct._browser_launch_error = ""
+
+    @pytest.mark.asyncio
+    async def test_cascade_resets_on_new_launch(self, monkeypatch):
+        """A new browser.launch attempt resets the cascade flag."""
+        import flyto_ai.tools.core_tools as ct
+
+        call_count = 0
+
+        async def mock_execute(module_id, params, context=None, browser_sessions=None):
+            nonlocal call_count
+            call_count += 1
+            if module_id == "browser.launch":
+                if call_count == 1:
+                    return {"ok": False, "error": "first attempt fails"}
+                return {"ok": True, "data": {"session_id": "s1"}}
+            return {"ok": True, "data": {}}
+
+        fake_handler = {
+            "execute_module": mock_execute,
+        }
+        monkeypatch.setattr(ct, "_get_mcp_handler", lambda: fake_handler)
+        ct._browser_launch_failed = False
+        ct._browser_launch_error = ""
+
+        # First launch fails
+        await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "browser.launch", "params": {}},
+        )
+        assert ct._browser_launch_failed is True
+
+        # Second launch resets and succeeds
+        result = await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "browser.launch", "params": {}},
+        )
+        assert result["ok"] is True
+        assert ct._browser_launch_failed is False
+
+        # browser.goto should now work
+        result = await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "browser.goto", "params": {"url": "https://google.com"}},
+        )
+        assert result["ok"] is True
+
+        # Cleanup
+        ct._browser_launch_failed = False
+        ct._browser_launch_error = ""
+
+    @pytest.mark.asyncio
+    async def test_cascade_does_not_affect_non_browser(self, monkeypatch):
+        """Non-browser execute_module calls should not be affected by cascade."""
+        import flyto_ai.tools.core_tools as ct
+
+        async def mock_execute(module_id, params, context=None, browser_sessions=None):
+            return {"ok": True, "data": {"result": "hello"}}
+
+        fake_handler = {
+            "execute_module": mock_execute,
+        }
+        monkeypatch.setattr(ct, "_get_mcp_handler", lambda: fake_handler)
+
+        # Set cascade flag manually
+        ct._browser_launch_failed = True
+        ct._browser_launch_error = "chromium not installed"
+
+        # Non-browser module should still work
+        result = await ct._dispatch_core_tool_inner(
+            "execute_module", {"module_id": "string.uppercase", "params": {"text": "hello"}},
+        )
+        assert result["ok"] is True
+
+        # Cleanup
+        ct._browser_launch_failed = False
+        ct._browser_launch_error = ""
+
+
 @pytest.mark.asyncio
 async def test_search_modules_web_guardrail(monkeypatch):
     """search_modules with web search query and 0 results adds hint."""

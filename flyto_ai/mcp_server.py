@@ -21,7 +21,7 @@ SERVER_INFO = {
     "capabilities": {"tools": {"listChanged": False}},
     "serverInfo": {
         "name": "flyto-ai",
-        "version": "0.9.2",
+        "version": "0.9.3",
     },
 }
 

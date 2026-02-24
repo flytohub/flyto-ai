@@ -73,7 +73,12 @@ async def dispatch_and_log_tool(
     }
     if func_name == "execute_module":
         log_entry["module_id"] = func_args.get("module_id", "")
-        log_entry["ok"] = result.get("ok", False) if isinstance(result, dict) else False
+        # flyto-core modules return {"status": "success"} without "ok" field.
+        # Normalize: treat status=="success" as ok=True.
+        if isinstance(result, dict):
+            log_entry["ok"] = result.get("ok", result.get("status") == "success")
+        else:
+            log_entry["ok"] = False
 
     return result_str, log_entry
 

@@ -220,7 +220,8 @@ You EXECUTE tasks directly. Do NOT only plan.
 
 ## Browser Protocol (for web search / scrape / browse)
 1. get_module_info("browser.launch"), then execute_module("browser.launch", {{}})
-   ⛔ If browser.launch returns ok=false → STOP HERE. Report the error. Do NOT continue.
+   ⛔ If browser.launch returns ok=false → STOP ALL browser calls. Do NOT call browser.goto or browser.snapshot.
+   → Try API fallback instead (see below).
 2. get_module_info("browser.goto"), then execute_module("browser.goto", {{"url": "https://www.google.com/search?q=URL_ENCODED_QUERY"}})
    ⛔ If browser.goto returns ok=false → STOP HERE. Report the error.
 3. get_module_info("browser.snapshot"), then execute_module("browser.snapshot", {{}}) to read results
@@ -231,7 +232,17 @@ You EXECUTE tasks directly. Do NOT only plan.
 - Return actual data (text, numbers) FROM tool results. NEVER just return a URL. NEVER make up data.
 - Do NOT call browser.close — the runtime handles cleanup.
 - On session error: the runtime auto-retries transient failures (timeout, disconnect). \
-If still failing after retry, report the error clearly and stop."""
+If still failing after retry, report the error clearly and stop.
+
+## API Fallback (when browser is unavailable)
+If browser.launch fails (chromium not installed, etc.), try these API alternatives:
+1. get_module_info("core.api.google_search") → execute_module("core.api.google_search", {{"query": "..."}})
+   Requires GOOGLE_API_KEY + GOOGLE_CSE_ID env vars.
+2. get_module_info("core.api.serpapi_search") → execute_module("core.api.serpapi_search", {{"query": "..."}})
+   Requires SERPAPI_KEY env var.
+3. get_module_info("core.api.http_get") → execute_module("core.api.http_get", {{"url": "..."}})
+   No API key needed — direct HTTP GET.
+If all methods fail, report clearly which were tried and what went wrong."""
 
 LAYER_B_YAML = """\
 You are flyto-ai, a workflow generator with {module_count}+ modules.

@@ -14,11 +14,30 @@ logger = logging.getLogger(__name__)
 _browser_sessions: Dict[str, Any] = {}
 _browser_sessions_lock = threading.Lock()
 
+# Browser cascade breaker: when browser.launch fails, skip subsequent browser.* calls.
+# Reset on each new browser.launch attempt.
+_browser_launch_failed: bool = False
+_browser_launch_error: str = ""
+
 
 def clear_browser_sessions() -> None:
     """Clear the shared browser session store (call between independent chats)."""
+    global _browser_launch_failed, _browser_launch_error
     with _browser_sessions_lock:
         _browser_sessions.clear()
+    _browser_launch_failed = False
+    _browser_launch_error = ""
+
+
+def _is_ok(result: Dict[str, Any]) -> bool:
+    """Check if a module result indicates success.
+
+    flyto-core modules return {"status": "success"} without an "ok" field.
+    Normalize: ok=true OR status=="success" → success.
+    """
+    if result.get("ok"):
+        return True
+    return result.get("status") == "success"
 
 
 _cached_handler = None
@@ -123,7 +142,7 @@ async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, 
     if (
         name == "execute_module"
         and isinstance(result, dict)
-        and not result.get("ok", True)
+        and not _is_ok(result)
     ):
         module_id = arguments.get("module_id", "")
         error_msg = str(result.get("error", ""))
@@ -134,7 +153,7 @@ async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, 
             # Session dead → relaunch first
             if _is_session_dead(error_msg):
                 relaunch = await _relaunch_browser()
-                if not relaunch.get("ok", False):
+                if not _is_ok(relaunch):
                     relaunch_err = relaunch.get("error", "unknown")
                     logger.warning("Browser relaunch failed: %s", relaunch_err)
                     return {
@@ -232,18 +251,42 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         return handler["get_module_examples"](module_id=arguments.get("module_id", ""))
 
     elif name == "execute_module":
+        global _browser_launch_failed, _browser_launch_error
         module_id = arguments.get("module_id", "")
+
+        # Browser cascade breaker: if browser.launch already failed,
+        # skip all subsequent browser.* calls immediately.
+        if module_id.startswith("browser.") and module_id != "browser.launch" and _browser_launch_failed:
+            return {
+                "ok": False,
+                "error": "Skipped: browser.launch failed earlier ({}). Fix browser.launch first.".format(
+                    _browser_launch_error[:100],
+                ),
+            }
+
+        # Reset cascade flag on new browser.launch attempt
+        if module_id == "browser.launch":
+            _browser_launch_failed = False
+            _browser_launch_error = ""
+
         # Sandbox: route dangerous categories to Docker container
         if _sandbox_mgr and _sandbox_mgr.needs_sandbox(module_id):
             return await _sandbox_mgr.execute(
                 module_id, arguments.get("params", {}), arguments.get("context"),
             )
-        return await handler["execute_module"](
+        result = await handler["execute_module"](
             module_id=module_id,
             params=arguments.get("params", {}),
             context=arguments.get("context"),
             browser_sessions=_browser_sessions,
         )
+
+        # Track browser.launch failure for cascade breaker
+        if module_id == "browser.launch" and isinstance(result, dict) and not _is_ok(result):
+            _browser_launch_failed = True
+            _browser_launch_error = str(result.get("error", "unknown error"))
+
+        return result
 
     elif name == "validate_params":
         return handler["validate_params"](

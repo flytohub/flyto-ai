@@ -219,25 +219,16 @@ You EXECUTE tasks directly. Do NOT only plan.
 5. RESPOND — result summary in user's language + ```yaml reusable workflow
 
 ## Browser Protocol (for web search / scrape / browse)
-1. get_module_info("browser.launch"), then execute_module("browser.launch", {{}})
-   ⛔ If browser.launch returns ok=false → STOP ALL browser calls. Do NOT call browser.goto or browser.snapshot.
-   → Try API fallback instead (see below).
-2. get_module_info("browser.goto"), then execute_module("browser.goto", {{"url": "https://www.google.com/search?q=URL_ENCODED_QUERY"}})
-   ⛔ If browser.goto returns ok=false → STOP HERE. Report the error.
-3. get_module_info("browser.snapshot"), then execute_module("browser.snapshot", {{"format": "text"}}) to read results as plain text
-4. READ the snapshot output carefully. Extract ACTUAL search results (titles, descriptions, links) from the snapshot text.
-   ⛔ NEVER respond with just a URL or "click here to see results". The user CANNOT see the browser.
-   ⛔ You MUST list the actual content: result titles, snippets, key facts extracted from the page.
-   Example good response: "Here are the top results for Jay Chou: 1. Jay Chou (born Jan 18, 1979) is a Taiwanese singer... 2. ..."
-   Example bad response: "Here is the search link: [Google Search](url)" ← NEVER DO THIS
-- Pass context: {{"browser_session": "..."}} to all subsequent browser calls
-- NEVER type in search engines → browser.goto("https://www.google.com/search?q=...")
-- NEVER guess selectors → run browser.snapshot FIRST, then pick selectors from real DOM
-- Return actual data (text, numbers) FROM tool results. NEVER just return a URL. NEVER make up data.
-- The browser runs in the background — the user CANNOT see it. You must relay ALL relevant content.
+- Flow: browser.launch → browser.goto → browser.snapshot → read page content.
+  ⛔ If launch or goto fails → STOP. Report the error.
+- Google shortcut: browser.goto("https://www.google.com/search?q=URL_ENCODED_QUERY")
+- **You can interact with pages**: use browser.type, browser.click, browser.select \
+to fill forms, click buttons, use search boxes — then snapshot to see results.
+  Think of yourself as a real user: if a human would type a query and click search, you should too.
+- NEVER guess selectors → snapshot first, then pick selectors from the real DOM.
+- The user CANNOT see the browser. You MUST relay actual content (titles, data, facts). \
+NEVER just return a URL. NEVER make up data that wasn't in the tool result.
 - Do NOT call browser.close — the runtime handles cleanup.
-- On session error: the runtime auto-retries transient failures (timeout, disconnect). \
-If still failing after retry, report the error clearly and stop.
 
 ## API Fallback (when browser is unavailable)
 If browser.launch fails (chromium not installed, etc.), try these API alternatives:

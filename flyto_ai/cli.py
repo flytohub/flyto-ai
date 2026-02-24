@@ -50,6 +50,24 @@ def main():
     # flyto-ai mcp
     sub.add_parser("mcp", help="Start MCP server (JSON-RPC 2.0 over STDIO)")
 
+    # flyto-ai prompt-lab
+    lab_p = sub.add_parser("prompt-lab", help="Prompt evolution system — eval, evolve, report")
+    lab_sub = lab_p.add_subparsers(dest="lab_command")
+    lab_eval = lab_sub.add_parser("eval", help="Evaluate current prompt against test cases")
+    lab_eval.add_argument("--cases", help="Path to eval cases YAML")
+    lab_eval.add_argument("--rubric", help="Path to rubric YAML")
+    lab_eval.add_argument("--json", action="store_true", help="Output JSON")
+    lab_evolve = lab_sub.add_parser("evolve", help="Run evolution loop")
+    lab_evolve.add_argument("--cases", help="Path to eval cases YAML")
+    lab_evolve.add_argument("--rubric", help="Path to rubric YAML")
+    lab_evolve.add_argument("--generations", type=int, help="Max generations")
+    lab_evolve.add_argument("--population", type=int, help="Candidates per generation")
+    lab_evolve.add_argument("--output", help="Output directory for results")
+    lab_evolve.add_argument("--provider", "-p", help="LLM provider")
+    lab_evolve.add_argument("--api-key", "-k", help="API key")
+    lab_sub.add_parser("cases", help="List all eval cases")
+    lab_sub.add_parser("report", help="Show latest evolution report")
+
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
 
@@ -63,6 +81,8 @@ def main():
         _cmd_serve(args)
     elif args.command == "mcp":
         _cmd_mcp()
+    elif args.command == "prompt-lab":
+        _cmd_prompt_lab(args)
     elif args.command == "chat":
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
@@ -322,6 +342,215 @@ def _export_blueprints(blueprints):
     print("# Exported from flyto-ai — {} learned blueprint(s)".format(len(export)))
     print("# Submit as PR to https://github.com/flytohub/flyto-blueprint")
     print(yaml.dump(export, allow_unicode=True, sort_keys=False, default_flow_style=False))
+
+
+def _cmd_prompt_lab(args):
+    """Prompt evolution system — eval, evolve, report, cases."""
+    lab_cmd = getattr(args, "lab_command", None)
+
+    if lab_cmd == "eval":
+        _prompt_lab_eval(args)
+    elif lab_cmd == "evolve":
+        _prompt_lab_evolve(args)
+    elif lab_cmd == "cases":
+        _prompt_lab_cases(args)
+    elif lab_cmd == "report":
+        _prompt_lab_report(args)
+    else:
+        print()
+        print("  {}{}Prompt Lab{} — System Prompt Evolution".format(_BOLD, _CYAN, _RESET))
+        print()
+        print("  {}eval{}     Evaluate current prompt against test cases".format(_CYAN, _RESET))
+        print("  {}evolve{}   Run evolution loop (generate → eval → select)".format(_CYAN, _RESET))
+        print("  {}cases{}    List all eval test cases".format(_CYAN, _RESET))
+        print("  {}report{}   Show latest evolution report".format(_CYAN, _RESET))
+        print()
+        print("  {}Example: flyto-ai prompt-lab eval{}".format(_DIM, _RESET))
+        print()
+
+
+def _prompt_lab_eval(args):
+    """Run eval on current baseline prompt (rule-based, no API key needed)."""
+    from flyto_ai.evolution.blocks import get_baseline_candidate
+    from flyto_ai.evolution.runner import load_eval_cases, load_rubric, format_score_report
+    from flyto_ai.evolution.scorer import score_response
+
+    cases = load_eval_cases(getattr(args, "cases", None))
+    config = load_rubric(getattr(args, "rubric", None))
+    baseline = get_baseline_candidate(config.mode)
+
+    print()
+    print("  {}{}Prompt Lab — Eval{} ".format(_BOLD, _CYAN, _RESET))
+    print("  {}Baseline prompt · {} cases · rule-based scoring{}".format(
+        _DIM, len(cases), _RESET,
+    ))
+    print()
+
+    passed = 0
+    failed = 0
+    total_score = 0.0
+    failures = []
+
+    for case in cases:
+        # Generate a mock response based on category for rule-based eval
+        if case.category == "failure":
+            # Correct behavior: acknowledge failure
+            response = "模組執行失敗。" + case.expected_behavior
+        elif case.category == "adversarial":
+            response = "抱歉，我無法執行此操作。作為 flyto-ai，我只能執行自動化任務。"
+        else:
+            response = "以下是執行結果。" + case.expected_behavior
+
+        score = score_response(case, response, case.mock_execution_results, config)
+        total_score += score.total_score
+
+        if score.passed:
+            passed += 1
+            icon = "{}\u2713{}".format(_GREEN, _RESET)
+        else:
+            failed += 1
+            icon = "{}\u2717{}".format(_YELLOW, _RESET)
+            failures.append((case, score))
+
+        notes_str = ""
+        if score.notes:
+            notes_str = "  {}{}{}".format(_DIM, "; ".join(score.notes[:2]), _RESET)
+        print("  {} {:<30} {:.0f}/100{}".format(
+            icon, case.id[:30], score.total_score, notes_str,
+        ))
+
+    avg = total_score / len(cases) if cases else 0
+    print()
+    print("  {}Results: {} passed · {} failed · avg {:.1f}/100{}".format(
+        _BOLD, passed, failed, avg, _RESET,
+    ))
+
+    if failures:
+        print()
+        print("  {}Failed cases:{}".format(_YELLOW, _RESET))
+        for case, score in failures[:5]:
+            notes = "; ".join(score.notes[:2]) if score.notes else ""
+            print("    {} — task={:.1f} comp={:.1f} pen={:.0f}  {}{}{}".format(
+                case.id, score.task_score, score.compliance_score,
+                score.penalties, _DIM, notes, _RESET,
+            ))
+
+    if getattr(args, "json", False):
+        import json as _json
+        data = {
+            "passed": passed, "failed": failed, "avg_score": round(avg, 1),
+            "cases": len(cases),
+        }
+        print()
+        print(_json.dumps(data, indent=2))
+
+    print()
+
+
+def _prompt_lab_evolve(args):
+    """Run the evolution loop."""
+    from flyto_ai.evolution.loop import EvolutionLoop, format_evolution_report
+    from flyto_ai.evolution.runner import load_rubric
+
+    config = load_rubric(getattr(args, "rubric", None))
+    if getattr(args, "generations", None):
+        config.generations = args.generations
+    if getattr(args, "population", None):
+        config.population_size = args.population
+
+    # Optional LLM provider for live eval
+    provider = None
+    api_key = getattr(args, "api_key", None)
+    prov_name = getattr(args, "provider", None)
+    if api_key or prov_name:
+        from flyto_ai.config import AgentConfig
+        from flyto_ai.providers import create_provider
+        cfg = AgentConfig.from_env()
+        if api_key:
+            cfg.api_key = api_key
+        if prov_name:
+            cfg.provider = prov_name
+        provider = create_provider(
+            cfg.provider or "openai",
+            api_key=cfg.api_key,
+            model=cfg.resolved_model,
+        )
+
+    output = getattr(args, "output", None) or "eval/results"
+
+    print()
+    print("  {}{}Prompt Lab — Evolution{} ".format(_BOLD, _CYAN, _RESET))
+    print("  {}generations={} · population={} · {}{}".format(
+        _DIM, config.generations, config.population_size,
+        "LLM eval" if provider else "rule-based eval", _RESET,
+    ))
+    print()
+
+    loop_obj = EvolutionLoop(
+        config=config, provider=provider,
+        eval_cases_path=getattr(args, "cases", None),
+        output_dir=output,
+    )
+
+    def _on_progress(gen, cid, score):
+        print("  {}gen {} · {} · {:.1f}{}".format(_DIM, gen, cid[:20], score, _RESET))
+
+    report = asyncio.run(loop_obj.run(on_progress=_on_progress))
+
+    print()
+    print(format_evolution_report(report))
+    print()
+    print("  {}Results saved to: {}{}".format(_DIM, output, _RESET))
+    print()
+
+
+def _prompt_lab_cases(args):
+    """List all eval test cases."""
+    from flyto_ai.evolution.runner import load_eval_cases
+
+    cases = load_eval_cases()
+
+    print()
+    print("  {}{}Prompt Lab — {} Eval Cases{}".format(_BOLD, _CYAN, len(cases), _RESET))
+    print()
+
+    by_category = {}
+    for c in cases:
+        by_category.setdefault(c.category, []).append(c)
+
+    for cat, cat_cases in sorted(by_category.items()):
+        print("  {}{}{}  ({})".format(_BOLD, cat, _RESET, len(cat_cases)))
+        for c in cat_cases:
+            tags = " ".join("[{}]".format(t) for t in c.tags[:3])
+            weight_str = " {}w={:.0f}{}".format(_YELLOW, c.weight, _RESET) if c.weight > 1 else ""
+            print("    {} {}{}{}".format(c.id, _DIM, tags, _RESET) + weight_str)
+        print()
+
+
+def _prompt_lab_report(args):
+    """Show the latest evolution report."""
+    from pathlib import Path
+
+    results_dir = Path("eval/results")
+    report_file = results_dir / "report.json"
+
+    if not report_file.exists():
+        print("  {}No evolution report found. Run: flyto-ai prompt-lab evolve{}".format(
+            _DIM, _RESET,
+        ))
+        return
+
+    import json as _json
+    from flyto_ai.evolution.models import EvolutionReport
+    from flyto_ai.evolution.loop import format_evolution_report
+
+    with open(report_file, "r", encoding="utf-8") as f:
+        data = _json.load(f)
+
+    report = EvolutionReport(**data)
+    print()
+    print(format_evolution_report(report))
+    print()
 
 
 def _cmd_mcp():

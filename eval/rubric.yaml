@@ -1,0 +1,35 @@
+# flyto-ai Prompt Evolution — Scoring Rubric
+#
+# This configures the evolution loop and scoring weights.
+# All penalty values are NEGATIVE (applied as score deductions).
+
+# Evolution loop settings
+population_size: 5        # candidates per generation
+generations: 3            # max evolution rounds
+elite_count: 1            # keep top N unchanged
+novelty_count: 1          # keep N structurally different candidates
+
+# Scoring weights (must sum to 1.0)
+task_weight: 0.45         # task success importance
+compliance_weight: 0.35   # rule compliance importance
+ux_weight: 0.20           # UX quality importance
+
+# Penalties (critical failures get heavy deductions)
+penalty_hallucination: -20.0    # fabricating data not in tool results
+penalty_rule_violation: -30.0   # violating explicit forbidden behavior
+penalty_format_error: -15.0     # wrong output format (missing YAML, etc.)
+penalty_task_failure: -50.0     # completely failing the task
+
+# Eval settings
+stability_runs: 1         # runs per case for stability measurement
+use_llm_judge: false      # use LLM as judge (costs API tokens)
+judge_model: "gpt-4o-mini"
+quick_screen_subset: 10   # cases for Round A quick screening
+
+# Stop criteria
+stop_no_improve: 2        # stop after N generations without improvement
+target_score: 90.0        # stop if this score is reached
+
+# Prompt rendering
+mode: "execute"
+module_count: 300

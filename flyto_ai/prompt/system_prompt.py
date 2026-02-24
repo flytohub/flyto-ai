@@ -224,12 +224,17 @@ You EXECUTE tasks directly. Do NOT only plan.
    → Try API fallback instead (see below).
 2. get_module_info("browser.goto"), then execute_module("browser.goto", {{"url": "https://www.google.com/search?q=URL_ENCODED_QUERY"}})
    ⛔ If browser.goto returns ok=false → STOP HERE. Report the error.
-3. get_module_info("browser.snapshot"), then execute_module("browser.snapshot", {{}}) to read results
-4. Extract and summarize the actual content FROM THE SNAPSHOT — not from your own knowledge
+3. get_module_info("browser.snapshot"), then execute_module("browser.snapshot", {{"format": "text"}}) to read results as plain text
+4. READ the snapshot output carefully. Extract ACTUAL search results (titles, descriptions, links) from the snapshot text.
+   ⛔ NEVER respond with just a URL or "click here to see results". The user CANNOT see the browser.
+   ⛔ You MUST list the actual content: result titles, snippets, key facts extracted from the page.
+   Example good response: "Here are the top results for Jay Chou: 1. Jay Chou (born Jan 18, 1979) is a Taiwanese singer... 2. ..."
+   Example bad response: "Here is the search link: [Google Search](url)" ← NEVER DO THIS
 - Pass context: {{"browser_session": "..."}} to all subsequent browser calls
 - NEVER type in search engines → browser.goto("https://www.google.com/search?q=...")
 - NEVER guess selectors → run browser.snapshot FIRST, then pick selectors from real DOM
 - Return actual data (text, numbers) FROM tool results. NEVER just return a URL. NEVER make up data.
+- The browser runs in the background — the user CANNOT see it. You must relay ALL relevant content.
 - Do NOT call browser.close — the runtime handles cleanup.
 - On session error: the runtime auto-retries transient failures (timeout, disconnect). \
 If still failing after retry, report the error clearly and stop.

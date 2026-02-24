@@ -128,6 +128,25 @@ _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
 _CYAN = "\033[36m"
 
+# Rich Markdown rendering (optional)
+_rich_console = None
+try:
+    from rich.console import Console as _RichConsole
+    from rich.markdown import Markdown as _RichMarkdown
+    _rich_console = _RichConsole()
+except ImportError:
+    pass
+
+
+def _print_markdown(text: str) -> None:
+    """Render markdown with rich if available, otherwise plain print."""
+    if _rich_console:
+        _rich_console.print(_RichMarkdown(text))
+    else:
+        for line in text.split("\n"):
+            print("  {}".format(line))
+
+
 # UI helpers
 import re as _re
 import shutil as _shutil
@@ -862,15 +881,7 @@ def _cmd_interactive(args):
 
             # Show response — skip if already streamed
             if not _streamed_any[0]:
-                msg_lines = result.message.split("\n")
-                if len(msg_lines) > 20:
-                    for line in msg_lines[:5]:
-                        print("  {}".format(line))
-                    print("  {}... ({} lines truncated){}".format(
-                        _DIM, len(msg_lines) - 5, _RESET))
-                else:
-                    for line in msg_lines:
-                        print("  {}".format(line))
+                _print_markdown(result.message)
 
             meta_parts = []
             if result.execution_results:

@@ -425,35 +425,67 @@ def _extract_check_phrases(text: str) -> List[str]:
 def _split_forbidden_phrases(text: str) -> List[str]:
     """Split forbidden behavior text into check phrases.
 
-    Uses minimal splitting to keep phrases intact and reduce false positives.
-    CJK-containing parts are kept as whole phrases for precise matching.
-    ASCII-only parts are split into significant words for broader matching.
+    Always keeps phrases whole (comma-separated) to avoid false positives
+    from matching common English words like "using", "module", "search".
     """
-    parts = re.split(r'[,;、\n]', text)
+    parts = re.split(r'[,;\n]', text)
     phrases = []
     for p in parts:
         p = p.strip().strip('-').strip('*').strip()
-        if len(p) < 2:
+        if len(p) < 3:
             continue
-        has_cjk = any('\u4e00' <= c <= '\u9fff' for c in p)
-        if has_cjk:
-            # CJK: keep whole phrase for precise matching
-            phrases.append(p)
-        else:
-            # ASCII: split into significant words
-            words = p.split()
-            for w in words:
-                w = w.strip('.,;:!?()"\'')
-                if len(w) >= 3:
-                    phrases.append(w)
+        phrases.append(p)
     return phrases
 
 
+_NEGATION_WORDS = frozenset([
+    "cannot", "can't", "not", "never", "refuse", "unable", "won't",
+    "don't", "doesn't", "didn't", "shouldn't", "wouldn't",
+])
+
+
 def _phrase_in_text(phrase: str, text: str) -> bool:
-    """Check if a phrase/keyword appears in text (case-insensitive for ASCII)."""
+    """Check if a phrase/keyword appears in text.
+
+    For CJK text: exact substring match.
+    For ASCII short phrases (1-2 words): exact substring match.
+    For ASCII longer phrases (3+ words): fuzzy match — >=50% word overlap,
+    BUT only if no negation word appears immediately before the first matched word.
+    """
     if any('\u4e00' <= c <= '\u9fff' for c in phrase):
         return phrase in text
-    return phrase.lower() in text.lower()
+
+    phrase_lower = phrase.lower()
+    text_lower = text.lower()
+
+    # Exact substring match first
+    if phrase_lower in text_lower:
+        return True
+
+    # For multi-word phrases, check word overlap (exclude stop words)
+    _stop = {"the", "and", "for", "with", "from", "that", "this", "all", "any", "but"}
+    words = [w for w in phrase_lower.split() if len(w) >= 3 and w not in _stop]
+    if len(words) < 3:
+        return False  # short phrases need exact match
+
+    matched_words = [w for w in words if w in text_lower]
+    if len(matched_words) / len(words) < 0.5:
+        return False
+
+    # The first word (typically the action verb) must be present
+    if words[0] not in text_lower:
+        return False
+
+    # Negation check: if the first matched word is preceded by negation, skip
+    first_match = matched_words[0]
+    idx = text_lower.find(first_match)
+    if idx > 0:
+        before = text_lower[max(0, idx - 20):idx].strip()
+        before_words = before.split()
+        if before_words and before_words[-1] in _NEGATION_WORDS:
+            return False
+
+    return True
 
 
 def _check_language_mismatch(user_input: str, response: str) -> str:

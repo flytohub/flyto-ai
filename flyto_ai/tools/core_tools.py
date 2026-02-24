@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """flyto-core MCP tool bridge — lazily imports core handler."""
 import logging
+import re
 import threading
 from typing import Any, Dict
 
@@ -149,6 +150,44 @@ async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, 
     return result
 
 
+# ---------------------------------------------------------------------------
+# search_modules guardrail — detect web search misuse
+# ---------------------------------------------------------------------------
+
+# Module-like pattern: dot notation (browser.launch, string.upper)
+_MODULE_QUERY_RE = re.compile(r"[a-z][a-z0-9_]*\.[a-z]", re.IGNORECASE)
+
+# Automation-related keywords that signal a legitimate module search
+_AUTOMATION_KEYWORDS = frozenset([
+    "click", "type", "extract", "screenshot", "resize", "convert", "send",
+    "email", "file", "image", "api", "http", "json", "csv", "pdf", "database",
+    "sql", "scrape", "download", "upload", "parse", "format", "encode", "decode",
+    "compress", "encrypt", "hash", "wait", "scroll", "select", "form", "login",
+    "notify", "slack", "telegram", "webhook", "string", "array", "datetime",
+    "evaluate", "snapshot", "launch", "goto", "navigate", "browser", "fill",
+    "submit", "button", "input", "checkbox", "dropdown", "module", "workflow",
+])
+
+
+def _looks_like_module_query(query: str) -> bool:
+    """Check if a query looks like it's searching for an automation module.
+
+    Returns True if the query contains module-like patterns (dot notation)
+    or automation-related keywords.
+    """
+    q = query.strip()
+    if not q:
+        return False
+
+    # Dot notation like "browser.launch" → definitely module search
+    if _MODULE_QUERY_RE.search(q):
+        return True
+
+    # Contains automation keywords → module search
+    q_lower = q.lower()
+    return any(kw in q_lower for kw in _AUTOMATION_KEYWORDS)
+
+
 _sandbox_mgr = None
 
 
@@ -168,11 +207,23 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         return handler["list_modules"](category=arguments.get("category"))
 
     elif name == "search_modules":
-        return handler["search_modules"](
-            query=arguments.get("query", ""),
+        query = arguments.get("query", "")
+        result = handler["search_modules"](
+            query=query,
             category=arguments.get("category"),
             limit=arguments.get("limit", 20),
         )
+        # Guardrail: if no results and query doesn't look like a module search, hint browser
+        if isinstance(result, dict) and result.get("total", 0) == 0 and not _looks_like_module_query(query):
+            result["web_search_hint"] = (
+                "No modules match this query. This looks like a web search request. "
+                "Use Browser Protocol instead: "
+                "execute_module('browser.launch') → "
+                "execute_module('browser.goto', {url: 'https://www.google.com/search?q=...'}) → "
+                "execute_module('browser.snapshot') to read the results."
+            )
+            logger.info("search_modules guardrail: query looks like web search: %s", query[:50])
+        return result
 
     elif name == "get_module_info":
         return handler["get_module_info"](module_id=arguments.get("module_id", ""))

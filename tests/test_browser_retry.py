@@ -6,6 +6,7 @@ import pytest
 from flyto_ai.tools.core_tools import (
     _is_transient_error,
     _is_session_dead,
+    _looks_like_module_query,
     dispatch_core_tool,
     _dispatch_core_tool_inner,
 )
@@ -175,3 +176,73 @@ async def test_relaunch_fail_returns_error(monkeypatch):
     assert "browser.launch" in calls
     # No retry after failed relaunch — only 1 call to browser.goto
     assert calls.count("browser.goto") == 1
+
+
+class TestModuleQueryDetection:
+    """Tests for _looks_like_module_query — guardrail for web search misuse."""
+
+    def test_dot_notation_is_module(self):
+        assert _looks_like_module_query("browser.launch")
+
+    def test_automation_keyword_is_module(self):
+        assert _looks_like_module_query("click button")
+
+    def test_resize_image_is_module(self):
+        assert _looks_like_module_query("resize image")
+
+    def test_send_email_is_module(self):
+        assert _looks_like_module_query("send email notification")
+
+    def test_cjk_person_name_not_module(self):
+        assert not _looks_like_module_query("周杰倫")
+
+    def test_cjk_search_query_not_module(self):
+        assert not _looks_like_module_query("搜尋周杰倫")
+
+    def test_english_person_not_module(self):
+        assert not _looks_like_module_query("Elon Musk")
+
+    def test_news_topic_not_module(self):
+        assert not _looks_like_module_query("latest AI news")
+
+    def test_empty_query_not_module(self):
+        assert not _looks_like_module_query("")
+
+    def test_mixed_cjk_with_technical_is_module(self):
+        assert _looks_like_module_query("screenshot 截圖")
+
+    def test_parse_json_is_module(self):
+        assert _looks_like_module_query("parse json")
+
+
+@pytest.mark.asyncio
+async def test_search_modules_web_guardrail(monkeypatch):
+    """search_modules with web search query and 0 results adds hint."""
+
+    def mock_search(query, category=None, limit=20):
+        return {"query": query, "total": 0, "results": []}
+
+    fake_handler = {
+        "search_modules": mock_search,
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await _dispatch_core_tool_inner("search_modules", {"query": "周杰倫"})
+    assert "web_search_hint" in result
+    assert "Browser Protocol" in result["web_search_hint"]
+
+
+@pytest.mark.asyncio
+async def test_search_modules_no_guardrail_for_module_query(monkeypatch):
+    """search_modules with module-like query and 0 results does NOT add hint."""
+
+    def mock_search(query, category=None, limit=20):
+        return {"query": query, "total": 0, "results": []}
+
+    fake_handler = {
+        "search_modules": mock_search,
+    }
+    monkeypatch.setattr("flyto_ai.tools.core_tools._get_mcp_handler", lambda: fake_handler)
+
+    result = await _dispatch_core_tool_inner("search_modules", {"query": "click button"})
+    assert "web_search_hint" not in result

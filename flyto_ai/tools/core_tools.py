@@ -67,8 +67,6 @@ def _get_mcp_handler():
             get_module_examples,
             execute_module,
             validate_params,
-            list_recipes,
-            run_recipe,
         )
         _cached_handler = {
             "TOOLS": TOOLS,
@@ -78,9 +76,14 @@ def _get_mcp_handler():
             "get_module_examples": get_module_examples,
             "execute_module": execute_module,
             "validate_params": validate_params,
-            "list_recipes": list_recipes,
-            "run_recipe": run_recipe,
         }
+        # Recipe support is optional (flyto-core >= 2.15.0)
+        try:
+            from core.mcp_handler import list_recipes, run_recipe
+            _cached_handler["list_recipes"] = list_recipes
+            _cached_handler["run_recipe"] = run_recipe
+        except ImportError:
+            pass
     except ImportError:
         _cached_handler = None
     return _cached_handler
@@ -338,10 +341,16 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         )
 
     elif name == "list_recipes":
-        return handler["list_recipes"]()
+        fn = handler.get("list_recipes")
+        if not fn:
+            return {"ok": False, "error": "Recipe support requires flyto-core >= 2.15.0"}
+        return fn()
 
     elif name == "run_recipe":
-        return await handler["run_recipe"](
+        fn = handler.get("run_recipe")
+        if not fn:
+            return {"ok": False, "error": "Recipe support requires flyto-core >= 2.15.0"}
+        return await fn(
             recipe_name=arguments.get("recipe_name", ""),
             args=arguments.get("args", {}),
             browser_sessions=_browser_sessions,

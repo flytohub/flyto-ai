@@ -67,6 +67,8 @@ def _get_mcp_handler():
             get_module_examples,
             execute_module,
             validate_params,
+            list_recipes,
+            run_recipe,
         )
         _cached_handler = {
             "TOOLS": TOOLS,
@@ -76,6 +78,8 @@ def _get_mcp_handler():
             "get_module_examples": get_module_examples,
             "execute_module": execute_module,
             "validate_params": validate_params,
+            "list_recipes": list_recipes,
+            "run_recipe": run_recipe,
         }
     except ImportError:
         _cached_handler = None
@@ -331,6 +335,16 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         return handler["validate_params"](
             module_id=arguments.get("module_id", ""),
             params=arguments.get("params", {}),
+        )
+
+    elif name == "list_recipes":
+        return handler["list_recipes"]()
+
+    elif name == "run_recipe":
+        return await handler["run_recipe"](
+            recipe_name=arguments.get("recipe_name", ""),
+            args=arguments.get("args", {}),
+            browser_sessions=_browser_sessions,
         )
 
     return {"ok": False, "error": "Unknown core tool: {}".format(name)}

@@ -8,6 +8,7 @@ from flyto_ai.models import StreamCallback, StreamEvent, StreamEventType
 from flyto_ai.providers.base import (
     DispatchFn, LLMProvider, dispatch_and_log_tool, fire_stream as _fire,
 )
+from flyto_ai.providers.openai import _looks_like_browser_task
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,10 @@ class AnthropicProvider(LLMProvider):
             }
             if anthropic_tools:
                 create_kwargs["tools"] = anthropic_tools
-                create_kwargs["tool_choice"] = {"type": "auto"}
+                if round_num == 0 and _looks_like_browser_task(messages):
+                    create_kwargs["tool_choice"] = {"type": "any"}
+                else:
+                    create_kwargs["tool_choice"] = {"type": "auto"}
 
             # ── Streaming path ──────────────────────────────────
             if on_stream is not None:

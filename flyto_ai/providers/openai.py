@@ -13,6 +13,26 @@ from flyto_ai.providers.base import (
 logger = logging.getLogger(__name__)
 
 
+_BROWSER_INTENT_PATTERNS = [
+    "http://", "https://", ".com", ".org", ".net", ".tw", ".io", ".dev",
+    "搜尋", "幫我到", "打開", "瀏覽", "上網", "查詢", "查一下", "看看",
+    "google", "search", "browse", "website", "scrape", "go to",
+    "tixcraft", "wikipedia", "youtube",
+]
+
+
+def _looks_like_browser_task(messages: list) -> bool:
+    """Check if the user query requires browser automation."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            text = msg.get("content", "")
+            if isinstance(text, str):
+                lower = text.lower()
+                return any(p in lower for p in _BROWSER_INTENT_PATTERNS)
+            break
+    return False
+
+
 class OpenAIProvider(LLMProvider):
     """OpenAI provider with function calling loop."""
 
@@ -89,7 +109,12 @@ class OpenAIProvider(LLMProvider):
             }
             if openai_tools:
                 create_kwargs["tools"] = openai_tools
-                create_kwargs["tool_choice"] = "auto"
+                # Force tool use on first round to prevent LLM from
+                # skipping tools entirely for browser/web tasks.
+                if round_num == 0 and _looks_like_browser_task(messages):
+                    create_kwargs["tool_choice"] = "required"
+                else:
+                    create_kwargs["tool_choice"] = "auto"
 
             # ── Streaming path ──────────────────────────────────
             if on_stream is not None:

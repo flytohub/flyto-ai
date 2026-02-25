@@ -215,8 +215,10 @@ def _get_cors_origin(request_origin: str) -> str:
     """Return allowed CORS origin. Uses whitelist if configured, else '*'."""
     if _CORS_ORIGINS is None:
         return "*"
-    if request_origin in _CORS_ORIGINS:
-        return request_origin
+    # Sanitize to prevent HTTP response splitting (CWE-113)
+    sanitized = request_origin.replace("\r", "").replace("\n", "")
+    if sanitized in _CORS_ORIGINS:
+        return sanitized
     return ""
 
 

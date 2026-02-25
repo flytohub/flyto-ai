@@ -68,7 +68,9 @@ class OpenAIProvider(LLMProvider):
         """True if talking to real OpenAI API (not Ollama / custom base_url)."""
         if not self._base_url:
             return True
-        return "api.openai.com" in self._base_url
+        from urllib.parse import urlparse
+        host = urlparse(self._base_url).hostname or ""
+        return host == "api.openai.com" or host.endswith(".openai.com")
 
     async def chat(
         self,

@@ -230,6 +230,62 @@ flyto-ai blueprints                             # View learned blueprints
 flyto-ai blueprints --export > blueprints.yaml  # Export for sharing
 ```
 
+## Claude Code Agent
+
+Use Claude Code as a coding worker with automatic verification loops:
+
+```bash
+pip install flyto-ai[agent]   # Installs claude-agent-sdk
+
+# Basic — Claude Code writes code, no verification
+flyto-ai code "fix the login form validation" --dir ./my-project
+
+# With verification — screenshot + visual comparison after each fix attempt
+flyto-ai code "match the Figma design for the login page" \
+  --dir ./my-project \
+  --verify screenshot \
+  --verify-args '{"url": "http://localhost:3000/login"}' \
+  --reference ./figma-login.png \
+  --max-attempts 3
+
+# JSON output for CI/CD
+flyto-ai code "add unit tests for auth module" --dir ./project --json
+```
+
+**How it works:**
+
+```
+Phase 1: Gather codebase context from flyto-indexer
+Phase 2: Claude Code writes code (with Guardian safety hooks)
+Phase 3: Run verification recipe (browser screenshot + text extraction)
+Phase 4: LLM visual comparison (actual vs reference)
+  → Failed → feed back to Claude Code (Phase 2)
+  → Passed → return result
+```
+
+**Features:**
+- **Guardian hooks** — blocks dangerous operations (rm -rf, .env writes, credential access)
+- **Evidence trail** — every tool call logged to `~/.flyto/evidence/<session>/evidence.jsonl`
+- **Budget control** — `--budget 5.0` caps spending per task
+- **Indexer integration** — flyto-indexer provides codebase context + mounts as MCP server
+- **Session resume** — feedback loop reuses the same Claude Code session for full context
+
+```python
+# Python API
+from flyto_ai import ClaudeCodeAgent, AgentConfig
+from flyto_ai.agents import CodeTaskRequest
+
+agent = ClaudeCodeAgent(config=AgentConfig.from_env())
+result = await agent.run(CodeTaskRequest(
+    message="fix the login page",
+    working_dir="/path/to/project",
+    verification_recipe="screenshot",
+    verification_args={"url": "http://localhost:3000/login"},
+    reference_image="./figma-login.png",
+))
+print(result.ok, result.attempts, result.files_changed)
+```
+
 ## CLI
 
 ```bash
@@ -238,6 +294,7 @@ flyto-ai chat "scrape example.com"           # One-shot execute mode
 flyto-ai chat "scrape example.com" --plan    # YAML-only mode (don't execute)
 flyto-ai chat "take screenshot" -p ollama    # Use Ollama (no API key needed)
 flyto-ai chat "..." --webhook https://...    # POST result to webhook
+flyto-ai code "fix bug" --dir ./project      # Claude Code Agent mode
 flyto-ai serve --port 8080                   # HTTP server for triggers
 flyto-ai blueprints                          # List learned blueprints
 flyto-ai version                             # Version + dependency status
@@ -352,6 +409,16 @@ User message
     → Execute mode: run modules, return results + YAML
     → Plan mode: YAML validation loop (auto-retry on errors)
   → Structured output (results + reusable workflow)
+
+Claude Code Agent (flyto-ai code):
+  → Phase 1: flyto-indexer gathers codebase context
+  → Phase 2: Claude Agent SDK spawns Claude Code
+      → PreToolUse hook: Guardian blocks dangerous ops
+      → PostToolUse hook: Evidence trail logging
+      → MCP: flyto-indexer available for code intelligence
+  → Phase 3: YAML recipe verification (browser automation)
+  → Phase 4: LLM visual comparison (screenshot vs Figma)
+  → Loop: failed → feedback → Phase 2 | passed → done
 ```
 
 ## Environment Variables
@@ -364,6 +431,9 @@ User message
 | `OPENAI_API_KEY` | Fallback for OpenAI provider |
 | `ANTHROPIC_API_KEY` | Fallback for Anthropic provider |
 | `FLYTO_AI_BASE_URL` | Custom API endpoint (OpenAI-compatible) |
+| `FLYTO_AI_CC_MAX_BUDGET` | Claude Code Agent max budget in USD (default: 5.0) |
+| `FLYTO_AI_CC_MAX_TURNS` | Claude Code Agent max turns (default: 30) |
+| `FLYTO_AI_CC_MAX_FIX_ATTEMPTS` | Claude Code Agent max fix attempts (default: 3) |
 
 ## License
 

@@ -68,6 +68,18 @@ def main():
     lab_sub.add_parser("cases", help="List all eval cases")
     lab_sub.add_parser("report", help="Show latest evolution report")
 
+    # flyto-ai code "fix login page"
+    code_p = sub.add_parser("code", help="AI-driven coding with Claude Code Agent + verification")
+    code_p.add_argument("message", nargs="+", help="What you want to build/fix")
+    code_p.add_argument("--dir", "-d", default=".", help="Project working directory (default: .)")
+    code_p.add_argument("--verify", help="Verification recipe name (e.g. 'screenshot')")
+    code_p.add_argument("--verify-args", help="Recipe args as JSON string")
+    code_p.add_argument("--reference", help="Reference image path for visual comparison")
+    code_p.add_argument("--max-attempts", type=int, default=3, help="Max fix attempts (default: 3)")
+    code_p.add_argument("--budget", type=float, default=5.0, help="Max budget in USD (default: 5.0)")
+    code_p.add_argument("--max-turns", type=int, default=30, help="Max Claude Code turns (default: 30)")
+    code_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
 
@@ -83,6 +95,8 @@ def main():
         _cmd_mcp()
     elif args.command == "prompt-lab":
         _cmd_prompt_lab(args)
+    elif args.command == "code":
+        _cmd_code(args)
     elif args.command == "chat":
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
@@ -107,6 +121,103 @@ def main():
         _cmd_chat(args)
     else:
         parser.print_help()
+
+
+def _cmd_code(args):
+    """Run Claude Code Agent with optional verification loop."""
+    import os
+
+    # Early check: claude-agent-sdk installed?
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError:
+        print("\033[31mError:\033[0m claude-agent-sdk is required for the 'code' command.")
+        print("Install with: \033[1mpip install flyto-ai[agent]\033[0m")
+        sys.exit(1)
+
+    message = " ".join(args.message)
+    working_dir = os.path.abspath(args.dir)
+
+    verify_args = {}
+    if args.verify_args:
+        verify_args = json.loads(args.verify_args)
+
+    from flyto_ai.config import AgentConfig
+    from flyto_ai.agents.claude_code import ClaudeCodeAgent
+    from flyto_ai.agents.models import CodeTaskRequest
+
+    config = AgentConfig.from_env()
+    agent = ClaudeCodeAgent(config=config)
+
+    request = CodeTaskRequest(
+        message=message,
+        working_dir=working_dir,
+        verification_recipe=args.verify or None,
+        verification_args=verify_args,
+        reference_image=args.reference or None,
+        max_fix_attempts=args.max_attempts,
+        max_budget_usd=args.budget,
+        max_turns=args.max_turns,
+    )
+
+    # Streaming callback
+    def _on_stream(event):
+        if getattr(args, "json", False):
+            return
+        etype = event.get("type", "")
+        if etype == "phase_start":
+            phase = event.get("phase", "")
+            attempt = event.get("attempt", "")
+            label = phase
+            if attempt:
+                label = "{} (attempt {})".format(phase, attempt)
+            sys.stdout.write("\033[36m▶ {}\033[0m\n".format(label))
+            sys.stdout.flush()
+        elif etype == "phase_end":
+            phase = event.get("phase", "")
+            sys.stdout.write("\033[36m◀ {} done\033[0m\n".format(phase))
+            sys.stdout.flush()
+        elif etype == "token":
+            sys.stdout.write(event.get("content", ""))
+            sys.stdout.flush()
+        elif etype == "verification_result":
+            passed = event.get("passed", False)
+            icon = "\033[32m✓\033[0m" if passed else "\033[31m✗\033[0m"
+            summary = event.get("summary") or event.get("error") or ""
+            sys.stdout.write("\n{} Verification: {}\n".format(icon, summary or ("passed" if passed else "failed")))
+            sys.stdout.flush()
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(agent.run(request, on_stream=_on_stream))
+    finally:
+        loop.close()
+
+    if getattr(args, "json", False):
+        import dataclasses
+        out = dataclasses.asdict(result)
+        print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+    else:
+        icon = "\033[32m✓\033[0m" if result.ok else "\033[31m✗\033[0m"
+        print("\n{} {} (attempts: {}, cost: ${:.4f})".format(
+            icon, result.message, result.attempts, result.total_cost_usd,
+        ))
+        if result.files_changed:
+            print("  Files changed: {}".format(", ".join(result.files_changed)))
+        # Claude SDK details
+        if result.claude_session_id:
+            dur_s = result.claude_duration_ms / 1000 if result.claude_duration_ms else 0
+            print("  Claude: session={}, turns={}, duration={:.1f}s".format(
+                result.claude_session_id, result.claude_num_turns, dur_s,
+            ))
+        if result.claude_usage:
+            u = result.claude_usage
+            print("  Usage: input={}, output={}, cache_read={}, cache_create={}".format(
+                u.get("input_tokens", 0), u.get("output_tokens", 0),
+                u.get("cache_read_input_tokens", 0), u.get("cache_creation_input_tokens", 0),
+            ))
+
+    sys.exit(0 if result.ok else 1)
 
 
 _LOGO_LINES = [

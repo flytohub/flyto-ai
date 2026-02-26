@@ -10,8 +10,20 @@ __all__ = [
     "Agent", "AgentConfig",
     "ChatMessage", "ChatRequest", "ChatResponse",
     "StreamEvent", "StreamEventType", "UsageStats",
+    "ClaudeCodeAgent",
     "__version__",
 ]
+
+
+def _lazy_claude_code_agent():
+    from flyto_ai.agents.claude_code import ClaudeCodeAgent
+    return ClaudeCodeAgent
+
+
+def __getattr__(name):
+    if name == "ClaudeCodeAgent":
+        return _lazy_claude_code_agent()
+    raise AttributeError("module 'flyto_ai' has no attribute '{}'".format(name))
 
 
 def create_agent(

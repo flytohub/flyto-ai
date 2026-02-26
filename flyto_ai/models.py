@@ -13,6 +13,9 @@ class StreamEventType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     DONE = "done"
+    PHASE_START = "phase_start"
+    PHASE_END = "phase_end"
+    VERIFICATION_RESULT = "verification_result"
 
 
 class StreamEvent(BaseModel):

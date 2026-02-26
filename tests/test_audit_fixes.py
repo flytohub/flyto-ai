@@ -530,14 +530,14 @@ class TestServeHardening:
 
 class TestInspectPageDefaults:
 
-    def test_source_uses_ok_false_default(self):
-        """inspect_page must use get('ok', False) not get('ok', True)."""
+    def test_source_uses_is_ok_helper(self):
+        """inspect_page must use _is_ok() helper, not raw .get('ok', True)."""
         src = inspect.getsource(inspect_page)
         # Should NOT have get("ok", True) anywhere
         assert '.get("ok", True)' not in src
         assert ".get('ok', True)" not in src
-        # Should use get("ok", False) for all checks
-        assert '.get("ok", False)' in src
+        # Should use _is_ok() helper for all result checks
+        assert '_is_ok(' in src
 
     def test_tool_def_has_required_url(self):
         assert INSPECT_PAGE_TOOL["name"] == "inspect_page"

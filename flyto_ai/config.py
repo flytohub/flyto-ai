@@ -4,7 +4,7 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,19 @@ FUNCTION_CALLING_SUPPORT = {
     "mistral": "fair",
     "deepseek-r1:8b": "poor",
 }
+
+
+@dataclass
+class ClaudeCodeConfig:
+    """Configuration for the Claude Code Agent mode."""
+    max_budget_usd: float = 5.0
+    max_turns: int = 30
+    max_fix_attempts: int = 3
+    allowed_tools: List[str] = field(default_factory=lambda: [
+        "Read", "Edit", "Write", "Bash", "Glob", "Grep",
+    ])
+    verification_timeout: int = 120
+    evidence_dir: str = "~/.flyto/evidence"
 
 
 @dataclass
@@ -52,6 +65,9 @@ class AgentConfig:
     sandbox_image: str = "flyto-sandbox:latest"
     sandbox_timeout: int = 60
 
+    # Claude Code Agent
+    claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         return cls(
@@ -69,6 +85,11 @@ class AgentConfig:
             enable_sandbox=data.get("enable_sandbox", False),
             sandbox_image=data.get("sandbox_image", "flyto-sandbox:latest"),
             sandbox_timeout=data.get("sandbox_timeout", 60),
+            claude_code=ClaudeCodeConfig(
+                **{k: v for k, v in data.get("claude_code", {}).items()
+                   if k in ("max_budget_usd", "max_turns", "max_fix_attempts",
+                            "allowed_tools", "verification_timeout", "evidence_dir")},
+            ),
         )
 
     @classmethod
@@ -110,6 +131,11 @@ class AgentConfig:
             enable_sandbox=os.getenv("FLYTO_AI_ENABLE_SANDBOX", "false").lower() == "true",
             sandbox_image=os.getenv("FLYTO_AI_SANDBOX_IMAGE", "flyto-sandbox:latest"),
             sandbox_timeout=int(os.getenv("FLYTO_AI_SANDBOX_TIMEOUT", "60")),
+            claude_code=ClaudeCodeConfig(
+                max_budget_usd=float(os.getenv("FLYTO_AI_CC_MAX_BUDGET", "5.0")),
+                max_turns=int(os.getenv("FLYTO_AI_CC_MAX_TURNS", "30")),
+                max_fix_attempts=int(os.getenv("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "3")),
+            ),
         )
 
     def __post_init__(self):

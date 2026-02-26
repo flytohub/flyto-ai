@@ -310,6 +310,28 @@ _SERVER_KEY = _os.getenv("FLYTO_AI_SERVER_KEY", "")
 _CORS_ORIGINS_RAW = _os.getenv("FLYTO_AI_CORS_ORIGINS", "")
 _CORS_ORIGINS = frozenset(o.strip() for o in _CORS_ORIGINS_RAW.split(",") if o.strip()) if _CORS_ORIGINS_RAW else None
 
+# Telegram Bot gateway (set TELEGRAM_BOT_TOKEN to enable /telegram webhook)
+_TG_TOKEN = _os.getenv("TELEGRAM_BOT_TOKEN", "")
+_TG_ALLOWED_RAW = _os.getenv("TELEGRAM_ALLOWED_CHATS", "")
+_TG_ALLOWED_CHATS = frozenset(int(c.strip()) for c in _TG_ALLOWED_RAW.split(",") if c.strip()) if _TG_ALLOWED_RAW else frozenset()
+
+
+async def _tg_send(token: str, chat_id: int, text: str):
+    """Send a message via Telegram Bot API."""
+    import aiohttp
+    url = "https://api.telegram.org/bot{}/sendMessage".format(token)
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status != 200:
+                    # Retry without parse_mode in case Markdown is invalid
+                    payload.pop("parse_mode", None)
+                    async with session.post(url, json=payload) as _:
+                        pass
+    except Exception:
+        pass  # Best-effort — don't crash the webhook
+
 
 def _check_server_auth(auth_header: str) -> bool:
     """Check Bearer token against FLYTO_AI_SERVER_KEY. Returns True if auth passes."""
@@ -1300,6 +1322,45 @@ def _cmd_serve_aiohttp(args):
     async def handle_health(request):
         return web.json_response({"ok": True, "status": "ready"})
 
+    # --- Telegram Bot webhook ---
+    async def handle_telegram(request):
+        """Receive Telegram Update, call agent.chat(), reply via sendMessage."""
+        if not _TG_TOKEN:
+            return web.json_response(
+                {"ok": False, "error": "TELEGRAM_BOT_TOKEN not set"}, status=503,
+            )
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": True})
+
+        msg = body.get("message") or body.get("edited_message") or {}
+        text = msg.get("text", "")
+        chat_id = msg.get("chat", {}).get("id")
+
+        if not text or not chat_id:
+            return web.json_response({"ok": True})
+
+        # Whitelist check
+        if _TG_ALLOWED_CHATS and chat_id not in _TG_ALLOWED_CHATS:
+            return web.json_response({"ok": True})
+
+        # Send "processing" indicator
+        await _tg_send(_TG_TOKEN, chat_id, "\u23f3 Processing...")
+
+        try:
+            result = await agent.chat(text, mode="execute")
+            reply = result.message or "Done."
+        except Exception as e:
+            reply = "Error: {}".format(e)
+
+        if len(reply) > 4000:
+            reply = reply[:4000] + "\n\n... (truncated)"
+
+        await _tg_send(_TG_TOKEN, chat_id, reply)
+        return web.json_response({"ok": True})
+
     app = web.Application(client_max_size=MAX_BODY_SIZE, middlewares=[cors_middleware])
     app.router.add_get("/", handle_demo)
     app.router.add_get("/demo", handle_demo)
@@ -1307,6 +1368,7 @@ def _cmd_serve_aiohttp(args):
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/chat/stream", handle_chat_stream)
     app.router.add_get("/health", handle_health)
+    app.router.add_post("/telegram", handle_telegram)
 
     print()
     print("  {}{}Flyto2 AI Server{}  {}(aiohttp){}".format(_BOLD, _CYAN, _RESET, _DIM, _RESET))
@@ -1316,6 +1378,8 @@ def _cmd_serve_aiohttp(args):
     print("  {}POST /chat{}        Chat API".format(_BOLD, _RESET))
     print("  {}POST /chat/stream{} Streaming SSE".format(_BOLD, _RESET))
     print("  {}GET  /health{}      Health check".format(_BOLD, _RESET))
+    if _TG_TOKEN:
+        print("  {}POST /telegram{}   Telegram Bot webhook".format(_BOLD, _RESET))
     print()
 
     web.run_app(app, host=args.host, port=args.port, print=lambda *a: None)

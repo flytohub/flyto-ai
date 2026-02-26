@@ -421,6 +421,30 @@ Claude Code Agent (flyto-ai code):
   → Loop: failed → feedback → Phase 2 | passed → done
 ```
 
+## Telegram Bot Gateway
+
+Run flyto-ai tasks from your phone via Telegram:
+
+```bash
+# 1. Set tokens
+export TELEGRAM_BOT_TOKEN=123456:ABC-DEF       # from @BotFather
+export TELEGRAM_ALLOWED_CHATS=your_chat_id      # optional whitelist
+export ANTHROPIC_API_KEY=sk-ant-...             # or OPENAI_API_KEY
+
+# 2. Start server
+flyto-ai serve --host 0.0.0.0 --port 7411
+
+# 3. Register webhook (once)
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://your-domain/telegram"
+
+# 4. Send a message to your bot in Telegram — it runs flyto-ai and replies
+```
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | Yes (for /telegram) |
+| `TELEGRAM_ALLOWED_CHATS` | Comma-separated chat_id whitelist | No (empty = allow all) |
+
 ## Environment Variables
 
 | Variable | Description |
@@ -431,6 +455,8 @@ Claude Code Agent (flyto-ai code):
 | `OPENAI_API_KEY` | Fallback for OpenAI provider |
 | `ANTHROPIC_API_KEY` | Fallback for Anthropic provider |
 | `FLYTO_AI_BASE_URL` | Custom API endpoint (OpenAI-compatible) |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot token for /telegram webhook |
+| `TELEGRAM_ALLOWED_CHATS` | Comma-separated Telegram chat_id whitelist |
 | `FLYTO_AI_CC_MAX_BUDGET` | Claude Code Agent max budget in USD (default: 5.0) |
 | `FLYTO_AI_CC_MAX_TURNS` | Claude Code Agent max turns (default: 30) |
 | `FLYTO_AI_CC_MAX_FIX_ATTEMPTS` | Claude Code Agent max fix attempts (default: 3) |

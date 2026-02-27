@@ -52,8 +52,7 @@ class TestListBlueprints:
         engine = MagicMock()
         engine.list_blueprints.return_value = []
 
-        with patch.dict("sys.modules", {"flyto_blueprint": MagicMock(get_engine=lambda **kw: engine),
-                                         "flyto_blueprint.storage": MagicMock()}):
+        with patch.dict("sys.modules", {"flyto_blueprint": MagicMock(get_engine=lambda **kw: engine)}):
             result = _tg_list_blueprints()
         assert result == "No blueprints yet."
 
@@ -69,7 +68,6 @@ class TestListBlueprints:
 
         with patch.dict("sys.modules", {
             "flyto_blueprint": MagicMock(get_engine=lambda **kw: engine),
-            "flyto_blueprint.storage": MagicMock(),
         }):
             result = _tg_list_blueprints()
 

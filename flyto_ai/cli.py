@@ -349,8 +349,7 @@ def _tg_list_blueprints() -> str:
     """List top blueprints from flyto-blueprint engine."""
     try:
         from flyto_blueprint import get_engine
-        from flyto_blueprint.storage import SQLiteBackend
-        engine = get_engine(storage=SQLiteBackend())
+        engine = get_engine()
         bps = engine.list_blueprints()
     except Exception as e:
         return "Error loading blueprints: {}".format(e)

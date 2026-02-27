@@ -46,6 +46,7 @@ def main():
     serve_p.add_argument("--provider", "-p", help="LLM provider")
     serve_p.add_argument("--model", "-m", help="Model name")
     serve_p.add_argument("--api-key", "-k", help="API key (or use env vars)")
+    serve_p.add_argument("--dir", default=None, help="Working directory for /claude commands")
 
     # flyto-ai mcp
     sub.add_parser("mcp", help="Start MCP server (JSON-RPC 2.0 over STDIO)")
@@ -331,6 +332,63 @@ async def _tg_send(token: str, chat_id: int, text: str):
                         pass
     except Exception:
         pass  # Best-effort — don't crash the webhook
+
+
+_TG_HELP_TEXT = (
+    "Available commands:\n"
+    "\n"
+    "  (plain text) — flyto-ai agent (automation)\n"
+    "  /claude <msg> — Claude Code (read/write code)\n"
+    "  /yaml — list learned blueprints\n"
+    "  /blueprint — same as /yaml\n"
+    "  /help — show this message"
+)
+
+
+def _tg_list_blueprints() -> str:
+    """List top blueprints from flyto-blueprint engine."""
+    try:
+        from flyto_blueprint import get_engine
+        from flyto_blueprint.storage import SQLiteBackend
+        engine = get_engine(storage=SQLiteBackend())
+        bps = engine.list_blueprints()
+    except Exception as e:
+        return "Error loading blueprints: {}".format(e)
+
+    if not bps:
+        return "No blueprints yet."
+
+    lines = []
+    sorted_bps = sorted(bps, key=lambda b: b.get("score", 0), reverse=True)[:10]
+    for bp in sorted_bps:
+        name = bp.get("name", "?")
+        score = bp.get("score", 0)
+        lines.append("  {} (score: {})".format(name, score))
+    return "Blueprints:\n" + "\n".join(lines)
+
+
+async def _tg_run_claude(msg: str, working_dir: str, config) -> str:
+    """Run a task via ClaudeCodeAgent and return formatted reply."""
+    try:
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+        from flyto_ai.agents.models import CodeTaskRequest
+
+        cc_agent = ClaudeCodeAgent(config=config)
+        request = CodeTaskRequest(message=msg, working_dir=working_dir)
+        result = await cc_agent.run(request)
+
+        parts = []
+        if result.ok:
+            parts.append("Done")
+        else:
+            parts.append("Failed")
+        if result.message:
+            parts.append(result.message)
+        if result.files_changed:
+            parts.append("Files: " + ", ".join(result.files_changed))
+        return "\n".join(parts)
+    except Exception as e:
+        return "Claude error: {}".format(e)
 
 
 def _check_server_auth(auth_header: str) -> bool:
@@ -1323,8 +1381,38 @@ def _cmd_serve_aiohttp(args):
         return web.json_response({"ok": True, "status": "ready"})
 
     # --- Telegram Bot webhook ---
+    _claude_working_dir = getattr(args, "dir", None) or _os.getcwd()
+
+    async def _tg_process(chat_id: int, text: str):
+        """Background task: route command and send result to Telegram."""
+        try:
+            stripped = text.strip()
+            if stripped == "/help":
+                reply = _TG_HELP_TEXT
+            elif stripped in ("/yaml", "/blueprint"):
+                reply = _tg_list_blueprints()
+            elif stripped.startswith("/claude "):
+                msg = stripped[8:].strip()
+                if not msg:
+                    reply = "Usage: /claude <message>"
+                else:
+                    reply = await _tg_run_claude(msg, _claude_working_dir, config)
+            elif stripped == "/claude":
+                reply = "Usage: /claude <message>"
+            else:
+                # Default — flyto-ai agent
+                result = await agent.chat(text, mode="execute")
+                reply = result.message or "Done."
+        except Exception as e:
+            reply = "Error: {}".format(e)
+
+        if len(reply) > 4000:
+            reply = reply[:4000] + "\n\n... (truncated)"
+
+        await _tg_send(_TG_TOKEN, chat_id, reply)
+
     async def handle_telegram(request):
-        """Receive Telegram Update, call agent.chat(), reply via sendMessage."""
+        """Receive Telegram Update, spawn background task, return immediately."""
         if not _TG_TOKEN:
             return web.json_response(
                 {"ok": False, "error": "TELEGRAM_BOT_TOKEN not set"}, status=503,
@@ -1346,19 +1434,11 @@ def _cmd_serve_aiohttp(args):
         if _TG_ALLOWED_CHATS and chat_id not in _TG_ALLOWED_CHATS:
             return web.json_response({"ok": True})
 
-        # Send "processing" indicator
+        # Send "processing" indicator and spawn background task
         await _tg_send(_TG_TOKEN, chat_id, "\u23f3 Processing...")
+        asyncio.ensure_future(_tg_process(chat_id, text))
 
-        try:
-            result = await agent.chat(text, mode="execute")
-            reply = result.message or "Done."
-        except Exception as e:
-            reply = "Error: {}".format(e)
-
-        if len(reply) > 4000:
-            reply = reply[:4000] + "\n\n... (truncated)"
-
-        await _tg_send(_TG_TOKEN, chat_id, reply)
+        # Return immediately so Telegram doesn't timeout
         return web.json_response({"ok": True})
 
     app = web.Application(client_max_size=MAX_BODY_SIZE, middlewares=[cors_middleware])

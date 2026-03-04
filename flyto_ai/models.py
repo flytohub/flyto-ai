@@ -67,3 +67,4 @@ class ChatResponse(BaseModel):
     error: Optional[str] = None
     rounds_used: int = 0
     usage: Optional[UsageStats] = None
+    cost: Optional[Dict[str, Any]] = None

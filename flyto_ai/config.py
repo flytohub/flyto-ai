@@ -41,6 +41,15 @@ class ClaudeCodeConfig:
 
 
 @dataclass
+class FailoverProviderConfig:
+    """Configuration for a single provider in the failover chain."""
+    provider: str = ""
+    api_key: str = ""
+    model: str = ""
+    base_url: Optional[str] = None
+
+
+@dataclass
 class AgentConfig:
     """Configuration for the AI agent.
 
@@ -68,8 +77,39 @@ class AgentConfig:
     # Claude Code Agent
     claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
 
+    # Failover chain
+    fallback_providers: List[FailoverProviderConfig] = field(default_factory=list)
+
+    # Cost tracking
+    session_budget_usd: Optional[float] = None
+    global_budget_usd: Optional[float] = None
+
+    # Transcript
+    enable_transcript: bool = True
+    transcript_dir: str = "~/.flyto/transcripts"
+
+    # Vault
+    vault_path: str = "~/.flyto/vault.enc"
+    vault_passphrase: Optional[str] = None
+    vault_auto_inject: bool = False
+
+    # Injection detection
+    enable_injection_detection: bool = True
+
+    # Browser engine
+    browser_engine: str = "chromium"  # "chromium" | "firefox" | "webkit"
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
+        fallbacks = []
+        for fb in data.get("fallback_providers", []):
+            fallbacks.append(FailoverProviderConfig(
+                provider=fb.get("provider", ""),
+                api_key=fb.get("api_key", ""),
+                model=fb.get("model", ""),
+                base_url=fb.get("base_url") or None,
+            ))
+
         return cls(
             provider=data.get("provider", ""),
             api_key=data.get("api_key", ""),
@@ -90,6 +130,15 @@ class AgentConfig:
                    if k in ("max_budget_usd", "max_turns", "max_fix_attempts",
                             "allowed_tools", "verification_timeout", "evidence_dir")},
             ),
+            fallback_providers=fallbacks,
+            session_budget_usd=data.get("session_budget_usd"),
+            global_budget_usd=data.get("global_budget_usd"),
+            enable_transcript=data.get("enable_transcript", True),
+            transcript_dir=data.get("transcript_dir", "~/.flyto/transcripts"),
+            vault_path=data.get("vault_path", "~/.flyto/vault.enc"),
+            vault_passphrase=data.get("vault_passphrase"),
+            vault_auto_inject=data.get("vault_auto_inject", False),
+            enable_injection_detection=data.get("enable_injection_detection", True),
         )
 
     @classmethod
@@ -117,6 +166,21 @@ class AgentConfig:
         if not api_key and provider == "ollama":
             api_key = "ollama"
 
+        # Parse fallback providers from env: FLYTO_AI_FALLBACK_1_PROVIDER, etc.
+        fallbacks = []
+        for i in range(1, 4):  # support up to 3 fallbacks
+            fb_provider = os.getenv("FLYTO_AI_FALLBACK_{}_PROVIDER".format(i), "")
+            if fb_provider:
+                fallbacks.append(FailoverProviderConfig(
+                    provider=fb_provider,
+                    api_key=os.getenv("FLYTO_AI_FALLBACK_{}_API_KEY".format(i), ""),
+                    model=os.getenv("FLYTO_AI_FALLBACK_{}_MODEL".format(i), ""),
+                    base_url=os.getenv("FLYTO_AI_FALLBACK_{}_BASE_URL".format(i)) or None,
+                ))
+
+        session_budget = os.getenv("FLYTO_AI_SESSION_BUDGET_USD", "")
+        global_budget = os.getenv("FLYTO_AI_GLOBAL_BUDGET_USD", "")
+
         return cls(
             provider=provider,
             api_key=api_key,
@@ -136,6 +200,15 @@ class AgentConfig:
                 max_turns=int(os.getenv("FLYTO_AI_CC_MAX_TURNS", "30")),
                 max_fix_attempts=int(os.getenv("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "3")),
             ),
+            fallback_providers=fallbacks,
+            session_budget_usd=float(session_budget) if session_budget else None,
+            global_budget_usd=float(global_budget) if global_budget else None,
+            enable_transcript=os.getenv("FLYTO_AI_ENABLE_TRANSCRIPT", "true").lower() != "false",
+            transcript_dir=os.getenv("FLYTO_AI_TRANSCRIPT_DIR", "~/.flyto/transcripts"),
+            vault_path=os.getenv("FLYTO_AI_VAULT_PATH", "~/.flyto/vault.enc"),
+            vault_passphrase=os.getenv("FLYTO_VAULT_PASSPHRASE") or None,
+            vault_auto_inject=os.getenv("FLYTO_AI_VAULT_AUTO_INJECT", "false").lower() == "true",
+            enable_injection_detection=os.getenv("FLYTO_AI_ENABLE_INJECTION_DETECTION", "true").lower() != "false",
         )
 
     def __post_init__(self):

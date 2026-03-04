@@ -16,6 +16,12 @@ from flyto_ai.validation import extract_yaml_from_response, validate_workflow_st
 
 logger = logging.getLogger(__name__)
 
+# Lazy imports for Phase 1 modules (avoid import errors if deps missing)
+_CostTracker = None
+_TranscriptWriter = None
+_injection_detector = None
+_Vault = None
+
 
 def _init_blueprint_storage():
     """Initialize flyto-blueprint with SQLite storage for local persistence."""
@@ -126,6 +132,24 @@ class Agent:
         self._memory_initialized = False
         self._session_id = uuid.uuid4().hex[:12]
 
+        # Phase 1: Cost tracker
+        self._cost_tracker = self._init_cost_tracker()
+
+        # Phase 1: Transcript writer
+        self._transcript = self._init_transcript()
+
+        # Phase 1: Vault (credential store)
+        self._vault = self._init_vault()
+
+        # Phase 2: Context compactor
+        self._compactor = self._init_compactor()
+
+        # Phase 2: Extension hooks
+        self._hooks = self._init_extensions()
+
+        # Phase 2: Orchestrator (lazy — only created when sub-agents spawn)
+        self._orchestrator = None
+
         # Sandbox
         if config.enable_sandbox:
             self._init_sandbox()
@@ -163,6 +187,106 @@ class Agent:
     def session_id(self) -> str:
         """Current session ID."""
         return self._session_id
+
+    @property
+    def cost_tracker(self):
+        """Cost tracker instance (may be None)."""
+        return self._cost_tracker
+
+    @property
+    def transcript(self):
+        """Transcript writer instance (may be None)."""
+        return self._transcript
+
+    @property
+    def vault(self):
+        """Vault instance (may be None)."""
+        return self._vault
+
+    def _init_cost_tracker(self):
+        """Initialize cost tracker from config."""
+        try:
+            from flyto_ai.cost import CostTracker
+            return CostTracker(
+                session_budget_usd=self._config.session_budget_usd,
+                global_budget_usd=self._config.global_budget_usd,
+            )
+        except Exception as e:
+            logger.debug("Cost tracker init failed: %s", e)
+            return None
+
+    def _init_transcript(self):
+        """Initialize transcript writer from config."""
+        if not self._config.enable_transcript:
+            return None
+        try:
+            from flyto_ai.transcript import TranscriptWriter
+            tw = TranscriptWriter(
+                session_id=self._session_id,
+                transcript_dir=self._config.transcript_dir,
+            )
+            tw.record_meta({
+                "event": "session_start",
+                "provider": self._config.provider,
+                "model": self._config.resolved_model,
+            })
+            return tw
+        except Exception as e:
+            logger.debug("Transcript init failed: %s", e)
+            return None
+
+    def _init_vault(self):
+        """Initialize vault from config."""
+        try:
+            from flyto_ai.vault import Vault
+            vault = Vault(
+                vault_path=self._config.vault_path,
+                passphrase=self._config.vault_passphrase,
+            )
+            vault.load()
+            if self._config.vault_auto_inject:
+                vault.inject_to_env()
+            return vault
+        except ImportError:
+            logger.debug("Vault unavailable (cryptography not installed)")
+            return None
+        except Exception as e:
+            logger.debug("Vault init failed: %s", e)
+            return None
+
+    def _init_compactor(self):
+        """Initialize context window compactor."""
+        try:
+            from flyto_ai.memory.compaction import ContextCompactor
+            return ContextCompactor()
+        except Exception as e:
+            logger.debug("Compactor init failed: %s", e)
+            return None
+
+    def _init_extensions(self):
+        """Initialize extension hook registry."""
+        try:
+            from flyto_ai.extensions.loader import ExtensionLoader
+            loader = ExtensionLoader()
+            registry = loader.load_all(
+                allowed_capabilities={"read_messages", "read_tool_results"},
+            )
+            if registry.extension_count > 0:
+                logger.info("Loaded %d extensions", registry.extension_count)
+            return registry
+        except Exception as e:
+            logger.debug("Extensions init failed: %s", e)
+            return None
+
+    def get_orchestrator(self):
+        """Get or create the sub-agent orchestrator."""
+        if self._orchestrator is None:
+            from flyto_ai.orchestration import AgentOrchestrator
+            self._orchestrator = AgentOrchestrator(
+                parent_session_id=self._session_id,
+                config=self._config,
+            )
+        return self._orchestrator
 
     def _auto_discover_tools(self):
         """Auto-detect and register available tools (core, blueprint, inspect)."""
@@ -249,7 +373,11 @@ class Agent:
             logger.warning("Memory system init failed: %s", e)
 
     def _make_provider(self) -> LLMProvider:
-        """Create the LLM provider from config using the provider registry."""
+        """Create the LLM provider from config using the provider registry.
+
+        If fallback_providers are configured, wraps in a ProviderChain
+        for automatic failover on 429/5xx errors.
+        """
         from flyto_ai.providers import create_provider
 
         cfg = self._config
@@ -265,12 +393,38 @@ class Agent:
             if cfg.base_url:
                 kwargs["base_url"] = cfg.base_url
 
-        return create_provider(cfg.provider or "openai", **kwargs)
+        primary = create_provider(cfg.provider or "openai", **kwargs)
+
+        # Wrap in ProviderChain if fallbacks configured
+        if cfg.fallback_providers:
+            try:
+                from flyto_ai.providers.failover import ProviderChain
+                fallbacks = []
+                names = ["{}:{}".format(cfg.provider or "openai", cfg.resolved_model)]
+                for fb in cfg.fallback_providers:
+                    fb_kwargs = {"temperature": cfg.temperature, "max_tokens": cfg.max_tokens}
+                    if fb.model:
+                        fb_kwargs["model"] = fb.model
+                    if fb.provider == "ollama":
+                        fb_kwargs["base_url"] = fb.base_url or "http://localhost:11434/v1"
+                    else:
+                        fb_kwargs["api_key"] = fb.api_key
+                        if fb.base_url:
+                            fb_kwargs["base_url"] = fb.base_url
+                    fallbacks.append(create_provider(fb.provider or "openai", **fb_kwargs))
+                    names.append("{}:{}".format(fb.provider, fb.model or "default"))
+                logger.info("Provider chain: %s", " → ".join(names))
+                return ProviderChain(primary=primary, fallbacks=fallbacks, provider_names=names)
+            except Exception as e:
+                logger.warning("Failed to create provider chain, using primary only: %s", e)
+
+        return primary
 
     def _make_safe_dispatch(self):
-        """Create a dispatch function that enforces policies."""
+        """Create a dispatch function that enforces policies + injection scanning."""
         base_dispatch = self._dispatch_fn
         policies = self._policies
+        enable_injection = self._config.enable_injection_detection
 
         async def safe_dispatch(func_name: str, func_args: dict) -> dict:
             if policies and not is_tool_allowed(func_name, policies):
@@ -283,7 +437,23 @@ class Agent:
                         "ok": False,
                         "error": "Module category '{}' is not allowed.".format(category),
                     }
-            return await base_dispatch(func_name, func_args)
+            result = await base_dispatch(func_name, func_args)
+
+            # Phase 1: Scan tool results for injection attempts
+            if enable_injection and isinstance(result, dict):
+                try:
+                    from flyto_ai.prompt.injection_detector import scan_tool_result, format_warning_for_llm
+                    import json as _json
+                    result_text = _json.dumps(result, ensure_ascii=False, default=str)
+                    if len(result_text) > 100:  # skip tiny results
+                        warnings = scan_tool_result(func_name, result_text)
+                        note = format_warning_for_llm(warnings)
+                        if note:
+                            result["_injection_warning"] = note
+                except Exception:
+                    pass
+
+            return result
 
         return safe_dispatch if base_dispatch else None
 
@@ -320,6 +490,20 @@ class Agent:
                 session_id=self._session_id,
                 error="no_api_key",
             )
+
+        # Phase 1: Injection detection on user input
+        injection_note = None
+        if self._config.enable_injection_detection:
+            try:
+                from flyto_ai.prompt.injection_detector import scan_text, format_warning_for_llm
+                warnings = scan_text(message, source="user_input")
+                injection_note = format_warning_for_llm(warnings)
+            except Exception:
+                pass
+
+        # Phase 1: Transcript — record user message
+        if self._transcript:
+            self._transcript.record_user(message)
 
         # Lazy-init memory
         await self._init_memory()
@@ -379,11 +563,22 @@ class Agent:
             except Exception as e:
                 logger.debug("Memory search failed: %s", e)
 
+        # Combine memory + injection warning into admin_addition
+        combined_addition = memory_addition or ""
+        if injection_note:
+            combined_addition = (combined_addition + "\n\n" + injection_note).strip()
+
         system_prompt = self._system_prompt or build_system_prompt(
             module_count=300, context=template_context, has_tools=has_tools,
             mode=mode, reply_language=reply_language,
-            admin_addition=memory_addition,
+            admin_addition=combined_addition or None,
         )
+
+        # Phase 2: Context compaction before LLM call
+        if self._compactor:
+            messages, was_compacted = self._compactor.maybe_compact(messages)
+            if was_compacted:
+                logger.info("Context compacted before LLM call")
 
         # Accumulated usage across all LLM calls
         total_usage = {
@@ -405,9 +600,24 @@ class Agent:
         for k in total_usage:
             total_usage[k] += usage_dict.get(k, 0)
 
+        # Phase 1: Cost tracking
+        if self._cost_tracker and any(v > 0 for v in usage_dict.values()):
+            try:
+                self._cost_tracker.record(
+                    model=self._config.resolved_model,
+                    provider=self._config.provider or "openai",
+                    prompt_tokens=usage_dict.get("prompt_tokens", 0),
+                    completion_tokens=usage_dict.get("completion_tokens", 0),
+                    cache_read_tokens=usage_dict.get("cache_read_input_tokens", 0),
+                )
+            except Exception as e:
+                logger.debug("Cost tracking failed: %s", e)
+
         if not response_content:
             duration_ms = int((time.monotonic() - t0) * 1000)
             self._emit_audit(message, mode, tool_calls, [], False, "provider_call_failed", duration_ms, total_usage)
+            if self._transcript:
+                self._transcript.record_error("provider_call_failed")
             return ChatResponse(
                 ok=False,
                 message="AI provider call failed. Please try again.",
@@ -534,6 +744,37 @@ class Agent:
         duration_ms = int((time.monotonic() - t0) * 1000)
         self._emit_audit(message, mode, tool_calls, execution_results, True, None, duration_ms, total_usage)
 
+        # Phase 1: Transcript — record assistant response + meta
+        if self._transcript:
+            self._transcript.record_assistant(
+                response_content,
+                provider=self._config.provider,
+                model=self._config.resolved_model,
+            )
+            # Record tool calls
+            for tc in tool_calls:
+                self._transcript.record_tool_call(
+                    tc.get("function", ""),
+                    tc.get("arguments", {}),
+                )
+                if tc.get("function") == "execute_module":
+                    self._transcript.record_execution(
+                        tc.get("module_id", ""),
+                        tc.get("ok", False),
+                        tc.get("result_preview", ""),
+                    )
+            # Record cost summary
+            if self._cost_tracker:
+                self._transcript.record_meta({
+                    "event": "cost_summary",
+                    **self._cost_tracker.summary(),
+                })
+
+        # Build cost info for response
+        cost_summary = None
+        if self._cost_tracker:
+            cost_summary = self._cost_tracker.summary()
+
         return ChatResponse(
             ok=True,
             message=response_content,
@@ -544,6 +785,7 @@ class Agent:
             model=self._config.resolved_model,
             rounds_used=total_rounds,
             usage=usage,
+            cost=cost_summary,
         )
 
     def _emit_audit(

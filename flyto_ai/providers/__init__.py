@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 from flyto_ai.providers.base import LLMProvider
 
-__all__ = ["LLMProvider", "PROVIDER_REGISTRY", "create_provider"]
+__all__ = ["LLMProvider", "PROVIDER_REGISTRY", "create_provider", "create_provider_chain"]
 
 
 # Provider registry — maps provider name to (module_path, class_name, default_kwargs)
@@ -33,3 +33,12 @@ def create_provider(provider_name: str, **kwargs) -> LLMProvider:
     mod = importlib.import_module(entry["module"])
     cls = getattr(mod, entry["class"])
     return cls(**kwargs)
+
+
+def create_provider_chain(configs):
+    """Create a ProviderChain from a list of provider config dicts.
+
+    See :func:`flyto_ai.providers.failover.create_provider_chain`.
+    """
+    from flyto_ai.providers.failover import create_provider_chain as _create
+    return _create(configs)

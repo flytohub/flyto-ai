@@ -1308,13 +1308,12 @@ def _cmd_serve_aiohttp(args):
     tg_service = None
     if _TG_TOKEN:
         from flyto_ai.telegram import TelegramService
-        from flyto_ai.telegram.claude_bridge import ClaudeBridge
+        from flyto_ai.telegram.claude_bridge import CLIBridge
 
         _claude_working_dir = getattr(args, "dir", None) or _os.getcwd()
 
-        _claude_bridge = ClaudeBridge(
+        _claude_bridge = CLIBridge(
             sender=None,  # injected during TelegramService.init()
-            confirmation=None,  # injected during TelegramService.init()
             working_dir=_claude_working_dir,
             model="sonnet",
         )

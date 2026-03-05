@@ -7,7 +7,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, TYPE_CHECKING
 from flyto_ai.telegram.sender import TelegramSender
 
 if TYPE_CHECKING:
-    from flyto_ai.telegram.claude_bridge import ClaudeBridge
+    from flyto_ai.telegram.claude_bridge import CLIBridge
     from flyto_ai.telegram.jobs import JobQueue
     from flyto_ai.cost import CostTracker
     from flyto_ai.memory.sqlite_store import SQLiteSessionStore
@@ -39,7 +39,7 @@ class CommandRouter:
         job_queue: "JobQueue",
         session_store: Optional["SQLiteSessionStore"] = None,
         cost_tracker: Optional["CostTracker"] = None,
-        claude_bridge: Optional["ClaudeBridge"] = None,
+        claude_bridge: Optional["CLIBridge"] = None,
         agent_handler: Optional[Callable] = None,
     ) -> None:
         self._sender = sender

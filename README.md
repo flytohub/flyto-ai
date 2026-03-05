@@ -401,22 +401,28 @@ Claude Code Agent (flyto-ai code):
 
 ## Telegram Bot Gateway
 
-Run flyto-ai tasks from your phone via Telegram — with multi-turn conversations, dangerous operation confirmation, persistent job queue, and real-time status updates.
+Run Claude Code from your phone via Telegram — read/write files, run commands, multi-turn conversation with full context. Also supports flyto-ai agent automation via `/agent`.
 
 ```bash
-# 1. Set tokens
+# 1. Install
+pip install flyto-ai[agent,serve]
+npm install -g @anthropic-ai/claude-code   # Claude Code CLI (required by SDK)
+
+# 2. Set tokens
 export TELEGRAM_BOT_TOKEN=123456:ABC-DEF       # from @BotFather
 export TELEGRAM_ALLOWED_CHATS=your_chat_id      # optional whitelist
-export ANTHROPIC_API_KEY=sk-ant-...             # or OPENAI_API_KEY
+export ANTHROPIC_API_KEY=sk-ant-...
 
-# 2. Start server
-flyto-ai serve --host 0.0.0.0 --port 7411
+# 3. Start server
+flyto-ai serve --host 0.0.0.0 --port 7411 --dir /path/to/your/project
 
-# 3. Register webhook (once)
+# 4. Register webhook (once)
 curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://your-domain/telegram"
 
-# 4. Send a message to your bot in Telegram — it runs flyto-ai and replies
+# 5. Open Telegram → send any message → Claude Code replies with streaming
 ```
+
+The `--dir` flag sets the default working directory for Claude Code. You can change it later with `/cd` in the chat.
 
 ### Bot Commands
 
@@ -435,10 +441,11 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://you
 
 ### Features
 
-- **Claude Code as default** — plain text messages go to Claude Code via `claude-agent-sdk`, with full file read/write, command execution, and persistent multi-turn context
-- **Real-time streaming** — Claude Code output streams to Telegram by editing the status message in real time
-- **Dangerous operation confirmation** — `rm`, `git push`, `git reset`, etc. require inline keyboard approval before execution
-- **Session resume** — each chat maintains a Claude Code session; context is preserved across messages
+- **Claude Code as default** — plain text messages go to Claude Code CLI, with full file read/write, command execution, and persistent multi-turn context
+- **Real-time streaming** — CLI output streams to Telegram by editing the status message in real time
+- **CLI-agnostic** — `CLIProfile` abstraction supports any AI CLI (Claude, Codex, Gemini, etc.)
+- **MCP tools built-in** — Claude Code inherits your MCP config (flyto-core 412 modules, flyto-indexer, etc.)
+- **Session resume** — each chat maintains a CLI session; context is preserved across messages
 - **flyto-ai agent via `/agent`** — browser automation, scraping, and 412-module workflows remain available as a slash command
 - **Persistent job queue** — agent tasks survive server restarts, with status tracking
 - **Mid-execution steering** — send a message while an agent task is running to redirect it

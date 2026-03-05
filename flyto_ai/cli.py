@@ -313,81 +313,6 @@ _CORS_ORIGINS = frozenset(o.strip() for o in _CORS_ORIGINS_RAW.split(",") if o.s
 
 # Telegram Bot gateway (set TELEGRAM_BOT_TOKEN to enable /telegram webhook)
 _TG_TOKEN = _os.getenv("TELEGRAM_BOT_TOKEN", "")
-_TG_ALLOWED_RAW = _os.getenv("TELEGRAM_ALLOWED_CHATS", "")
-_TG_ALLOWED_CHATS = frozenset(int(c.strip()) for c in _TG_ALLOWED_RAW.split(",") if c.strip()) if _TG_ALLOWED_RAW else frozenset()
-
-
-async def _tg_send(token: str, chat_id: int, text: str):
-    """Send a message via Telegram Bot API."""
-    import aiohttp
-    url = "https://api.telegram.org/bot{}/sendMessage".format(token)
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as resp:
-                if resp.status != 200:
-                    # Retry without parse_mode in case Markdown is invalid
-                    payload.pop("parse_mode", None)
-                    async with session.post(url, json=payload) as _:
-                        pass
-    except Exception:
-        pass  # Best-effort — don't crash the webhook
-
-
-_TG_HELP_TEXT = (
-    "Available commands:\n"
-    "\n"
-    "  (plain text) — flyto-ai agent (automation)\n"
-    "  /claude <msg> — Claude Code (read/write code)\n"
-    "  /yaml — list learned blueprints\n"
-    "  /blueprint — same as /yaml\n"
-    "  /help — show this message"
-)
-
-
-def _tg_list_blueprints() -> str:
-    """List top blueprints from flyto-blueprint engine."""
-    try:
-        from flyto_blueprint import get_engine
-        engine = get_engine()
-        bps = engine.list_blueprints()
-    except Exception as e:
-        return "Error loading blueprints: {}".format(e)
-
-    if not bps:
-        return "No blueprints yet."
-
-    lines = []
-    sorted_bps = sorted(bps, key=lambda b: b.get("score", 0), reverse=True)[:10]
-    for bp in sorted_bps:
-        name = bp.get("name", "?")
-        score = bp.get("score", 0)
-        lines.append("  {} (score: {})".format(name, score))
-    return "Blueprints:\n" + "\n".join(lines)
-
-
-async def _tg_run_claude(msg: str, working_dir: str, config) -> str:
-    """Run a task via ClaudeCodeAgent and return formatted reply."""
-    try:
-        from flyto_ai.agents.claude_code import ClaudeCodeAgent
-        from flyto_ai.agents.models import CodeTaskRequest
-
-        cc_agent = ClaudeCodeAgent(config=config)
-        request = CodeTaskRequest(message=msg, working_dir=working_dir)
-        result = await cc_agent.run(request)
-
-        parts = []
-        if result.ok:
-            parts.append("Done")
-        else:
-            parts.append("Failed")
-        if result.message:
-            parts.append(result.message)
-        if result.files_changed:
-            parts.append("Files: " + ", ".join(result.files_changed))
-        return "\n".join(parts)
-    except Exception as e:
-        return "Claude error: {}".format(e)
 
 
 def _check_server_auth(auth_header: str) -> bool:
@@ -1379,66 +1304,33 @@ def _cmd_serve_aiohttp(args):
     async def handle_health(request):
         return web.json_response({"ok": True, "status": "ready"})
 
-    # --- Telegram Bot webhook ---
-    _claude_working_dir = getattr(args, "dir", None) or _os.getcwd()
+    # --- Telegram Bot service ---
+    tg_service = None
+    if _TG_TOKEN:
+        from flyto_ai.telegram import TelegramService
+        from flyto_ai.telegram.claude_bridge import ClaudeBridge
 
-    async def _tg_process(chat_id: int, text: str):
-        """Background task: route command and send result to Telegram."""
-        try:
-            stripped = text.strip()
-            if stripped == "/help":
-                reply = _TG_HELP_TEXT
-            elif stripped in ("/yaml", "/blueprint"):
-                reply = _tg_list_blueprints()
-            elif stripped.startswith("/claude "):
-                msg = stripped[8:].strip()
-                if not msg:
-                    reply = "Usage: /claude <message>"
-                else:
-                    reply = await _tg_run_claude(msg, _claude_working_dir, config)
-            elif stripped == "/claude":
-                reply = "Usage: /claude <message>"
-            else:
-                # Default — flyto-ai agent
-                result = await agent.chat(text, mode="execute")
-                reply = result.message or "Done."
-        except Exception as e:
-            reply = "Error: {}".format(e)
+        _claude_working_dir = getattr(args, "dir", None) or _os.getcwd()
 
-        if len(reply) > 4000:
-            reply = reply[:4000] + "\n\n... (truncated)"
+        _claude_bridge = ClaudeBridge(
+            sender=None,  # injected during TelegramService.init()
+            confirmation=None,  # injected during TelegramService.init()
+            working_dir=_claude_working_dir,
+            model="sonnet",
+        )
 
-        await _tg_send(_TG_TOKEN, chat_id, reply)
+        tg_service = TelegramService(
+            agent=agent,
+            bot_token=_TG_TOKEN,
+            claude_bridge=_claude_bridge,
+            working_dir=_claude_working_dir,
+        )
 
-    async def handle_telegram(request):
-        """Receive Telegram Update, spawn background task, return immediately."""
-        if not _TG_TOKEN:
-            return web.json_response(
-                {"ok": False, "error": "TELEGRAM_BOT_TOKEN not set"}, status=503,
-            )
+        async def _tg_startup(app):
+            await tg_service.init()
 
-        try:
-            body = await request.json()
-        except Exception:
-            return web.json_response({"ok": True})
-
-        msg = body.get("message") or body.get("edited_message") or {}
-        text = msg.get("text", "")
-        chat_id = msg.get("chat", {}).get("id")
-
-        if not text or not chat_id:
-            return web.json_response({"ok": True})
-
-        # Whitelist check
-        if _TG_ALLOWED_CHATS and chat_id not in _TG_ALLOWED_CHATS:
-            return web.json_response({"ok": True})
-
-        # Send "processing" indicator and spawn background task
-        await _tg_send(_TG_TOKEN, chat_id, "\u23f3 Processing...")
-        asyncio.ensure_future(_tg_process(chat_id, text))
-
-        # Return immediately so Telegram doesn't timeout
-        return web.json_response({"ok": True})
+        async def _tg_cleanup(app):
+            await tg_service.close()
 
     app = web.Application(client_max_size=MAX_BODY_SIZE, middlewares=[cors_middleware])
     app.router.add_get("/", handle_demo)
@@ -1447,7 +1339,11 @@ def _cmd_serve_aiohttp(args):
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/chat/stream", handle_chat_stream)
     app.router.add_get("/health", handle_health)
-    app.router.add_post("/telegram", handle_telegram)
+
+    if tg_service:
+        app.router.add_post("/telegram", tg_service.handle_aiohttp)
+        app.on_startup.append(_tg_startup)
+        app.on_cleanup.append(_tg_cleanup)
 
     print()
     print("  {}{}Flyto2 AI Server{}  {}(aiohttp){}".format(_BOLD, _CYAN, _RESET, _DIM, _RESET))

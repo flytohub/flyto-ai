@@ -28,7 +28,32 @@ class TelegramAdapter(ChannelAdapter):
         return "telegram"
 
     async def parse_incoming(self, raw_payload: Dict[str, Any]) -> Optional[IncomingMessage]:
-        """Parse Telegram webhook update into IncomingMessage."""
+        """Parse Telegram webhook update into IncomingMessage.
+
+        Handles both regular messages and callback_query (inline keyboard presses).
+        """
+        # Handle callback_query (inline keyboard button press)
+        callback = raw_payload.get("callback_query")
+        if callback:
+            user = callback.get("from", {})
+            msg = callback.get("message", {})
+            chat = msg.get("chat", {})
+            return IncomingMessage(
+                channel="telegram",
+                user_id=str(user.get("id", "")),
+                text=callback.get("data", ""),
+                session_id=str(chat.get("id", "")),
+                metadata={
+                    "type": "callback_query",
+                    "callback_query_id": callback.get("id", ""),
+                    "chat_type": chat.get("type", ""),
+                    "username": user.get("username", ""),
+                    "first_name": user.get("first_name", ""),
+                    "message_id": msg.get("message_id", 0),
+                },
+            )
+
+        # Handle regular messages
         message = raw_payload.get("message") or raw_payload.get("edited_message")
         if not message:
             return None
@@ -46,6 +71,7 @@ class TelegramAdapter(ChannelAdapter):
             text=text,
             session_id=str(chat.get("id", "")),
             metadata={
+                "type": "message",
                 "chat_type": chat.get("type", ""),
                 "username": user.get("username", ""),
                 "first_name": user.get("first_name", ""),

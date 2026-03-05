@@ -20,7 +20,7 @@
 
 ## The Problem
 
-AI agents like open-interpreter and OpenClaw have the LLM generate shell commands or raw code on every run. This means:
+Most AI agents have the LLM generate shell commands or raw code on every run. This means:
 
 - **Non-deterministic** — the same prompt can produce different commands each time
 - **No validation** — wrong flags, hallucinated APIs, subtle bugs only found at runtime
@@ -72,7 +72,7 @@ One install, one command — interactive chat with **412 automation modules**, b
 
 The core difference is **what the LLM does during execution**:
 
-| | open-interpreter / OpenClaw | flyto-ai |
+| | Traditional AI agents | flyto-ai |
 |---|---|---|
 | **LLM's job** | Write shell/Python code from scratch | Select modules + fill params |
 | **Execution** | `subprocess.run(llm_output)` | `execute_module("browser.extract", {validated_params})` |
@@ -81,28 +81,6 @@ The core difference is **what the LLM does during execution**:
 | **Output** | One-time result | Result + reusable YAML workflow |
 | **Learning** | None | Self-learning blueprints (zero LLM replay) |
 | **Cost per replay** | Full LLM inference again | $0 (saved blueprint, no LLM) |
-
-### Benchmark: "Scrape the title from example.com"
-
-| | open-interpreter | flyto-ai |
-|---|---|---|
-| **Tokens used** | ~8K (writes Python + subprocess) | ~2K (search → schema → execute) |
-| **Execution time** | ~12s (LLM generates code + runs) | ~8s (LLM selects modules + runs) |
-| **Second run** | ~12s (same cost, regenerate code) | ~0.5s (blueprint replay, zero LLM) |
-| **Reusable output** | No | Yes (YAML workflow) |
-| **Deterministic** | No | Yes |
-
-## Why flyto-ai?
-
-| | aider | open-interpreter | flyto-ai |
-|---|---|---|---|
-| **Output** | Code changes (git diff) | One-time code execution | **Results + reusable YAML workflows** |
-| **Tools** | Your codebase | Raw Python/JS/Shell | **412 pre-built modules** |
-| **Learns** | No | No | **Yes — self-learning blueprints** |
-| **Reusable** | Yes (code) | No (ephemeral) | **Yes (save, share, schedule)** |
-| **Webhook/API** | No | No | **Yes** |
-| **For** | Developers | Power users | **Developers & ops automation** |
-| **License** | Apache-2.0 | AGPL-3.0 | **Apache-2.0** |
 
 ## Use Cases
 
@@ -423,7 +401,7 @@ Claude Code Agent (flyto-ai code):
 
 ## Telegram Bot Gateway
 
-Run flyto-ai tasks from your phone via Telegram:
+Run flyto-ai tasks from your phone via Telegram — with multi-turn conversations, dangerous operation confirmation, persistent job queue, and real-time status updates.
 
 ```bash
 # 1. Set tokens
@@ -439,6 +417,31 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://you
 
 # 4. Send a message to your bot in Telegram — it runs flyto-ai and replies
 ```
+
+### Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| (plain text) | **Claude Code** — read/write files, run commands, multi-turn conversation |
+| `/agent <msg>` | flyto-ai agent automation (browser, scraper, etc.) |
+| `/cd <path>` | Change Claude Code working directory |
+| `/model <name>` | Switch model (sonnet/opus/haiku) |
+| `/cancel` | Interrupt Claude Code or cancel agent task |
+| `/clear` | Clear session |
+| `/status` | View active/recent tasks |
+| `/cost` | View token spending |
+| `/yaml` | List learned blueprints |
+| `/help` | Show command list |
+
+### Features
+
+- **Claude Code as default** — plain text messages go to Claude Code via `claude-agent-sdk`, with full file read/write, command execution, and persistent multi-turn context
+- **Real-time streaming** — Claude Code output streams to Telegram by editing the status message in real time
+- **Dangerous operation confirmation** — `rm`, `git push`, `git reset`, etc. require inline keyboard approval before execution
+- **Session resume** — each chat maintains a Claude Code session; context is preserved across messages
+- **flyto-ai agent via `/agent`** — browser automation, scraping, and 412-module workflows remain available as a slash command
+- **Persistent job queue** — agent tasks survive server restarts, with status tracking
+- **Mid-execution steering** — send a message while an agent task is running to redirect it
 
 | Variable | Purpose | Required |
 |----------|---------|----------|

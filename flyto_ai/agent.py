@@ -465,6 +465,7 @@ class Agent:
         mode: str = "execute",
         on_tool_call=None,
         on_stream: Optional[StreamCallback] = None,
+        dispatch_wrapper=None,
     ) -> ChatResponse:
         """Run one chat turn: send message → tool loop → validation → response.
 
@@ -514,6 +515,8 @@ class Agent:
 
         # Build dispatch (with optional progress + stream callbacks)
         dispatch_fn = self._make_safe_dispatch()
+        if dispatch_wrapper and dispatch_fn:
+            dispatch_fn = dispatch_wrapper(dispatch_fn)
         if dispatch_fn and (on_tool_call or on_stream):
             _base = dispatch_fn
 

@@ -145,6 +145,31 @@ class TelegramSender:
             payload["text"] = text
         await self._request("answerCallbackQuery", payload)
 
+    async def download_file(self, file_id: str, dest_path: str) -> bool:
+        """Download a Telegram file to a local path. Returns True on success."""
+        import aiohttp
+
+        result = await self._request("getFile", {"file_id": file_id})
+        if not result or not result.get("ok"):
+            logger.warning("TG getFile failed for %s", file_id)
+            return False
+
+        tg_path = result["result"]["file_path"]
+        url = "https://api.telegram.org/file/bot{}/{}".format(self._bot_token, tg_path)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        logger.warning("TG file download failed: %s", resp.status)
+                        return False
+                    with open(dest_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(8192):
+                            f.write(chunk)
+            return True
+        except Exception as e:
+            logger.warning("TG file download error: %s", e)
+            return False
+
     async def send_long(
         self,
         chat_id: int,

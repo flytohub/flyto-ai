@@ -8,8 +8,9 @@ or flyto-ai agent jobs. Claude Code is the default; agent is via /agent.
 import asyncio
 import logging
 import os
+import tempfile
 import time
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from flyto_ai.channels.telegram import TelegramAdapter
 from flyto_ai.models import StreamEvent, StreamEventType
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from flyto_ai.agent import Agent
     from flyto_ai.cost import CostTracker
     from flyto_ai.memory.sqlite_store import SQLiteSessionStore
-    from flyto_ai.telegram.claude_bridge import ClaudeBridge
+    from flyto_ai.telegram.claude_bridge import CLIBridge
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class TelegramService:
         allowed_chats: Optional[frozenset] = None,
         session_store: Optional["SQLiteSessionStore"] = None,
         cost_tracker: Optional["CostTracker"] = None,
-        claude_bridge: Optional["ClaudeBridge"] = None,
+        claude_bridge: Optional["CLIBridge"] = None,
         working_dir: Optional[str] = None,
     ) -> None:
         self._agent = agent
@@ -87,10 +88,9 @@ class TelegramService:
 
         self._confirmation = ConfirmationManager(self._sender)
 
-        # Initialize ClaudeBridge with sender + confirmation if provided
+        # Initialize CLIBridge with sender if provided
         if self._claude_bridge:
             self._claude_bridge._sender = self._sender
-            self._claude_bridge._confirmation = self._confirmation
 
         # Agent handler for /agent command — starts a flyto-ai agent job
         async def _agent_handler(chat_id: int, msg: str) -> None:
@@ -155,16 +155,27 @@ class TelegramService:
                 await self._confirmation.handle_callback(incoming.text, callback_query_id)
             return
 
-        # Route text messages
-        await self._handle_message(chat_id, incoming.text)
+        # Route text messages (with optional attachments)
+        await self._handle_message(chat_id, incoming.text, incoming.attachments)
 
-    async def _handle_message(self, chat_id: int, text: str) -> None:
+    async def _handle_message(
+        self, chat_id: int, text: str, attachments: Optional[List[Dict]] = None,
+    ) -> None:
         """Route a text message: command → Claude Code → agent fallback."""
+        # 0. Process attachments → rewrite text before routing
+        if attachments:
+            text = await self._process_attachments(chat_id, text, attachments)
+            if text is None:
+                return  # error already reported to user
+
         # 1. Try slash commands
-        if text.strip().startswith("/") and self._commands:
+        if text and text.strip().startswith("/") and self._commands:
             handled = await self._commands.handle(chat_id, text)
             if handled:
                 return
+
+        if not text:
+            return
 
         # 2. Claude Code is busy → follow-up queue
         if self._claude_bridge and self._claude_bridge.is_busy(chat_id):
@@ -188,6 +199,107 @@ class TelegramService:
 
         # 5. Fallback → new agent job
         await self._start_new_job(chat_id, text)
+
+    # ── Attachment processing ──────────────────────────────────
+
+    async def _process_attachments(
+        self, chat_id: int, text: str, attachments: List[Dict],
+    ) -> Optional[str]:
+        """Process photo/voice attachments and return rewritten prompt text.
+
+        Returns None if processing failed (error already sent to user).
+        """
+        for att in attachments:
+            att_type = att.get("type")
+            if att_type == "photo":
+                result = await self._process_photo(chat_id, att["file_id"], text)
+                if result is None:
+                    return None
+                text = result
+            elif att_type == "voice":
+                result = await self._process_voice(chat_id, att["file_id"])
+                if result is None:
+                    return None
+                # Append caption text if present
+                if text:
+                    text = "{}\n\n{}".format(result, text)
+                else:
+                    text = result
+        return text
+
+    async def _process_photo(
+        self, chat_id: int, file_id: str, caption: str,
+    ) -> Optional[str]:
+        """Download photo and build a prompt that tells Claude Code to read it.
+
+        Returns rewritten prompt or None on failure.
+        """
+        suffix = ".jpg"
+        fd, path = tempfile.mkstemp(suffix=suffix, prefix="tg_photo_")
+        os.close(fd)
+
+        ok = await self._sender.download_file(file_id, path)
+        if not ok:
+            await self._sender.send(chat_id, "Failed to download photo.", parse_mode="")
+            _safe_remove(path)
+            return None
+
+        # Schedule cleanup after 5 minutes
+        loop = asyncio.get_event_loop()
+        loop.call_later(300, _safe_remove, path)
+
+        user_text = caption or "Describe this image"
+        prompt = (
+            "The user sent a photo. Read the image at: {}\n\n"
+            "User: {}"
+        ).format(path, user_text)
+        return prompt
+
+    async def _process_voice(self, chat_id: int, file_id: str) -> Optional[str]:
+        """Download voice, transcribe via Whisper, return transcribed text.
+
+        Returns transcribed text or None on failure.
+        """
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            await self._sender.send(
+                chat_id,
+                "Voice messages require OPENAI_API_KEY (for Whisper).",
+                parse_mode="",
+            )
+            return None
+
+        fd, path = tempfile.mkstemp(suffix=".ogg", prefix="tg_voice_")
+        os.close(fd)
+
+        ok = await self._sender.download_file(file_id, path)
+        if not ok:
+            await self._sender.send(chat_id, "Failed to download voice.", parse_mode="")
+            _safe_remove(path)
+            return None
+
+        try:
+            transcript = await _transcribe_whisper(path, api_key)
+        except Exception as e:
+            logger.warning("Whisper transcription failed: %s", e)
+            await self._sender.send(
+                chat_id, "Voice transcription failed: {}".format(e), parse_mode="",
+            )
+            return None
+        finally:
+            _safe_remove(path)
+
+        if not transcript:
+            await self._sender.send(chat_id, "Could not transcribe voice.", parse_mode="")
+            return None
+
+        # Show user what was heard
+        preview = transcript[:200]
+        if len(transcript) > 200:
+            preview += "..."
+        await self._sender.send(chat_id, "Voice: {}".format(preview), parse_mode="")
+
+        return transcript
 
     async def _start_new_job(self, chat_id: int, text: str) -> None:
         """Enqueue and start a new agent job."""
@@ -317,3 +429,39 @@ class TelegramService:
             logger.exception("Job %s failed", job_id)
             await self._jobs.fail(job_id, error=str(e))
             await self._sender.send(chat_id, "Error: {}".format(e), parse_mode="")
+
+
+# ── Module-level helpers ──────────────────────────────────────
+
+
+def _safe_remove(path: str) -> None:
+    """Remove a file if it exists, silently ignoring errors."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+async def _transcribe_whisper(file_path: str, api_key: str) -> str:
+    """Transcribe an audio file using OpenAI Whisper API. Returns transcript text."""
+    import aiohttp
+
+    url = "https://api.openai.com/v1/audio/transcriptions"
+    headers = {"Authorization": "Bearer {}".format(api_key)}
+
+    data = aiohttp.FormData()
+    data.add_field("model", "whisper-1")
+    data.add_field(
+        "file",
+        open(file_path, "rb"),
+        filename=os.path.basename(file_path),
+        content_type="audio/ogg",
+    )
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, data=data) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError("Whisper API {}: {}".format(resp.status, body[:200]))
+            result = await resp.json()
+            return result.get("text", "")

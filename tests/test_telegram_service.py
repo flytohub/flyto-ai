@@ -386,6 +386,92 @@ class TestCallbackQueryParsing:
         msg = await adapter.parse_incoming({})
         assert msg is None
 
+    @pytest.mark.asyncio
+    async def test_parse_photo_with_caption(self):
+        from flyto_ai.channels.telegram import TelegramAdapter
+        adapter = TelegramAdapter("fake-token")
+
+        payload = {
+            "message": {
+                "message_id": 1,
+                "from": {"id": 999, "username": "testuser"},
+                "chat": {"id": 123, "type": "private"},
+                "photo": [
+                    {"file_id": "small_id", "width": 90, "height": 90},
+                    {"file_id": "medium_id", "width": 320, "height": 320},
+                    {"file_id": "large_id", "width": 800, "height": 800},
+                ],
+                "caption": "What is this?",
+            }
+        }
+
+        msg = await adapter.parse_incoming(payload)
+        assert msg is not None
+        assert msg.text == "What is this?"
+        assert len(msg.attachments) == 1
+        assert msg.attachments[0]["type"] == "photo"
+        assert msg.attachments[0]["file_id"] == "large_id"  # largest
+
+    @pytest.mark.asyncio
+    async def test_parse_photo_without_caption(self):
+        from flyto_ai.channels.telegram import TelegramAdapter
+        adapter = TelegramAdapter("fake-token")
+
+        payload = {
+            "message": {
+                "message_id": 1,
+                "from": {"id": 999},
+                "chat": {"id": 123, "type": "private"},
+                "photo": [{"file_id": "pic_id", "width": 800, "height": 800}],
+            }
+        }
+
+        msg = await adapter.parse_incoming(payload)
+        assert msg is not None
+        assert msg.text == ""  # no caption, no text
+        assert len(msg.attachments) == 1
+        assert msg.attachments[0]["type"] == "photo"
+
+    @pytest.mark.asyncio
+    async def test_parse_voice(self):
+        from flyto_ai.channels.telegram import TelegramAdapter
+        adapter = TelegramAdapter("fake-token")
+
+        payload = {
+            "message": {
+                "message_id": 1,
+                "from": {"id": 999},
+                "chat": {"id": 123, "type": "private"},
+                "voice": {"file_id": "voice_id", "duration": 5},
+            }
+        }
+
+        msg = await adapter.parse_incoming(payload)
+        assert msg is not None
+        assert msg.text == ""
+        assert len(msg.attachments) == 1
+        assert msg.attachments[0]["type"] == "voice"
+        assert msg.attachments[0]["file_id"] == "voice_id"
+        assert msg.attachments[0]["duration"] == "5"
+
+    @pytest.mark.asyncio
+    async def test_parse_sticker_returns_none(self):
+        """Unsupported message types (sticker, etc.) return None."""
+        from flyto_ai.channels.telegram import TelegramAdapter
+        adapter = TelegramAdapter("fake-token")
+
+        payload = {
+            "message": {
+                "message_id": 1,
+                "from": {"id": 999},
+                "chat": {"id": 123, "type": "private"},
+                "sticker": {"file_id": "sticker_id"},
+            }
+        }
+
+        msg = await adapter.parse_incoming(payload)
+        assert msg is None
+
 
 # ===================================================================
 # TelegramSender
@@ -569,3 +655,166 @@ class TestDispatchWrapper:
         # We can't easily run a full chat without an LLM, but we can verify
         # the wrapper parameter is accepted
         assert "dispatch_wrapper" in Agent.chat.__code__.co_varnames
+
+
+# ===================================================================
+# Photo / Voice processing
+# ===================================================================
+
+class TestPhotoVoiceProcessing:
+    """Tests for photo download/prompt and voice transcription flows."""
+
+    @pytest_asyncio.fixture()
+    async def service_with_bridge(self, tmp_path):
+        from flyto_ai.telegram.service import TelegramService
+
+        mock_agent = MagicMock()
+        mock_bridge = MagicMock()
+        mock_bridge.is_busy = MagicMock(return_value=False)
+        mock_bridge.query = AsyncMock()
+
+        svc = TelegramService(
+            agent=mock_agent,
+            bot_token="fake-token",
+            allowed_chats=frozenset({123}),
+            claude_bridge=mock_bridge,
+        )
+        await svc.init()
+
+        svc._sender = MagicMock()
+        svc._sender.send = AsyncMock(return_value=100)
+        svc._sender.download_file = AsyncMock(return_value=True)
+
+        svc._commands._sender = svc._sender
+
+        yield svc, mock_bridge
+        await svc.close()
+
+    @pytest.mark.asyncio
+    async def test_photo_builds_prompt_with_path(self, service_with_bridge):
+        """Photo message downloads file and builds a prompt with the file path."""
+        svc, mock_bridge = service_with_bridge
+
+        await svc.handle_webhook({
+            "message": {
+                "chat": {"id": 123}, "from": {"id": 1}, "message_id": 1,
+                "photo": [{"file_id": "photo_123", "width": 800, "height": 600}],
+                "caption": "What is this?",
+            }
+        })
+        await asyncio.sleep(0.1)
+
+        svc._sender.download_file.assert_called_once()
+        mock_bridge.query.assert_called_once()
+        prompt = mock_bridge.query.call_args[0][1]
+        assert "Read the image at:" in prompt
+        assert "tg_photo_" in prompt
+        assert "What is this?" in prompt
+
+    @pytest.mark.asyncio
+    async def test_photo_no_caption_uses_default(self, service_with_bridge):
+        """Photo without caption uses 'Describe this image' as default."""
+        svc, mock_bridge = service_with_bridge
+
+        await svc.handle_webhook({
+            "message": {
+                "chat": {"id": 123}, "from": {"id": 1}, "message_id": 1,
+                "photo": [{"file_id": "photo_456", "width": 800, "height": 600}],
+            }
+        })
+        await asyncio.sleep(0.1)
+
+        mock_bridge.query.assert_called_once()
+        prompt = mock_bridge.query.call_args[0][1]
+        assert "Describe this image" in prompt
+
+    @pytest.mark.asyncio
+    async def test_photo_download_failure(self, service_with_bridge):
+        """If photo download fails, error is sent to user."""
+        svc, mock_bridge = service_with_bridge
+        svc._sender.download_file = AsyncMock(return_value=False)
+
+        await svc.handle_webhook({
+            "message": {
+                "chat": {"id": 123}, "from": {"id": 1}, "message_id": 1,
+                "photo": [{"file_id": "bad_photo", "width": 800, "height": 600}],
+            }
+        })
+        await asyncio.sleep(0.1)
+
+        mock_bridge.query.assert_not_called()
+        svc._sender.send.assert_called()
+        error_text = svc._sender.send.call_args[0][1]
+        assert "Failed to download" in error_text
+
+    @pytest.mark.asyncio
+    async def test_voice_no_api_key(self, service_with_bridge, monkeypatch):
+        """Voice without OPENAI_API_KEY sends error to user."""
+        svc, mock_bridge = service_with_bridge
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        await svc.handle_webhook({
+            "message": {
+                "chat": {"id": 123}, "from": {"id": 1}, "message_id": 1,
+                "voice": {"file_id": "voice_123", "duration": 5},
+            }
+        })
+        await asyncio.sleep(0.1)
+
+        mock_bridge.query.assert_not_called()
+        svc._sender.send.assert_called()
+        error_text = svc._sender.send.call_args[0][1]
+        assert "OPENAI_API_KEY" in error_text
+
+    @pytest.mark.asyncio
+    async def test_voice_transcription_flow(self, service_with_bridge, monkeypatch):
+        """Voice with API key downloads, transcribes, and sends transcript as prompt."""
+        svc, mock_bridge = service_with_bridge
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+
+        with patch("flyto_ai.telegram.service._transcribe_whisper", new_callable=AsyncMock) as mock_whisper:
+            mock_whisper.return_value = "Hello this is a voice message"
+
+            await svc.handle_webhook({
+                "message": {
+                    "chat": {"id": 123}, "from": {"id": 1}, "message_id": 1,
+                    "voice": {"file_id": "voice_456", "duration": 3},
+                }
+            })
+            await asyncio.sleep(0.1)
+
+            svc._sender.download_file.assert_called_once()
+            mock_whisper.assert_called_once()
+
+            # Should send preview to user
+            preview_calls = [
+                call for call in svc._sender.send.call_args_list
+                if "Voice:" in str(call)
+            ]
+            assert len(preview_calls) > 0
+
+            # Should send transcript as prompt to bridge
+            mock_bridge.query.assert_called_once()
+            prompt = mock_bridge.query.call_args[0][1]
+            assert "Hello this is a voice message" in prompt
+
+    @pytest.mark.asyncio
+    async def test_voice_transcription_failure(self, service_with_bridge, monkeypatch):
+        """Failed transcription sends error to user."""
+        svc, mock_bridge = service_with_bridge
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+
+        with patch("flyto_ai.telegram.service._transcribe_whisper", new_callable=AsyncMock) as mock_whisper:
+            mock_whisper.side_effect = RuntimeError("Whisper API 500: Internal Server Error")
+
+            await svc.handle_webhook({
+                "message": {
+                    "chat": {"id": 123}, "from": {"id": 1}, "message_id": 1,
+                    "voice": {"file_id": "voice_err", "duration": 2},
+                }
+            })
+            await asyncio.sleep(0.1)
+
+            mock_bridge.query.assert_not_called()
+            error_text = svc._sender.send.call_args[0][1]
+            assert "transcription failed" in error_text

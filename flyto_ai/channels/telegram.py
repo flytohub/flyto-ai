@@ -59,7 +59,26 @@ class TelegramAdapter(ChannelAdapter):
             return None
 
         text = message.get("text", "")
-        if not text:
+        caption = message.get("caption", "")
+        attachments: list = []
+
+        # Photo — pick highest resolution (last in array)
+        photos = message.get("photo")
+        if photos:
+            best = photos[-1]
+            attachments.append({"type": "photo", "file_id": best["file_id"]})
+            text = text or caption
+
+        # Voice message
+        voice = message.get("voice")
+        if voice:
+            attachments.append({
+                "type": "voice",
+                "file_id": voice["file_id"],
+                "duration": str(voice.get("duration", 0)),
+            })
+
+        if not text and not attachments:
             return None
 
         chat = message.get("chat", {})
@@ -70,6 +89,7 @@ class TelegramAdapter(ChannelAdapter):
             user_id=str(user.get("id", "")),
             text=text,
             session_id=str(chat.get("id", "")),
+            attachments=attachments,
             metadata={
                 "type": "message",
                 "chat_type": chat.get("type", ""),

@@ -216,6 +216,7 @@ class OpenAIProvider(LLMProvider):
                 full_messages.append(assistant_msg)
 
                 # Dispatch each tool call via shared helper
+                _ask_user_break = False
                 for tc in tc_list:
                     func_name = tc["function"]["name"]
                     try:
@@ -234,6 +235,11 @@ class OpenAIProvider(LLMProvider):
                         "content": result_str,
                     })
 
+                    # ask_user marker — break tool loop, user input needed
+                    if log_entry.get("result", {}).get("__ASK_USER__"):
+                        _ask_user_break = True
+                        break
+
                     # Inject vision user message for native OpenAI (tool messages don't support images)
                     if images and self._is_native_openai():
                         vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
@@ -246,6 +252,11 @@ class OpenAIProvider(LLMProvider):
                                 },
                             })
                         full_messages.append({"role": "user", "content": vision_content})
+
+                if _ask_user_break:
+                    text = "I need some information from you before I can continue."
+                    _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
+                    return text, tool_call_log, round_num + 1, total_usage
 
                 continue  # next round
 
@@ -288,6 +299,7 @@ class OpenAIProvider(LLMProvider):
             )
             full_messages.append(stripped_msg)
 
+            _ask_user_break = False
             for tc in choice.message.tool_calls:
                 func_name = tc.function.name
                 try:
@@ -306,6 +318,11 @@ class OpenAIProvider(LLMProvider):
                     "content": result_str,
                 })
 
+                # ask_user marker — break tool loop, user input needed
+                if log_entry.get("result", {}).get("__ASK_USER__"):
+                    _ask_user_break = True
+                    break
+
                 # Inject vision user message for native OpenAI (tool messages don't support images)
                 if images and self._is_native_openai():
                     vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
@@ -318,6 +335,10 @@ class OpenAIProvider(LLMProvider):
                             },
                         })
                     full_messages.append({"role": "user", "content": vision_content})
+
+            if _ask_user_break:
+                text = "I need some information from you before I can continue."
+                return text, tool_call_log, round_num + 1, total_usage
 
         # Hit max rounds — force summary with improved prompt
         completed = [tc["function"] for tc in tool_call_log if tc.get("ok", True)]

@@ -115,19 +115,20 @@ class TestLayerC:
         assert "params_schema" in prompt
 
 
-class TestBlueprintRemoved:
-    """Blueprint instructions must NOT appear in any prompt."""
+class TestBlueprintFirst:
+    """Blueprint-first instructions MUST appear in execute/yaml prompts."""
 
-    def test_no_blueprint_in_prompt(self):
+    def test_blueprint_shortcut_in_prompt(self):
         for mode in _VALID_MODES:
             prompt = build_system_prompt(module_count=300, mode=mode)
-            assert "save_as_blueprint" not in prompt
-            assert "list_blueprints() FIRST" not in prompt
-            assert "use_blueprint" not in prompt
-            assert "Blueprint Learning" not in prompt
+            assert "list_blueprints" in prompt
+            assert "use_blueprint" in prompt
+            # Must have blueprint-first instruction (MANDATORY or SHORTCUT)
+            assert "blueprint" in prompt.lower()
 
+        # Toolless mode should NOT have blueprint instructions
         prompt = build_system_prompt(module_count=300, has_tools=False)
-        assert "save_as_blueprint" not in prompt
+        assert "use_blueprint" not in prompt
 
     def test_no_tool_list_in_prompt(self):
         """Available tools section removed — tools are in function calling schema."""

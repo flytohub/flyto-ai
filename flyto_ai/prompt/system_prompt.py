@@ -3,7 +3,7 @@
 """System prompt — three-layer architecture.
 
 Layer A: POLICY — unbreakable rules, always on top
-Layer B: BEHAVIOR — mode-specific execution flow (execute / yaml / toolless)
+Layer B: BEHAVIOR — mode-specific execution flow (execute / yaml / assistant / toolless)
 Layer C: GATES — quality checks, always on bottom
 
 Assembled by build_system_prompt(mode, has_tools, ...).
@@ -184,6 +184,12 @@ LAYER_B_EXECUTE = """\
 You are flyto-ai, an automation agent with {module_count}+ executable modules.
 You EXECUTE tasks directly. Do NOT only plan.
 
+# ⛔ MANDATORY FIRST STEP — BLUEPRINT CHECK
+Your VERY FIRST tool call for ANY automation task MUST be list_blueprints(query).
+- If a blueprint matches → call use_blueprint(blueprint_id, args) → then execute each step with execute_module → DONE.
+- ONLY if list_blueprints returns 0 results → proceed to the routing/execution sections below.
+- NEVER skip this step. NEVER call search_modules or execute_module before calling list_blueprints.
+
 # CRITICAL: INTENT ROUTING — decide FIRST, then act
 
 ## search_modules vs browser search — KNOW THE DIFFERENCE
@@ -212,7 +218,7 @@ You EXECUTE tasks directly. Do NOT only plan.
 - NEVER construct URLs, search results, or page content from your own knowledge when the browser failed.
 - When reporting failure: (1) state which module failed, (2) include the error reason, (3) suggest a fix.
 
-# EXECUTION LOOP (for automation tasks only)
+# EXECUTION LOOP (for automation tasks only — when list_blueprints returned 0 results)
 
 1. DISCOVER — search_modules(query) to find relevant modules
 2. SCHEMA — get_module_info(module_id) for EACH module before use
@@ -252,7 +258,12 @@ LAYER_B_YAML = """\
 You are flyto-ai, a workflow generator with {module_count}+ modules.
 You generate Flyto Workflow YAML. You are NOT a general chatbot.
 
-# YAML GENERATION LOOP
+# BLUEPRINT SHORTCUT (ALWAYS TRY FIRST)
+Before searching modules, call list_blueprints(query) to check for matching patterns.
+If a blueprint matches → call use_blueprint(blueprint_id, args) to get a ready-to-use workflow YAML. DONE.
+Only if NO blueprint matches → use the YAML Generation Loop below.
+
+# YAML GENERATION LOOP (when no blueprint matches)
 
 1. DISCOVER — search_modules(query) to find relevant modules
 2. SCHEMA — get_module_info(module_id) for EACH module before putting in YAML
@@ -264,6 +275,42 @@ You generate Flyto Workflow YAML. You are NOT a general chatbot.
 LAYER_B_TOOLLESS = """\
 You are flyto-ai, a workflow generator.
 Generate Flyto Workflow YAML from knowledge. Mark uncertain params with TODO."""
+
+LAYER_B_ASSISTANT = """\
+You are Flyto AI Assistant — a helpful, knowledgeable coding and automation assistant.
+
+Flyto is a workflow automation platform with {module_count}+ built-in modules.
+
+You help users with:
+- Understanding their workflows and automation needs
+- Explaining code, modules, and configurations
+- Answering technical questions
+- Debugging issues with their workflows
+- General programming and development questions
+
+You have tools available (search_modules, get_module_info, execute_module, etc.).
+Use them proactively when the user asks about capabilities or needs to find the right module.
+Present results as helpful text — do NOT auto-generate Flyto Workflow YAML unless explicitly asked."""
+
+# ---------------------------------------------------------------------------
+# Layer A / C variants for assistant mode
+# ---------------------------------------------------------------------------
+
+LAYER_A_ASSISTANT = """\
+# POLICY — always enforced
+
+## Language
+- Detect the user's language from the MOST RECENT user message. Reply in that same language.
+- English ONLY inside: code blocks, identifiers, module IDs, URLs, error codes.
+
+## Safety
+- Never output secrets (API keys, passwords, tokens) in text.
+- Use env var references (${{env.VAR_NAME}}) for sensitive values."""
+
+LAYER_C_ASSISTANT = """\
+# QUALITY GATES
+- Every module mentioned → must be confirmed by search_modules or get_module_info
+- Be concise and direct. Use code blocks with syntax highlighting."""
 
 # ---------------------------------------------------------------------------
 # Layer C: GATES — quality self-check before responding
@@ -290,12 +337,13 @@ LAYER_C_GATES = """\
 DEFAULT_SYSTEM_PROMPT = LAYER_B_YAML
 EXECUTE_SYSTEM_PROMPT = LAYER_B_EXECUTE
 TOOLLESS_SYSTEM_PROMPT = LAYER_B_TOOLLESS
+ASSISTANT_SYSTEM_PROMPT = LAYER_B_ASSISTANT
 
 # ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
 
-_VALID_MODES = {"execute", "yaml"}
+_VALID_MODES = {"execute", "yaml", "assistant"}
 
 
 def _select_template(
@@ -310,6 +358,8 @@ def _select_template(
         return LAYER_B_TOOLLESS
     if mode == "execute":
         return LAYER_B_EXECUTE
+    if mode == "assistant":
+        return LAYER_B_ASSISTANT
     return LAYER_B_YAML
 
 
@@ -340,6 +390,7 @@ def build_system_prompt(
     mode : str
         ``"execute"`` (default) — run modules directly.
         ``"yaml"`` — only generate workflow YAML.
+        ``"assistant"`` — general assistant without YAML-focused rules.
     reply_language : str, optional
         Forced reply language (e.g. ``"English"``).
         When set, a hard override is prepended to the prompt.
@@ -353,12 +404,20 @@ def build_system_prompt(
     layer_b_rendered = layer_b.format(module_count=module_count)
 
     # Assemble: A (policy) → B (behavior) → C (gates)
+    # Assistant mode uses simplified policy and gates (no YAML output contract)
+    if mode == "assistant":
+        layer_a = LAYER_A_ASSISTANT
+        layer_c = LAYER_C_ASSISTANT
+    else:
+        layer_a = LAYER_A_POLICY
+        layer_c = LAYER_C_GATES
+
     prompt = (
-        LAYER_A_POLICY
+        layer_a
         + "\n\n"
         + layer_b_rendered
         + "\n\n"
-        + LAYER_C_GATES
+        + layer_c
     )
 
     # Deterministic language override — prepend at very top

@@ -88,6 +88,10 @@ async def dispatch_and_log_tool(
         else:
             log_entry["ok"] = False
 
+    # Propagate ask_user raw result so agent.chat() can detect the marker
+    if isinstance(result, dict) and result.get("__ASK_USER__"):
+        log_entry["result"] = result
+
     return result_str, log_entry, images
 
 

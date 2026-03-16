@@ -139,6 +139,19 @@ class AnthropicProvider(LLMProvider):
                 )
                 tool_call_log.append(log_entry)
 
+                # ask_user marker — break tool loop, user input needed
+                if log_entry.get("result", {}).get("__ASK_USER__"):
+                    # Still append a tool_result so Anthropic API is happy
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
+                    claude_messages.append({"role": "user", "content": tool_results})
+                    text = "I need some information from you before I can continue."
+                    _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
+                    return text, tool_call_log, round_num + 1, total_usage
+
                 if images:
                     content_parts = [{"type": "text", "text": result_str}]
                     for img in images:

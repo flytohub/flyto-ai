@@ -1,6 +1,11 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
-"""Agent class — chat loop orchestrator."""
+"""Agent class — chat loop orchestrator.
+
+The Agent is a thin shell: config → provider → tools → system prompt → chat loop.
+All assistant intelligence (blueprint routing, interactive input, selector healing)
+lives in ``flyto_ai.assistant.AssistantMiddleware``.
+"""
 import json
 import logging
 import time
@@ -16,83 +21,11 @@ from flyto_ai.validation import extract_yaml_from_response, validate_workflow_st
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports for Phase 1 modules (avoid import errors if deps missing)
+# Lazy imports for optional modules
 _CostTracker = None
 _TranscriptWriter = None
 _injection_detector = None
 _Vault = None
-
-
-def _init_blueprint_storage():
-    """Initialize flyto-blueprint with SQLite storage for local persistence."""
-    try:
-        from flyto_blueprint import get_engine
-        from flyto_blueprint.storage.sqlite import SQLiteBackend
-        get_engine(storage=SQLiteBackend())
-    except ImportError:
-        pass
-
-
-def _blueprint_feedback(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str):
-    """Closed-loop blueprint learning. Pure code — zero LLM involvement.
-
-    1. If a blueprint was used (use_blueprint in tool_calls):
-       - All executions OK  → report_outcome(success=True)  → score +5
-       - Any execution FAIL → report_outcome(success=False) → score -10
-       - Score < 10 → auto-retired, never suggested again
-    2. If execution succeeded with 3+ steps (no blueprint):
-       - learn_from_execution() → save as verified blueprint (score 70)
-       - Duplicate workflow → boosted_existing → score +3
-    """
-    try:
-        from flyto_blueprint import get_engine
-    except ImportError:
-        return
-
-    engine = get_engine()
-    all_ok = all(r.get("ok", False) for r in execution_results)
-
-    # --- Phase 1: Report outcome if a blueprint was used ---
-    used_blueprint_id = None
-    for tc in tool_calls:
-        if tc.get("function") == "use_blueprint":
-            used_blueprint_id = tc.get("arguments", {}).get("blueprint_id", "")
-            break
-
-    if used_blueprint_id:
-        try:
-            engine.report_outcome(used_blueprint_id, success=all_ok)
-            logger.info("Blueprint outcome: %s %s", used_blueprint_id, "OK" if all_ok else "FAIL")
-        except Exception as e:
-            logger.debug("Blueprint report_outcome failed: %s", e)
-
-    # --- Phase 2: Learn new blueprint from successful execution ---
-    if not all_ok or len(execution_results) < 3:
-        return
-
-    steps = []
-    for i, r in enumerate(execution_results):
-        mid = r.get("module_id", "")
-        if not mid:
-            continue  # skip entries with empty module_id
-        params = r.get("arguments", {}).get("params", {})
-        steps.append({
-            "id": "step_{}".format(i + 1),
-            "module": mid,
-            "params": params,
-        })
-
-    if len(steps) < 3:
-        return  # not enough meaningful steps to save
-
-    workflow = {"name": user_message[:80], "steps": steps}
-    categories = list({s["module"].split(".")[0] for s in steps if "." in s["module"]})
-
-    try:
-        engine.learn_from_execution(workflow=workflow, name=user_message[:80], tags=categories)
-        logger.info("Blueprint learned: %s (%d steps)", user_message[:40], len(steps))
-    except Exception as e:
-        logger.debug("Blueprint learn failed: %s", e)
 
 
 def _merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None:
@@ -107,7 +40,7 @@ def _merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None:
 class Agent:
     """High-level AI agent that translates natural language to Flyto workflows.
 
-    Wires together: config → provider → tools → system prompt → chat loop.
+    Wires together: config → provider → tools → assistant → system prompt → chat loop.
     """
 
     def __init__(
@@ -131,6 +64,9 @@ class Agent:
         self._memory_search = None
         self._memory_initialized = False
         self._session_id = uuid.uuid4().hex[:12]
+
+        # Assistant middleware — single entry point for all intelligence
+        self._assistant = self._init_assistant()
 
         # Phase 1: Cost tracker
         self._cost_tracker = self._init_cost_tracker()
@@ -158,53 +94,56 @@ class Agent:
         if not self._tools and not self._dispatch_fn:
             self._auto_discover_tools()
 
+    # ── Properties ────────────────────────────────────────────────
+
     @property
     def config(self) -> AgentConfig:
-        """Agent configuration."""
         return self._config
 
     @property
     def tools(self) -> List[Dict]:
-        """Registered tool definitions."""
         return list(self._tools) if self._tools else []
 
     @property
     def dispatch_fn(self):
-        """The tool dispatch function."""
         return self._dispatch_fn
 
     @property
     def memory_store(self):
-        """The memory store (may be None if not initialized)."""
         return self._memory_store
 
     @property
     def memory_search(self):
-        """The memory search engine (may be None if not initialized)."""
         return self._memory_search
 
     @property
     def session_id(self) -> str:
-        """Current session ID."""
         return self._session_id
 
     @property
     def cost_tracker(self):
-        """Cost tracker instance (may be None)."""
         return self._cost_tracker
 
     @property
     def transcript(self):
-        """Transcript writer instance (may be None)."""
         return self._transcript
 
     @property
     def vault(self):
-        """Vault instance (may be None)."""
         return self._vault
 
+    # ── Init helpers ──────────────────────────────────────────────
+
+    def _init_assistant(self):
+        """Initialize the AssistantMiddleware (blueprint, interactive, resilience)."""
+        try:
+            from flyto_ai.assistant import AssistantMiddleware
+            return AssistantMiddleware()
+        except Exception as e:
+            logger.debug("Assistant middleware init failed: %s", e)
+            return None
+
     def _init_cost_tracker(self):
-        """Initialize cost tracker from config."""
         try:
             from flyto_ai.cost import CostTracker
             return CostTracker(
@@ -216,7 +155,6 @@ class Agent:
             return None
 
     def _init_transcript(self):
-        """Initialize transcript writer from config."""
         if not self._config.enable_transcript:
             return None
         try:
@@ -236,7 +174,6 @@ class Agent:
             return None
 
     def _init_vault(self):
-        """Initialize vault from config."""
         try:
             from flyto_ai.vault import Vault
             vault = Vault(
@@ -255,7 +192,6 @@ class Agent:
             return None
 
     def _init_compactor(self):
-        """Initialize context window compactor."""
         try:
             from flyto_ai.memory.compaction import ContextCompactor
             return ContextCompactor()
@@ -264,7 +200,6 @@ class Agent:
             return None
 
     def _init_extensions(self):
-        """Initialize extension hook registry."""
         try:
             from flyto_ai.extensions.loader import ExtensionLoader
             loader = ExtensionLoader()
@@ -279,7 +214,6 @@ class Agent:
             return None
 
     def get_orchestrator(self):
-        """Get or create the sub-agent orchestrator."""
         if self._orchestrator is None:
             from flyto_ai.orchestration import AgentOrchestrator
             self._orchestrator = AgentOrchestrator(
@@ -289,10 +223,19 @@ class Agent:
         return self._orchestrator
 
     def _auto_discover_tools(self):
-        """Auto-detect and register available tools (core, blueprint, inspect)."""
+        """Auto-detect and register available tools."""
         from flyto_ai.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
+
+        # Blueprint tools FIRST — LLMs prefer tools listed earlier
+        try:
+            from flyto_ai.tools.blueprint_tools import get_blueprint_tool_defs, dispatch_blueprint_tool
+            defs = get_blueprint_tool_defs()
+            if defs:
+                registry.register_many(defs, dispatch_blueprint_tool)
+        except Exception as e:
+            logger.warning("Failed to load blueprint tools: %s", e)
 
         try:
             from flyto_ai.tools.core_tools import get_core_tool_defs, dispatch_core_tool
@@ -303,13 +246,10 @@ class Agent:
             logger.warning("Failed to load core tools: %s", e)
 
         try:
-            from flyto_ai.tools.blueprint_tools import get_blueprint_tool_defs, dispatch_blueprint_tool
-            _init_blueprint_storage()
-            defs = get_blueprint_tool_defs()
-            if defs:
-                registry.register_many(defs, dispatch_blueprint_tool)
+            from flyto_ai.tools.ask_user import TOOL_DEF as ASK_USER_TOOL, dispatch_ask_user
+            registry.register(ASK_USER_TOOL, dispatch_ask_user)
         except Exception as e:
-            logger.warning("Failed to load blueprint tools: %s", e)
+            logger.warning("Failed to load ask_user tool: %s", e)
 
         try:
             from flyto_ai.tools.inspect_page import INSPECT_PAGE_TOOL, dispatch_inspect_page
@@ -322,7 +262,6 @@ class Agent:
             self._dispatch_fn = registry.dispatch
 
     def _init_sandbox(self):
-        """Initialize Docker sandbox manager."""
         try:
             from flyto_ai.sandbox.manager import SandboxManager
             from flyto_ai.tools.core_tools import set_sandbox_manager
@@ -336,7 +275,6 @@ class Agent:
             logger.warning("Failed to init sandbox: %s", e)
 
     async def _init_memory(self):
-        """Lazy-init memory system (SQLite store + summarizer + search)."""
         if self._memory_initialized:
             return
         self._memory_initialized = True
@@ -354,7 +292,6 @@ class Agent:
                 provider=self._provider, threshold=20, keep_recent=10,
             )
 
-            # Init search (best-effort — embeddings need API key)
             try:
                 import aiosqlite
                 from flyto_ai.memory.embeddings import EmbeddingStore
@@ -373,11 +310,6 @@ class Agent:
             logger.warning("Memory system init failed: %s", e)
 
     def _make_provider(self) -> LLMProvider:
-        """Create the LLM provider from config using the provider registry.
-
-        If fallback_providers are configured, wraps in a ProviderChain
-        for automatic failover on 429/5xx errors.
-        """
         from flyto_ai.providers import create_provider
 
         cfg = self._config
@@ -395,7 +327,6 @@ class Agent:
 
         primary = create_provider(cfg.provider or "openai", **kwargs)
 
-        # Wrap in ProviderChain if fallbacks configured
         if cfg.fallback_providers:
             try:
                 from flyto_ai.providers.failover import ProviderChain
@@ -420,32 +351,39 @@ class Agent:
 
         return primary
 
-    def _make_safe_dispatch(self):
-        """Create a dispatch function that enforces policies + injection scanning."""
+    # ── Dispatch ──────────────────────────────────────────────────
+
+    def _make_safe_dispatch(self, user_message: str = ""):
+        """Create a dispatch function with policy enforcement + assistant middleware."""
         base_dispatch = self._dispatch_fn
         policies = self._policies
         enable_injection = self._config.enable_injection_detection
 
+        # Wrap with assistant middleware (blueprint guard + selector healing)
+        if self._assistant and base_dispatch:
+            assisted_dispatch = self._assistant.wrap(base_dispatch, user_message)
+        else:
+            assisted_dispatch = base_dispatch
+
         async def safe_dispatch(func_name: str, func_args: dict) -> dict:
+            # Policy enforcement
             if policies and not is_tool_allowed(func_name, policies):
                 return {"ok": False, "error": "Tool not allowed: {}".format(func_name)}
             if policies and func_name == "execute_module":
                 module_id = func_args.get("module_id", "")
                 if not is_module_allowed(module_id, policies):
                     category = module_id.split(".")[0] if "." in module_id else module_id
-                    return {
-                        "ok": False,
-                        "error": "Module category '{}' is not allowed.".format(category),
-                    }
-            result = await base_dispatch(func_name, func_args)
+                    return {"ok": False, "error": "Module category '{}' is not allowed.".format(category)}
 
-            # Phase 1: Scan tool results for injection attempts
+            result = await assisted_dispatch(func_name, func_args)
+
+            # Injection scanning
             if enable_injection and isinstance(result, dict):
                 try:
                     from flyto_ai.prompt.injection_detector import scan_tool_result, format_warning_for_llm
                     import json as _json
                     result_text = _json.dumps(result, ensure_ascii=False, default=str)
-                    if len(result_text) > 100:  # skip tiny results
+                    if len(result_text) > 100:
                         warnings = scan_tool_result(func_name, result_text)
                         note = format_warning_for_llm(warnings)
                         if note:
@@ -457,6 +395,8 @@ class Agent:
 
         return safe_dispatch if base_dispatch else None
 
+    # ── Chat ──────────────────────────────────────────────────────
+
     async def chat(
         self,
         message: str,
@@ -467,32 +407,16 @@ class Agent:
         on_stream: Optional[StreamCallback] = None,
         dispatch_wrapper=None,
     ) -> ChatResponse:
-        """Run one chat turn: send message → tool loop → validation → response.
-
-        Parameters
-        ----------
-        mode : str
-            ``"execute"`` — run modules directly, skip YAML nudge/validation.
-            ``"yaml"`` — only generate workflow YAML (original behaviour).
-        on_tool_call : callable, optional
-            ``on_tool_call(func_name, func_args)`` — called before each tool
-            dispatch.  Use for progress display.
-        on_stream : callable, optional
-            ``on_stream(StreamEvent)`` — called for each streaming event
-            (tokens, tool start/end, done).  When set, providers enable
-            streaming for LLM responses.
-        """
+        """Run one chat turn: message → tool loop → validation → response."""
         t0 = time.monotonic()
 
         if not self._config.api_key and self._config.provider != "ollama":
             return ChatResponse(
-                ok=False,
-                message="No API key configured.",
-                session_id=self._session_id,
-                error="no_api_key",
+                ok=False, message="No API key configured.",
+                session_id=self._session_id, error="no_api_key",
             )
 
-        # Phase 1: Injection detection on user input
+        # Injection detection
         injection_note = None
         if self._config.enable_injection_detection:
             try:
@@ -502,19 +426,16 @@ class Agent:
             except Exception:
                 pass
 
-        # Phase 1: Transcript — record user message
         if self._transcript:
             self._transcript.record_user(message)
 
-        # Lazy-init memory
         await self._init_memory()
 
-        # Build messages
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
 
-        # Build dispatch (with optional progress + stream callbacks)
-        dispatch_fn = self._make_safe_dispatch()
+        # Build dispatch — assistant middleware wraps base dispatch
+        dispatch_fn = self._make_safe_dispatch(user_message=message)
         if dispatch_wrapper and dispatch_fn:
             dispatch_fn = dispatch_wrapper(dispatch_fn)
         if dispatch_fn and (on_tool_call or on_stream):
@@ -525,24 +446,16 @@ class Agent:
                     try:
                         on_tool_call(func_name, func_args)
                     except Exception:
-                        pass  # callback failure must not break tool loop
+                        pass
                 if on_stream:
                     try:
-                        on_stream(StreamEvent(
-                            type=StreamEventType.TOOL_START,
-                            tool_name=func_name,
-                            tool_args=func_args,
-                        ))
+                        on_stream(StreamEvent(type=StreamEventType.TOOL_START, tool_name=func_name, tool_args=func_args))
                     except Exception:
                         pass
                 result = await _base(func_name, func_args)
                 if on_stream:
                     try:
-                        on_stream(StreamEvent(
-                            type=StreamEventType.TOOL_END,
-                            tool_name=func_name,
-                            tool_result=result if isinstance(result, dict) else None,
-                        ))
+                        on_stream(StreamEvent(type=StreamEventType.TOOL_END, tool_name=func_name, tool_result=result if isinstance(result, dict) else None))
                     except Exception:
                         pass
                 return result
@@ -550,10 +463,9 @@ class Agent:
             dispatch_fn = _instrumented
         has_tools = bool(self._tools and dispatch_fn)
 
-        # Build system prompt (with deterministic language detection)
+        # Build system prompt
         reply_language = detect_language(message)
 
-        # Memory: search for relevant past context
         memory_addition = None
         if self._memory_search:
             try:
@@ -566,31 +478,42 @@ class Agent:
             except Exception as e:
                 logger.debug("Memory search failed: %s", e)
 
-        # Combine memory + injection warning into admin_addition
+        # Assistant: pre-resolve blueprint
+        blueprint_hint = ""
+        if self._assistant and mode == "execute" and has_tools:
+            blueprint_hint = self._assistant.prepare(message, mode)
+
         combined_addition = memory_addition or ""
         if injection_note:
             combined_addition = (combined_addition + "\n\n" + injection_note).strip()
+        if blueprint_hint:
+            combined_addition = (combined_addition + "\n\n" + blueprint_hint).strip()
+
+        _module_count = 300
+        try:
+            from core.modules.registry import ModuleRegistry
+            _module_count = len(ModuleRegistry.get_all_metadata())
+        except Exception:
+            pass
 
         system_prompt = self._system_prompt or build_system_prompt(
-            module_count=300, context=template_context, has_tools=has_tools,
+            module_count=_module_count, context=template_context, has_tools=has_tools,
             mode=mode, reply_language=reply_language,
             admin_addition=combined_addition or None,
         )
 
-        # Phase 2: Context compaction before LLM call
         if self._compactor:
             messages, was_compacted = self._compactor.maybe_compact(messages)
             if was_compacted:
                 logger.info("Context compacted before LLM call")
 
-        # Accumulated usage across all LLM calls
+        # Call LLM
         total_usage = {
             "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
         }
         total_rounds = 0
 
-        # Call LLM (toolless mode if no tools available)
         if has_tools:
             response_content, tool_calls, rounds_used, usage_dict = await self._call_llm(
                 messages, system_prompt, dispatch_fn, on_stream=on_stream,
@@ -603,7 +526,7 @@ class Agent:
         for k in total_usage:
             total_usage[k] += usage_dict.get(k, 0)
 
-        # Phase 1: Cost tracking
+        # Cost tracking
         if self._cost_tracker and any(v > 0 for v in usage_dict.values()):
             try:
                 self._cost_tracker.record(
@@ -622,22 +545,16 @@ class Agent:
             if self._transcript:
                 self._transcript.record_error("provider_call_failed")
             return ChatResponse(
-                ok=False,
-                message="AI provider call failed. Please try again.",
-                session_id=self._session_id,
-                error="provider_call_failed",
+                ok=False, message="AI provider call failed. Please try again.",
+                session_id=self._session_id, error="provider_call_failed",
             )
 
-        # --- yaml mode: nudge + validation (original behaviour) ---
+        # YAML mode: nudge + validation
         if mode == "yaml":
-            # No-YAML nudge
             if not extract_yaml_from_response(response_content):
                 nudge_messages = messages + [
                     {"role": "assistant", "content": response_content},
-                    {"role": "user", "content": (
-                        "You must always output a Flyto Workflow YAML. "
-                        "Please generate the workflow YAML now using the modules and blueprints available."
-                    )},
+                    {"role": "user", "content": "You must always output a Flyto Workflow YAML. Please generate the workflow YAML now using the modules and blueprints available."},
                 ]
                 nudge_content, nudge_tc, nudge_rounds, nudge_usage = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
                 total_rounds += nudge_rounds
@@ -647,7 +564,6 @@ class Agent:
                     response_content = nudge_content
                     tool_calls.extend(nudge_tc)
 
-            # YAML validation loop
             for _attempt in range(self._config.max_validation_rounds):
                 yaml_str = extract_yaml_from_response(response_content)
                 if not yaml_str:
@@ -655,16 +571,10 @@ class Agent:
                 errors = validate_workflow_steps(yaml_str)
                 if not errors:
                     break
-
                 error_list = "\n".join("- {}".format(e) for e in errors)
                 retry_messages = messages + [
                     {"role": "assistant", "content": response_content},
-                    {"role": "user", "content": (
-                        "The workflow YAML you generated has validation errors:\n"
-                        "{}\n\n"
-                        "Please call get_module_info() for each failing module to "
-                        "verify the correct param names, then regenerate the YAML.".format(error_list)
-                    )},
+                    {"role": "user", "content": "The workflow YAML you generated has validation errors:\n{}\n\nPlease call get_module_info() for each failing module to verify the correct param names, then regenerate the YAML.".format(error_list)},
                 ]
                 retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
                 total_rounds += retry_rounds
@@ -676,15 +586,11 @@ class Agent:
                 else:
                     break
 
-        # Collect execute_module results from tool calls
-        execution_results = [
-            tc for tc in tool_calls
-            if tc.get("function") == "execute_module"
-        ]
+        # Collect execution results
+        execution_results = [tc for tc in tool_calls if tc.get("function") == "execute_module"]
 
-        # Guard: if ALL executions failed, force the LLM to acknowledge failure
+        # Guard: if ALL executions failed, force LLM to acknowledge
         if execution_results and all(not er.get("ok", False) for er in execution_results):
-            failed_modules = [er.get("module_id", "?") for er in execution_results]
             errors = []
             for er in execution_results:
                 preview = er.get("result_preview", "")
@@ -694,7 +600,6 @@ class Agent:
                 except Exception:
                     err_msg = ""
                 errors.append("{}: {}".format(er.get("module_id", "?"), err_msg or "failed"))
-
             error_detail = "\n".join(errors)
             correction_messages = messages + [
                 {"role": "assistant", "content": response_content},
@@ -707,8 +612,7 @@ class Agent:
                 ).format(len(execution_results), error_detail)},
             ]
             corrected, _, corr_rounds, corr_usage = await self._call_llm_toolless(
-                correction_messages, system_prompt,
-                on_stream=on_stream,
+                correction_messages, system_prompt, on_stream=on_stream,
             )
             if corrected:
                 response_content = corrected
@@ -716,11 +620,14 @@ class Agent:
                 for k in total_usage:
                     total_usage[k] += corr_usage.get(k, 0)
 
-        # Closed-loop blueprint feedback (no LLM involved)
-        if mode == "execute" and execution_results:
-            _blueprint_feedback(tool_calls, execution_results, message)
+        # Assistant post-process: blueprint feedback + pending input detection
+        pending_input = None
+        if self._assistant:
+            pending_input = self._assistant.post_process(
+                tool_calls, execution_results, message, mode,
+            )
 
-        # Memory: persist conversation + summarize + index
+        # Memory
         session_id = self._session_id
         if self._memory_store:
             try:
@@ -735,102 +642,51 @@ class Agent:
                 logger.debug("Summarization failed: %s", e)
         if self._memory_search:
             try:
-                exchange = "User: {}\nAssistant: {}".format(
-                    message[:200], response_content[:200],
-                )
+                exchange = "User: {}\nAssistant: {}".format(message[:200], response_content[:200])
                 await self._memory_search.index_content(session_id, exchange)
             except Exception as e:
                 logger.debug("Memory indexing failed: %s", e)
 
         usage = UsageStats(**total_usage) if any(v > 0 for v in total_usage.values()) else None
-
         duration_ms = int((time.monotonic() - t0) * 1000)
         self._emit_audit(message, mode, tool_calls, execution_results, True, None, duration_ms, total_usage)
 
-        # Phase 1: Transcript — record assistant response + meta
         if self._transcript:
-            self._transcript.record_assistant(
-                response_content,
-                provider=self._config.provider,
-                model=self._config.resolved_model,
-            )
-            # Record tool calls
+            self._transcript.record_assistant(response_content, provider=self._config.provider, model=self._config.resolved_model)
             for tc in tool_calls:
-                self._transcript.record_tool_call(
-                    tc.get("function", ""),
-                    tc.get("arguments", {}),
-                )
+                self._transcript.record_tool_call(tc.get("function", ""), tc.get("arguments", {}))
                 if tc.get("function") == "execute_module":
-                    self._transcript.record_execution(
-                        tc.get("module_id", ""),
-                        tc.get("ok", False),
-                        tc.get("result_preview", ""),
-                    )
-            # Record cost summary
+                    self._transcript.record_execution(tc.get("module_id", ""), tc.get("ok", False), tc.get("result_preview", ""))
             if self._cost_tracker:
-                self._transcript.record_meta({
-                    "event": "cost_summary",
-                    **self._cost_tracker.summary(),
-                })
+                self._transcript.record_meta({"event": "cost_summary", **self._cost_tracker.summary()})
 
-        # Build cost info for response
-        cost_summary = None
-        if self._cost_tracker:
-            cost_summary = self._cost_tracker.summary()
+        cost_summary = self._cost_tracker.summary() if self._cost_tracker else None
 
         return ChatResponse(
-            ok=True,
-            message=response_content,
-            session_id=self._session_id,
-            tool_calls=tool_calls,
-            execution_results=execution_results,
-            provider=self._config.provider,
-            model=self._config.resolved_model,
-            rounds_used=total_rounds,
-            usage=usage,
-            cost=cost_summary,
+            ok=True, message=response_content, session_id=self._session_id,
+            tool_calls=tool_calls, execution_results=execution_results,
+            provider=self._config.provider, model=self._config.resolved_model,
+            rounds_used=total_rounds, usage=usage, cost=cost_summary,
+            pending_input=pending_input,
         )
 
-    def _emit_audit(
-        self,
-        user_message: str,
-        mode: str,
-        tool_calls: List[Dict],
-        execution_results: List[Dict],
-        ok: bool,
-        error: Optional[str],
-        duration_ms: int,
-        usage: Dict[str, int],
-    ) -> None:
-        """Emit a structured audit log entry (best-effort)."""
+    # ── Internal ──────────────────────────────────────────────────
+
+    def _emit_audit(self, user_message, mode, tool_calls, execution_results, ok, error, duration_ms, usage):
         try:
             from flyto_ai.audit import ChatAuditEntry
-            entry = ChatAuditEntry(
-                user_message=user_message[:200],
-                provider=self._config.provider or "openai",
-                model=self._config.resolved_model,
-                mode=mode,
-                tool_calls_count=len(tool_calls),
-                execution_count=len(execution_results),
-                duration_ms=duration_ms,
-                prompt_tokens=usage.get("prompt_tokens", 0),
+            ChatAuditEntry(
+                user_message=user_message[:200], provider=self._config.provider or "openai",
+                model=self._config.resolved_model, mode=mode,
+                tool_calls_count=len(tool_calls), execution_count=len(execution_results),
+                duration_ms=duration_ms, prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),
-                total_tokens=usage.get("total_tokens", 0),
-                ok=ok,
-                error=error,
-            )
-            entry.emit()
+                total_tokens=usage.get("total_tokens", 0), ok=ok, error=error,
+            ).emit()
         except Exception:
-            pass  # audit must never break main flow
+            pass
 
-    async def _call_llm(
-        self,
-        messages: List[Dict[str, Any]],
-        system_prompt: str,
-        dispatch_fn,
-        on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[Optional[str], List[Dict[str, Any]], int, Dict[str, int]]:
-        """Call the LLM provider with tools. Returns (content, tool_call_log, rounds_used, usage_dict)."""
+    async def _call_llm(self, messages, system_prompt, dispatch_fn, on_stream=None):
         try:
             return await self._provider.chat(
                 messages, system_prompt, self._tools,
@@ -841,17 +697,10 @@ class Agent:
             logger.warning("LLM call failed: %s", e)
             return None, [], 0, {}
 
-    async def _call_llm_toolless(
-        self,
-        messages: List[Dict[str, Any]],
-        system_prompt: str,
-        on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[Optional[str], List[Dict[str, Any]], int, Dict[str, int]]:
-        """Call the LLM provider without tools (pure conversation)."""
+    async def _call_llm_toolless(self, messages, system_prompt, on_stream=None):
         try:
-            async def _noop_dispatch(name: str, args: dict) -> dict:
+            async def _noop_dispatch(name, args):
                 return {"ok": False, "error": "No tools available"}
-
             return await self._provider.chat(
                 messages, system_prompt, [], _noop_dispatch, max_rounds=1,
                 on_stream=on_stream,

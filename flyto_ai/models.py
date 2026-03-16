@@ -68,3 +68,4 @@ class ChatResponse(BaseModel):
     rounds_used: int = 0
     usage: Optional[UsageStats] = None
     cost: Optional[Dict[str, Any]] = None
+    pending_input: Optional[Dict[str, Any]] = None

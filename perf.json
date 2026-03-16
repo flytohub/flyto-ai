@@ -1,0 +1,1 @@
+{"url": "https://example.com/", "metrics": {"domContentLoaded": 17.4, "load": 17.6, "ttfb": 2.7, "fcp": 276, "resourceCount": 1, "resourceTotalSize": 676, "jsHeapUsed": 1512034, "jsHeapTotal": 2898274, "lcp": 276, "cls": 0}, "ratings": {"lcp": "good", "fcp": "good", "cls": "good", "ttfb": "good"}}

@@ -8,7 +8,7 @@ import time
 import pytest
 
 from flyto_ai import Agent, AgentConfig
-from flyto_ai.agent import _blueprint_feedback
+from flyto_ai.assistant.router import feedback as _blueprint_feedback
 from flyto_ai.models import ChatResponse
 from flyto_ai.redaction import is_sensitive_key, redact_args
 from flyto_ai.session import SessionStore

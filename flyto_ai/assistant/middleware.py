@@ -144,29 +144,29 @@ class AssistantMiddleware:
 
                     logger.info("Auto-navigating choice: %s → %s", opt, target[:60])
 
-                    # Always try click by text first (works for JS-driven navigation)
-                    # Fall back to goto URL only if click fails
-                    click_result = await dispatch("execute_module", {
-                        "module_id": "browser.click",
-                        "params": {"selector": 'text="{}"'.format(opt)},
-                    })
-
-                    if isinstance(click_result, dict) and (click_result.get("ok") or click_result.get("status") == "success"):
-                        self._last_choices = None
-                        # Wait briefly for navigation
-                        import asyncio as _aio
-                        await _aio.sleep(1)
-                        return click_result
-
-                    # Click failed — try goto URL if it's not the same page
-                    if target.startswith("http") or target.startswith("/"):
-                        result = await dispatch("execute_module", {
-                            "module_id": "browser.goto",
-                            "params": {"url": target},
+                    # Re-snapshot to re-stamp hints, then click
+                    if target.startswith("[data-flyto-hint"):
+                        await dispatch("execute_module", {
+                            "module_id": "browser.snapshot",
+                            "params": {},
                         })
-                        if isinstance(result, dict) and (result.get("ok") or result.get("status") == "success"):
-                            self._last_choices = None
-                            return result
+
+                    # Try hint selector first, then text selector
+                    for selector in [target, 'text="{}"'.format(opt)]:
+                        try:
+                            click_result = await dispatch("execute_module", {
+                                "module_id": "browser.click",
+                                "params": {"selector": selector},
+                            })
+                            if isinstance(click_result, dict) and (
+                                click_result.get("ok") or click_result.get("status") == "success"
+                            ):
+                                self._last_choices = None
+                                import asyncio as _aio
+                                await _aio.sleep(1)
+                                return click_result
+                        except Exception:
+                            continue
 
         return None
 

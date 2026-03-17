@@ -58,7 +58,10 @@ def detect_choices(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "type": "select",
                 "label": "Please select",
                 "options": opts,
-                "_selectors": {b.get("text", "").strip(): b.get("selector", b.get("hint", b.get("href", ""))) for b in btn_group},
+                "_selectors": {
+                    b.get("text", "").strip(): b.get("_click_selector", b.get("selector", b.get("hint", "")))
+                    for b in btn_group
+                },
             })
 
     link_group = _find_choice_group(links, min_size=3, max_size=30)
@@ -70,7 +73,10 @@ def detect_choices(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "type": "select",
                 "label": "Please select",
                 "options": opts,
-                "_selectors": {l.get("text", "").strip(): l.get("href", l.get("selector", "")) for l in link_group},
+                "_selectors": {
+                    l.get("text", "").strip(): l.get("_click_selector", l.get("selector", l.get("href", "")))
+                    for l in link_group
+                },
             })
 
     if not fields:
@@ -102,6 +108,15 @@ def _extract_interactive(result: Dict[str, Any]) -> Tuple[list, list, list]:
                     links.append({"text": text, "href": el.get("href", ""), "selector": el.get("selector", "")})
                 elif tag in ("button", "input"):
                     buttons.append({"text": text, "selector": el.get("selector", "")})
+
+    # Prefer hint selectors (data-flyto-hint) over hrefs for _selectors mapping
+    # Hint selectors work for both href and JS navigation
+    for item_list in [buttons, links]:
+        for item in item_list:
+            sel = item.get("selector", item.get("hint", ""))
+            if sel and sel.startswith("[data-flyto-hint"):
+                # Override href with hint selector
+                item["_click_selector"] = sel
 
     # goto format: {links: [{text, href}]}
     # Already handled by result.get("links")

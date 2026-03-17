@@ -75,7 +75,18 @@ async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, 
     if not dispatch:
         return {"ok": False, "error": "Navigator dispatch not initialized"}
 
-    # Step 1: Launch browser
+    # Step 1: Launch browser (clean stale locks first)
+    import os
+    from pathlib import Path
+    profile_dir = Path.home() / '.flyto' / 'chrome-profile'
+    for lock_name in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
+        lock_file = profile_dir / lock_name
+        if lock_file.exists():
+            try:
+                lock_file.unlink()
+            except OSError:
+                pass
+
     launch_result = await dispatch("execute_module", {
         "module_id": "browser.launch",
         "params": {"headless": False},

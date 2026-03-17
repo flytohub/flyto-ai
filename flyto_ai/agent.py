@@ -431,7 +431,7 @@ class Agent:
         dispatch_fn, has_tools = self._build_dispatch(
             message, on_tool_call, on_stream, dispatch_wrapper,
         )
-        system_prompt = await self._build_prompt(
+        system_prompt, has_blueprint_match = await self._build_prompt(
             message, mode, has_tools, template_context, injection_note,
         )
 
@@ -471,6 +471,39 @@ class Agent:
                 ok=False, message="AI provider call failed. Please try again.",
                 session_id=self._session_id, error="provider_call_failed",
             )
+
+        # System safety net: if a blueprint was pre-resolved but LLM answered
+        # from knowledge without using any tools, retry once with a nudge.
+        # This catches the case where LLM says "here's the URL" instead of
+        # actually going to the site and doing the task.
+        if (mode == "execute"
+                and has_blueprint_match
+                and self._assistant
+                and not tool_calls
+                and response_content
+                and has_tools
+                and total_rounds <= 1
+                and self._config.provider != "ollama"):
+            logger.info("Blueprint pre-resolved but LLM skipped tools — retrying")
+            nudge_messages = messages + [
+                {"role": "assistant", "content": response_content},
+                {"role": "user", "content": (
+                    "You answered from knowledge but this task requires execution. "
+                    "Use the tools available to actually perform the task."
+                )},
+            ]
+            try:
+                retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(
+                    nudge_messages, system_prompt, dispatch_fn, on_stream=on_stream,
+                )
+                if retry_tc:
+                    response_content = retry_content
+                    tool_calls = retry_tc
+                    total_rounds += retry_rounds
+                    for k in total_usage:
+                        total_usage[k] += retry_usage.get(k, 0)
+            except Exception:
+                pass  # nudge failed, use original response
 
         # YAML mode: nudge + validation
         if mode == "yaml":
@@ -567,10 +600,14 @@ class Agent:
         self, message: str, mode: str, has_tools: bool,
         template_context: Optional[Dict[str, Any]],
         injection_note: Optional[str],
-    ) -> str:
-        """Build the system prompt with memory, injection notes, and blueprint hints."""
+    ) -> Tuple[str, bool]:
+        """Build the system prompt with memory, injection notes, and blueprint hints.
+
+        Returns:
+            (system_prompt, has_blueprint_match)
+        """
         if self._system_prompt:
-            return self._system_prompt
+            return self._system_prompt, False
 
         reply_language = detect_language(message)
 
@@ -589,6 +626,7 @@ class Agent:
         blueprint_hint = ""
         if self._assistant and mode == "execute" and has_tools:
             blueprint_hint = self._assistant.prepare(message, mode)
+            self._last_blueprint_hint = blueprint_hint
 
         combined_addition = memory_addition or ""
         if injection_note:
@@ -603,11 +641,12 @@ class Agent:
         except Exception:
             pass
 
-        return build_system_prompt(
+        prompt = build_system_prompt(
             module_count=_module_count, context=template_context, has_tools=has_tools,
             mode=mode, reply_language=reply_language,
             admin_addition=combined_addition or None,
         )
+        return prompt, bool(blueprint_hint)
 
     async def _handle_yaml_validation(
         self, response_content: str, tool_calls: List[Dict],

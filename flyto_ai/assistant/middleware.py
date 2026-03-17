@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from flyto_ai.assistant import router, interactive, resilience
 from flyto_ai.assistant.output_tracker import OutputTracker, extract_output_paths
 from flyto_ai.assistant.safety import CircuitBreaker, BoundedHistory, mask_sensitive
+from flyto_ai.assistant.choice_detector import detect_choices
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +343,7 @@ class AssistantMiddleware:
                 except Exception:
                     pass
 
-        # Track URL from goto results
+        # Track URL from goto results + detect choices
         if (func_name == "execute_module"
                 and func_args.get("module_id") == "browser.goto"
                 and isinstance(result, dict)):
@@ -350,11 +351,67 @@ class AssistantMiddleware:
             if new_url:
                 current_url["v"] = new_url
 
-        # Track snapshot results
+            # Choice detection on goto result (has links)
+            try:
+                choices = detect_choices(result)
+                if choices:
+                    result["_choices_detected"] = choices
+                    opts_summary = [
+                        f.get("label", "") + ": " + str(f.get("options", [])[:5])
+                        for f in choices.get("fields", [])
+                    ]
+                    result["message"] = (
+                        (result.get("message", "") or "") +
+                        "\n\nCHOICES DETECTED on this page. "
+                        "Call ask_user to let the user pick: " + str(opts_summary)
+                    )
+            except Exception:
+                pass
+
+        # Track snapshot results + detect choices
         if (func_name == "execute_module"
                 and func_args.get("module_id") in ("browser.snapshot",)
                 and isinstance(result, dict) and result.get("ok")):
             snap_guard.record_snapshot(result)
+
+            # Choice detection: if page has selectable groups, inject ask_user hint
+            try:
+                snap_data = result.get("result", result)
+                if isinstance(snap_data, str):
+                    import json as _json
+                    try:
+                        snap_data = _json.loads(snap_data)
+                    except (ValueError, TypeError):
+                        snap_data = result
+                choices = detect_choices(snap_data)
+                if choices:
+                    result["_choices_detected"] = choices
+                    result["message"] = (
+                        result.get("message", "") +
+                        "\n\nINTERACTIVE CHOICES DETECTED on this page. "
+                        "Call ask_user to let the user pick: " +
+                        str([f.get("label") + ": " + str(f.get("options", [])[:5])
+                             for f in choices.get("fields", [])])
+                    )
+            except Exception:
+                pass
+
+        # Also detect choices from inspect_page results
+        if (func_name == "inspect_page"
+                and isinstance(result, dict) and result.get("ok", True)):
+            try:
+                choices = detect_choices(result)
+                if choices:
+                    result["_choices_detected"] = choices
+                    result["message"] = (
+                        result.get("message", "") +
+                        "\n\nINTERACTIVE CHOICES DETECTED. "
+                        "Call ask_user to let the user pick: " +
+                        str([f.get("label") + ": " + str(f.get("options", [])[:5])
+                             for f in choices.get("fields", [])])
+                    )
+            except Exception:
+                pass
 
         # Anti-bot detection — auto-retry with system Chrome
         if antibot_guard.check_result(func_name, func_args, result):

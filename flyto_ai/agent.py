@@ -484,17 +484,14 @@ class Agent:
                 session_id=self._session_id, error="provider_call_failed",
             )
 
-        # System safety net: if a blueprint was pre-resolved but LLM answered
-        # from knowledge without using any tools, retry once with a nudge.
-        # This catches the case where LLM says "here's the URL" instead of
-        # actually going to the site and doing the task.
-        # System safety net: if LLM answered from knowledge without using
-        # any tools, retry once with a soft nudge. Only accept the retry
-        # if it results in actual execution (execute_module calls),
-        # not just discovery (search_modules/list_blueprints).
+        # System safety net: if LLM only used discovery tools (search/list)
+        # but never executed anything, nudge once. Only accept if retry
+        # results in actual execution.
+        _action_tools = {"execute_module", "navigate_website", "ask_user"}
+        _has_action = any(tc.get("function") in _action_tools for tc in tool_calls)
         if (mode == "execute"
                 and self._assistant
-                and not tool_calls
+                and not _has_action
                 and response_content
                 and has_tools
                 and total_rounds <= 1

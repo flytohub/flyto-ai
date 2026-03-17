@@ -118,25 +118,19 @@ class AssistantMiddleware:
     # ── Before LLM call ──────────────────────────────────────────
 
     def prepare(self, message: str, mode: str = "execute") -> str:
-        """Pre-resolve blueprint and return a prompt snippet to inject.
-
-        Also checks if the user's message matches a previously detected
-        page choice — if so, returns a hint to click that element.
-        """
+        """Pre-resolve blueprint and return a prompt snippet to inject."""
         if mode != "execute":
             return ""
-
-        # Check if user is responding to a previous choice
-        click_hint = self._try_auto_click_hint(message)
-        if click_hint:
-            return click_hint
-
         return router.pre_resolve(message)
 
-    def _try_auto_click_hint(self, message: str) -> str:
-        """If user's message matches a stored page choice, return a click hint."""
-        if not self._last_choices:
-            return ""
+    async def auto_navigate_choice(self, message: str, dispatch: Any) -> Optional[Dict[str, Any]]:
+        """If user's message matches a stored page choice, auto-navigate.
+
+        System-level: directly clicks/gotos the element without LLM involvement.
+        Returns the navigation result, or None if no match.
+        """
+        if not self._last_choices or not dispatch:
+            return None
 
         msg = message.strip()
         for field in self._last_choices.get("fields", []):
@@ -144,21 +138,37 @@ class AssistantMiddleware:
             options = field.get("options", [])
             for opt in options:
                 if opt in msg or msg in opt:
-                    selector = selectors.get(opt, "")
-                    href = selectors.get(opt, "")
-                    if href and href.startswith("http"):
-                        return (
-                            "\n\n## USER SELECTED: {}\n"
-                            "Navigate to this URL: {}\n"
-                            "Do NOT guess a different URL."
-                        ).format(opt, href)
-                    elif selector:
-                        return (
-                            "\n\n## USER SELECTED: {}\n"
-                            "Click this element: {}\n"
-                            "Then read the next page and present new choices."
-                        ).format(opt, selector)
-        return ""
+                    target = selectors.get(opt, "")
+                    if not target:
+                        continue
+
+                    logger.info("Auto-navigating choice: %s → %s", opt, target[:60])
+
+                    # Always try click by text first (works for JS-driven navigation)
+                    # Fall back to goto URL only if click fails
+                    click_result = await dispatch("execute_module", {
+                        "module_id": "browser.click",
+                        "params": {"selector": 'text="{}"'.format(opt)},
+                    })
+
+                    if isinstance(click_result, dict) and (click_result.get("ok") or click_result.get("status") == "success"):
+                        self._last_choices = None
+                        # Wait briefly for navigation
+                        import asyncio as _aio
+                        await _aio.sleep(1)
+                        return click_result
+
+                    # Click failed — try goto URL if it's not the same page
+                    if target.startswith("http") or target.startswith("/"):
+                        result = await dispatch("execute_module", {
+                            "module_id": "browser.goto",
+                            "params": {"url": target},
+                        })
+                        if isinstance(result, dict) and (result.get("ok") or result.get("status") == "success"):
+                            self._last_choices = None
+                            return result
+
+        return None
 
     # ── Wrap dispatch ────────────────────────────────────────────
 
@@ -182,8 +192,7 @@ class AssistantMiddleware:
         has_browsed = {"v": False}
         output_paths = extract_output_paths(user_message)
         self._output_tracker = OutputTracker(output_paths) if output_paths else None
-        # Store last detected choices for auto-click on user response
-        self._last_choices: Optional[Dict[str, Any]] = None
+        # NOTE: do NOT reset self._last_choices here — it persists across rounds
 
         async def assistant_dispatch(func_name: str, func_args: dict) -> dict:
             # Layer 1: Blueprint guard (first call only)

@@ -21,6 +21,8 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from flyto_ai.assistant import router, interactive, resilience
+from flyto_ai.assistant.output_tracker import OutputTracker, extract_output_paths
+from flyto_ai.assistant.safety import CircuitBreaker, BoundedHistory, mask_sensitive
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ class AssistantMiddleware:
 
     def __init__(self) -> None:
         router.init_storage()
+        self._output_tracker: Optional[OutputTracker] = None
 
     # ── Before LLM call ──────────────────────────────────────────
 
@@ -134,7 +137,11 @@ class AssistantMiddleware:
         guard_done = {"v": False}
         snap_guard = resilience.SnapshotGuard()
         antibot_guard = resilience.AntibotGuard()
-        current_url = {"v": ""}  # tracked from browser.goto results
+        breaker = CircuitBreaker(max_failures=3)
+        history = BoundedHistory(max_size=20)
+        current_url = {"v": ""}
+        output_paths = extract_output_paths(user_message)
+        self._output_tracker = OutputTracker(output_paths) if output_paths else None
 
         async def assistant_dispatch(func_name: str, func_args: dict) -> dict:
             # Layer 1: Blueprint guard (first call only)
@@ -177,8 +184,90 @@ class AssistantMiddleware:
             # Track snapshot calls
             snap_guard.on_tool_call(func_name, func_args)
 
+            # Layer 4: Delegate to flyto-core — validate + auto-correct before execution
+            # flyto-core's validate_params now returns corrections, not just errors
+            if func_name == "execute_module" and isinstance(func_args, dict):
+                module_id = func_args.get("module_id", "")
+                params = func_args.get("params", {})
+                if module_id:
+                    try:
+                        vr = await base_dispatch("validate_params", {
+                            "module_id": module_id, "params": params,
+                        })
+                        if isinstance(vr, dict) and not vr.get("valid", True):
+                            suggestions = vr.get("suggestions", {})
+                            # Auto-correct: use corrected_params from flyto-core
+                            if "corrected_params" in suggestions:
+                                func_args = dict(func_args)
+                                func_args["params"] = suggestions["corrected_params"]
+                                logger.info("Params auto-corrected by flyto-core for %s", module_id)
+                            # Module not found: use alternatives from flyto-core
+                            elif "alternatives" in suggestions and suggestions["alternatives"]:
+                                func_args = dict(func_args)
+                                func_args["module_id"] = suggestions["alternatives"][0]
+                                logger.info("Module redirected by flyto-core: %s → %s",
+                                            module_id, func_args["module_id"])
+                    except Exception:
+                        pass
+
+            # Variable resolution (${steps.x.result} → actual value)
+            if func_name == "execute_module" and isinstance(func_args, dict):
+                params = func_args.get("params", {})
+                if any("${" in str(v) for v in params.values()):
+                    try:
+                        from flyto_ai.assistant.param_fixer import _resolve_variables
+                        resolved = _resolve_variables(params, history.items())
+                        if resolved is not params:
+                            func_args = dict(func_args)
+                            func_args["params"] = resolved
+                    except Exception:
+                        pass
+
+            # Circuit breaker: block modules that keep failing
+            if func_name == "execute_module" and isinstance(func_args, dict):
+                mid = func_args.get("module_id", "")
+                if breaker.is_tripped(mid):
+                    return {"ok": False, "error": breaker.get_message(mid)}
+
             # Normal dispatch
             result = await base_dispatch(func_name, func_args)
+
+            # Mask sensitive data in ask_user auto-fill results
+            if func_name == "ask_user" and isinstance(result, dict):
+                if result.get("auto_filled"):
+                    # Mask passwords before LLM sees them
+                    result["data"] = mask_sensitive(result.get("data", {}))
+
+            # Track execution results + circuit breaker (with empty detection)
+            if func_name == "execute_module" and isinstance(result, dict):
+                mid = func_args.get("module_id", "") if isinstance(func_args, dict) else ""
+                breaker.record_result(mid, result.get("ok", False), result)
+                history.append(result)
+                if self._output_tracker:
+                    self._output_tracker.on_tool_call(func_name, func_args, result)
+
+            # Auto-retry on failure: use flyto-core's corrected_params
+            if (func_name == "execute_module"
+                    and isinstance(result, dict)
+                    and not result.get("ok", True)
+                    and isinstance(func_args, dict)):
+                error_msg = str(result.get("error", "")).lower()
+                if "missing" in error_msg or "required" in error_msg:
+                    try:
+                        vr = await base_dispatch("validate_params", {
+                            "module_id": func_args.get("module_id", ""),
+                            "params": func_args.get("params", {}),
+                        })
+                        corrected = vr.get("suggestions", {}).get("corrected_params")
+                        if corrected:
+                            retry_args = dict(func_args)
+                            retry_args["params"] = corrected
+                            retry_result = await base_dispatch(func_name, retry_args)
+                            if retry_result.get("ok", False):
+                                history.append(retry_result)
+                                return retry_result
+                    except Exception:
+                        pass
 
             # Track URL from goto results
             if (func_name == "execute_module"
@@ -209,18 +298,48 @@ class AssistantMiddleware:
 
             return result
 
-        return assistant_dispatch
+        # Wrap with output auto-save on session end
+        original_dispatch = assistant_dispatch
+        _output_tracker = self._output_tracker
+
+        async def dispatch_with_output(func_name: str, func_args: dict) -> dict:
+            return await original_dispatch(func_name, func_args)
+
+        # Store references for post_process to use the same dispatch chain
+        self._wrapped_dispatch = dispatch_with_output
+        self._exec_history = history
+
+        return dispatch_with_output
 
     # ── After LLM call ───────────────────────────────────────────
 
-    def post_process(
+    async def post_process(
         self,
         tool_calls: List[Dict[str, Any]],
         execution_results: List[Dict[str, Any]],
         user_message: str,
         mode: str = "execute",
+        dispatch: Optional[Callable] = None,
     ) -> Optional[Dict[str, Any]]:
         """Run post-execution logic. Returns pending_input if ask_user was triggered."""
         if mode == "execute" and execution_results:
             router.feedback(tool_calls, execution_results, user_message)
+
+        # Auto-write missing output files using the SAME dispatch chain
+        # (preserves SANDBOX_DIR and other context)
+        write_dispatch = getattr(self, '_wrapped_dispatch', None) or dispatch
+        hist = getattr(self, '_exec_history', None)
+        full_results = hist.items() if hist else execution_results
+
+        if self._output_tracker and write_dispatch and full_results:
+            try:
+                auto_results = await self._output_tracker.auto_write_missing(
+                    write_dispatch, full_results,
+                )
+                if auto_results:
+                    execution_results.extend(auto_results)
+                    logger.info("Auto-saved %d missing output files", len(auto_results))
+            except Exception as e:
+                logger.debug("Auto-save failed: %s", e)
+
         return interactive.extract_pending_input(tool_calls)

@@ -107,8 +107,8 @@ async def test_yaml_mode_uses_default_prompt(monkeypatch):
     agent = _make_agent(monkeypatch, mock_chat)
     await agent.chat("hello", mode="yaml")
 
-    assert "YAML GENERATION LOOP" in captured_prompt["value"]
-    assert "EXECUTION LOOP" not in captured_prompt["value"]
+    assert "GENERATION" in captured_prompt["value"]
+    assert "DISCOVERY" in captured_prompt["value"]
 
 
 @pytest.mark.asyncio

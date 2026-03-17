@@ -620,11 +620,12 @@ class Agent:
                 for k in total_usage:
                     total_usage[k] += corr_usage.get(k, 0)
 
-        # Assistant post-process: blueprint feedback + pending input detection
+        # Assistant post-process: blueprint feedback + output auto-save + pending input
         pending_input = None
         if self._assistant:
-            pending_input = self._assistant.post_process(
+            pending_input = await self._assistant.post_process(
                 tool_calls, execution_results, message, mode,
+                dispatch=self._dispatch_fn,
             )
 
         # Memory

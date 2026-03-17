@@ -455,6 +455,32 @@ The `--dir` flag sets the default working directory for Claude Code. You can cha
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | Yes (for /telegram) |
 | `TELEGRAM_ALLOWED_CHATS` | Comma-separated chat_id whitelist | No (empty = allow all) |
 
+## Action Assistant (v0.10.0)
+
+The Action Assistant is a 7-layer middleware system that makes browser automation reliable without hardcoding any site-specific logic into the system prompt.
+
+### AssistantMiddleware
+
+Seven layers of system intelligence that run automatically on every tool call:
+
+1. **Blueprint Guard** — enforces blueprint-first routing; the agent must follow a matching blueprint before improvising
+2. **Snapshot Guard** — ensures the agent always has a fresh page snapshot before acting
+3. **Param Auto-Correction** — fixes common parameter mistakes (wrong field names, missing required fields) before they reach the module
+4. **Circuit Breaker** — detects infinite retry loops on failing or empty modules and stops execution early
+5. **Anti-Bot Detection** — recognizes bot-detection pages (Cloudflare, CAPTCHA) and switches strategy
+6. **Selector Healing** — when a selector fails, attempts alternative selectors before giving up
+7. **Output Auto-Save** — automatically persists structured output (screenshots, extracted data) to disk
+
+### Key Features
+
+- **ask_user tool** — pauses execution mid-flow to request user credentials, choices, or confirmation. The agent waits for the user's response before continuing.
+- **Vault auto-fill** — encrypted local credential storage. Credentials entered once are securely saved and auto-filled on repeat visits to the same site.
+- **Preference learning** — remembers non-sensitive choices (seat type, meal preference, sort order, etc.) so the agent does not ask again.
+- **Blueprint-first routing** — 33 seed blueprints cover common workflows. The system enforces blueprint selection at the middleware level, not via prompt instructions.
+- **Zero hardcoded prompt** — no module names, no site names, no selectors in the system prompt. All domain knowledge lives in blueprints and middleware.
+- **Circuit breaker** — stops infinite retry when a module keeps failing or returns empty results. Prevents wasted tokens and stuck sessions.
+- **Credential masking** — passwords and secrets are never exposed in LLM context. The vault injects credentials at execution time, after the LLM has selected the action.
+
 ## Environment Variables
 
 | Variable | Description |

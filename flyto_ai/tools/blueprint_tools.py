@@ -35,20 +35,27 @@ async def dispatch_blueprint_tool(
         return {"ok": True, "blueprints": engine.list_blueprints()}
 
     elif name == "use_blueprint":
-        result = engine.expand(
+        raw = engine.expand(
             blueprint_id=arguments.get("blueprint_id", ""),
             args=arguments.get("args", {}),
         )
-        # Tell LLM to execute each step — don't just return the YAML
-        if result.get("ok") and result.get("data", {}).get("steps"):
-            steps = result["data"]["steps"]
-            result["_next_action"] = (
-                "IMPORTANT: Now you MUST execute each step below with execute_module(module_id, params). "
-                "Do NOT stop here. Steps: {}".format(
-                    ", ".join("{} → {}".format(s["id"], s["module"]) for s in steps)
-                )
-            )
-        return result
+        if not raw.get("ok") or not raw.get("data", {}).get("steps"):
+            return raw
+
+        steps = raw["data"]["steps"]
+        # Return a compact result with the execution instruction AT THE TOP
+        # so it doesn't get truncated by the 8000-char limit
+        return {
+            "ok": True,
+            "action_required": (
+                "EXECUTE each step NOW with execute_module(module_id, params). "
+                "Do NOT stop. Do NOT just return the YAML."
+            ),
+            "steps": [
+                {"module": s["module"], "params": s.get("params", {})}
+                for s in steps
+            ],
+        }
 
     elif name == "save_as_blueprint":
         return engine.learn_from_workflow(

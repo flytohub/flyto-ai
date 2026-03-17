@@ -238,6 +238,13 @@ class OpenAIProvider(LLMProvider):
                     # ask_user marker — break tool loop, user input needed
                     if log_entry.get("result", {}).get("__ASK_USER__"):
                         _ask_user_break = True
+                        # Must still respond to remaining tool_calls to avoid API error
+                        for remaining_tc in tc_list[tc_list.index(tc) + 1:]:
+                            full_messages.append({
+                                "role": "tool",
+                                "tool_call_id": remaining_tc["id"],
+                                "content": '{"ok": false, "error": "Execution paused — waiting for user input"}',
+                            })
                         break
 
                     # Inject vision user message for native OpenAI (tool messages don't support images)
@@ -321,6 +328,14 @@ class OpenAIProvider(LLMProvider):
                 # ask_user marker — break tool loop, user input needed
                 if log_entry.get("result", {}).get("__ASK_USER__"):
                     _ask_user_break = True
+                    tc_list = list(choice.message.tool_calls)
+                    tc_idx = tc_list.index(tc)
+                    for remaining in tc_list[tc_idx + 1:]:
+                        full_messages.append({
+                            "role": "tool",
+                            "tool_call_id": remaining.id,
+                            "content": '{"ok": false, "error": "Execution paused — waiting for user input"}',
+                        })
                     break
 
                 # Inject vision user message for native OpenAI (tool messages don't support images)

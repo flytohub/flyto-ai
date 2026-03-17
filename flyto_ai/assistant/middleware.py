@@ -23,7 +23,6 @@ from urllib.parse import urlparse
 from flyto_ai.assistant import router, interactive, resilience
 from flyto_ai.assistant.output_tracker import OutputTracker, extract_output_paths
 from flyto_ai.assistant.safety import CircuitBreaker, BoundedHistory, mask_sensitive
-from flyto_ai.assistant.choice_detector import detect_choices
 
 logger = logging.getLogger(__name__)
 
@@ -123,52 +122,6 @@ class AssistantMiddleware:
             return ""
         return router.pre_resolve(message)
 
-    async def auto_navigate_choice(self, message: str, dispatch: Any) -> Optional[Dict[str, Any]]:
-        """If user's message matches a stored page choice, auto-navigate.
-
-        System-level: directly clicks/gotos the element without LLM involvement.
-        Returns the navigation result, or None if no match.
-        """
-        if not self._last_choices or not dispatch:
-            return None
-
-        msg = message.strip()
-        for field in self._last_choices.get("fields", []):
-            selectors = field.get("_selectors", {})
-            options = field.get("options", [])
-            for opt in options:
-                if opt in msg or msg in opt:
-                    target = selectors.get(opt, "")
-                    if not target:
-                        continue
-
-                    logger.info("Auto-navigating choice: %s → %s", opt, target[:60])
-
-                    # Re-snapshot to re-stamp hints, then click
-                    if target.startswith("[data-flyto-hint"):
-                        await dispatch("execute_module", {
-                            "module_id": "browser.snapshot",
-                            "params": {},
-                        })
-
-                    # Try hint selector first, then text selector
-                    for selector in [target, 'text="{}"'.format(opt)]:
-                        try:
-                            click_result = await dispatch("execute_module", {
-                                "module_id": "browser.click",
-                                "params": {"selector": selector},
-                            })
-                            if isinstance(click_result, dict) and (
-                                click_result.get("ok") or click_result.get("status") == "success"
-                            ):
-                                self._last_choices = None
-                                import asyncio as _aio
-                                await _aio.sleep(1)
-                                return click_result
-                        except Exception:
-                            continue
-
-        return None
 
     # ── Wrap dispatch ────────────────────────────────────────────
 
@@ -189,7 +142,6 @@ class AssistantMiddleware:
         breaker = CircuitBreaker(max_failures=3)
         history = BoundedHistory(max_size=20)
         current_url = {"v": ""}
-        has_browsed = {"v": False}
         output_paths = extract_output_paths(user_message)
         self._output_tracker = OutputTracker(output_paths) if output_paths else None
         # NOTE: do NOT reset self._last_choices here — it persists across rounds
@@ -204,12 +156,8 @@ class AssistantMiddleware:
                 if redirect is not None:
                     return redirect
 
-            # Layer 2: ask_user enrichment + premature ask_user guard
-            ask_redirect = await self._apply_ask_user_enrichment(
-                func_name, func_args, current_url, base_dispatch, has_browsed,
-            )
-            if ask_redirect is not None:
-                return ask_redirect
+            # Layer 2: ask_user context_key enrichment
+            self._apply_ask_user_enrichment(func_name, func_args, current_url)
 
             # Layer 3: Snapshot guard
             snap_redirect = await self._apply_snapshot_guard(
@@ -236,7 +184,7 @@ class AssistantMiddleware:
             result = await self._on_result(
                 func_name, func_args, result,
                 base_dispatch, breaker, history, snap_guard,
-                antibot_guard, current_url, has_browsed,
+                antibot_guard, current_url,
             )
 
             return result
@@ -255,48 +203,19 @@ class AssistantMiddleware:
         """Layer 1: Redirect to use_blueprint on first call if applicable."""
         return await router.guard(func_name, func_args, user_message, base_dispatch)
 
-    async def _apply_ask_user_enrichment(
+    def _apply_ask_user_enrichment(
         self, func_name: str, func_args: dict,
         current_url: Dict[str, str],
-        base_dispatch: Callable,
-        has_browsed: Dict[str, bool],
-    ) -> Optional[dict]:
-        """Layer 2: Enrich ask_user + guard against premature ask_user.
-
-        If LLM calls ask_user before visiting any website, and the fields
-        have no options (LLM is guessing what to ask), redirect to
-        inspect_page first so the system can detect real choices.
-        """
+    ) -> None:
+        """Layer 2: Auto-derive context_key for ask_user calls."""
         if func_name != "ask_user":
-            return None
-
+            return
         args = func_args if isinstance(func_args, dict) else {}
-
-        # Auto-derive context_key
         if not args.get("context_key"):
             question = args.get("question", "")
             derived_key = _derive_context_key(current_url["v"], question)
             if derived_key:
                 args["context_key"] = derived_key
-                logger.info("Auto-derived context_key=%s", derived_key)
-
-        # Guard: if no browser activity yet and fields have no options,
-        # LLM is guessing. Return a hint to use browser first.
-        fields = args.get("fields", [])
-        has_options = any(f.get("options") for f in fields)
-        if not has_browsed.get("v") and not has_options:
-            logger.info("ask_user called without browsing — suggesting browser first")
-            return {
-                "ok": True,
-                "__ASK_USER__": False,
-                "message": (
-                    "You haven't visited any website yet. Before asking the user, "
-                    "go to the relevant website first, read the page, and present "
-                    "the ACTUAL options from the page — not guessed questions."
-                ),
-            }
-
-        return None
 
     async def _apply_snapshot_guard(
         self, func_name: str, func_args: dict,
@@ -386,7 +305,6 @@ class AssistantMiddleware:
         snap_guard: "resilience.SnapshotGuard",
         antibot_guard: "resilience.AntibotGuard",
         current_url: Dict[str, str],
-        has_browsed: Optional[Dict[str, bool]] = None,
     ) -> dict:
         """Post-dispatch: mask, track, auto-retry, heal."""
         # Mask sensitive data in ask_user auto-fill results
@@ -425,82 +343,19 @@ class AssistantMiddleware:
                 except Exception:
                     pass
 
-        # Track URL + browser activity + detect choices
-        if func_name == "inspect_page" and has_browsed:
-            has_browsed["v"] = True
+        # Track URL from goto results
         if (func_name == "execute_module"
                 and func_args.get("module_id") == "browser.goto"
                 and isinstance(result, dict)):
-            if has_browsed:
-                has_browsed["v"] = True
             new_url = result.get("url", func_args.get("params", {}).get("url", ""))
             if new_url:
                 current_url["v"] = new_url
 
-            # Choice detection on goto result (has links)
-            try:
-                choices = detect_choices(result)
-                if choices:
-                    result["_choices_detected"] = choices
-                    self._last_choices = choices
-                    opts_summary = [
-                        f.get("label", "") + ": " + str(f.get("options", [])[:5])
-                        for f in choices.get("fields", [])
-                    ]
-                    result["message"] = (
-                        (result.get("message", "") or "") +
-                        "\n\nCHOICES DETECTED on this page. "
-                        "Call ask_user to let the user pick: " + str(opts_summary)
-                    )
-            except Exception:
-                pass
-
-        # Track snapshot results + detect choices
+        # Track snapshot results
         if (func_name == "execute_module"
                 and func_args.get("module_id") in ("browser.snapshot",)
                 and isinstance(result, dict) and result.get("ok")):
             snap_guard.record_snapshot(result)
-
-            # Choice detection: if page has selectable groups, inject ask_user hint
-            try:
-                snap_data = result.get("result", result)
-                if isinstance(snap_data, str):
-                    import json as _json
-                    try:
-                        snap_data = _json.loads(snap_data)
-                    except (ValueError, TypeError):
-                        snap_data = result
-                choices = detect_choices(snap_data)
-                if choices:
-                    result["_choices_detected"] = choices
-                    self._last_choices = choices
-                    result["message"] = (
-                        result.get("message", "") +
-                        "\n\nINTERACTIVE CHOICES DETECTED on this page. "
-                        "Call ask_user to let the user pick: " +
-                        str([f.get("label") + ": " + str(f.get("options", [])[:5])
-                             for f in choices.get("fields", [])])
-                    )
-            except Exception:
-                pass
-
-        # Also detect choices from inspect_page results
-        if (func_name == "inspect_page"
-                and isinstance(result, dict) and result.get("ok", True)):
-            try:
-                choices = detect_choices(result)
-                if choices:
-                    result["_choices_detected"] = choices
-                    self._last_choices = choices
-                    result["message"] = (
-                        result.get("message", "") +
-                        "\n\nINTERACTIVE CHOICES DETECTED. "
-                        "Call ask_user to let the user pick: " +
-                        str([f.get("label") + ": " + str(f.get("options", [])[:5])
-                             for f in choices.get("fields", [])])
-                    )
-            except Exception:
-                pass
 
         # Anti-bot detection — auto-retry with system Chrome
         if antibot_guard.check_result(func_name, func_args, result):

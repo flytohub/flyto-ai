@@ -252,6 +252,12 @@ class Agent:
             logger.warning("Failed to load ask_user tool: %s", e)
 
         try:
+            from flyto_ai.tools.navigator import TOOL_DEF as NAV_TOOL, dispatch_navigator
+            registry.register(NAV_TOOL, dispatch_navigator)
+        except Exception as e:
+            logger.warning("Failed to load navigator tool: %s", e)
+
+        try:
             from flyto_ai.tools.inspect_page import INSPECT_PAGE_TOOL, dispatch_inspect_page
             registry.register(INSPECT_PAGE_TOOL, dispatch_inspect_page)
         except Exception as e:
@@ -260,6 +266,12 @@ class Agent:
         if registry.tools:
             self._tools = registry.tools
             self._dispatch_fn = registry.dispatch
+            # Set dispatch ref for navigator
+            try:
+                from flyto_ai.tools.navigator import set_dispatch
+                set_dispatch(registry.dispatch)
+            except Exception:
+                pass
 
     def _init_sandbox(self):
         try:
@@ -434,29 +446,6 @@ class Agent:
         system_prompt, has_blueprint_match = await self._build_prompt(
             message, mode, has_tools, template_context, injection_note,
         )
-
-        # Auto-navigate: if user's message matches a stored page choice,
-        # click/goto directly without LLM. Then inject the result into context.
-        if self._assistant and mode == "execute" and self._dispatch_fn:
-            try:
-                nav_result = await self._assistant.auto_navigate_choice(
-                    message, self._dispatch_fn,
-                )
-                if nav_result:
-                    logger.info("Auto-navigated choice — injecting result")
-                    # Add navigation result as context for LLM
-                    import json as _json
-                    nav_summary = _json.dumps(nav_result, ensure_ascii=False, default=str)[:500]
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "[System auto-navigated to the selected option. "
-                            "Page result: {}. "
-                            "Now read the current page and present the next choices or continue the task.]"
-                        ).format(nav_summary),
-                    })
-            except Exception as e:
-                logger.debug("Auto-navigate failed: %s", e)
 
         if self._compactor:
             messages, was_compacted = self._compactor.maybe_compact(messages)

@@ -113,14 +113,52 @@ class AssistantMiddleware:
     def __init__(self) -> None:
         router.init_storage()
         self._output_tracker: Optional[OutputTracker] = None
+        self._last_choices: Optional[Dict[str, Any]] = None
 
     # ── Before LLM call ──────────────────────────────────────────
 
     def prepare(self, message: str, mode: str = "execute") -> str:
-        """Pre-resolve blueprint and return a prompt snippet to inject."""
+        """Pre-resolve blueprint and return a prompt snippet to inject.
+
+        Also checks if the user's message matches a previously detected
+        page choice — if so, returns a hint to click that element.
+        """
         if mode != "execute":
             return ""
+
+        # Check if user is responding to a previous choice
+        click_hint = self._try_auto_click_hint(message)
+        if click_hint:
+            return click_hint
+
         return router.pre_resolve(message)
+
+    def _try_auto_click_hint(self, message: str) -> str:
+        """If user's message matches a stored page choice, return a click hint."""
+        if not self._last_choices:
+            return ""
+
+        msg = message.strip()
+        for field in self._last_choices.get("fields", []):
+            selectors = field.get("_selectors", {})
+            options = field.get("options", [])
+            for opt in options:
+                if opt in msg or msg in opt:
+                    selector = selectors.get(opt, "")
+                    href = selectors.get(opt, "")
+                    if href and href.startswith("http"):
+                        return (
+                            "\n\n## USER SELECTED: {}\n"
+                            "Navigate to this URL: {}\n"
+                            "Do NOT guess a different URL."
+                        ).format(opt, href)
+                    elif selector:
+                        return (
+                            "\n\n## USER SELECTED: {}\n"
+                            "Click this element: {}\n"
+                            "Then read the next page and present new choices."
+                        ).format(opt, selector)
+        return ""
 
     # ── Wrap dispatch ────────────────────────────────────────────
 
@@ -141,8 +179,11 @@ class AssistantMiddleware:
         breaker = CircuitBreaker(max_failures=3)
         history = BoundedHistory(max_size=20)
         current_url = {"v": ""}
+        has_browsed = {"v": False}
         output_paths = extract_output_paths(user_message)
         self._output_tracker = OutputTracker(output_paths) if output_paths else None
+        # Store last detected choices for auto-click on user response
+        self._last_choices: Optional[Dict[str, Any]] = None
 
         async def assistant_dispatch(func_name: str, func_args: dict) -> dict:
             # Layer 1: Blueprint guard (first call only)
@@ -154,8 +195,12 @@ class AssistantMiddleware:
                 if redirect is not None:
                     return redirect
 
-            # Layer 2: ask_user enrichment
-            self._apply_ask_user_enrichment(func_name, func_args, current_url)
+            # Layer 2: ask_user enrichment + premature ask_user guard
+            ask_redirect = await self._apply_ask_user_enrichment(
+                func_name, func_args, current_url, base_dispatch, has_browsed,
+            )
+            if ask_redirect is not None:
+                return ask_redirect
 
             # Layer 3: Snapshot guard
             snap_redirect = await self._apply_snapshot_guard(
@@ -182,7 +227,7 @@ class AssistantMiddleware:
             result = await self._on_result(
                 func_name, func_args, result,
                 base_dispatch, breaker, history, snap_guard,
-                antibot_guard, current_url,
+                antibot_guard, current_url, has_browsed,
             )
 
             return result
@@ -201,21 +246,48 @@ class AssistantMiddleware:
         """Layer 1: Redirect to use_blueprint on first call if applicable."""
         return await router.guard(func_name, func_args, user_message, base_dispatch)
 
-    def _apply_ask_user_enrichment(
+    async def _apply_ask_user_enrichment(
         self, func_name: str, func_args: dict,
         current_url: Dict[str, str],
-    ) -> None:
-        """Layer 2: Auto-inject context_key for ask_user calls."""
+        base_dispatch: Callable,
+        has_browsed: Dict[str, bool],
+    ) -> Optional[dict]:
+        """Layer 2: Enrich ask_user + guard against premature ask_user.
+
+        If LLM calls ask_user before visiting any website, and the fields
+        have no options (LLM is guessing what to ask), redirect to
+        inspect_page first so the system can detect real choices.
+        """
         if func_name != "ask_user":
-            return
+            return None
+
         args = func_args if isinstance(func_args, dict) else {}
-        if args.get("context_key"):
-            return
-        question = args.get("question", "")
-        derived_key = _derive_context_key(current_url["v"], question)
-        if derived_key:
-            args["context_key"] = derived_key
-            logger.info("Auto-derived context_key=%s", derived_key)
+
+        # Auto-derive context_key
+        if not args.get("context_key"):
+            question = args.get("question", "")
+            derived_key = _derive_context_key(current_url["v"], question)
+            if derived_key:
+                args["context_key"] = derived_key
+                logger.info("Auto-derived context_key=%s", derived_key)
+
+        # Guard: if no browser activity yet and fields have no options,
+        # LLM is guessing. Return a hint to use browser first.
+        fields = args.get("fields", [])
+        has_options = any(f.get("options") for f in fields)
+        if not has_browsed.get("v") and not has_options:
+            logger.info("ask_user called without browsing — suggesting browser first")
+            return {
+                "ok": True,
+                "__ASK_USER__": False,
+                "message": (
+                    "You haven't visited any website yet. Before asking the user, "
+                    "go to the relevant website first, read the page, and present "
+                    "the ACTUAL options from the page — not guessed questions."
+                ),
+            }
+
+        return None
 
     async def _apply_snapshot_guard(
         self, func_name: str, func_args: dict,
@@ -305,6 +377,7 @@ class AssistantMiddleware:
         snap_guard: "resilience.SnapshotGuard",
         antibot_guard: "resilience.AntibotGuard",
         current_url: Dict[str, str],
+        has_browsed: Optional[Dict[str, bool]] = None,
     ) -> dict:
         """Post-dispatch: mask, track, auto-retry, heal."""
         # Mask sensitive data in ask_user auto-fill results
@@ -343,10 +416,14 @@ class AssistantMiddleware:
                 except Exception:
                     pass
 
-        # Track URL from goto results + detect choices
+        # Track URL + browser activity + detect choices
+        if func_name == "inspect_page" and has_browsed:
+            has_browsed["v"] = True
         if (func_name == "execute_module"
                 and func_args.get("module_id") == "browser.goto"
                 and isinstance(result, dict)):
+            if has_browsed:
+                has_browsed["v"] = True
             new_url = result.get("url", func_args.get("params", {}).get("url", ""))
             if new_url:
                 current_url["v"] = new_url
@@ -356,6 +433,7 @@ class AssistantMiddleware:
                 choices = detect_choices(result)
                 if choices:
                     result["_choices_detected"] = choices
+                    self._last_choices = choices
                     opts_summary = [
                         f.get("label", "") + ": " + str(f.get("options", [])[:5])
                         for f in choices.get("fields", [])
@@ -386,6 +464,7 @@ class AssistantMiddleware:
                 choices = detect_choices(snap_data)
                 if choices:
                     result["_choices_detected"] = choices
+                    self._last_choices = choices
                     result["message"] = (
                         result.get("message", "") +
                         "\n\nINTERACTIVE CHOICES DETECTED on this page. "
@@ -403,6 +482,7 @@ class AssistantMiddleware:
                 choices = detect_choices(result)
                 if choices:
                     result["_choices_detected"] = choices
+                    self._last_choices = choices
                     result["message"] = (
                         result.get("message", "") +
                         "\n\nINTERACTIVE CHOICES DETECTED. "

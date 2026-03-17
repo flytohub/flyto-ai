@@ -34,7 +34,7 @@ class TestAgentConfig:
 
     def test_resolved_model_openai(self):
         cfg = AgentConfig(provider="openai")
-        assert cfg.resolved_model == "gpt-4o-mini"
+        assert cfg.resolved_model == "gpt-4o"
 
     def test_resolved_model_anthropic(self):
         cfg = AgentConfig(provider="anthropic")

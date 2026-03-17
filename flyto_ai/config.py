@@ -247,4 +247,4 @@ class AgentConfig:
             return "claude-sonnet-4-5-20250929"
         if self.provider == "ollama":
             return "llama3.2"
-        return "gpt-4o-mini"
+        return "gpt-4o"

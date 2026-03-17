@@ -21,6 +21,11 @@ from flyto_ai.assistant.choice_detector import detect_choices
 
 logger = logging.getLogger(__name__)
 
+
+def _is_success(result: dict) -> bool:
+    """Check if a module result indicates success (handles both ok and status)."""
+    return bool(result.get("ok") or result.get("status") == "success")
+
 TOOL_DEF = {
     "name": "navigate_website",
     "description": (
@@ -81,7 +86,8 @@ async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, 
         "module_id": "browser.goto",
         "params": {"url": url},
     })
-    if not (goto_result.get("ok") or goto_result.get("status") == "success"):
+
+    if not _is_success(goto_result):
         return {
             "ok": False,
             "error": "Failed to navigate to {}".format(url),
@@ -115,7 +121,7 @@ async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, 
     )
 
     if has_password:
-        # Login form detected — return ask_user for credentials
+        # Login form detected — call ask_user via dispatch
         fields = []
         for inp in inputs:
             if not isinstance(inp, dict):
@@ -131,28 +137,19 @@ async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, 
             })
 
         if fields:
-            return {
-                "ok": True,
-                ASK_USER_MARKER: True,
+            return await dispatch("ask_user", {
                 "question": "Login required. Please enter your credentials.",
                 "fields": fields,
                 "context_key": "",
-                "page_title": snap_data.get("title", ""),
-                "page_url": goto_result.get("url", url),
-            }
+            })
 
     if choices:
-        # Return choices as ask_user
-        return {
-            "ok": True,
-            ASK_USER_MARKER: True,
+        # Choices detected — call ask_user via dispatch
+        return await dispatch("ask_user", {
             "question": choices.get("question", "Please select an option"),
             "fields": choices.get("fields", []),
             "context_key": "",
-            "page_title": snap_data.get("title", ""),
-            "page_url": goto_result.get("url", url),
-            "_choices": choices,
-        }
+        })
 
     # No choices, no login — just return page info
     page_text = snap_data.get("text", "")

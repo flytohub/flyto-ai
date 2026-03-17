@@ -11,14 +11,12 @@ ASK_USER_MARKER = "__ASK_USER__"
 
 
 def extract_pending_input(tool_calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Scan tool_calls for an ask_user result with the ASK_USER marker.
+    """Scan tool_calls for ASK_USER marker in any tool's result.
 
-    Returns the pending_input dict if found, None otherwise.
+    Works for both direct ask_user calls and tools that internally
+    trigger ask_user (like navigate_website).
     """
     for tc in tool_calls:
-        if tc.get("function") != "ask_user":
-            continue
-
         result = tc.get("result", {})
         if not isinstance(result, dict):
             try:

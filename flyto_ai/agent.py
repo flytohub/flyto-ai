@@ -476,35 +476,43 @@ class Agent:
         # from knowledge without using any tools, retry once with a nudge.
         # This catches the case where LLM says "here's the URL" instead of
         # actually going to the site and doing the task.
+        # System safety net: if LLM answered from knowledge without using
+        # any tools, retry once with a soft nudge. Only accept the retry
+        # if it results in actual execution (execute_module calls),
+        # not just discovery (search_modules/list_blueprints).
         if (mode == "execute"
-                and (has_blueprint_match or self._should_nudge(message))
                 and self._assistant
                 and not tool_calls
                 and response_content
                 and has_tools
                 and total_rounds <= 1
                 and self._config.provider != "ollama"):
-            logger.info("Blueprint pre-resolved but LLM skipped tools — retrying")
-            nudge_messages = messages + [
-                {"role": "assistant", "content": response_content},
-                {"role": "user", "content": (
-                    "If this task requires you to actually DO something (go to a website, "
-                    "execute a module, automate an action), use the tools available. "
-                    "If this is just a knowledge question, answer as you did."
-                )},
-            ]
             try:
+                nudge_messages = messages + [
+                    {"role": "assistant", "content": response_content},
+                    {"role": "user", "content": (
+                        "If this task requires you to actually DO something (go to a website, "
+                        "execute a module, automate an action), use the tools available. "
+                        "If this is just a knowledge question, answer as you did."
+                    )},
+                ]
                 retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(
                     nudge_messages, system_prompt, dispatch_fn, on_stream=on_stream,
                 )
-                if retry_tc:
+                # Only accept if LLM actually EXECUTED something (not just searched)
+                has_execution = any(
+                    tc.get("function") == "execute_module" or tc.get("function") == "ask_user"
+                    for tc in retry_tc
+                )
+                if has_execution:
+                    logger.info("Nudge accepted: LLM used execution tools")
                     response_content = retry_content
                     tool_calls = retry_tc
                     total_rounds += retry_rounds
                     for k in total_usage:
                         total_usage[k] += retry_usage.get(k, 0)
             except Exception:
-                pass  # nudge failed, use original response
+                pass
 
         # YAML mode: nudge + validation
         if mode == "yaml":
@@ -773,30 +781,6 @@ class Agent:
                 self._transcript.record_execution(tc.get("module_id", ""), tc.get("ok", False), tc.get("result_preview", ""))
         if self._cost_tracker:
             self._transcript.record_meta({"event": "cost_summary", **self._cost_tracker.summary()})
-
-    def _should_nudge(self, message: str) -> bool:
-        """Check if the user message implies an action (not just a question).
-
-        Cross-language heuristic:
-        - Has a URL → action
-        - Ends with ? or ？ → question, don't nudge
-        - Otherwise → nudge (let the LLM decide on retry)
-
-        The nudge message is soft ("if this requires action, use tools;
-        if it's a question, answer as you did"), so false positives are
-        handled gracefully — LLM will just repeat its answer.
-        """
-        msg = message.strip()
-        if not msg:
-            return False
-        # URL → action
-        if "http" in msg or ".com" in msg or ".org" in msg or ".tw" in msg or ".net" in msg:
-            return True
-        # Question mark → don't nudge
-        if msg.endswith("?") or msg.endswith("？") or msg.endswith("嗎") or msg.endswith("呢"):
-            return False
-        # Default: nudge (soft, LLM can choose to not use tools)
-        return True
 
     def _record_cost(self, usage_dict: Dict[str, int]) -> None:
         """Record token usage in cost tracker."""

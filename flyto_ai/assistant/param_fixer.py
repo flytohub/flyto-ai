@@ -125,7 +125,21 @@ async def fix_params(
     fixed = dict(params)
     was_fixed = False
 
-    # Strategy 1: Alias mapping
+    was_fixed |= _fix_aliases(missing, params, fixed, module_id)
+    was_fixed |= _fix_from_history(missing, fixed, last_results, module_id)
+    was_fixed |= _fix_cross_mapping(missing, fixed)
+
+    return fixed, was_fixed
+
+
+def _fix_aliases(
+    missing: Dict[str, str],
+    params: dict,
+    fixed: dict,
+    module_id: str,
+) -> bool:
+    """Strategy 1: Map aliased param names to correct ones."""
+    was_fixed = False
     for field in list(missing):
         if field in _ALIASES:
             for alias in _ALIASES[field]:
@@ -135,8 +149,19 @@ async def fix_params(
                     del missing[field]
                     logger.info("Param alias: %s.%s ← %s", module_id, field, alias)
                     break
+    return was_fixed
 
-    # Strategy 2: Fill 'text' from last result
+
+def _fix_from_history(
+    missing: Dict[str, str],
+    fixed: dict,
+    last_results: List[Dict[str, Any]],
+    module_id: str,
+) -> bool:
+    """Strategy 2+4: Fill missing 'text' or 'path' from execution history."""
+    was_fixed = False
+
+    # Fill 'text' from last result
     if "text" in missing:
         last_text = _extract_text_from_results(last_results)
         if last_text:
@@ -145,15 +170,7 @@ async def fix_params(
             del missing["text"]
             logger.info("Param flow: %s.text ← last result", module_id)
 
-    # Strategy 3: Fill 'content' ↔ 'text' cross-mapping
-    if "content" in missing and "text" in fixed:
-        fixed["content"] = fixed["text"]
-        was_fixed = True
-    elif "text" in missing and "content" in fixed:
-        fixed["text"] = fixed["content"]
-        was_fixed = True
-
-    # Strategy 4: Fill 'path' from last file.write result
+    # Fill 'path' from last file.write result
     if "path" in missing:
         for r in reversed(last_results):
             if r.get("ok") and "path" in str(r.get("result_preview", "")):
@@ -167,7 +184,18 @@ async def fix_params(
                 except (ValueError, TypeError):
                     pass
 
-    return fixed, was_fixed
+    return was_fixed
+
+
+def _fix_cross_mapping(missing: Dict[str, str], fixed: dict) -> bool:
+    """Strategy 3: Fill 'content' ↔ 'text' cross-mapping."""
+    if "content" in missing and "text" in fixed:
+        fixed["content"] = fixed["text"]
+        return True
+    elif "text" in missing and "content" in fixed:
+        fixed["text"] = fixed["content"]
+        return True
+    return False
 
 
 # ── Layer 3: Variable resolver ──────────────────────────────────

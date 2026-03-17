@@ -417,14 +417,7 @@ class Agent:
             )
 
         # Injection detection
-        injection_note = None
-        if self._config.enable_injection_detection:
-            try:
-                from flyto_ai.prompt.injection_detector import scan_text, format_warning_for_llm
-                warnings = scan_text(message, source="user_input")
-                injection_note = format_warning_for_llm(warnings)
-            except Exception:
-                pass
+        injection_note = self._detect_injection(message)
 
         if self._transcript:
             self._transcript.record_user(message)
@@ -434,72 +427,12 @@ class Agent:
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
 
-        # Build dispatch — assistant middleware wraps base dispatch
-        dispatch_fn = self._make_safe_dispatch(user_message=message)
-        if dispatch_wrapper and dispatch_fn:
-            dispatch_fn = dispatch_wrapper(dispatch_fn)
-        if dispatch_fn and (on_tool_call or on_stream):
-            _base = dispatch_fn
-
-            async def _instrumented(func_name: str, func_args: dict) -> dict:
-                if on_tool_call:
-                    try:
-                        on_tool_call(func_name, func_args)
-                    except Exception:
-                        pass
-                if on_stream:
-                    try:
-                        on_stream(StreamEvent(type=StreamEventType.TOOL_START, tool_name=func_name, tool_args=func_args))
-                    except Exception:
-                        pass
-                result = await _base(func_name, func_args)
-                if on_stream:
-                    try:
-                        on_stream(StreamEvent(type=StreamEventType.TOOL_END, tool_name=func_name, tool_result=result if isinstance(result, dict) else None))
-                    except Exception:
-                        pass
-                return result
-
-            dispatch_fn = _instrumented
-        has_tools = bool(self._tools and dispatch_fn)
-
-        # Build system prompt
-        reply_language = detect_language(message)
-
-        memory_addition = None
-        if self._memory_search:
-            try:
-                relevant = await self._memory_search.search(message, top_k=3)
-                if relevant:
-                    memory_lines = ["## Relevant Memory (from past conversations):"]
-                    for r in relevant:
-                        memory_lines.append("- {}".format(r["content"][:300]))
-                    memory_addition = "\n".join(memory_lines)
-            except Exception as e:
-                logger.debug("Memory search failed: %s", e)
-
-        # Assistant: pre-resolve blueprint
-        blueprint_hint = ""
-        if self._assistant and mode == "execute" and has_tools:
-            blueprint_hint = self._assistant.prepare(message, mode)
-
-        combined_addition = memory_addition or ""
-        if injection_note:
-            combined_addition = (combined_addition + "\n\n" + injection_note).strip()
-        if blueprint_hint:
-            combined_addition = (combined_addition + "\n\n" + blueprint_hint).strip()
-
-        _module_count = 300
-        try:
-            from core.modules.registry import ModuleRegistry
-            _module_count = len(ModuleRegistry.get_all_metadata())
-        except Exception:
-            pass
-
-        system_prompt = self._system_prompt or build_system_prompt(
-            module_count=_module_count, context=template_context, has_tools=has_tools,
-            mode=mode, reply_language=reply_language,
-            admin_addition=combined_addition or None,
+        # Build dispatch + system prompt
+        dispatch_fn, has_tools = self._build_dispatch(
+            message, on_tool_call, on_stream, dispatch_wrapper,
+        )
+        system_prompt = await self._build_prompt(
+            message, mode, has_tools, template_context, injection_note,
         )
 
         if self._compactor:
@@ -527,17 +460,7 @@ class Agent:
             total_usage[k] += usage_dict.get(k, 0)
 
         # Cost tracking
-        if self._cost_tracker and any(v > 0 for v in usage_dict.values()):
-            try:
-                self._cost_tracker.record(
-                    model=self._config.resolved_model,
-                    provider=self._config.provider or "openai",
-                    prompt_tokens=usage_dict.get("prompt_tokens", 0),
-                    completion_tokens=usage_dict.get("completion_tokens", 0),
-                    cache_read_tokens=usage_dict.get("cache_read_input_tokens", 0),
-                )
-            except Exception as e:
-                logger.debug("Cost tracking failed: %s", e)
+        self._record_cost(usage_dict)
 
         if not response_content:
             duration_ms = int((time.monotonic() - t0) * 1000)
@@ -551,74 +474,19 @@ class Agent:
 
         # YAML mode: nudge + validation
         if mode == "yaml":
-            if not extract_yaml_from_response(response_content):
-                nudge_messages = messages + [
-                    {"role": "assistant", "content": response_content},
-                    {"role": "user", "content": "You must always output a Flyto Workflow YAML. Please generate the workflow YAML now using the modules and blueprints available."},
-                ]
-                nudge_content, nudge_tc, nudge_rounds, nudge_usage = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
-                total_rounds += nudge_rounds
-                for k in total_usage:
-                    total_usage[k] += nudge_usage.get(k, 0)
-                if nudge_content and extract_yaml_from_response(nudge_content):
-                    response_content = nudge_content
-                    tool_calls.extend(nudge_tc)
-
-            for _attempt in range(self._config.max_validation_rounds):
-                yaml_str = extract_yaml_from_response(response_content)
-                if not yaml_str:
-                    break
-                errors = validate_workflow_steps(yaml_str)
-                if not errors:
-                    break
-                error_list = "\n".join("- {}".format(e) for e in errors)
-                retry_messages = messages + [
-                    {"role": "assistant", "content": response_content},
-                    {"role": "user", "content": "The workflow YAML you generated has validation errors:\n{}\n\nPlease call get_module_info() for each failing module to verify the correct param names, then regenerate the YAML.".format(error_list)},
-                ]
-                retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
-                total_rounds += retry_rounds
-                for k in total_usage:
-                    total_usage[k] += retry_usage.get(k, 0)
-                if retry_content:
-                    response_content = retry_content
-                    tool_calls.extend(retry_tc)
-                else:
-                    break
+            response_content, tool_calls, total_rounds, total_usage = await self._handle_yaml_validation(
+                response_content, tool_calls, messages, system_prompt, dispatch_fn,
+                total_rounds, total_usage,
+            )
 
         # Collect execution results
         execution_results = [tc for tc in tool_calls if tc.get("function") == "execute_module"]
 
         # Guard: if ALL executions failed, force LLM to acknowledge
-        if execution_results and all(not er.get("ok", False) for er in execution_results):
-            errors = []
-            for er in execution_results:
-                preview = er.get("result_preview", "")
-                try:
-                    err_data = json.loads(preview) if preview.startswith("{") else {}
-                    err_msg = err_data.get("error", "")
-                except Exception:
-                    err_msg = ""
-                errors.append("{}: {}".format(er.get("module_id", "?"), err_msg or "failed"))
-            error_detail = "\n".join(errors)
-            correction_messages = messages + [
-                {"role": "assistant", "content": response_content},
-                {"role": "user", "content": (
-                    "STOP. All {} module executions FAILED:\n{}\n\n"
-                    "Your previous response is WRONG — you must NOT claim success. "
-                    "Rewrite your response: (1) state which modules failed and why, "
-                    "(2) suggest what the user can do to fix it. "
-                    "Do NOT fabricate results or URLs."
-                ).format(len(execution_results), error_detail)},
-            ]
-            corrected, _, corr_rounds, corr_usage = await self._call_llm_toolless(
-                correction_messages, system_prompt, on_stream=on_stream,
-            )
-            if corrected:
-                response_content = corrected
-                total_rounds += corr_rounds
-                for k in total_usage:
-                    total_usage[k] += corr_usage.get(k, 0)
+        response_content, total_rounds, total_usage = await self._handle_failure_guard(
+            response_content, execution_results, messages, system_prompt,
+            on_stream, total_rounds, total_usage,
+        )
 
         # Assistant post-process: blueprint feedback + output auto-save + pending input
         pending_input = None
@@ -628,7 +496,213 @@ class Agent:
                 dispatch=self._dispatch_fn,
             )
 
-        # Memory
+        # Memory + transcript recording
+        await self._record_memory(message, response_content)
+        self._record_transcript(response_content, tool_calls)
+
+        usage = UsageStats(**total_usage) if any(v > 0 for v in total_usage.values()) else None
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        self._emit_audit(message, mode, tool_calls, execution_results, True, None, duration_ms, total_usage)
+        cost_summary = self._cost_tracker.summary() if self._cost_tracker else None
+
+        return ChatResponse(
+            ok=True, message=response_content, session_id=self._session_id,
+            tool_calls=tool_calls, execution_results=execution_results,
+            provider=self._config.provider, model=self._config.resolved_model,
+            rounds_used=total_rounds, usage=usage, cost=cost_summary,
+            pending_input=pending_input,
+        )
+
+    # ── Chat phase helpers ────────────────────────────────────────
+
+    def _detect_injection(self, message: str) -> Optional[str]:
+        """Scan user message for prompt injection patterns."""
+        if not self._config.enable_injection_detection:
+            return None
+        try:
+            from flyto_ai.prompt.injection_detector import scan_text, format_warning_for_llm
+            warnings = scan_text(message, source="user_input")
+            return format_warning_for_llm(warnings)
+        except Exception:
+            return None
+
+    def _build_dispatch(
+        self, message: str, on_tool_call, on_stream, dispatch_wrapper,
+    ) -> Tuple:
+        """Build the final dispatch function with middleware + instrumentation.
+
+        Returns:
+            (dispatch_fn, has_tools)
+        """
+        dispatch_fn = self._make_safe_dispatch(user_message=message)
+        if dispatch_wrapper and dispatch_fn:
+            dispatch_fn = dispatch_wrapper(dispatch_fn)
+        if dispatch_fn and (on_tool_call or on_stream):
+            _base = dispatch_fn
+
+            async def _instrumented(func_name: str, func_args: dict) -> dict:
+                if on_tool_call:
+                    try:
+                        on_tool_call(func_name, func_args)
+                    except Exception:
+                        pass
+                if on_stream:
+                    try:
+                        on_stream(StreamEvent(type=StreamEventType.TOOL_START, tool_name=func_name, tool_args=func_args))
+                    except Exception:
+                        pass
+                result = await _base(func_name, func_args)
+                if on_stream:
+                    try:
+                        on_stream(StreamEvent(type=StreamEventType.TOOL_END, tool_name=func_name, tool_result=result if isinstance(result, dict) else None))
+                    except Exception:
+                        pass
+                return result
+
+            dispatch_fn = _instrumented
+        has_tools = bool(self._tools and dispatch_fn)
+        return dispatch_fn, has_tools
+
+    async def _build_prompt(
+        self, message: str, mode: str, has_tools: bool,
+        template_context: Optional[Dict[str, Any]],
+        injection_note: Optional[str],
+    ) -> str:
+        """Build the system prompt with memory, injection notes, and blueprint hints."""
+        if self._system_prompt:
+            return self._system_prompt
+
+        reply_language = detect_language(message)
+
+        memory_addition = None
+        if self._memory_search:
+            try:
+                relevant = await self._memory_search.search(message, top_k=3)
+                if relevant:
+                    memory_lines = ["## Relevant Memory (from past conversations):"]
+                    for r in relevant:
+                        memory_lines.append("- {}".format(r["content"][:300]))
+                    memory_addition = "\n".join(memory_lines)
+            except Exception as e:
+                logger.debug("Memory search failed: %s", e)
+
+        blueprint_hint = ""
+        if self._assistant and mode == "execute" and has_tools:
+            blueprint_hint = self._assistant.prepare(message, mode)
+
+        combined_addition = memory_addition or ""
+        if injection_note:
+            combined_addition = (combined_addition + "\n\n" + injection_note).strip()
+        if blueprint_hint:
+            combined_addition = (combined_addition + "\n\n" + blueprint_hint).strip()
+
+        _module_count = 300
+        try:
+            from core.modules.registry import ModuleRegistry
+            _module_count = len(ModuleRegistry.get_all_metadata())
+        except Exception:
+            pass
+
+        return build_system_prompt(
+            module_count=_module_count, context=template_context, has_tools=has_tools,
+            mode=mode, reply_language=reply_language,
+            admin_addition=combined_addition or None,
+        )
+
+    async def _handle_yaml_validation(
+        self, response_content: str, tool_calls: List[Dict],
+        messages: List[Dict], system_prompt: str, dispatch_fn,
+        total_rounds: int, total_usage: Dict[str, int],
+    ) -> Tuple[str, List[Dict], int, Dict[str, int]]:
+        """Nudge LLM to produce YAML and validate it iteratively.
+
+        Returns:
+            (response_content, tool_calls, total_rounds, total_usage)
+        """
+        if not extract_yaml_from_response(response_content):
+            nudge_messages = messages + [
+                {"role": "assistant", "content": response_content},
+                {"role": "user", "content": "You must always output a Flyto Workflow YAML. Please generate the workflow YAML now using the modules and blueprints available."},
+            ]
+            nudge_content, nudge_tc, nudge_rounds, nudge_usage = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
+            total_rounds += nudge_rounds
+            for k in total_usage:
+                total_usage[k] += nudge_usage.get(k, 0)
+            if nudge_content and extract_yaml_from_response(nudge_content):
+                response_content = nudge_content
+                tool_calls.extend(nudge_tc)
+
+        for _attempt in range(self._config.max_validation_rounds):
+            yaml_str = extract_yaml_from_response(response_content)
+            if not yaml_str:
+                break
+            errors = validate_workflow_steps(yaml_str)
+            if not errors:
+                break
+            error_list = "\n".join("- {}".format(e) for e in errors)
+            retry_messages = messages + [
+                {"role": "assistant", "content": response_content},
+                {"role": "user", "content": "The workflow YAML you generated has validation errors:\n{}\n\nPlease call get_module_info() for each failing module to verify the correct param names, then regenerate the YAML.".format(error_list)},
+            ]
+            retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(retry_messages, system_prompt, dispatch_fn)
+            total_rounds += retry_rounds
+            for k in total_usage:
+                total_usage[k] += retry_usage.get(k, 0)
+            if retry_content:
+                response_content = retry_content
+                tool_calls.extend(retry_tc)
+            else:
+                break
+
+        return response_content, tool_calls, total_rounds, total_usage
+
+    async def _handle_failure_guard(
+        self, response_content: str, execution_results: List[Dict],
+        messages: List[Dict], system_prompt: str,
+        on_stream: Optional[StreamCallback],
+        total_rounds: int, total_usage: Dict[str, int],
+    ) -> Tuple[str, int, Dict[str, int]]:
+        """If ALL executions failed, force LLM to acknowledge failures.
+
+        Returns:
+            (response_content, total_rounds, total_usage)
+        """
+        if not execution_results or not all(not er.get("ok", False) for er in execution_results):
+            return response_content, total_rounds, total_usage
+
+        errors = []
+        for er in execution_results:
+            preview = er.get("result_preview", "")
+            try:
+                err_data = json.loads(preview) if preview.startswith("{") else {}
+                err_msg = err_data.get("error", "")
+            except Exception:
+                err_msg = ""
+            errors.append("{}: {}".format(er.get("module_id", "?"), err_msg or "failed"))
+        error_detail = "\n".join(errors)
+        correction_messages = messages + [
+            {"role": "assistant", "content": response_content},
+            {"role": "user", "content": (
+                "STOP. All {} module executions FAILED:\n{}\n\n"
+                "Your previous response is WRONG — you must NOT claim success. "
+                "Rewrite your response: (1) state which modules failed and why, "
+                "(2) suggest what the user can do to fix it. "
+                "Do NOT fabricate results or URLs."
+            ).format(len(execution_results), error_detail)},
+        ]
+        corrected, _, corr_rounds, corr_usage = await self._call_llm_toolless(
+            correction_messages, system_prompt, on_stream=on_stream,
+        )
+        if corrected:
+            response_content = corrected
+            total_rounds += corr_rounds
+            for k in total_usage:
+                total_usage[k] += corr_usage.get(k, 0)
+
+        return response_content, total_rounds, total_usage
+
+    async def _record_memory(self, message: str, response_content: str) -> None:
+        """Record conversation turn in memory store, summarizer, and search index."""
         session_id = self._session_id
         if self._memory_store:
             try:
@@ -648,28 +722,32 @@ class Agent:
             except Exception as e:
                 logger.debug("Memory indexing failed: %s", e)
 
-        usage = UsageStats(**total_usage) if any(v > 0 for v in total_usage.values()) else None
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        self._emit_audit(message, mode, tool_calls, execution_results, True, None, duration_ms, total_usage)
+    def _record_transcript(self, response_content: str, tool_calls: List[Dict]) -> None:
+        """Record assistant response and tool calls to transcript."""
+        if not self._transcript:
+            return
+        self._transcript.record_assistant(response_content, provider=self._config.provider, model=self._config.resolved_model)
+        for tc in tool_calls:
+            self._transcript.record_tool_call(tc.get("function", ""), tc.get("arguments", {}))
+            if tc.get("function") == "execute_module":
+                self._transcript.record_execution(tc.get("module_id", ""), tc.get("ok", False), tc.get("result_preview", ""))
+        if self._cost_tracker:
+            self._transcript.record_meta({"event": "cost_summary", **self._cost_tracker.summary()})
 
-        if self._transcript:
-            self._transcript.record_assistant(response_content, provider=self._config.provider, model=self._config.resolved_model)
-            for tc in tool_calls:
-                self._transcript.record_tool_call(tc.get("function", ""), tc.get("arguments", {}))
-                if tc.get("function") == "execute_module":
-                    self._transcript.record_execution(tc.get("module_id", ""), tc.get("ok", False), tc.get("result_preview", ""))
-            if self._cost_tracker:
-                self._transcript.record_meta({"event": "cost_summary", **self._cost_tracker.summary()})
-
-        cost_summary = self._cost_tracker.summary() if self._cost_tracker else None
-
-        return ChatResponse(
-            ok=True, message=response_content, session_id=self._session_id,
-            tool_calls=tool_calls, execution_results=execution_results,
-            provider=self._config.provider, model=self._config.resolved_model,
-            rounds_used=total_rounds, usage=usage, cost=cost_summary,
-            pending_input=pending_input,
-        )
+    def _record_cost(self, usage_dict: Dict[str, int]) -> None:
+        """Record token usage in cost tracker."""
+        if not self._cost_tracker or not any(v > 0 for v in usage_dict.values()):
+            return
+        try:
+            self._cost_tracker.record(
+                model=self._config.resolved_model,
+                provider=self._config.provider or "openai",
+                prompt_tokens=usage_dict.get("prompt_tokens", 0),
+                completion_tokens=usage_dict.get("completion_tokens", 0),
+                cache_read_tokens=usage_dict.get("cache_read_input_tokens", 0),
+            )
+        except Exception as e:
+            logger.debug("Cost tracking failed: %s", e)
 
     # ── Internal ──────────────────────────────────────────────────
 

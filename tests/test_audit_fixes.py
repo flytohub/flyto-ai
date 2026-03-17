@@ -673,8 +673,8 @@ class TestTruncationDetection:
 class TestCallbackSafety:
 
     def test_agent_source_wraps_callback_in_try(self):
-        """Agent.chat source must wrap on_tool_call in try/except."""
-        src = inspect.getsource(Agent.chat)
+        """Agent._build_dispatch source must wrap on_tool_call in try/except."""
+        src = inspect.getsource(Agent._build_dispatch)
         # Find the callback wrapping section
         assert "on_tool_call" in src
         assert "except Exception" in src

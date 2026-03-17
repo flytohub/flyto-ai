@@ -128,11 +128,11 @@ class AssistantMiddleware:
 
         Layers:
         1. Blueprint guard — redirect to use_blueprint on first call
-        2. URL tracker — track current URL for context_key derivation
-        3. ask_user enrichment — auto-inject context_key from URL
-        4. Snapshot guard — auto-inject snapshot before browser interact
-        5. Anti-bot detection — auto-retry with system Chrome
-        6. Selector healing — auto-fix broken CSS after failure
+        2. ask_user enrichment — auto-inject context_key from URL
+        3. Snapshot guard — auto-inject snapshot before browser interact
+        4. Param correction — validate + auto-correct before execution
+        5. Circuit breaker — block modules that keep failing
+        6. Post-result — healing, anti-bot retry, URL/snapshot tracking
         """
         guard_done = {"v": False}
         snap_guard = resilience.SnapshotGuard()
@@ -147,169 +147,229 @@ class AssistantMiddleware:
             # Layer 1: Blueprint guard (first call only)
             if not guard_done["v"]:
                 guard_done["v"] = True
-                redirect = await router.guard(
+                redirect = await self._apply_blueprint_guard(
                     func_name, func_args, user_message, base_dispatch,
                 )
                 if redirect is not None:
                     return redirect
 
-            # Layer 2: ask_user enrichment — auto-inject context_key
-            if func_name == "ask_user":
-                args = func_args if isinstance(func_args, dict) else {}
-                if not args.get("context_key"):
-                    question = args.get("question", "")
-                    derived_key = _derive_context_key(current_url["v"], question)
-                    if derived_key:
-                        args["context_key"] = derived_key
-                        logger.info("Auto-derived context_key=%s", derived_key)
+            # Layer 2: ask_user enrichment
+            self._apply_ask_user_enrichment(func_name, func_args, current_url)
 
-            # Layer 3: Snapshot guard — auto-inject snapshot before interact
-            if snap_guard.needs_snapshot(func_name, func_args):
-                logger.info("Auto-injecting browser.snapshot before %s",
-                            func_args.get("module_id", func_name))
-                snap_result = await base_dispatch("execute_module", {
-                    "module_id": "browser.snapshot",
-                    "params": {},
-                })
-                if snap_result.get("ok", False):
-                    snap_guard.record_snapshot(snap_result)
-                    snap_result["_auto_snapshot"] = True
-                    snap_result["message"] = (
-                        "AUTO-SNAPSHOT: You tried to interact without seeing the page first. "
-                        "Here is the current page content. Find the REAL selector from the "
-                        "hints below, then retry your action with the correct selector."
-                    )
-                    return snap_result
-
-            # Track snapshot calls
+            # Layer 3: Snapshot guard
+            snap_redirect = await self._apply_snapshot_guard(
+                func_name, func_args, snap_guard, base_dispatch,
+            )
+            if snap_redirect is not None:
+                return snap_redirect
             snap_guard.on_tool_call(func_name, func_args)
 
-            # Layer 4: Delegate to flyto-core — validate + auto-correct before execution
-            # flyto-core's validate_params now returns corrections, not just errors
-            if func_name == "execute_module" and isinstance(func_args, dict):
-                module_id = func_args.get("module_id", "")
-                params = func_args.get("params", {})
-                if module_id:
-                    try:
-                        vr = await base_dispatch("validate_params", {
-                            "module_id": module_id, "params": params,
-                        })
-                        if isinstance(vr, dict) and not vr.get("valid", True):
-                            suggestions = vr.get("suggestions", {})
-                            # Auto-correct: use corrected_params from flyto-core
-                            if "corrected_params" in suggestions:
-                                func_args = dict(func_args)
-                                func_args["params"] = suggestions["corrected_params"]
-                                logger.info("Params auto-corrected by flyto-core for %s", module_id)
-                            # Module not found: use alternatives from flyto-core
-                            elif "alternatives" in suggestions and suggestions["alternatives"]:
-                                func_args = dict(func_args)
-                                func_args["module_id"] = suggestions["alternatives"][0]
-                                logger.info("Module redirected by flyto-core: %s → %s",
-                                            module_id, func_args["module_id"])
-                    except Exception:
-                        pass
+            # Layer 4: Param correction (validate + variable resolution)
+            func_args = await self._apply_param_correction(
+                func_name, func_args, base_dispatch, history,
+            )
 
-            # Variable resolution (${steps.x.result} → actual value)
-            if func_name == "execute_module" and isinstance(func_args, dict):
-                params = func_args.get("params", {})
-                if any("${" in str(v) for v in params.values()):
-                    try:
-                        from flyto_ai.assistant.param_fixer import _resolve_variables
-                        resolved = _resolve_variables(params, history.items())
-                        if resolved is not params:
-                            func_args = dict(func_args)
-                            func_args["params"] = resolved
-                    except Exception:
-                        pass
-
-            # Circuit breaker: block modules that keep failing
-            if func_name == "execute_module" and isinstance(func_args, dict):
-                mid = func_args.get("module_id", "")
-                if breaker.is_tripped(mid):
-                    return {"ok": False, "error": breaker.get_message(mid)}
+            # Layer 5: Circuit breaker
+            blocked = self._apply_circuit_breaker(func_name, func_args, breaker)
+            if blocked is not None:
+                return blocked
 
             # Normal dispatch
             result = await base_dispatch(func_name, func_args)
 
-            # Mask sensitive data in ask_user auto-fill results
-            if func_name == "ask_user" and isinstance(result, dict):
-                if result.get("auto_filled"):
-                    # Mask passwords before LLM sees them
-                    result["data"] = mask_sensitive(result.get("data", {}))
-
-            # Track execution results + circuit breaker (with empty detection)
-            if func_name == "execute_module" and isinstance(result, dict):
-                mid = func_args.get("module_id", "") if isinstance(func_args, dict) else ""
-                breaker.record_result(mid, result.get("ok", False), result)
-                history.append(result)
-                if self._output_tracker:
-                    self._output_tracker.on_tool_call(func_name, func_args, result)
-
-            # Auto-retry on failure: use flyto-core's corrected_params
-            if (func_name == "execute_module"
-                    and isinstance(result, dict)
-                    and not result.get("ok", True)
-                    and isinstance(func_args, dict)):
-                error_msg = str(result.get("error", "")).lower()
-                if "missing" in error_msg or "required" in error_msg:
-                    try:
-                        vr = await base_dispatch("validate_params", {
-                            "module_id": func_args.get("module_id", ""),
-                            "params": func_args.get("params", {}),
-                        })
-                        corrected = vr.get("suggestions", {}).get("corrected_params")
-                        if corrected:
-                            retry_args = dict(func_args)
-                            retry_args["params"] = corrected
-                            retry_result = await base_dispatch(func_name, retry_args)
-                            if retry_result.get("ok", False):
-                                history.append(retry_result)
-                                return retry_result
-                    except Exception:
-                        pass
-
-            # Track URL from goto results
-            if (func_name == "execute_module"
-                    and func_args.get("module_id") == "browser.goto"
-                    and isinstance(result, dict)):
-                new_url = result.get("url", func_args.get("params", {}).get("url", ""))
-                if new_url:
-                    current_url["v"] = new_url
-
-            # Track snapshot results
-            if (func_name == "execute_module"
-                    and func_args.get("module_id") in ("browser.snapshot",)
-                    and isinstance(result, dict) and result.get("ok")):
-                snap_guard.record_snapshot(result)
-
-            # Layer 5: Anti-bot detection — auto-retry with system Chrome
-            if antibot_guard.check_result(func_name, func_args, result):
-                url = func_args.get("params", {}).get("url", "")
-                retried = await antibot_guard.retry_with_system_chrome(base_dispatch, url)
-                if retried is not None:
-                    return retried
-
-            # Layer 6: Selector healing (on failure)
-            if resilience.should_heal(func_name, func_args, result):
-                healed = await resilience.try_heal(base_dispatch, func_args)
-                if healed is not None:
-                    return healed
+            # Post-result processing
+            result = await self._on_result(
+                func_name, func_args, result,
+                base_dispatch, breaker, history, snap_guard,
+                antibot_guard, current_url,
+            )
 
             return result
 
-        # Wrap with output auto-save on session end
-        original_dispatch = assistant_dispatch
-        _output_tracker = self._output_tracker
-
-        async def dispatch_with_output(func_name: str, func_args: dict) -> dict:
-            return await original_dispatch(func_name, func_args)
-
-        # Store references for post_process to use the same dispatch chain
-        self._wrapped_dispatch = dispatch_with_output
+        self._wrapped_dispatch = assistant_dispatch
         self._exec_history = history
 
-        return dispatch_with_output
+        return assistant_dispatch
+
+    # ── Dispatch layer helpers ──────────────────────────────────
+
+    async def _apply_blueprint_guard(
+        self, func_name: str, func_args: dict,
+        user_message: str, base_dispatch: Callable,
+    ) -> Optional[dict]:
+        """Layer 1: Redirect to use_blueprint on first call if applicable."""
+        return await router.guard(func_name, func_args, user_message, base_dispatch)
+
+    def _apply_ask_user_enrichment(
+        self, func_name: str, func_args: dict,
+        current_url: Dict[str, str],
+    ) -> None:
+        """Layer 2: Auto-inject context_key for ask_user calls."""
+        if func_name != "ask_user":
+            return
+        args = func_args if isinstance(func_args, dict) else {}
+        if args.get("context_key"):
+            return
+        question = args.get("question", "")
+        derived_key = _derive_context_key(current_url["v"], question)
+        if derived_key:
+            args["context_key"] = derived_key
+            logger.info("Auto-derived context_key=%s", derived_key)
+
+    async def _apply_snapshot_guard(
+        self, func_name: str, func_args: dict,
+        snap_guard: "resilience.SnapshotGuard",
+        base_dispatch: Callable,
+    ) -> Optional[dict]:
+        """Layer 3: Auto-inject snapshot before browser interact."""
+        if not snap_guard.needs_snapshot(func_name, func_args):
+            return None
+        logger.info("Auto-injecting browser.snapshot before %s",
+                    func_args.get("module_id", func_name))
+        snap_result = await base_dispatch("execute_module", {
+            "module_id": "browser.snapshot",
+            "params": {},
+        })
+        if snap_result.get("ok", False):
+            snap_guard.record_snapshot(snap_result)
+            snap_result["_auto_snapshot"] = True
+            snap_result["message"] = (
+                "AUTO-SNAPSHOT: You tried to interact without seeing the page first. "
+                "Here is the current page content. Find the REAL selector from the "
+                "hints below, then retry your action with the correct selector."
+            )
+            return snap_result
+        return None
+
+    async def _apply_param_correction(
+        self, func_name: str, func_args: dict,
+        base_dispatch: Callable, history: "BoundedHistory",
+    ) -> dict:
+        """Layer 4: Validate + auto-correct params, resolve variables, before execution."""
+        if func_name != "execute_module" or not isinstance(func_args, dict):
+            return func_args
+
+        # Delegate to flyto-core for validation + auto-correction
+        module_id = func_args.get("module_id", "")
+        params = func_args.get("params", {})
+        if module_id:
+            try:
+                vr = await base_dispatch("validate_params", {
+                    "module_id": module_id, "params": params,
+                })
+                if isinstance(vr, dict) and not vr.get("valid", True):
+                    suggestions = vr.get("suggestions", {})
+                    if "corrected_params" in suggestions:
+                        func_args = dict(func_args)
+                        func_args["params"] = suggestions["corrected_params"]
+                        logger.info("Params auto-corrected by flyto-core for %s", module_id)
+                    elif "alternatives" in suggestions and suggestions["alternatives"]:
+                        func_args = dict(func_args)
+                        func_args["module_id"] = suggestions["alternatives"][0]
+                        logger.info("Module redirected by flyto-core: %s → %s",
+                                    module_id, func_args["module_id"])
+            except Exception:
+                pass
+
+        # Variable resolution (${steps.x.result} → actual value)
+        params = func_args.get("params", {})
+        if any("${" in str(v) for v in params.values()):
+            try:
+                from flyto_ai.assistant.param_fixer import _resolve_variables
+                resolved = _resolve_variables(params, history.items())
+                if resolved is not params:
+                    func_args = dict(func_args)
+                    func_args["params"] = resolved
+            except Exception:
+                pass
+
+        return func_args
+
+    def _apply_circuit_breaker(
+        self, func_name: str, func_args: dict,
+        breaker: "CircuitBreaker",
+    ) -> Optional[dict]:
+        """Layer 5: Block modules that keep failing."""
+        if func_name != "execute_module" or not isinstance(func_args, dict):
+            return None
+        mid = func_args.get("module_id", "")
+        if breaker.is_tripped(mid):
+            return {"ok": False, "error": breaker.get_message(mid)}
+        return None
+
+    async def _on_result(
+        self, func_name: str, func_args: dict, result: dict,
+        base_dispatch: Callable,
+        breaker: "CircuitBreaker", history: "BoundedHistory",
+        snap_guard: "resilience.SnapshotGuard",
+        antibot_guard: "resilience.AntibotGuard",
+        current_url: Dict[str, str],
+    ) -> dict:
+        """Post-dispatch: mask, track, auto-retry, heal."""
+        # Mask sensitive data in ask_user auto-fill results
+        if func_name == "ask_user" and isinstance(result, dict):
+            if result.get("auto_filled"):
+                result["data"] = mask_sensitive(result.get("data", {}))
+
+        # Track execution results + circuit breaker
+        if func_name == "execute_module" and isinstance(result, dict):
+            mid = func_args.get("module_id", "") if isinstance(func_args, dict) else ""
+            breaker.record_result(mid, result.get("ok", False), result)
+            history.append(result)
+            if self._output_tracker:
+                self._output_tracker.on_tool_call(func_name, func_args, result)
+
+        # Auto-retry on failure: use flyto-core's corrected_params
+        if (func_name == "execute_module"
+                and isinstance(result, dict)
+                and not result.get("ok", True)
+                and isinstance(func_args, dict)):
+            error_msg = str(result.get("error", "")).lower()
+            if "missing" in error_msg or "required" in error_msg:
+                try:
+                    vr = await base_dispatch("validate_params", {
+                        "module_id": func_args.get("module_id", ""),
+                        "params": func_args.get("params", {}),
+                    })
+                    corrected = vr.get("suggestions", {}).get("corrected_params")
+                    if corrected:
+                        retry_args = dict(func_args)
+                        retry_args["params"] = corrected
+                        retry_result = await base_dispatch(func_name, retry_args)
+                        if retry_result.get("ok", False):
+                            history.append(retry_result)
+                            return retry_result
+                except Exception:
+                    pass
+
+        # Track URL from goto results
+        if (func_name == "execute_module"
+                and func_args.get("module_id") == "browser.goto"
+                and isinstance(result, dict)):
+            new_url = result.get("url", func_args.get("params", {}).get("url", ""))
+            if new_url:
+                current_url["v"] = new_url
+
+        # Track snapshot results
+        if (func_name == "execute_module"
+                and func_args.get("module_id") in ("browser.snapshot",)
+                and isinstance(result, dict) and result.get("ok")):
+            snap_guard.record_snapshot(result)
+
+        # Anti-bot detection — auto-retry with system Chrome
+        if antibot_guard.check_result(func_name, func_args, result):
+            url = func_args.get("params", {}).get("url", "")
+            retried = await antibot_guard.retry_with_system_chrome(base_dispatch, url)
+            if retried is not None:
+                return retried
+
+        # Selector healing (on failure)
+        if resilience.should_heal(func_name, func_args, result):
+            healed = await resilience.try_heal(base_dispatch, func_args)
+            if healed is not None:
+                return healed
+
+        return result
 
     # ── After LLM call ───────────────────────────────────────────
 

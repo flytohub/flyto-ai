@@ -477,7 +477,7 @@ class Agent:
         # This catches the case where LLM says "here's the URL" instead of
         # actually going to the site and doing the task.
         if (mode == "execute"
-                and has_blueprint_match
+                and (has_blueprint_match or self._should_nudge(message))
                 and self._assistant
                 and not tool_calls
                 and response_content
@@ -488,8 +488,9 @@ class Agent:
             nudge_messages = messages + [
                 {"role": "assistant", "content": response_content},
                 {"role": "user", "content": (
-                    "You answered from knowledge but this task requires execution. "
-                    "Use the tools available to actually perform the task."
+                    "If this task requires you to actually DO something (go to a website, "
+                    "execute a module, automate an action), use the tools available. "
+                    "If this is just a knowledge question, answer as you did."
                 )},
             ]
             try:
@@ -772,6 +773,30 @@ class Agent:
                 self._transcript.record_execution(tc.get("module_id", ""), tc.get("ok", False), tc.get("result_preview", ""))
         if self._cost_tracker:
             self._transcript.record_meta({"event": "cost_summary", **self._cost_tracker.summary()})
+
+    def _should_nudge(self, message: str) -> bool:
+        """Check if the user message implies an action (not just a question).
+
+        Cross-language heuristic:
+        - Has a URL → action
+        - Ends with ? or ？ → question, don't nudge
+        - Otherwise → nudge (let the LLM decide on retry)
+
+        The nudge message is soft ("if this requires action, use tools;
+        if it's a question, answer as you did"), so false positives are
+        handled gracefully — LLM will just repeat its answer.
+        """
+        msg = message.strip()
+        if not msg:
+            return False
+        # URL → action
+        if "http" in msg or ".com" in msg or ".org" in msg or ".tw" in msg or ".net" in msg:
+            return True
+        # Question mark → don't nudge
+        if msg.endswith("?") or msg.endswith("？") or msg.endswith("嗎") or msg.endswith("呢"):
+            return False
+        # Default: nudge (soft, LLM can choose to not use tools)
+        return True
 
     def _record_cost(self, usage_dict: Dict[str, int]) -> None:
         """Record token usage in cost tracker."""

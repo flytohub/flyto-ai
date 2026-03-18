@@ -137,3 +137,69 @@ class BoundedHistory:
 
     def __len__(self) -> int:
         return len(self._items)
+
+
+# ── Variable Resolver ──────────────────────────────────────────
+
+_VAR_PATTERN = re.compile(r'\$\{(?:steps\.)?(\w+)\.(\w+)\}')
+
+
+def _resolve_variables(params: dict, exec_history: List[Dict[str, Any]]) -> dict:
+    """Resolve ${steps.x.result} variables to actual values from exec history.
+
+    LLM sometimes writes YAML variable syntax as literal strings.
+    This resolver replaces them with actual values.
+    """
+    if not exec_history:
+        return params
+
+    resolved = {}
+    any_resolved = False
+
+    for key, value in params.items():
+        if isinstance(value, str) and "${" in value:
+            new_value = value
+            for match in _VAR_PATTERN.finditer(value):
+                step_ref = match.group(1)  # step name
+                field_ref = match.group(2)  # field name (usually 'result')
+                actual = _find_step_value(step_ref, field_ref, exec_history)
+                if actual is not None:
+                    if value == match.group(0):
+                        # Entire value is a variable — replace completely (preserve type)
+                        new_value = actual
+                    else:
+                        # Variable is part of a larger string — string replace
+                        new_value = new_value.replace(match.group(0), str(actual))
+                    any_resolved = True
+                    logger.info("Var resolved: %s → %s", match.group(0), str(actual)[:50])
+            resolved[key] = new_value
+        else:
+            resolved[key] = value
+
+    return resolved if any_resolved else params
+
+
+def _find_step_value(step_ref: str, field_ref: str, exec_history: List[Dict[str, Any]]) -> Any:
+    """Find a value from execution history by step reference."""
+    import json
+    for r in reversed(exec_history):
+        if not r.get("ok"):
+            continue
+        # Match by module_id suffix or step index
+        mid = r.get("module_id", "")
+        if step_ref in mid or step_ref.replace("_", ".") in mid:
+            preview = r.get("result_preview", "")
+            try:
+                data = json.loads(preview) if isinstance(preview, str) else preview
+                if isinstance(data, dict):
+                    if field_ref in data:
+                        return data[field_ref]
+                    # 'result' often means the main output
+                    if field_ref == "result":
+                        for k in ("result", "text", "output", "content", "data", "value"):
+                            if k in data and data[k]:
+                                return data[k]
+            except (ValueError, TypeError):
+                if field_ref == "result" and isinstance(preview, str):
+                    return preview
+    return None

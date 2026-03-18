@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 from flyto_ai.assistant import router, interactive, resilience
 from flyto_ai.assistant.output_tracker import OutputTracker, extract_output_paths
-from flyto_ai.assistant.safety import CircuitBreaker, BoundedHistory, mask_sensitive
+from flyto_ai.assistant.safety import CircuitBreaker, BoundedHistory, mask_sensitive, _resolve_variables
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,6 @@ class AssistantMiddleware:
         params = func_args.get("params", {})
         if any("${" in str(v) for v in params.values()):
             try:
-                from flyto_ai.assistant.param_fixer import _resolve_variables
                 resolved = _resolve_variables(params, history.items())
                 if resolved is not params:
                     func_args = dict(func_args)

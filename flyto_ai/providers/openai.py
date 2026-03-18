@@ -33,6 +33,27 @@ def _looks_like_browser_task(messages: list) -> bool:
     return False
 
 
+def _fill_remaining_tool_responses(
+    tc_list: list,
+    current_tc: Any,
+    full_messages: list,
+    *,
+    id_key: str = "id",
+) -> None:
+    """Fill remaining tool calls with 'paused' responses after ask_user break.
+
+    Works with both dict-style (streaming) and object-style (non-streaming) tool calls.
+    """
+    idx = tc_list.index(current_tc)
+    for remaining in tc_list[idx + 1:]:
+        tc_id = remaining[id_key] if isinstance(remaining, dict) else getattr(remaining, id_key)
+        full_messages.append({
+            "role": "tool",
+            "tool_call_id": tc_id,
+            "content": '{"ok": false, "error": "Execution paused — waiting for user input"}',
+        })
+
+
 class OpenAIProvider(LLMProvider):
     """OpenAI provider with function calling loop."""
 
@@ -238,13 +259,7 @@ class OpenAIProvider(LLMProvider):
                     # ask_user marker — break tool loop, user input needed
                     if log_entry.get("result", {}).get("__ASK_USER__"):
                         _ask_user_break = True
-                        # Must still respond to remaining tool_calls to avoid API error
-                        for remaining_tc in tc_list[tc_list.index(tc) + 1:]:
-                            full_messages.append({
-                                "role": "tool",
-                                "tool_call_id": remaining_tc["id"],
-                                "content": '{"ok": false, "error": "Execution paused — waiting for user input"}',
-                            })
+                        _fill_remaining_tool_responses(tc_list, tc, full_messages)
                         break
 
                     # Inject vision user message for native OpenAI (tool messages don't support images)
@@ -329,13 +344,7 @@ class OpenAIProvider(LLMProvider):
                 if log_entry.get("result", {}).get("__ASK_USER__"):
                     _ask_user_break = True
                     tc_list = list(choice.message.tool_calls)
-                    tc_idx = tc_list.index(tc)
-                    for remaining in tc_list[tc_idx + 1:]:
-                        full_messages.append({
-                            "role": "tool",
-                            "tool_call_id": remaining.id,
-                            "content": '{"ok": false, "error": "Execution paused — waiting for user input"}',
-                        })
+                    _fill_remaining_tool_responses(tc_list, tc, full_messages, id_key="id")
                     break
 
                 # Inject vision user message for native OpenAI (tool messages don't support images)

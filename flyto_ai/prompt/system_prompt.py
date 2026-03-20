@@ -171,6 +171,7 @@ LAYER_A_POLICY = """\
 
 ## On Failure
 - No apology essays. Output: (1) one-line error, (2) one next action, (3) ```yaml
+- If tool results contain _ems_fix_hint, apply that fix immediately — it's a learned solution.
 
 ## Safety
 - Never output secrets (API keys, passwords, tokens) in YAML or text.
@@ -204,6 +205,15 @@ ALWAYS discover before executing:
 - The system will auto-fill from saved credentials if available — you don't need to manage this.
 - When interacting with web pages, ALWAYS read the page content first (use a snapshot/extract module)
   to find real selectors. NEVER guess CSS selectors.
+
+# BROWSER SESSION
+
+- When calling browser.launch, ALWAYS pass params: headless=false, channel="chrome".
+  This uses the system Chrome which is more stable than the test binary.
+- Do NOT call browser.close unless the user explicitly asks to close the browser.
+- The browser stays open between chat turns so the user can continue interacting.
+- Do NOT include browser.close in generated YAML workflows unless it's a one-shot batch job.
+- If the browser is already running, do NOT call browser.launch again — just use browser.goto directly.
 
 # FAILURE HANDLING
 

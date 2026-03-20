@@ -77,6 +77,9 @@ class Agent:
         # Phase 1: Vault (credential store)
         self._vault = self._init_vault()
 
+        # Phase 1.5: flyto-pro intelligence bridge
+        self._pro = self._init_pro_bridge()
+
         # Phase 2: Context compactor
         self._compactor = self._init_compactor()
 
@@ -123,6 +126,11 @@ class Agent:
     @property
     def cost_tracker(self):
         return self._cost_tracker
+
+    @property
+    def pro(self):
+        """flyto-pro intelligence bridge (None if unavailable)."""
+        return self._pro
 
     @property
     def transcript(self):
@@ -189,6 +197,23 @@ class Agent:
             return None
         except Exception as e:
             logger.debug("Vault init failed: %s", e)
+            return None
+
+    def _init_pro_bridge(self):
+        """Initialize the flyto-pro intelligence bridge."""
+        if not self._config.enable_pro:
+            return None
+        try:
+            from flyto_ai.intelligence.pro_bridge import ProBridge
+            bridge = ProBridge(config=self._config)
+            if bridge.available:
+                # Share EMS with assistant middleware for error learning
+                if self._assistant and self._config.enable_ems:
+                    self._assistant._ems_bridge = bridge
+                return bridge
+            return None
+        except Exception as e:
+            logger.debug("Pro bridge init failed: %s", e)
             return None
 
     def _init_compactor(self):
@@ -363,6 +388,113 @@ class Agent:
 
         return primary
 
+    # ── Deterministic pipeline ─────────────────────────────────────
+
+    async def _try_deterministic(
+        self, message: str, on_tool_call, on_stream, dispatch_wrapper,
+    ) -> Optional[ChatResponse]:
+        """Try to handle the message with deterministic planning (zero LLM).
+
+        Returns a ChatResponse if handled, None to fall back to LLM.
+        """
+        try:
+            from flyto_ai.intelligence.planner import extract_intent, extract_intent_llm, plan_execution, execute_plan, _resolve_url
+            from flyto_ai.tools.core_tools import get_browser_status
+        except ImportError:
+            return None
+
+        # 1. Extract intent — try data-driven first, then 1 cheap LLM call
+        intent = extract_intent(message)
+        if intent is None:
+            # Try LLM intent extraction (1 call, ~$0.001)
+            llm_intent = await extract_intent_llm(message, self._provider)
+            if llm_intent is None:
+                return None  # Question/conversation → full LLM
+
+            # Map LLM intent to planner format
+            action = llm_intent.get("action", "")
+            target = llm_intent.get("target", "")
+            query = llm_intent.get("query", "")
+
+            if action in ("navigate", "open", "go"):
+                url = llm_intent.get("url") or _resolve_url(target)
+                if url:
+                    if query:
+                        intent = {"intent": "open_and_search", "url": url, "search_text": query, "site": target}
+                    else:
+                        intent = {"intent": "open_website", "url": url, "site": target}
+                else:
+                    return None
+            elif action in ("search", "find"):
+                intent = {"intent": "search_on_website", "search_text": query or target}
+            elif action in ("click", "play", "select", "tap"):
+                intent = {"intent": "click_element", "target": target or query}
+            elif action in ("screenshot",):
+                intent = {"intent": "single_module", "module_id": "browser.screenshot", "params": {}}
+            else:
+                # Try as single module with LLM-extracted params
+                intent = {"intent": "single_module", "module_id": action + "." + target if "." not in action else action,
+                          "params": llm_intent.get("params", {})}
+
+        if intent is None:
+            return None
+
+        logger.info("Deterministic intent: %s", intent.get("intent"))
+
+        # 2. Plan execution
+        has_browser = bool(get_browser_status())
+        steps = plan_execution(intent, has_browser=has_browser)
+        if not steps:
+            return None
+
+        # 3. Execute with raw dispatch (bypass middleware for deterministic steps)
+        dispatch_fn = self._dispatch_fn
+        if dispatch_wrapper and dispatch_fn:
+            dispatch_fn = dispatch_wrapper(dispatch_fn)
+
+        results, summary = await execute_plan(steps, dispatch_fn)
+
+        # 4. Check if execution succeeded
+        ok = any(r["ok"] for r in results)
+        failed = [r for r in results if not r["ok"]]
+
+        # Build tool_calls list for audit
+        tool_calls = [
+            {"function": "execute_module", "module_id": r["module_id"],
+             "ok": r["ok"], "error": r.get("error", "")}
+            for r in results
+        ]
+
+        # 5. Build response (deterministic template — zero LLM, zero hardcoded language)
+        ok_modules = [r["module_id"] for r in results if r["ok"]]
+        fail_modules = [(r["module_id"], r.get("error", "")) for r in results if not r["ok"]]
+
+        if ok and not fail_modules:
+            response_text = "OK: {}".format(" → ".join(ok_modules))
+        elif ok:
+            response_text = "OK: {}. Failed: {}".format(
+                " → ".join(ok_modules),
+                ", ".join("{} ({})".format(m, e[:50]) for m, e in fail_modules),
+            )
+        else:
+            response_text = "Failed: {}".format(
+                "; ".join("{}: {}".format(m, e[:80]) for m, e in fail_modules) or summary,
+            )
+
+        cost_summary = self._cost_tracker.summary() if self._cost_tracker else None
+
+        return ChatResponse(
+            ok=ok,
+            message=response_text,
+            session_id=self._session_id,
+            tool_calls=tool_calls,
+            execution_results=[r for r in results if r.get("module_id", "").startswith("browser.") or r.get("ok")],
+            provider=self._config.provider,
+            model="deterministic",
+            rounds_used=1 if ok else 0,
+            cost=cost_summary,
+        )
+
     # ── Dispatch ──────────────────────────────────────────────────
 
     def _make_safe_dispatch(self, user_message: str = ""):
@@ -388,6 +520,13 @@ class Agent:
                     return {"ok": False, "error": "Module category '{}' is not allowed.".format(category)}
 
             result = await assisted_dispatch(func_name, func_args)
+
+            # Pro: track tool call for budget enforcement
+            if self._pro:
+                try:
+                    self._pro.record_tool_call()
+                except Exception:
+                    pass
 
             # Injection scanning
             if enable_injection and isinstance(result, dict):
@@ -435,6 +574,19 @@ class Agent:
             self._transcript.record_user(message)
 
         await self._init_memory()
+
+        # ── Deterministic pipeline (try before LLM) ──
+        if mode == "execute" and self._dispatch_fn:
+            det_result = await self._try_deterministic(message, on_tool_call, on_stream, dispatch_wrapper)
+            if det_result is not None:
+                # Record cost, memory, audit
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                await self._record_memory(message, det_result.message)
+                self._emit_audit(
+                    message, mode, det_result.tool_calls, det_result.execution_results,
+                    det_result.ok, None, duration_ms, {},
+                )
+                return det_result
 
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
@@ -652,12 +804,31 @@ class Agent:
         if blueprint_hint:
             combined_addition = (combined_addition + "\n\n" + blueprint_hint).strip()
 
+        # Browser session hint — tell LLM if browser is already running
+        try:
+            from flyto_ai.tools.core_tools import get_browser_status
+            browser_hint = get_browser_status()
+            if browser_hint:
+                combined_addition = (combined_addition + "\n\n" + browser_hint).strip()
+        except Exception:
+            pass
+
         _module_count = 300
         try:
             from core.modules.registry import ModuleRegistry
             _module_count = len(ModuleRegistry.get_all_metadata())
         except Exception:
             pass
+
+        # Pro: inject catalog outline for LLM module discovery
+        if self._pro and self._config.enable_knowledge:
+            try:
+                catalog = self._pro.get_catalog_outline()
+                if catalog:
+                    catalog_section = "\n\n## Module Catalog:\n" + catalog
+                    combined_addition = (combined_addition + catalog_section).strip()
+            except Exception:
+                pass
 
         prompt = build_system_prompt(
             module_count=_module_count, context=template_context, has_tools=has_tools,
@@ -693,7 +864,30 @@ class Agent:
             yaml_str = extract_yaml_from_response(response_content)
             if not yaml_str:
                 break
-            errors = validate_workflow_steps(yaml_str)
+
+            # Use deep validation when pro bridge is available
+            if self._pro and self._config.enable_contract_validation:
+                try:
+                    from flyto_ai.validation import validate_workflow_deep
+                    deep_result = await validate_workflow_deep(yaml_str, self._pro)
+                    errors = deep_result["basic"] + deep_result["contract"]
+
+                    # Auto-generate missing modules via EvolutionRouter
+                    if self._config.enable_evolution and deep_result["missing_modules"]:
+                        gen_result = await self._pro.generate_missing_modules(
+                            deep_result["missing_modules"],
+                            context=messages[-1].get("content", "") if messages else "",
+                        )
+                        if gen_result and gen_result.get("all_generated"):
+                            logger.info("Auto-generated %d missing modules",
+                                        len(gen_result.get("generated", [])))
+                            errors = validate_workflow_steps(yaml_str)
+                except Exception as e:
+                    logger.debug("Deep validation failed, falling back to basic: %s", e)
+                    errors = validate_workflow_steps(yaml_str)
+            else:
+                errors = validate_workflow_steps(yaml_str)
+
             if not errors:
                 break
             error_list = "\n".join("- {}".format(e) for e in errors)
@@ -726,6 +920,9 @@ class Agent:
         """
         if not execution_results or not all(not er.get("ok", False) for er in execution_results):
             return response_content, total_rounds, total_usage
+
+        # NOTE: Individual execution errors are already recorded by
+        # AssistantMiddleware._on_result() → EMS. No duplicate recording here.
 
         errors = []
         for er in execution_results:
@@ -792,25 +989,44 @@ class Agent:
             self._transcript.record_meta({"event": "cost_summary", **self._cost_tracker.summary()})
 
     def _record_cost(self, usage_dict: Dict[str, int]) -> None:
-        """Record token usage in cost tracker."""
-        if not self._cost_tracker or not any(v > 0 for v in usage_dict.values()):
+        """Record token usage in cost tracker + pro CostController."""
+        if not any(v > 0 for v in usage_dict.values()):
             return
-        try:
-            self._cost_tracker.record(
-                model=self._config.resolved_model,
-                provider=self._config.provider or "openai",
-                prompt_tokens=usage_dict.get("prompt_tokens", 0),
-                completion_tokens=usage_dict.get("completion_tokens", 0),
-                cache_read_tokens=usage_dict.get("cache_read_input_tokens", 0),
-            )
-        except Exception as e:
-            logger.debug("Cost tracking failed: %s", e)
+        prompt_tokens = usage_dict.get("prompt_tokens", 0)
+        completion_tokens = usage_dict.get("completion_tokens", 0)
+
+        if self._cost_tracker:
+            try:
+                self._cost_tracker.record(
+                    model=self._config.resolved_model,
+                    provider=self._config.provider or "openai",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cache_read_tokens=usage_dict.get("cache_read_input_tokens", 0),
+                )
+            except Exception as e:
+                logger.debug("Cost tracking failed: %s", e)
+
+        # Pro CostController — multi-resource budget enforcement
+        if self._pro:
+            try:
+                self._pro.record_llm_usage(
+                    self._config.resolved_model, prompt_tokens, completion_tokens,
+                )
+            except Exception as e:
+                if "exceeded" in type(e).__name__.lower():
+                    logger.warning("Pro budget exceeded: %s", e)
+                    raise
+                logger.debug("Pro cost tracking failed: %s", e)
 
     # ── Internal ──────────────────────────────────────────────────
 
     def _emit_audit(self, user_message, mode, tool_calls, execution_results, ok, error, duration_ms, usage):
         try:
             from flyto_ai.audit import ChatAuditEntry
+            cost_usd = 0.0
+            if self._cost_tracker:
+                cost_usd = self._cost_tracker.session_total_usd
             ChatAuditEntry(
                 user_message=user_message[:200], provider=self._config.provider or "openai",
                 model=self._config.resolved_model, mode=mode,
@@ -818,6 +1034,8 @@ class Agent:
                 duration_ms=duration_ms, prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),
                 total_tokens=usage.get("total_tokens", 0), ok=ok, error=error,
+                tool_calls=tool_calls, execution_results=execution_results,
+                cost_usd=cost_usd,
             ).emit()
         except Exception:
             pass

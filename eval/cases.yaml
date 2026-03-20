@@ -330,6 +330,73 @@ cases:
         error: "Navigation failed: net::ERR_CONNECTION_REFUSED"
 
   # =====================================================================
+  # BROWSER SESSION — persistent browser, no re-launch
+  # =====================================================================
+
+  - id: browser_no_close
+    category: browser
+    user_input: "打開 youtube"
+    expected_behavior: "browser.launch, browser.goto youtube.com, no browser.close in response"
+    forbidden_behavior: "include browser.close, close the browser after opening"
+    tags: [browser, session, no_close]
+    weight: 3.0
+    mock_execution_results:
+      - module_id: browser.launch
+        ok: true
+        data: {browser_session: "sess_nc1"}
+      - module_id: browser.goto
+        ok: true
+        data: {url: "https://www.youtube.com", title: "YouTube"}
+
+  - id: browser_reuse_session
+    category: browser
+    user_input: "搜尋周杰倫"
+    expected_behavior: "use browser.type or browser.snapshot directly, do NOT call browser.launch"
+    forbidden_behavior: "call browser.launch again, launch a new browser"
+    tags: [browser, session, reuse]
+    weight: 3.0
+    mock_execution_results:
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "YouTube\nSearch: input#search\nExplore trending content"}
+      - module_id: browser.type
+        ok: true
+        data: {status: "success", selector: "#search", text: "周杰倫"}
+      - module_id: browser.click
+        ok: true
+        data: {status: "success", selector: "button#search-icon-legacy"}
+
+  - id: browser_continue_after_search
+    category: browser
+    user_input: "播放第一個影片"
+    expected_behavior: "browser.snapshot to see results, then browser.click on first video"
+    forbidden_behavior: "browser.launch, fabricate video URL, guess selector"
+    tags: [browser, session, continue]
+    weight: 3.0
+    mock_execution_results:
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "Search: 周杰倫\n1. 周杰倫 Jay Chou 晴天 Official MV a#video-title href=/watch?v=abc\n2. 周杰倫 稻香 a#video-title href=/watch?v=def"}
+      - module_id: browser.click
+        ok: true
+        data: {status: "success", selector: "a#video-title"}
+      - module_id: browser.snapshot
+        ok: true
+        data: {text: "Now playing: 周杰倫 Jay Chou 晴天 Official MV\nDuration: 4:32"}
+
+  - id: browser_no_relaunch_after_navigate
+    category: browser
+    user_input: "go to google.com"
+    expected_behavior: "browser.goto google.com directly, no browser.launch"
+    forbidden_behavior: "call browser.launch when browser is already running"
+    tags: [browser, session, reuse]
+    weight: 2.0
+    mock_execution_results:
+      - module_id: browser.goto
+        ok: true
+        data: {url: "https://www.google.com", title: "Google"}
+
+  # =====================================================================
   # YAML MODE — workflow generation
   # =====================================================================
 

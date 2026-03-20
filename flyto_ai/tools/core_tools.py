@@ -34,6 +34,21 @@ def clear_browser_sessions() -> None:
     _goto_consecutive_fails = 0
 
 
+def get_browser_status() -> str:
+    """Get a prompt hint about browser state for the LLM.
+
+    Returns empty string if no browser running, or an instruction
+    telling the LLM to reuse the existing browser.
+    """
+    with _browser_sessions_lock:
+        if not _browser_sessions:
+            return ""
+        return (
+            "BROWSER IS ALREADY RUNNING. Do NOT call browser.launch again. "
+            "Continue using browser.goto / browser.snapshot / browser.click directly."
+        )
+
+
 def _is_ok(result: Dict[str, Any]) -> bool:
     """Check if a module result indicates success.
 

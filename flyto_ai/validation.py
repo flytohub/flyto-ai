@@ -1,8 +1,16 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
-"""YAML extraction and workflow step validation."""
+"""YAML extraction and workflow step validation.
+
+Two validation tiers:
+1. Basic (flyto-core) — module existence + param name check
+2. Deep  (flyto-pro)  — ContractEngine binding resolution + type checking
+"""
+import logging
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 _YAML_BLOCK_RE = re.compile(r'```(?:yaml|yml)\s*\n(.*?)```', re.DOTALL)
 
@@ -77,3 +85,56 @@ def validate_workflow_steps(yaml_str: str) -> List[str]:
                     )
 
     return errors
+
+
+async def validate_workflow_deep(
+    yaml_str: str,
+    pro_bridge=None,
+) -> Dict[str, List[str]]:
+    """Deep validation using flyto-pro ContractEngine + basic validation.
+
+    Returns {"basic": [...], "contract": [...], "missing_modules": [...]}.
+    Basic errors are always checked. Contract errors are added when
+    flyto-pro is available and enabled.
+
+    Args:
+        yaml_str: Raw YAML string.
+        pro_bridge: ProBridge instance (optional). If None, only basic
+                    validation is performed.
+    """
+    result = {
+        "basic": validate_workflow_steps(yaml_str),
+        "contract": [],
+        "missing_modules": [],
+    }
+
+    if pro_bridge is None:
+        return result
+
+    # Extract missing module IDs from basic validation errors
+    for err in result["basic"]:
+        if "not found" in err:
+            # "Step 'x': module 'y' not found" → extract 'y'
+            parts = err.split("'")
+            if len(parts) >= 4:
+                result["missing_modules"].append(parts[3])
+
+    # Deep contract validation
+    try:
+        deep_report = await pro_bridge.validate_workflow_deep(yaml_str)
+        if deep_report and not deep_report.get("valid", True):
+            for issue in deep_report.get("issues", []):
+                msg = issue.get("message", "")
+                node = issue.get("node_id", "")
+                severity = issue.get("severity", "error")
+                prefix = "[{}]".format(severity) if severity != "error" else ""
+                if node:
+                    result["contract"].append(
+                        "{}Node '{}': {}".format(prefix + " " if prefix else "", node, msg)
+                    )
+                else:
+                    result["contract"].append("{}{}".format(prefix + " " if prefix else "", msg))
+    except Exception as e:
+        logger.debug("Deep validation failed: %s", e)
+
+    return result

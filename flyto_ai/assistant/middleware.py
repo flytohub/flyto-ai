@@ -113,6 +113,8 @@ class AssistantMiddleware:
         router.init_storage()
         self._output_tracker: Optional[OutputTracker] = None
         self._last_choices: Optional[Dict[str, Any]] = None
+        # Set by Agent._init_pro_bridge() when flyto-pro is available
+        self._ems_bridge = None
 
     # ── Before LLM call ──────────────────────────────────────────
 
@@ -318,6 +320,38 @@ class AssistantMiddleware:
             history.append(result)
             if self._output_tracker:
                 self._output_tracker.on_tool_call(func_name, func_args, result)
+
+        # EMS: record errors + check for known fixes
+        if (func_name == "execute_module"
+                and isinstance(result, dict)
+                and result.get("ok") is False
+                and self._ems_bridge is not None):
+            mid = func_args.get("module_id", "") if isinstance(func_args, dict) else ""
+            error_msg = str(result.get("error", ""))
+            error_type = result.get("error_type", "execution_error")
+            try:
+                # Record error for future learning (await, not fire-and-forget)
+                await self._ems_bridge.record_error(
+                    error_type=error_type,
+                    message=error_msg,
+                    stage="execute_module",
+                    module_id=mid,
+                )
+            except Exception as e:
+                logger.debug("EMS record_error failed: %s", e)
+            try:
+                # Check for a known fix
+                lesson = await self._ems_bridge.get_lesson_for_error(
+                    error_type=error_type,
+                    message=error_msg,
+                )
+                if lesson:
+                    fix_hint = lesson.get("fix", lesson.get("lesson", ""))
+                    if fix_hint:
+                        result["_ems_fix_hint"] = fix_hint
+                        logger.info("EMS found fix for %s: %s", mid, fix_hint[:100])
+            except Exception as e:
+                logger.debug("EMS get_lesson failed: %s", e)
 
         # Auto-retry on failure: use flyto-core's corrected_params
         if (func_name == "execute_module"

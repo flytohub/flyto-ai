@@ -99,6 +99,14 @@ class AgentConfig:
     # Browser engine
     browser_engine: str = "chromium"  # "chromium" | "firefox" | "webkit"
 
+    # flyto-pro intelligence
+    enable_pro: bool = True
+    pro_budget_tier: str = ""  # "free" | "pro" | "enterprise" | "" (use env)
+    enable_ems: bool = True  # Error Memory System — learn from failures
+    enable_knowledge: bool = True  # Knowledge-powered module discovery
+    enable_contract_validation: bool = True  # Deep workflow validation
+    enable_evolution: bool = False  # Auto-generate missing modules (opt-in)
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         fallbacks = []
@@ -139,6 +147,12 @@ class AgentConfig:
             vault_passphrase=data.get("vault_passphrase"),
             vault_auto_inject=data.get("vault_auto_inject", False),
             enable_injection_detection=data.get("enable_injection_detection", True),
+            enable_pro=data.get("enable_pro", True),
+            pro_budget_tier=data.get("pro_budget_tier", ""),
+            enable_ems=data.get("enable_ems", True),
+            enable_knowledge=data.get("enable_knowledge", True),
+            enable_contract_validation=data.get("enable_contract_validation", True),
+            enable_evolution=data.get("enable_evolution", False),
         )
 
     @classmethod
@@ -209,6 +223,12 @@ class AgentConfig:
             vault_passphrase=os.getenv("FLYTO_VAULT_PASSPHRASE") or None,
             vault_auto_inject=os.getenv("FLYTO_AI_VAULT_AUTO_INJECT", "false").lower() == "true",
             enable_injection_detection=os.getenv("FLYTO_AI_ENABLE_INJECTION_DETECTION", "true").lower() != "false",
+            enable_pro=os.getenv("FLYTO_AI_ENABLE_PRO", "true").lower() != "false",
+            pro_budget_tier=os.getenv("FLYTO_AI_PRO_BUDGET_TIER", ""),
+            enable_ems=os.getenv("FLYTO_AI_ENABLE_EMS", "true").lower() != "false",
+            enable_knowledge=os.getenv("FLYTO_AI_ENABLE_KNOWLEDGE", "true").lower() != "false",
+            enable_contract_validation=os.getenv("FLYTO_AI_ENABLE_CONTRACT_VALIDATION", "true").lower() != "false",
+            enable_evolution=os.getenv("FLYTO_AI_ENABLE_EVOLUTION", "false").lower() == "true",
         )
 
     def __post_init__(self):

@@ -7,7 +7,7 @@
 <h3 align="center">Natural language → executable automation workflows</h3>
 
 <p align="center">
-  <em>Most AI agents have the LLM write shell commands and pray. <strong>flyto-ai uses 412 pre-built, schema-validated modules instead.</strong></em>
+  <em>Most AI agents have the LLM write shell commands and pray. <strong>flyto-ai uses 467 pre-built, schema-validated modules instead.</strong></em>
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@ Most AI agents have the LLM generate shell commands or raw code on every run. Th
 
 ## The Fix
 
-flyto-ai flips the model: **the LLM never writes code.** It searches and selects from 412 pre-built modules, fills in parameters (validated against schemas), and executes them deterministically. Every run produces a reusable YAML workflow.
+flyto-ai flips the model: **the LLM never writes code.** It searches and selects from 467 pre-built modules, fills in parameters (validated against schemas), and executes them deterministically. Every run produces a reusable YAML workflow.
 
 ```
 ❯ scrape the title from example.com
@@ -62,7 +62,7 @@ export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 
-One install, one command — interactive chat with **412 automation modules**, browser automation, and self-learning blueprints.
+One install, one command — interactive chat with **467 automation modules**, browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
@@ -79,8 +79,8 @@ The core difference is **what the LLM does during execution**:
 | **Validation** | None — errors at runtime | Schema validation before execution |
 | **Determinism** | Same prompt → different code | Same module + params → same result |
 | **Output** | One-time result | Result + reusable YAML workflow |
-| **Learning** | None | Self-learning blueprints (zero LLM replay) |
-| **Cost per replay** | Full LLM inference again | $0 (saved blueprint, no LLM) |
+| **Learning** | None | Self-learning blueprints (near-zero LLM replay) |
+| **Cost per replay** | Full LLM inference again | ~100-500 tokens (blueprint match + invoke, 60-80% savings) |
 
 ## Use Cases
 
@@ -162,9 +162,9 @@ steps:
     condition: "${{steps.check.status_code}} != 200"
 ```
 
-## 412 Batteries Included
+## 467 Batteries Included
 
-Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 412 automation modules across 55 categories:
+Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 467 automation modules across 55 categories:
 
 | Category | Modules | Examples |
 |----------|---------|---------|
@@ -193,7 +193,7 @@ The agent remembers what works. Good workflows are automatically saved as **blue
 
 ```
 First time:  "screenshot example.com" → 15s (discover modules, build from scratch)
-Second time: "screenshot another.com" → 3s  (reuse learned blueprint, zero LLM cost)
+Second time: "screenshot another.com" → 3s  (reuse learned blueprint, minimal LLM cost)
 ```
 
 How it works (closed-loop, no LLM involved):
@@ -293,9 +293,9 @@ $ flyto-ai
            |___/
 
   v0.6.0  Interactive Mode
-  Provider: openai  Model: gpt-4o  Tools: 412
+  Provider: openai  Model: gpt-4o  Tools: 467
 
-  ⏵⏵ execute · openai/gpt-4o · 412 tools
+  ⏵⏵ execute · openai/gpt-4o · 467 tools
 ❯ scrape the title from example.com
 
   ○ browser.launch
@@ -306,7 +306,7 @@ $ flyto-ai
 
   3 executed · 5 tool calls
 
-  ⏵⏵ execute · openai/gpt-4o · 412 tools · 1 msgs
+  ⏵⏵ execute · openai/gpt-4o · 467 tools · 1 msgs
 ❯ now also take a screenshot
 
 ❯ /mode
@@ -381,8 +381,8 @@ flyto-ai chat "..." --model <name>    # Any specific model
 User message
   → LLM (OpenAI / Anthropic / Ollama)
     → Function calling: search_modules, get_module_info, execute_module, ...
-      → 412 flyto-core modules (schema-validated, deterministic)
-      → Self-learning blueprints (closed-loop, zero LLM)
+      → 467 flyto-core modules (schema-validated, deterministic)
+      → Self-learning blueprints (closed-loop, near-zero LLM)
       → Browser page inspection
     → Execute mode: run modules, return results + YAML
     → Plan mode: YAML validation loop (auto-retry on errors)
@@ -444,9 +444,9 @@ The `--dir` flag sets the default working directory for Claude Code. You can cha
 - **Claude Code as default** — plain text messages go to Claude Code CLI, with full file read/write, command execution, and persistent multi-turn context
 - **Real-time streaming** — CLI output streams to Telegram by editing the status message in real time
 - **CLI-agnostic** — `CLIProfile` abstraction supports any AI CLI (Claude, Codex, Gemini, etc.)
-- **MCP tools built-in** — Claude Code inherits your MCP config (flyto-core 412 modules, flyto-indexer, etc.)
+- **MCP tools built-in** — Claude Code inherits your MCP config (flyto-core 467 modules, flyto-indexer, etc.)
 - **Session resume** — each chat maintains a CLI session; context is preserved across messages
-- **flyto-ai agent via `/agent`** — browser automation, scraping, and 412-module workflows remain available as a slash command
+- **flyto-ai agent via `/agent`** — browser automation, scraping, and 467-module workflows remain available as a slash command
 - **Persistent job queue** — agent tasks survive server restarts, with status tracking
 - **Mid-execution steering** — send a message while an agent task is running to redirect it
 

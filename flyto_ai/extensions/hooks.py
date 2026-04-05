@@ -5,6 +5,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from flyto_ai.extensions.base import ExtensionBase
+from flyto_ai.extensions.shell_hook import HookDecision
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +80,10 @@ class HookRegistry:
 
     async def invoke_before_tool_call(
         self, tool_name: str, arguments: Dict
-    ) -> Tuple[Dict, bool]:
-        """Invoke all before_tool_call hooks.
+    ) -> HookDecision:
+        """Invoke all before_tool_call hooks sequentially.
 
-        Returns (modified_arguments, should_block).
+        Returns a ``HookDecision``. Short-circuits on first deny.
         """
         result = dict(arguments)
         for ext in self._extensions:
@@ -91,12 +92,13 @@ class HookRegistry:
                     modified = await ext.before_tool_call(tool_name, result)
                     if modified is not None:
                         if modified.get("_block"):
-                            logger.info("Extension %s blocked tool call: %s", ext.name, tool_name)
-                            return result, True
+                            reason = modified.get("_reason", "Blocked by extension: {}".format(ext.name))
+                            logger.info("Extension %s blocked tool call: %s (%s)", ext.name, tool_name, reason)
+                            return HookDecision(allowed=False, reason=reason)
                         result = modified
                 except Exception as e:
                     logger.warning("Extension %s before_tool_call failed: %s", ext.name, e)
-        return result, False
+        return HookDecision(allowed=True, modified_arguments=result)
 
     async def invoke_after_tool_call(
         self, tool_name: str, arguments: Dict, result: Any

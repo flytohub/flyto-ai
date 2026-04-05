@@ -96,6 +96,9 @@ class AgentConfig:
     # Injection detection
     enable_injection_detection: bool = True
 
+    # Permission level: "read_only", "workspace_write", or "danger_full"
+    permission_level: str = "workspace_write"
+
     # Browser engine
     browser_engine: str = "chromium"  # "chromium" | "firefox" | "webkit"
 
@@ -147,6 +150,7 @@ class AgentConfig:
             vault_passphrase=data.get("vault_passphrase"),
             vault_auto_inject=data.get("vault_auto_inject", False),
             enable_injection_detection=data.get("enable_injection_detection", True),
+            permission_level=data.get("permission_level", "workspace_write"),
             enable_pro=data.get("enable_pro", True),
             pro_budget_tier=data.get("pro_budget_tier", ""),
             enable_ems=data.get("enable_ems", True),
@@ -223,6 +227,7 @@ class AgentConfig:
             vault_passphrase=os.getenv("FLYTO_VAULT_PASSPHRASE") or None,
             vault_auto_inject=os.getenv("FLYTO_AI_VAULT_AUTO_INJECT", "false").lower() == "true",
             enable_injection_detection=os.getenv("FLYTO_AI_ENABLE_INJECTION_DETECTION", "true").lower() != "false",
+            permission_level=os.getenv("FLYTO_AI_PERMISSION_LEVEL", "workspace_write"),
             enable_pro=os.getenv("FLYTO_AI_ENABLE_PRO", "true").lower() != "false",
             pro_budget_tier=os.getenv("FLYTO_AI_PRO_BUDGET_TIER", ""),
             enable_ems=os.getenv("FLYTO_AI_ENABLE_EMS", "true").lower() != "false",

@@ -489,11 +489,11 @@ class BlockerExtension(ExtensionBase):
         loader = ExtensionLoader(self.tmpdir)
         registry = loader.load_all()
 
-        _, blocked = await registry.invoke_before_tool_call("dangerous_operation", {})
-        assert blocked is True
+        result = await registry.invoke_before_tool_call("dangerous_operation", {})
+        assert result.allowed is False
 
-        _, blocked = await registry.invoke_before_tool_call("safe_operation", {})
-        assert blocked is False
+        result = await registry.invoke_before_tool_call("safe_operation", {})
+        assert result.allowed is True
 
     def test_capability_filter_rejects(self):
         """Extension requiring disallowed capability is rejected."""

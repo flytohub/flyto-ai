@@ -14,8 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.config import AgentConfig
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
+from flyto_ai.permissions import PermissionDecision, PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
 from flyto_ai.prompt.system_prompt import build_system_prompt, detect_language
+from flyto_ai.protocols import ApiClient, ToolExecutor
 from flyto_ai.providers.base import LLMProvider
 from flyto_ai.validation import extract_yaml_from_response, validate_workflow_steps
 
@@ -50,13 +52,27 @@ class Agent:
         dispatch_fn=None,
         system_prompt: Optional[str] = None,
         policies: Optional[Dict[str, Any]] = None,
+        *,
+        api_client: Optional[ApiClient] = None,
+        tool_executor: Optional[ToolExecutor] = None,
     ) -> None:
         self._config = config
-        self._provider = self._make_provider()
-        self._tools = tools or []
-        self._dispatch_fn = dispatch_fn
+        self._provider = api_client or self._make_provider()
         self._system_prompt = system_prompt
         self._policies = policies
+
+        # When a ToolExecutor is provided, derive tools + dispatch from it
+        if tool_executor is not None:
+            self._tools = tool_executor.tools
+            self._dispatch_fn = tool_executor.dispatch
+        else:
+            self._tools = tools or []
+            self._dispatch_fn = dispatch_fn
+
+        # Permission enforcer (three-tier: READ_ONLY / WORKSPACE_WRITE / DANGER_FULL)
+        self._permission_enforcer = PermissionEnforcer(
+            level=PermissionLevel[config.permission_level.upper()],
+        )
 
         # Memory system (lazy init)
         self._memory_store = None
@@ -498,10 +514,12 @@ class Agent:
     # ── Dispatch ──────────────────────────────────────────────────
 
     def _make_safe_dispatch(self, user_message: str = ""):
-        """Create a dispatch function with policy enforcement + assistant middleware."""
+        """Create a dispatch function with permission + hooks + policy enforcement + assistant middleware."""
         base_dispatch = self._dispatch_fn
         policies = self._policies
         enable_injection = self._config.enable_injection_detection
+        enforcer = self._permission_enforcer
+        hooks = self._hooks
 
         # Wrap with assistant middleware (blueprint guard + selector healing)
         if self._assistant and base_dispatch:
@@ -510,7 +528,12 @@ class Agent:
             assisted_dispatch = base_dispatch
 
         async def safe_dispatch(func_name: str, func_args: dict) -> dict:
-            # Policy enforcement
+            # Permission tier enforcement
+            decision = enforcer.check(func_name, func_args)
+            if not decision.allowed:
+                return {"ok": False, "error": decision.reason}
+
+            # Legacy policy enforcement (allowlists)
             if policies and not is_tool_allowed(func_name, policies):
                 return {"ok": False, "error": "Tool not allowed: {}".format(func_name)}
             if policies and func_name == "execute_module":
@@ -519,7 +542,19 @@ class Agent:
                     category = module_id.split(".")[0] if "." in module_id else module_id
                     return {"ok": False, "error": "Module category '{}' is not allowed.".format(category)}
 
+            # Extension hooks: before_tool_call (deny = short-circuit)
+            if hooks:
+                hook_result = await hooks.invoke_before_tool_call(func_name, func_args)
+                if not hook_result.allowed:
+                    return {"ok": False, "error": hook_result.reason}
+                if hook_result.modified_arguments is not None:
+                    func_args = hook_result.modified_arguments
+
             result = await assisted_dispatch(func_name, func_args)
+
+            # Extension hooks: after_tool_call
+            if hooks:
+                await hooks.invoke_after_tool_call(func_name, func_args, result)
 
             # Pro: track tool call for budget enforcement
             if self._pro:

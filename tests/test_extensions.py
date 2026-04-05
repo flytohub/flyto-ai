@@ -120,9 +120,9 @@ async def test_hook_before_tool_call():
     ext = MockExtension()
     reg.register(ext)
 
-    args, blocked = await reg.invoke_before_tool_call("search_modules", {"query": "email"})
-    assert blocked is False
-    assert args == {"query": "email"}
+    result = await reg.invoke_before_tool_call("search_modules", {"query": "email"})
+    assert result.allowed is True
+    assert result.modified_arguments == {"query": "email"}
 
 
 @pytest.mark.asyncio
@@ -141,11 +141,11 @@ async def test_hook_block_tool_call():
     reg = HookRegistry()
     reg.register(BlockingExt())
 
-    _, blocked = await reg.invoke_before_tool_call("dangerous_tool", {})
-    assert blocked is True
+    result = await reg.invoke_before_tool_call("dangerous_tool", {})
+    assert result.allowed is False
 
-    _, blocked = await reg.invoke_before_tool_call("safe_tool", {})
-    assert blocked is False
+    result = await reg.invoke_before_tool_call("safe_tool", {})
+    assert result.allowed is True
 
 
 @pytest.mark.asyncio

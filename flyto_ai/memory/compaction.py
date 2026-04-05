@@ -187,6 +187,29 @@ class ContextCompactor:
 
         return result, True
 
+    def auto_compact_from_usage(
+        self,
+        messages: List[Dict[str, Any]],
+        prompt_tokens: int,
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Compact using actual token count from provider response.
+
+        Uses real ``prompt_tokens`` instead of the heuristic estimator,
+        inspired by claw-code's auto-compact that triggers when
+        ``input_tokens > 100K``.
+
+        Falls back to :meth:`maybe_compact` when ``prompt_tokens`` is 0
+        (e.g. deterministic pipeline, no LLM call).
+        """
+        if prompt_tokens <= 0:
+            return self.maybe_compact(messages)
+
+        if prompt_tokens >= self._hard_threshold:
+            return self._hard_compact(messages)
+        if prompt_tokens >= self._soft_threshold:
+            return self._soft_compact(messages)
+        return messages, False
+
     def _summarize_messages(self, messages: List[Dict[str, Any]]) -> Optional[str]:
         """Summarize a list of messages into a compact summary.
 

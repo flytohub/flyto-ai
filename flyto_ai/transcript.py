@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 # Default transcript directory
 _DEFAULT_DIR = "~/.flyto/transcripts"
+
+# Rotation constants (inspired by claw-code's 256KB / max 3 rotated files)
+MAX_FILE_SIZE_BYTES = 256 * 1024  # 256 KB
+MAX_ROTATED_FILES = 3
 
 
 class TranscriptWriter:
@@ -25,7 +30,14 @@ class TranscriptWriter:
     Crash-safe: each event is flushed immediately after write.
     """
 
+    # Only allow safe characters in session_id to prevent path traversal
+    _SAFE_SESSION_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
     def __init__(self, session_id: str, transcript_dir: Optional[str] = None) -> None:
+        if not self._SAFE_SESSION_RE.match(session_id):
+            # Sanitize: keep only safe chars
+            session_id = re.sub(r"[^a-zA-Z0-9_\-]", "", session_id) or "unknown"
+            logger.warning("Session ID sanitized to: %s", session_id)
         self._session_id = session_id
         base_dir = Path(os.path.expanduser(transcript_dir or _DEFAULT_DIR))
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -42,9 +54,54 @@ class TranscriptWriter:
         if self._file is None:
             self._file = open(self._path, "a", encoding="utf-8")
 
+    def _maybe_rotate(self) -> None:
+        """Rotate the transcript file if it exceeds MAX_FILE_SIZE_BYTES.
+
+        Keeps at most MAX_ROTATED_FILES rotated copies::
+
+            session.jsonl       (current)
+            session.1.jsonl     (previous)
+            session.2.jsonl     (oldest kept)
+            session.3.jsonl     (deleted when MAX_ROTATED_FILES=3)
+        """
+        try:
+            if not self._path.exists():
+                return
+            if self._path.stat().st_size < MAX_FILE_SIZE_BYTES:
+                return
+
+            # Close current file before rotating
+            self.close()
+
+            base = self._path
+            stem = base.stem      # e.g. "abc123"
+            parent = base.parent
+            suffix = base.suffix  # e.g. ".jsonl"
+
+            # Delete oldest if at limit
+            oldest = parent / "{}.{}{}".format(stem, MAX_ROTATED_FILES, suffix)
+            if oldest.exists():
+                oldest.unlink()
+
+            # Shift existing rotated files: 2→3, 1→2
+            for i in range(MAX_ROTATED_FILES - 1, 0, -1):
+                src = parent / "{}.{}{}".format(stem, i, suffix)
+                dst = parent / "{}.{}{}".format(stem, i + 1, suffix)
+                if src.exists():
+                    src.rename(dst)
+
+            # Current → .1
+            rotated = parent / "{}.1{}".format(stem, suffix)
+            base.rename(rotated)
+
+            logger.debug("Transcript rotated: %s → %s", base.name, rotated.name)
+        except Exception as e:
+            logger.debug("Transcript rotation failed: %s", e)
+
     def _write_event(self, event_type: str, data: Any) -> None:
         """Write a single event line and flush."""
         try:
+            self._maybe_rotate()
             self._ensure_open()
             record = {
                 "ts": time.time(),

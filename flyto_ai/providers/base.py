@@ -13,10 +13,16 @@ logger = logging.getLogger(__name__)
 # Type alias for the dispatch function
 DispatchFn = Callable[[str, dict], Coroutine[Any, Any, dict]]
 
-# Shared constants for tool result handling
-MAX_RESULT_LEN = 8000
-MAX_PREVIEW_LEN = 500
-TRUNCATION_NOTE = "...(truncated)"
+# Import shared constants from flyto-core (canonical source)
+try:
+    from core.modules.atomic.llm._resilience import (
+        MAX_TOOL_RESULT_LEN as MAX_RESULT_LEN,
+        TRUNCATION_MARKER as TRUNCATION_NOTE,
+    )
+except ImportError:
+    MAX_RESULT_LEN = 8000
+    TRUNCATION_NOTE = "...(truncated)"
+MAX_PREVIEW_LEN = 500  # flyto-ai only (log preview)
 
 
 def fire_stream(on_stream: Optional[StreamCallback], event: StreamEvent) -> None:

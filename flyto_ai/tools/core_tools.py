@@ -114,30 +114,32 @@ def get_core_tool_defs():
 # Browser retry — transient error detection + smart retry at dispatch level
 # ---------------------------------------------------------------------------
 
-_TRANSIENT_PATTERNS = [
-    "timeout", "timed out", "target closed", "session closed",
-    "navigation failed", "browser disconnected",
-    "execution context was destroyed", "connection refused",
-    "net::err_", "page crashed",
-]
+# Import shared error classification from flyto-core (canonical source)
+try:
+    from core.modules.atomic.llm._resilience import (
+        is_transient_error as _is_transient_error,
+        is_session_dead as _is_session_dead,
+    )
+except ImportError:
+    # Fallback: inline patterns if flyto-core is too old
+    _TRANSIENT_PATTERNS = [
+        "timeout", "timed out", "target closed", "session closed",
+        "navigation failed", "browser disconnected",
+        "execution context was destroyed", "connection refused",
+        "net::err_", "page crashed",
+    ]
+    _SESSION_DEAD_PATTERNS = [
+        "target closed", "session closed", "browser disconnected",
+        "browser has been closed", "browser.close",
+    ]
 
-# Patterns that indicate the browser session itself is dead (needs relaunch)
-_SESSION_DEAD_PATTERNS = [
-    "target closed", "session closed", "browser disconnected",
-    "browser has been closed", "browser.close",
-]
+    def _is_transient_error(error_msg: str) -> bool:
+        lower = error_msg.lower()
+        return any(p in lower for p in _TRANSIENT_PATTERNS)
 
-
-def _is_transient_error(error_msg: str) -> bool:
-    """Check if an error message indicates a transient browser failure."""
-    lower = error_msg.lower()
-    return any(p in lower for p in _TRANSIENT_PATTERNS)
-
-
-def _is_session_dead(error_msg: str) -> bool:
-    """Check if an error message indicates the browser session is dead."""
-    lower = error_msg.lower()
-    return any(p in lower for p in _SESSION_DEAD_PATTERNS)
+    def _is_session_dead(error_msg: str) -> bool:
+        lower = error_msg.lower()
+        return any(p in lower for p in _SESSION_DEAD_PATTERNS)
 
 
 async def _relaunch_browser() -> Dict[str, Any]:

@@ -13,12 +13,30 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+# Import shared resilience primitives from flyto-core (canonical source)
+try:
+    from core.modules.atomic.llm._resilience import (
+        SnapshotGuard as _CoreSnapshotGuard,
+        CircuitBreaker,
+        is_transient_error,
+        is_session_dead,
+        truncate_tool_result,
+        scan_for_injection,
+        BROWSER_POLICIES,
+        _SNAPSHOT_MODULES,
+        _INTERACT_MODULES,
+    )
+    _HAS_CORE_RESILIENCE = True
+except ImportError:
+    _HAS_CORE_RESILIENCE = False
+
 logger = logging.getLogger(__name__)
 
 _FAIL_HINTS = ("not found", "no element", "timeout", "waiting for selector", "failed to find")
-_INTERACT_MODULES = frozenset(("browser.click", "browser.type", "browser.extract",
-                                "browser.wait", "browser.find", "browser.form", "browser.select"))
-_SNAPSHOT_MODULES = frozenset(("browser.snapshot", "browser.extract"))
+if not _HAS_CORE_RESILIENCE:
+    _INTERACT_MODULES = frozenset(("browser.click", "browser.type", "browser.extract",
+                                    "browser.wait", "browser.find", "browser.form", "browser.select"))
+    _SNAPSHOT_MODULES = frozenset(("browser.snapshot", "browser.extract"))
 
 # Anti-bot detection signals in page content
 _ANTIBOT_SIGNALS = (

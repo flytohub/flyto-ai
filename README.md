@@ -14,6 +14,8 @@
   <a href="https://pypi.org/project/flyto-ai/"><img src="https://img.shields.io/pypi/v/flyto-ai?color=blue" alt="PyPI"></a>
   <a href="https://pypi.org/project/flyto-ai/"><img src="https://img.shields.io/pypi/pyversions/flyto-ai" alt="Python"></a>
   <a href="https://github.com/flytohub/flyto-ai/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"></a>
+  <a href="https://flyto2.com"><img src="https://img.shields.io/badge/website-flyto2.com-8B5CF6" alt="Website"></a>
+  <a href="https://docs.flyto2.com"><img src="https://img.shields.io/badge/docs-docs.flyto2.com-06B6D4" alt="Docs"></a>
 </p>
 
 ---

@@ -502,3 +502,7 @@ Seven layers of system intelligence that run automatically on every tool call:
 ## License
 
 Apache-2.0 — use it commercially, fork it, build on it.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=flytohub/flyto-ai&type=Date)](https://star-history.com/#flytohub/flyto-ai&Date)

@@ -41,8 +41,9 @@ flyto-ai = "flyto_ai.cli:main"
 flyto-ai-mcp = "flyto_ai.mcp_server:main"
 
 [project.urls]
-Homepage = "https://github.com/flytohub/flyto-ai"
-Repository = "https://github.com/flytohub/flyto-ai.git"
+Homepage = "https://flyto2.com"
+Documentation = "https://docs.flyto2.com"
+Repository = "https://github.com/flytohub/flyto-ai"
 Issues = "https://github.com/flytohub/flyto-ai/issues"
 
 [tool.hatch.build.targets.wheel]

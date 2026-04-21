@@ -81,11 +81,6 @@ def main():
     code_p.add_argument("--max-turns", type=int, default=30, help="Max Claude Code turns (default: 30)")
     code_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
-    # flyto-ai console
-    console_p = sub.add_parser("console", help="Open management dashboard in browser")
-    console_p.add_argument("--port", type=int, default=7411, help="Server port (default: 7411)")
-    console_p.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
-
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
 
@@ -95,8 +90,6 @@ def main():
         _cmd_version()
     elif args.command == "blueprints":
         _cmd_blueprints(args)
-    elif args.command == "console":
-        _cmd_console(args)
     elif args.command == "serve":
         _cmd_serve(args)
     elif args.command == "mcp":
@@ -1128,32 +1121,6 @@ def _post_webhook(url, result):
         print("{}Webhook failed: {} — {}{}".format(_YELLOW, url, e, _RESET), file=sys.stderr)
 
 
-def _cmd_console(args):
-    """Start server and open management dashboard in browser."""
-    import webbrowser
-    import threading
-
-    port = args.port
-    url = "http://127.0.0.1:{}/console".format(port)
-
-    if not args.no_open:
-        # Open browser after short delay (server needs time to start)
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-
-    print()
-    print("  {}{}flyto-ai Console{}".format(_BOLD, _CYAN, _RESET))
-    print("  Opening {}{}{}".format(_GREEN, url, _RESET))
-    print()
-
-    # Reuse serve with default args
-    args.host = "127.0.0.1"
-    args.provider = None
-    args.model = None
-    args.api_key = None
-    args.dir = None
-    _cmd_serve(args)
-
-
 def _cmd_serve(args):
     """Start HTTP server. Uses aiohttp if installed, otherwise stdlib fallback."""
     try:
@@ -1367,117 +1334,6 @@ def _cmd_serve_aiohttp(args):
         async def _tg_cleanup(app):
             await tg_service.close()
 
-    # --- Console API (management dashboard) ---
-    from flyto_ai import console_api
-    console_api.set_agent(agent)
-
-    async def _console_get(endpoint_fn):
-        async def handler(request):
-            import asyncio
-            result = endpoint_fn()
-            if asyncio.iscoroutine(result):
-                result = await result
-            return web.json_response(result, dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-        return handler
-
-    async def handle_console_overview(request):
-        return web.json_response(console_api.get_overview(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_cost(request):
-        return web.json_response(console_api.get_cost_detail(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_keys(request):
-        return web.json_response(console_api.get_api_keys(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_keys_post(request):
-        body = await request.json()
-        return web.json_response(console_api.set_api_key(body.get("provider", ""), body.get("api_key", "")))
-
-    async def handle_console_keys_delete(request):
-        body = await request.json()
-        return web.json_response(console_api.delete_api_key(body.get("provider", "")))
-
-    async def handle_console_executions(request):
-        return web.json_response(console_api.get_executions(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_sessions(request):
-        result = await console_api.get_sessions()
-        return web.json_response(result, dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_blueprints(request):
-        return web.json_response(console_api.get_blueprints(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_license(request):
-        return web.json_response(console_api.get_license())
-
-    async def handle_console_license_activate(request):
-        body = await request.json()
-        return web.json_response(console_api.activate_license(body.get("key", "")))
-
-    async def handle_console_ems(request):
-        return web.json_response(console_api.get_ems_stats())
-
-    async def handle_console_modules(request):
-        return web.json_response(console_api.get_modules(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_budget(request):
-        return web.json_response(console_api.get_budget(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_chat_history(request):
-        sid = request.query.get("session_id", "")
-        result = await console_api.get_chat_history(session_id=sid)
-        return web.json_response(result, dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_all_sessions(request):
-        result = await console_api.get_all_sessions()
-        return web.json_response(result, dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
-
-    async def handle_console_set_budget(request):
-        body = await request.json()
-        return web.json_response(console_api.set_budget(
-            session_budget_usd=body.get("session_budget_usd"),
-            global_budget_usd=body.get("global_budget_usd"),
-        ))
-
-    async def handle_console_reset_budget(request):
-        return web.json_response(console_api.reset_budget())
-
-    async def handle_console_channels(request):
-        return web.json_response(console_api.get_channels())
-
-    async def handle_console_set_channel(request):
-        body = await request.json()
-        return web.json_response(console_api.set_channel(
-            body.get("channel", ""), body.get("token", ""),
-        ))
-
-    async def handle_console_setup(request):
-        body = await request.json()
-        result = console_api.setup_provider(
-            provider=body.get("provider", ""),
-            api_key=body.get("api_key", ""),
-            base_url=body.get("base_url", ""),
-        )
-        if result.get("ok"):
-            # Re-register the new agent for console API
-            console_api.set_agent(console_api._agent)
-            # Also update the chat handler's agent reference
-            nonlocal agent
-            agent = console_api._agent
-        return web.json_response(result)
-
-    async def handle_console_setup_status(request):
-        return web.json_response(console_api.get_setup_status())
-
-    # --- Console static files ---
-    async def handle_console_index(request):
-        try:
-            dist_dir = importlib.resources.files("flyto_ai").joinpath("console/dist")
-            index = dist_dir.joinpath("index.html")
-            return web.Response(text=index.read_text("utf-8"), content_type="text/html")
-        except Exception:
-            return web.Response(text="Console not built. Run: cd console-ui && npm run build", status=404)
-
     app = web.Application(client_max_size=MAX_BODY_SIZE, middlewares=[cors_middleware])
     app.router.add_get("/", handle_demo)
     app.router.add_get("/demo", handle_demo)
@@ -1485,37 +1341,6 @@ def _cmd_serve_aiohttp(args):
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/chat/stream", handle_chat_stream)
     app.router.add_get("/health", handle_health)
-
-    # Console routes
-    app.router.add_get("/console", handle_console_index)
-    app.router.add_get("/console/api/overview", handle_console_overview)
-    app.router.add_get("/console/api/cost", handle_console_cost)
-    app.router.add_get("/console/api/keys", handle_console_keys)
-    app.router.add_post("/console/api/keys", handle_console_keys_post)
-    app.router.add_post("/console/api/keys/delete", handle_console_keys_delete)
-    app.router.add_get("/console/api/executions", handle_console_executions)
-    app.router.add_get("/console/api/sessions", handle_console_sessions)
-    app.router.add_get("/console/api/blueprints", handle_console_blueprints)
-    app.router.add_get("/console/api/license", handle_console_license)
-    app.router.add_post("/console/api/license/activate", handle_console_license_activate)
-    app.router.add_get("/console/api/ems", handle_console_ems)
-    app.router.add_get("/console/api/modules", handle_console_modules)
-    app.router.add_get("/console/api/budget", handle_console_budget)
-    app.router.add_post("/console/api/setup", handle_console_setup)
-    app.router.add_get("/console/api/setup/status", handle_console_setup_status)
-    app.router.add_get("/console/api/chat/history", handle_console_chat_history)
-    app.router.add_get("/console/api/sessions/all", handle_console_all_sessions)
-    app.router.add_post("/console/api/budget/set", handle_console_set_budget)
-    app.router.add_post("/console/api/budget/reset", handle_console_reset_budget)
-    app.router.add_get("/console/api/channels", handle_console_channels)
-    app.router.add_post("/console/api/channels/set", handle_console_set_channel)
-
-    # Serve console static assets
-    try:
-        dist_path = str(importlib.resources.files("flyto_ai").joinpath("console/dist"))
-        app.router.add_static("/console/assets", dist_path + "/assets")
-    except Exception:
-        pass
 
     if tg_service:
         app.router.add_post("/telegram", tg_service.handle_aiohttp)
@@ -1527,7 +1352,6 @@ def _cmd_serve_aiohttp(args):
     print("  Listening on {}http://{}:{}{}".format(_GREEN, args.host, args.port, _RESET))
     print()
     print("  {}GET  /{}            Demo page".format(_BOLD, _RESET))
-    print("  {}GET  /console{}     Management dashboard".format(_BOLD, _RESET))
     print("  {}POST /chat{}        Chat API".format(_BOLD, _RESET))
     print("  {}POST /chat/stream{} Streaming SSE".format(_BOLD, _RESET))
     print("  {}GET  /health{}      Health check".format(_BOLD, _RESET))

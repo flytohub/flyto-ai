@@ -4,13 +4,37 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-from .blueprints import auth_bypass, sql_injection, xss_reflected
+from .blueprints import (
+    auth_bypass,
+    command_injection,
+    crlf_injection,
+    insecure_deserialization,
+    mass_assignment,
+    nosql_injection,
+    open_redirect,
+    path_traversal,
+    sql_injection,
+    ssrf,
+    ssti,
+    xss_reflected,
+    xxe,
+)
 from .schema import SecurityFinding
 
 _BLUEPRINT_MAP = {
     "sql_injection": sql_injection.generate,
     "xss_reflected": xss_reflected.generate,
     "auth_bypass": auth_bypass.generate,
+    "ssrf": ssrf.generate,
+    "open_redirect": open_redirect.generate,
+    "command_injection": command_injection.generate,
+    "path_traversal": path_traversal.generate,
+    "xxe": xxe.generate,
+    "ssti": ssti.generate,
+    "nosql_injection": nosql_injection.generate,
+    "insecure_deserialization": insecure_deserialization.generate,
+    "mass_assignment": mass_assignment.generate,
+    "crlf_injection": crlf_injection.generate,
 }
 
 

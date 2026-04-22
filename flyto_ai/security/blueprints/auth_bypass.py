@@ -100,7 +100,7 @@ def generate(
                 "module": "test.assert_status",
                 "label": "Assert Auth Bypass Detected",
                 "params": {
-                    "source": "${auth_probes.data}",
+                    "source": "${auth_probes.items}",
                     "baseline_index": 0,
                     "probe_indices": [1, 2, 3, 4],
                     "expected_blocked": [401, 403],

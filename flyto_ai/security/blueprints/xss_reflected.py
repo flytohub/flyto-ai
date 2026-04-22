@@ -104,7 +104,7 @@ def generate(
                 "module": "test.assert_contains",
                 "label": "Assert XSS Detected",
                 "params": {
-                    "source": "${xss_probes.data}",
+                    "source": "${xss_probes.items}",
                     "patterns": [
                         "<script>alert",
                         "onerror=alert",

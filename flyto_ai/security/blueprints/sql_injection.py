@@ -85,7 +85,7 @@ def generate(
                 "module": "test.assert_contains",
                 "label": "Assert SQL Injection Detected",
                 "params": {
-                    "source": "${sql_probes.data}",
+                    "source": "${sql_probes.items}",
                     "patterns": [
                         "sql syntax",
                         "mysql_fetch",
@@ -106,7 +106,7 @@ def generate(
                 "module": "test.assert_timing",
                 "label": "Assert Time-Based Blind SQLi",
                 "params": {
-                    "source": "${sql_probes.data}",
+                    "source": "${sql_probes.items}",
                     "baseline_index": 0,
                     "probe_index": 2,
                     "threshold_ms": 3000,

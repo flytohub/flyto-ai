@@ -6,13 +6,33 @@ VulnCategory = Literal[
     "sql_injection",
     "xss_reflected",
     "auth_bypass",
-    # Future: "xss_stored", "ssrf", "idor", "deserialization"
+    "ssrf",
+    "open_redirect",
+    "command_injection",
+    "path_traversal",
+    "xxe",
+    "ssti",
+    "nosql_injection",
+    "insecure_deserialization",
+    "mass_assignment",
+    "crlf_injection",
+    # Future: "xss_stored", "xss_dom", "csrf", "idor"
 ]
 
 SUPPORTED_CATEGORIES: list[str] = [
     "sql_injection",
     "xss_reflected",
     "auth_bypass",
+    "ssrf",
+    "open_redirect",
+    "command_injection",
+    "path_traversal",
+    "xxe",
+    "ssti",
+    "nosql_injection",
+    "insecure_deserialization",
+    "mass_assignment",
+    "crlf_injection",
 ]
 
 

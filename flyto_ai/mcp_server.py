@@ -16,14 +16,38 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-SERVER_INFO = {
-    "protocolVersion": "2024-11-05",
+# MCP protocol versions we support, newest first.
+# Server echoes the client's requested version when supported, otherwise
+# returns SUPPORTED_PROTOCOL_VERSIONS[0] and lets the client decide.
+# Reference: https://modelcontextprotocol.io/specification/versioning
+SUPPORTED_PROTOCOL_VERSIONS = (
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+)
+
+SERVER_CAPABILITIES = {
     "capabilities": {"tools": {"listChanged": False}},
     "serverInfo": {
         "name": "flyto-ai",
         "version": "0.9.20",
     },
 }
+
+
+def negotiate_protocol_version(client_version: Optional[str]) -> str:
+    """Echo client's requested MCP protocol version when supported, else server preferred."""
+    if client_version and client_version in SUPPORTED_PROTOCOL_VERSIONS:
+        return client_version
+    return SUPPORTED_PROTOCOL_VERSIONS[0]
+
+
+def build_initialize_response(client_version: Optional[str]) -> Dict:
+    return {
+        "protocolVersion": negotiate_protocol_version(client_version),
+        **SERVER_CAPABILITIES,
+    }
 
 # Meta-tool: lets external AI (Claude Desktop) ask flyto-ai agent
 # to execute a full workflow via natural language.
@@ -90,7 +114,8 @@ class MCPServer:
         params = request.get("params", {})
 
         if method == "initialize":
-            return _make_result(req_id, SERVER_INFO)
+            client_version = params.get("protocolVersion") if isinstance(params, dict) else None
+            return _make_result(req_id, build_initialize_response(client_version))
 
         elif method == "notifications/initialized":
             return None  # notification, no response

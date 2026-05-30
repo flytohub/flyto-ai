@@ -1,0 +1,31 @@
+# gitleaks config — flyto-ai
+# Authored by SecurityEngineer for FLYA-35 (triage of FLYA-30 Track B findings).
+# Posture: extend gitleaks' default ruleset (fail-closed on everything not
+# explicitly allowlisted below). Allowlist entries are NARROW — they name the
+# specific fixture files / fake values that the FLYA-30 sweep flagged, so a NEW
+# real secret added anywhere still trips the gate.
+#
+# Triage result: all 4 flyto-ai findings are unit-test fixtures that exercise
+# the Vault / OpenAIProvider secret-REDACTION paths (the tests assert the code
+# hides these values). No real credential was ever committed to this repo
+# (verified: `git log -S` for sk-/AIza patterns returns no live key).
+
+title = "flyto-ai gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake API keys used by Vault/OpenAIProvider redaction tests (FLYA-35)"
+# Scope to the test files that legitimately hold secret-shaped fixtures.
+paths = [
+  '''tests/test_vault\.py''',
+  '''tests/test_real_integration\.py''',
+  '''tests/test_sprint1_sprint2\.py''',
+]
+# Belt-and-suspenders: the exact fixture values, so even if these strings move
+# files they stay allowlisted while a real `sk-...` key elsewhere still fails.
+regexes = [
+  '''sk-1234567890abcdef''',
+  '''sk-test-12345678''',
+]

@@ -17,7 +17,7 @@ We take security seriously. If you discover a security vulnerability in Flyto AI
 
 Instead, report it via either channel:
 
-- **Email:** **security@flyto.dev**
+- **Email:** **security@flyto2.com**
 - **GitHub private vulnerability reporting:** go to the **Security** tab of this repository, click **"Report a vulnerability"**, and fill out the form.
 
 ### What to Include

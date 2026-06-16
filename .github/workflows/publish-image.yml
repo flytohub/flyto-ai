@@ -51,7 +51,7 @@ jobs:
             org.opencontainers.image.documentation=https://docs.flyto2.com
             org.opencontainers.image.vendor=Flyto
 
-      - uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v7
         with:
           context: flyto_ai/sandbox
           file: flyto_ai/sandbox/Dockerfile

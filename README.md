@@ -70,6 +70,20 @@ One install, one command — interactive chat with **467 automation modules**, b
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
 </p>
 
+## Usage
+
+Run `flyto-ai` for an interactive automation session, or pass a prompt directly
+to generate and execute a workflow:
+
+```bash
+flyto-ai "open https://example.com and extract the h1 text"
+flyto-ai --provider anthropic --model claude-sonnet-4-5 "summarize this page"
+flyto-ai blueprints --export > blueprints.yaml
+```
+
+For local or CI configuration, copy `.env.example` and fill only the providers
+you use. Never commit real API keys or bot tokens.
+
 ## How It's Different
 
 The core difference is **what the LLM does during execution**:

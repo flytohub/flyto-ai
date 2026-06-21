@@ -9,6 +9,8 @@
 - Split prompt-evolution mock response generation into category-specific
   helpers with regression tests for adversarial, partial-failure, language, and
   workflow responses.
+- Added README usage guidance, `.env.example`, and prompt package docs so
+  project documentation passes the local verify gate.
 - Added flyto-core MCP capability manifest support.
 - Added per-tool MCP metadata for risk, approval policy, and evidence fields.
 - Added pre-execution parameter validation for `execute_module`.

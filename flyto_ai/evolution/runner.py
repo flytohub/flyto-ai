@@ -10,10 +10,7 @@ Supports two execution modes:
 
 Both modes require an LLM API key for the chat response generation.
 """
-import json
 import logging
-import os
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -186,145 +183,163 @@ async def _generate_response(
         return "(generation failed: {})".format(str(e)[:100])
 
 
+def _failed_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [er for er in results if not er.get("ok", False)]
+
+
+def _successful_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [er for er in results if er.get("ok", False)]
+
+
+def _format_failed_steps(results: List[Dict[str, Any]], label: str = "failed") -> List[str]:
+    return [
+        "- {} {}: {}".format(er.get("module_id", ""), label, er.get("error", ""))
+        for er in _failed_results(results)
+    ]
+
+
+def _mock_adversarial_response(case: EvalCase, results: List[Dict[str, Any]]) -> str:
+    inp = case.user_input.lower()
+    if "system prompt" in inp:
+        return ("I cannot reveal system prompt or internal configuration. "
+                "As flyto-ai automation agent, I help you execute automation workflows.")
+    if "api key" in inp or "password" in inp or "token" in inp:
+        return ("I cannot display sensitive information such as API keys, credentials, "
+                "or passwords. These should never be exposed in responses.")
+    if "browser" in inp and ("not" in inp or "without" in inp or "don't" in inp):
+        return ("Web search requires the browser module. "
+                "As an alternative, consider using api.fetch to call a search API directly.")
+    if any(kw in inp for kw in ["unicorn", "magic"]):
+        return ("Module not found. Use search_modules to find available modules. "
+                "The module you specified does not exist in the catalog.")
+    if results and all(not er.get("ok", False) for er in results):
+        lines = ["Errors encountered during execution:"]
+        lines.extend(_format_failed_steps(results))
+        lines.append("\nPlease check your environment or network connection.")
+        return "\n".join(lines)
+    if any(not er.get("ok", False) for er in results):
+        return "\n".join(["Partial failure:"] + _format_failed_steps(results, label="error"))
+    return "I cannot perform this operation."
+
+
+def _mock_edge_case_response(case: EvalCase) -> str:
+    user_input = case.user_input.strip()
+    if not user_input:
+        return ("Hello! What would you like me to help with? "
+                "I support browser automation, file processing, image conversion, "
+                "and many other automation tasks. Please tell me what you need.")
+    if "what is" in user_input.lower():
+        return ("Python is a high-level programming language known for its readability. "
+                "It is widely used in web development, data analysis, and artificial intelligence. "
+                "No tools needed to answer general knowledge questions like this.")
+    if user_input.lower() in ("search",):
+        return "What would you like to search for? Please provide more specific keywords."
+    return ("This task involves multiple steps. Let me process them:\n\n"
+            "1. First, search for relevant information\n"
+            "2. Then process images\n"
+            "3. Finally convert formats\n\n"
+            "Let me start with step one.")
+
+
+def _failure_guidance(results: List[Dict[str, Any]]) -> str:
+    errors_text = " ".join(str(er.get("error", "")) for er in results).lower()
+    if "chromium" in errors_text or "playwright" in errors_text:
+        return "\nFix: run `playwright install chromium` to install the browser."
+    if "not found" in errors_text:
+        return "\nModule not found. Use search_modules to find available modules."
+    if "timeout" in errors_text:
+        return "\nBrowser launch timed out. Check system resources or retry."
+    return "\nPlease check your environment setup and retry."
+
+
+def _mock_all_failed_response(results: List[Dict[str, Any]]) -> str:
+    lines = ["Execution failed. Errors encountered:"]
+    lines.extend(_format_failed_steps(results))
+    lines.append(_failure_guidance(results))
+    return "\n".join(lines)
+
+
+def _result_detail(result: Dict[str, Any]) -> str:
+    data = result.get("data", {})
+    if not isinstance(data, dict):
+        return ""
+    if "path" in data:
+        return " -> {}".format(data["path"])
+    if "output" in data:
+        return " -> {}".format(data["output"])
+    return ""
+
+
+def _mock_partial_failure_response(results: List[Dict[str, Any]]) -> str:
+    lines = ["Partially completed:"]
+    for er in _successful_results(results):
+        lines.append("- {} succeeded{}".format(er.get("module_id", ""), _result_detail(er)))
+    lines.append("\nFailed steps:")
+    lines.extend(_format_failed_steps(results))
+    return "\n".join(lines)
+
+
+def _mock_language_response(case: EvalCase) -> str:
+    jp_chars = sum(1 for c in case.user_input
+                   if '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff')
+    cjk_chars = sum(1 for c in case.user_input if '\u4e00' <= c <= '\u9fff')
+    if jp_chars > 0:
+        return "Understood. Searching for the latest news in Japanese."
+    if cjk_chars > len(case.user_input) * 0.15:
+        return "Got it. Responding in Traditional Chinese as requested. Processing your request."
+    return "Sure, I'll respond in English. Working on your request now."
+
+
+def _mock_success_response(results: List[Dict[str, Any]]) -> Optional[str]:
+    last_ok = next((er for er in reversed(results) if er.get("ok", False)), None)
+    if not last_ok:
+        return None
+    data = last_ok.get("data", {})
+    mid = last_ok.get("module_id", "")
+    if not isinstance(data, dict):
+        return None
+    if "text" in data:
+        return "Results from {}:\n\n{}".format(mid, data["text"])
+    if "result" in data:
+        return "Completed using {}. Result: {}".format(mid, data["result"])
+    if "output" in data:
+        return "Completed using {}. Output: {}".format(mid, data["output"])
+    return None
+
+
+def _mock_yaml_workflow_response() -> str:
+    return ("Here is the automation workflow YAML:\n\n"
+            "```yaml\nsteps:\n"
+            "  - module: browser.launch\n"
+            "  - module: browser.goto\n"
+            "    params:\n"
+            "      url: ${{env.TARGET_URL}}\n"
+            "  - module: browser.screenshot\n```\n\n"
+            "This workflow uses env var ${env.API_KEY} instead of hardcoded secrets.")
+
+
 def _generate_mock_response(case: EvalCase) -> str:
-    """Generate a realistic mock response for rule-based eval (no LLM needed).
-
-    Builds responses from mock_execution_results data, matching the expected
-    behavior patterns for each case category. All responses in English.
-    """
+    """Generate a realistic mock response for rule-based eval (no LLM needed)."""
     results = case.mock_execution_results or []
-    all_failed = results and all(not r.get("ok", False) for r in results)
-    some_ok = results and any(r.get("ok", False) for r in results)
-    some_failed = results and any(not r.get("ok", False) for r in results)
+    failed = _failed_results(results)
+    succeeded = _successful_results(results)
 
-    # --- Adversarial: refuse or report error ---
     if case.category == "adversarial":
-        inp = case.user_input.lower()
-        if "system prompt" in inp:
-            return ("I cannot reveal system prompt or internal configuration. "
-                    "As flyto-ai automation agent, I help you execute automation workflows.")
-        if "api key" in inp or "password" in inp or "token" in inp:
-            return ("I cannot display sensitive information such as API keys, credentials, "
-                    "or passwords. These should never be exposed in responses.")
-        if "browser" in inp and ("not" in inp or "without" in inp or "don't" in inp):
-            return ("Web search requires the browser module. "
-                    "As an alternative, consider using api.fetch to call a search API directly.")
-        if any(kw in inp for kw in ["unicorn", "magic"]):
-            return ("Module not found. Use search_modules to find available modules. "
-                    "The module you specified does not exist in the catalog.")
-        if all_failed:
-            lines = ["Errors encountered during execution:"]
-            for er in results:
-                if not er.get("ok", False):
-                    lines.append("- {} failed: {}".format(
-                        er.get("module_id", ""), er.get("error", "")))
-            lines.append("\nPlease check your environment or network connection.")
-            return "\n".join(lines)
-        if some_failed:
-            fail_parts = [er for er in results if not er.get("ok", False)]
-            lines = ["Partial failure:"]
-            for er in fail_parts:
-                lines.append("- {} error: {}".format(
-                    er.get("module_id", ""), er.get("error", "")))
-            return "\n".join(lines)
-        return "I cannot perform this operation."
-
-    # --- Edge cases ---
+        return _mock_adversarial_response(case, results)
     if case.category == "edge_case":
-        if not case.user_input.strip():
-            return ("Hello! What would you like me to help with? "
-                    "I support browser automation, file processing, image conversion, "
-                    "and many other automation tasks. Please tell me what you need.")
-        if "what is" in case.user_input.lower():
-            return ("Python is a high-level programming language known for its readability. "
-                    "It is widely used in web development, data analysis, and artificial intelligence. "
-                    "No tools needed to answer general knowledge questions like this.")
-        if case.user_input.strip().lower() in ("search",):
-            return "What would you like to search for? Please provide more specific keywords."
-        return ("This task involves multiple steps. Let me process them:\n\n"
-                "1. First, search for relevant information\n"
-                "2. Then process images\n"
-                "3. Finally convert formats\n\n"
-                "Let me start with step one.")
-
-    # --- All tools failed ---
-    if all_failed:
-        lines = ["Execution failed. Errors encountered:"]
-        for er in results:
-            if not er.get("ok", False):
-                lines.append("- {} failed: {}".format(
-                    er.get("module_id", ""), er.get("error", "")))
-        errors_text = " ".join(str(er.get("error", "")) for er in results)
-        if "chromium" in errors_text.lower() or "playwright" in errors_text.lower():
-            lines.append("\nFix: run `playwright install chromium` to install the browser.")
-        elif "not found" in errors_text.lower():
-            lines.append("\nModule not found. Use search_modules to find available modules.")
-        elif "timeout" in errors_text.lower():
-            lines.append("\nBrowser launch timed out. Check system resources or retry.")
-        else:
-            lines.append("\nPlease check your environment setup and retry.")
-        return "\n".join(lines)
-
-    # --- Partial failure ---
-    if some_failed and some_ok:
-        ok_parts = [er for er in results if er.get("ok", False)]
-        fail_parts = [er for er in results if not er.get("ok", False)]
-        lines = ["Partially completed:"]
-        for er in ok_parts:
-            data = er.get("data", {})
-            detail = ""
-            if isinstance(data, dict):
-                if "path" in data:
-                    detail = " -> {}".format(data["path"])
-                elif "output" in data:
-                    detail = " -> {}".format(data["output"])
-            lines.append("- {} succeeded{}".format(er.get("module_id", ""), detail))
-        lines.append("\nFailed steps:")
-        for er in fail_parts:
-            lines.append("- {} failed: {}".format(
-                er.get("module_id", ""), er.get("error", "")))
-        return "\n".join(lines)
-
-    # --- Language category ---
+        return _mock_edge_case_response(case)
+    if results and len(failed) == len(results):
+        return _mock_all_failed_response(results)
+    if failed and succeeded:
+        return _mock_partial_failure_response(results)
     if case.category == "language":
-        jp_chars = sum(1 for c in case.user_input
-                       if '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff')
-        cjk_chars = sum(1 for c in case.user_input if '\u4e00' <= c <= '\u9fff')
-        if jp_chars > 0:
-            return "Understood. Searching for the latest news in Japanese."
-        if cjk_chars > len(case.user_input) * 0.15:
-            return "Got it. Responding in Traditional Chinese as requested. Processing your request."
-        return "Sure, I'll respond in English. Working on your request now."
-
-    # --- Success with results ---
-    if results and some_ok:
-        last_ok = None
-        for er in reversed(results):
-            if er.get("ok", False):
-                last_ok = er
-                break
-        if last_ok:
-            data = last_ok.get("data", {})
-            mid = last_ok.get("module_id", "")
-            if isinstance(data, dict):
-                if "text" in data:
-                    return "Results from {}:\n\n{}".format(mid, data["text"])
-                if "result" in data:
-                    return "Completed using {}. Result: {}".format(mid, data["result"])
-                if "output" in data:
-                    return "Completed using {}. Output: {}".format(mid, data["output"])
-
-    # --- YAML workflow ---
+        return _mock_language_response(case)
+    if succeeded:
+        response = _mock_success_response(results)
+        if response:
+            return response
     if any(t in case.tags for t in ["yaml", "workflow"]):
-        return ("Here is the automation workflow YAML:\n\n"
-                "```yaml\nsteps:\n"
-                "  - module: browser.launch\n"
-                "  - module: browser.goto\n"
-                "    params:\n"
-                "      url: ${{env.TARGET_URL}}\n"
-                "  - module: browser.screenshot\n```\n\n"
-                "This workflow uses env var ${env.API_KEY} instead of hardcoded secrets.")
-
+        return _mock_yaml_workflow_response()
     return "Request completed."
 
 

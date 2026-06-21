@@ -32,6 +32,8 @@ jobs:
         run: |
           echo "lint: compile imports"
           python -m compileall flyto_ai
+      - name: Lint with ruff
+        run: python -m ruff check --select E9,F63,F7,F82 flyto_ai tests
       - name: Verify MCP contract smoke
         run: |
           echo "verify: mcp contract smoke"
@@ -42,6 +44,10 @@ jobs:
             tests/test_tool_registry.py \
             tests/test_validation.py \
             -q
+      - name: Verify with flyto-indexer
+        run: |
+          python -m pip install flyto-indexer
+          flyto-index verify . --full-scan
       - name: Build distribution
         run: python -m build
 

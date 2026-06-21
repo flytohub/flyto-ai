@@ -7,5 +7,6 @@
 - [x] Add CI and generated index ignore.
 - [ ] Add reusable eval datasets for MCP tool selection.
 - [ ] Wire Cloud UI diagnostics to `/api/ai/tools/manifest`.
+- [x] Split OpenAI provider chat dispatch into test-backed helper pipeline.
 - [ ] Refactor provider chat complexity in small, test-backed steps.
 - [ ] Repair full-suite pytest drift after deterministic planning and Python 3.11 event loop changes.

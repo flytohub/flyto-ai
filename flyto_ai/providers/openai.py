@@ -54,6 +54,148 @@ def _fill_remaining_tool_responses(
         })
 
 
+def _to_openai_tools(tools: List[Dict]) -> List[Dict[str, Any]]:
+    """Convert Flyto tool definitions to OpenAI function tool definitions."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["inputSchema"],
+            },
+        }
+        for t in tools
+    ]
+
+
+def _accumulate_usage(total_usage: Dict[str, int], usage: Any) -> None:
+    """Accumulate OpenAI usage objects into the provider usage dict."""
+    if not usage:
+        return
+    total_usage["prompt_tokens"] += usage.prompt_tokens or 0
+    total_usage["completion_tokens"] += usage.completion_tokens or 0
+    total_usage["total_tokens"] += usage.total_tokens or 0
+
+
+def _content_with_finish_note(content: str, finish_reason: Optional[str]) -> str:
+    """Append the token-limit note when OpenAI truncated the response."""
+    if finish_reason == "length":
+        return content + "\n\n[Note: Response was truncated due to token limit.]"
+    return content
+
+
+def _tool_call_id(tc: Any) -> str:
+    return tc["id"] if isinstance(tc, dict) else tc.id
+
+
+def _tool_call_name(tc: Any) -> str:
+    return tc["function"]["name"] if isinstance(tc, dict) else tc.function.name
+
+
+def _tool_call_arguments(tc: Any) -> str:
+    return tc["function"]["arguments"] if isinstance(tc, dict) else tc.function.arguments
+
+
+def _parse_tool_args(arguments: str) -> Dict[str, Any]:
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _assistant_message_from_tool_calls(tool_calls: list):
+    """Build an OpenAI assistant message containing tool calls and no text."""
+    import openai.types.chat as _cht
+
+    tool_call_objs = [
+        _cht.ChatCompletionMessageToolCall(
+            id=_tool_call_id(tc),
+            type="function",
+            function=_cht.chat_completion_message_tool_call.Function(
+                name=_tool_call_name(tc),
+                arguments=_tool_call_arguments(tc),
+            ),
+        )
+        for tc in tool_calls
+    ]
+    return _cht.ChatCompletionMessage(
+        role="assistant",
+        content=None,
+        tool_calls=tool_call_objs,
+    )
+
+
+def _vision_user_message(func_name: str, images: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Build a native OpenAI vision message from tool image sidebands."""
+    vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
+    for img in images:
+        vision_content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:{};base64,{}".format(img.get("media_type", "image/png"), img["base64"]),
+                "detail": "low",
+            },
+        })
+    return {"role": "user", "content": vision_content}
+
+
+def _stream_tool_call_list(collected_tool_calls: Dict[int, Dict[str, Any]]) -> list:
+    """Convert accumulated streaming tool deltas into OpenAI tool-call dicts."""
+    return [
+        {
+            "id": tc["id"],
+            "type": "function",
+            "function": {
+                "name": tc["name"],
+                "arguments": tc["arguments"],
+            },
+        }
+        for _, tc in sorted(collected_tool_calls.items())
+    ]
+
+
+async def _collect_stream_response(stream: Any, total_usage: Dict[str, int], on_stream: StreamCallback):
+    """Collect text and tool calls from an OpenAI streaming response."""
+    content_parts: List[str] = []
+    collected_tool_calls: Dict[int, Dict[str, Any]] = {}
+    finish_reason = None
+
+    async for chunk in stream:
+        if hasattr(chunk, "usage") and chunk.usage:
+            _accumulate_usage(total_usage, chunk.usage)
+
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta is None:
+            continue
+
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
+
+        if delta.content:
+            content_parts.append(delta.content)
+            _fire(on_stream, StreamEvent(
+                type=StreamEventType.TOKEN,
+                content=delta.content,
+            ))
+
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                idx = tc_delta.index
+                if idx not in collected_tool_calls:
+                    collected_tool_calls[idx] = {"id": tc_delta.id or "", "name": "", "arguments": ""}
+                entry = collected_tool_calls[idx]
+                if tc_delta.id:
+                    entry["id"] = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        entry["name"] += tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        entry["arguments"] += tc_delta.function.arguments
+
+    return content_parts, collected_tool_calls, finish_reason
+
+
 class OpenAIProvider(LLMProvider):
     """OpenAI provider with function calling loop."""
 
@@ -93,278 +235,71 @@ class OpenAIProvider(LLMProvider):
         host = urlparse(self._base_url).hostname or ""
         return host == "api.openai.com" or host.endswith(".openai.com")
 
-    async def chat(
+    def _create_kwargs(
         self,
-        messages: List[Dict[str, Any]],
-        system_prompt: str,
-        tools: List[Dict],
+        full_messages: List[Any],
+        openai_tools: List[Dict[str, Any]],
+        source_messages: List[Dict[str, Any]],
+        round_num: int,
+    ) -> Dict[str, Any]:
+        create_kwargs: Dict[str, Any] = {
+            "model": self._model,
+            "messages": full_messages,
+            "max_tokens": self._max_tokens,
+            "temperature": self._temperature,
+        }
+        if openai_tools:
+            create_kwargs["tools"] = openai_tools
+            if round_num == 0 and _looks_like_browser_task(source_messages):
+                create_kwargs["tool_choice"] = "required"
+            else:
+                create_kwargs["tool_choice"] = "auto"
+        return create_kwargs
+
+    async def _dispatch_tool_calls(
+        self,
+        tool_calls: list,
+        full_messages: List[Any],
+        tool_call_log: List[Dict[str, Any]],
         dispatch_fn: DispatchFn,
-        max_rounds: int = 30,
+        round_num: int,
         on_stream: Optional[StreamCallback] = None,
-    ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
-        client = self._make_client()
+    ) -> bool:
+        """Dispatch model-requested tools. Returns True when ask_user pauses."""
+        tc_list = list(tool_calls)
+        for tc in tc_list:
+            func_name = _tool_call_name(tc)
+            func_args = _parse_tool_args(_tool_call_arguments(tc))
 
-        # Convert to OpenAI function format
-        openai_tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t["description"],
-                    "parameters": t["inputSchema"],
-                },
-            }
-            for t in tools
-        ]
-
-        full_messages = [{"role": "system", "content": system_prompt}]
-        full_messages.extend(messages)
-
-        tool_call_log: List[Dict[str, Any]] = []
-        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-
-        for round_num in range(max_rounds):
-            create_kwargs = {
-                "model": self._model,
-                "messages": full_messages,
-                "max_tokens": self._max_tokens,
-                "temperature": self._temperature,
-            }
-            if openai_tools:
-                create_kwargs["tools"] = openai_tools
-                # Force tool use on first round to prevent LLM from
-                # skipping tools entirely for browser/web tasks.
-                if round_num == 0 and _looks_like_browser_task(messages):
-                    create_kwargs["tool_choice"] = "required"
-                else:
-                    create_kwargs["tool_choice"] = "auto"
-
-            # ── Streaming path ──────────────────────────────────
-            if on_stream is not None:
-                create_kwargs["stream"] = True
-                # Request usage in stream (native OpenAI only)
-                if self._is_native_openai():
-                    create_kwargs["stream_options"] = {"include_usage": True}
-
-                content_parts: List[str] = []
-                collected_tool_calls: Dict[int, Dict[str, Any]] = {}
-                finish_reason = None
-
-                stream = await client.chat.completions.create(**create_kwargs)
-                async for chunk in stream:
-                    # Accumulate usage from stream (last chunk)
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        total_usage["prompt_tokens"] += chunk.usage.prompt_tokens or 0
-                        total_usage["completion_tokens"] += chunk.usage.completion_tokens or 0
-                        total_usage["total_tokens"] += chunk.usage.total_tokens or 0
-
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    if delta is None:
-                        continue
-
-                    # Finish reason
-                    if chunk.choices[0].finish_reason:
-                        finish_reason = chunk.choices[0].finish_reason
-
-                    # Text content
-                    if delta.content:
-                        content_parts.append(delta.content)
-                        _fire(on_stream, StreamEvent(
-                            type=StreamEventType.TOKEN,
-                            content=delta.content,
-                        ))
-
-                    # Tool call deltas — accumulate by index
-                    if delta.tool_calls:
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in collected_tool_calls:
-                                collected_tool_calls[idx] = {
-                                    "id": tc_delta.id or "",
-                                    "name": "",
-                                    "arguments": "",
-                                }
-                            entry = collected_tool_calls[idx]
-                            if tc_delta.id:
-                                entry["id"] = tc_delta.id
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    entry["name"] += tc_delta.function.name
-                                if tc_delta.function.arguments:
-                                    entry["arguments"] += tc_delta.function.arguments
-
-                # No tool calls → return content
-                if not collected_tool_calls:
-                    content = "".join(content_parts)
-                    if finish_reason == "length":
-                        content += "\n\n[Note: Response was truncated due to token limit.]"
-                    _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
-                    return content, tool_call_log, round_num + 1, total_usage
-
-                # Reconstruct assistant message for conversation history
-                tc_list = []
-                for idx in sorted(collected_tool_calls.keys()):
-                    tc = collected_tool_calls[idx]
-                    tc_list.append({
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": tc["arguments"],
-                        },
-                    })
-
-                # Build a message object compatible with the OpenAI API
-                import openai.types.chat as _cht
-                assistant_tc_objs = [
-                    _cht.ChatCompletionMessageToolCall(
-                        id=tc["id"],
-                        type="function",
-                        function=_cht.chat_completion_message_tool_call.Function(
-                            name=tc["function"]["name"],
-                            arguments=tc["function"]["arguments"],
-                        ),
-                    )
-                    for tc in tc_list
-                ]
-                # Strip text content from intermediate rounds with tool calls.
-                # Fabricated text alongside tool calls pollutes conversation history.
-                assistant_msg = _cht.ChatCompletionMessage(
-                    role="assistant",
-                    content=None,
-                    tool_calls=assistant_tc_objs,
-                )
-                full_messages.append(assistant_msg)
-
-                # Dispatch each tool call via shared helper
-                _ask_user_break = False
-                for tc in tc_list:
-                    func_name = tc["function"]["name"]
-                    try:
-                        func_args = json.loads(tc["function"]["arguments"])
-                    except json.JSONDecodeError:
-                        func_args = {}
-
-                    result_str, log_entry, images = await dispatch_and_log_tool(
-                        func_name, func_args, dispatch_fn, round_num, on_stream,
-                    )
-                    tool_call_log.append(log_entry)
-
-                    full_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result_str,
-                    })
-
-                    # ask_user marker — break tool loop, user input needed
-                    if log_entry.get("result", {}).get("__ASK_USER__"):
-                        _ask_user_break = True
-                        _fill_remaining_tool_responses(tc_list, tc, full_messages)
-                        break
-
-                    # Inject vision user message for native OpenAI (tool messages don't support images)
-                    if images and self._is_native_openai():
-                        vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
-                        for img in images:
-                            vision_content.append({
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "data:{};base64,{}".format(img.get("media_type", "image/png"), img["base64"]),
-                                    "detail": "low",
-                                },
-                            })
-                        full_messages.append({"role": "user", "content": vision_content})
-
-                if _ask_user_break:
-                    text = "I need some information from you before I can continue."
-                    _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
-                    return text, tool_call_log, round_num + 1, total_usage
-
-                continue  # next round
-
-            # ── Non-streaming path ──────────────────────────────
-            response = await client.chat.completions.create(**create_kwargs)
-
-            # Accumulate usage
-            if response.usage:
-                total_usage["prompt_tokens"] += response.usage.prompt_tokens or 0
-                total_usage["completion_tokens"] += response.usage.completion_tokens or 0
-                total_usage["total_tokens"] += response.usage.total_tokens or 0
-
-            choice = response.choices[0]
-
-            if not choice.message.tool_calls:
-                content = choice.message.content or ""
-                if choice.finish_reason == "length":
-                    content += "\n\n[Note: Response was truncated due to token limit.]"
-                return content, tool_call_log, round_num + 1, total_usage
-
-            # Strip text content from intermediate rounds to prevent fabrication.
-            # Reconstruct message with content=None so the LLM generates text
-            # only AFTER seeing actual tool results.
-            import openai.types.chat as _cht2
-            stripped_tc_objs = [
-                _cht2.ChatCompletionMessageToolCall(
-                    id=tc.id,
-                    type="function",
-                    function=_cht2.chat_completion_message_tool_call.Function(
-                        name=tc.function.name,
-                        arguments=tc.function.arguments,
-                    ),
-                )
-                for tc in choice.message.tool_calls
-            ]
-            stripped_msg = _cht2.ChatCompletionMessage(
-                role="assistant",
-                content=None,
-                tool_calls=stripped_tc_objs,
+            result_str, log_entry, images = await dispatch_and_log_tool(
+                func_name, func_args, dispatch_fn, round_num, on_stream,
             )
-            full_messages.append(stripped_msg)
+            tool_call_log.append(log_entry)
 
-            _ask_user_break = False
-            for tc in choice.message.tool_calls:
-                func_name = tc.function.name
-                try:
-                    func_args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    func_args = {}
+            full_messages.append({
+                "role": "tool",
+                "tool_call_id": _tool_call_id(tc),
+                "content": result_str,
+            })
 
-                result_str, log_entry, images = await dispatch_and_log_tool(
-                    func_name, func_args, dispatch_fn, round_num,
-                )
-                tool_call_log.append(log_entry)
+            if log_entry.get("result", {}).get("__ASK_USER__"):
+                _fill_remaining_tool_responses(tc_list, tc, full_messages)
+                return True
 
-                full_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_str,
-                })
+            if images and self._is_native_openai():
+                full_messages.append(_vision_user_message(func_name, images))
 
-                # ask_user marker — break tool loop, user input needed
-                if log_entry.get("result", {}).get("__ASK_USER__"):
-                    _ask_user_break = True
-                    tc_list = list(choice.message.tool_calls)
-                    _fill_remaining_tool_responses(tc_list, tc, full_messages, id_key="id")
-                    break
+        return False
 
-                # Inject vision user message for native OpenAI (tool messages don't support images)
-                if images and self._is_native_openai():
-                    vision_content = [{"type": "text", "text": "[Screenshot from {}]".format(func_name)}]
-                    for img in images:
-                        vision_content.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:{};base64,{}".format(img.get("media_type", "image/png"), img["base64"]),
-                                "detail": "low",
-                            },
-                        })
-                    full_messages.append({"role": "user", "content": vision_content})
-
-            if _ask_user_break:
-                text = "I need some information from you before I can continue."
-                return text, tool_call_log, round_num + 1, total_usage
-
-        # Hit max rounds — force summary with improved prompt
+    async def _finish_after_max_rounds(
+        self,
+        client: Any,
+        full_messages: List[Any],
+        tool_call_log: List[Dict[str, Any]],
+        max_rounds: int,
+        total_usage: Dict[str, int],
+        on_stream: Optional[StreamCallback],
+    ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         completed = [tc["function"] for tc in tool_call_log if tc.get("ok", True)]
         failed = [tc["function"] for tc in tool_call_log if not tc.get("ok", True)]
         summary_parts = [
@@ -387,10 +322,76 @@ class OpenAIProvider(LLMProvider):
             max_tokens=self._max_tokens,
             temperature=self._temperature,
         )
-        if response.usage:
-            total_usage["prompt_tokens"] += response.usage.prompt_tokens or 0
-            total_usage["completion_tokens"] += response.usage.completion_tokens or 0
-            total_usage["total_tokens"] += response.usage.total_tokens or 0
+        _accumulate_usage(total_usage, response.usage)
 
         _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
         return response.choices[0].message.content or "", tool_call_log, max_rounds, total_usage
+
+    async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str,
+        tools: List[Dict],
+        dispatch_fn: DispatchFn,
+        max_rounds: int = 30,
+        on_stream: Optional[StreamCallback] = None,
+    ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
+        client = self._make_client()
+
+        openai_tools = _to_openai_tools(tools)
+        full_messages = [{"role": "system", "content": system_prompt}]
+        full_messages.extend(messages)
+
+        tool_call_log: List[Dict[str, Any]] = []
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        for round_num in range(max_rounds):
+            create_kwargs = self._create_kwargs(full_messages, openai_tools, messages, round_num)
+
+            # ── Streaming path ──────────────────────────────────
+            if on_stream is not None:
+                create_kwargs["stream"] = True
+                if self._is_native_openai():
+                    create_kwargs["stream_options"] = {"include_usage": True}
+
+                stream = await client.chat.completions.create(**create_kwargs)
+                content_parts, collected_tool_calls, finish_reason = await _collect_stream_response(
+                    stream, total_usage, on_stream,
+                )
+                if not collected_tool_calls:
+                    content = _content_with_finish_note("".join(content_parts), finish_reason)
+                    _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
+                    return content, tool_call_log, round_num + 1, total_usage
+
+                tc_list = _stream_tool_call_list(collected_tool_calls)
+                full_messages.append(_assistant_message_from_tool_calls(tc_list))
+                if await self._dispatch_tool_calls(tc_list, full_messages, tool_call_log, dispatch_fn, round_num, on_stream):
+                    text = "I need some information from you before I can continue."
+                    _fire(on_stream, StreamEvent(type=StreamEventType.DONE))
+                    return text, tool_call_log, round_num + 1, total_usage
+
+                continue  # next round
+
+            # ── Non-streaming path ──────────────────────────────
+            response = await client.chat.completions.create(**create_kwargs)
+
+            # Accumulate usage
+            _accumulate_usage(total_usage, response.usage)
+
+            choice = response.choices[0]
+
+            if not choice.message.tool_calls:
+                content = choice.message.content or ""
+                return _content_with_finish_note(content, choice.finish_reason), tool_call_log, round_num + 1, total_usage
+
+            # Strip text content from intermediate rounds to prevent fabrication.
+            # Reconstruct message with content=None so the LLM generates text
+            # only AFTER seeing actual tool results.
+            tool_calls = list(choice.message.tool_calls)
+            full_messages.append(_assistant_message_from_tool_calls(tool_calls))
+
+            if await self._dispatch_tool_calls(tool_calls, full_messages, tool_call_log, dispatch_fn, round_num):
+                text = "I need some information from you before I can continue."
+                return text, tool_call_log, round_num + 1, total_usage
+
+        return await self._finish_after_max_rounds(client, full_messages, tool_call_log, max_rounds, total_usage, on_stream)

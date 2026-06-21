@@ -13,7 +13,7 @@ from flyto_ai.models import ChatResponse
 from flyto_ai.redaction import is_sensitive_key, redact_args
 from flyto_ai.session import SessionStore
 from flyto_ai.prompt.policies import (
-    validate_base_url, is_tool_allowed, is_module_allowed, get_default_policies,
+    validate_base_url, is_module_allowed, get_default_policies,
 )
 from flyto_ai.tools.registry import ToolRegistry
 from flyto_ai.tools.core_tools import (
@@ -60,7 +60,9 @@ class TestProviderLogFormatSource:
 
     def test_openai_uses_shared_dispatch(self):
         src = inspect.getsource(OpenAIProvider.chat)
-        assert "dispatch_and_log_tool" in src
+        assert "_dispatch_tool_calls" in src
+        helper_src = inspect.getsource(OpenAIProvider._dispatch_tool_calls)
+        assert "dispatch_and_log_tool" in helper_src
 
     def test_anthropic_uses_shared_dispatch(self):
         src = inspect.getsource(AnthropicProvider.chat)

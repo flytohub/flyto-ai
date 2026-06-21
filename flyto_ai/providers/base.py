@@ -85,14 +85,38 @@ async def dispatch_and_log_tool(
         "arguments": func_args,
         "result_preview": result_str[:MAX_PREVIEW_LEN],
     }
+    if func_name in {
+        "list_modules",
+        "search_modules",
+        "get_module_info",
+        "get_module_examples",
+        "validate_params",
+        "list_recipes",
+        "run_recipe",
+        "execute_module",
+        "get_core_capability_manifest",
+    }:
+        try:
+            from flyto_ai.tools.core_tools import CORE_MCP_CONTRACT_VERSION
+        except Exception:
+            CORE_MCP_CONTRACT_VERSION = "unknown"
+        log_entry["mcp"] = {
+            "source": "flyto-core",
+            "contract_version": CORE_MCP_CONTRACT_VERSION,
+            "tool_name": func_name,
+        }
     if func_name == "execute_module":
         log_entry["module_id"] = func_args.get("module_id", "")
+        log_entry["mcp"]["module_id"] = func_args.get("module_id", "")
         # flyto-core modules return {"status": "success"} without "ok" field.
         # Normalize: treat status=="success" as ok=True.
         if isinstance(result, dict):
             log_entry["ok"] = result.get("ok", result.get("status") == "success")
         else:
             log_entry["ok"] = False
+        log_entry["mcp"]["ok"] = log_entry["ok"]
+    elif func_name == "run_recipe":
+        log_entry["mcp"]["recipe_name"] = func_args.get("recipe_name", "")
 
     # Propagate ask_user raw result so agent.chat() can detect the marker
     if isinstance(result, dict) and result.get("__ASK_USER__"):

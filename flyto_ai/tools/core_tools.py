@@ -1,12 +1,17 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """flyto-core MCP tool bridge — lazily imports core handler."""
+import hashlib
+import importlib.metadata
 import logging
 import re
 import threading
-from typing import Any, Dict
+from copy import deepcopy
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+CORE_MCP_CONTRACT_VERSION = "flyto-core-mcp.v1"
 
 # Shared browser session store across tool calls within a chat session.
 # Keys are browser session IDs from browser.launch results.
@@ -22,6 +27,47 @@ _browser_launch_error: str = ""
 # Goto circuit breaker: after N consecutive goto failures, return a non-retryable error.
 _goto_consecutive_fails: int = 0
 _GOTO_MAX_FAILS: int = 3
+
+_READ_ONLY_CORE_TOOLS = frozenset({
+    "list_modules",
+    "search_modules",
+    "get_module_info",
+    "get_module_examples",
+    "validate_params",
+    "list_recipes",
+    "get_core_capability_manifest",
+})
+
+_EXECUTION_CORE_TOOLS = frozenset({"execute_module", "run_recipe"})
+
+_DANGER_MODULE_CATEGORIES = frozenset({
+    "shell", "process", "docker", "k8s", "ssh", "network", "port", "dns",
+    "file", "path", "env", "git",
+})
+
+CORE_CAPABILITY_MANIFEST_TOOL = {
+    "name": "get_core_capability_manifest",
+    "description": (
+        "Return the flyto-core MCP capability manifest for agents and cloud UIs: "
+        "contract version, installed core version, tool fingerprint, recipes support, "
+        "module categories, and risk/approval metadata for callable tools."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "include_tools": {
+                "type": "boolean",
+                "description": "Include per-tool metadata in the response.",
+                "default": True,
+            },
+            "include_categories": {
+                "type": "boolean",
+                "description": "Include flyto-core module category counts when available.",
+                "default": True,
+            },
+        },
+    },
+}
 
 
 def clear_browser_sessions() -> None:
@@ -104,10 +150,148 @@ def _get_mcp_handler():
     return _cached_handler
 
 
+def _core_package_version() -> str:
+    """Return installed flyto-core package version when available."""
+    try:
+        return importlib.metadata.version("flyto-core")
+    except importlib.metadata.PackageNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
+
+def _risk_for_tool(name: str) -> str:
+    if name in _READ_ONLY_CORE_TOOLS:
+        return "read_only"
+    if name in _EXECUTION_CORE_TOOLS:
+        return "workspace_write"
+    return "workspace_write"
+
+
+def _approval_policy_for_tool(name: str) -> str:
+    if name == "execute_module":
+        return "module_category_runtime"
+    if name == "run_recipe":
+        return "recipe_runtime"
+    return "none"
+
+
+def _tool_annotations(name: str) -> Dict[str, bool]:
+    read_only = name in _READ_ONLY_CORE_TOOLS
+    return {
+        "readOnlyHint": read_only,
+        "destructiveHint": not read_only,
+        "idempotentHint": read_only,
+    }
+
+
+def _enrich_core_tool_def(tool_def: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach agent-facing MCP metadata without changing the callable schema."""
+    tool = deepcopy(tool_def)
+    name = tool.get("name", "")
+    tool.setdefault("description", "")
+    tool.setdefault("inputSchema", {"type": "object", "properties": {}})
+    tool["annotations"] = _tool_annotations(name)
+    tool["metadata"] = {
+        "source": "flyto-core",
+        "contract_version": CORE_MCP_CONTRACT_VERSION,
+        "risk_level": _risk_for_tool(name),
+        "approval_policy": _approval_policy_for_tool(name),
+        "evidence_fields": [
+            "run_id",
+            "tool_name",
+            "module_id",
+            "recipe_name",
+            "params_valid",
+            "ok",
+            "duration_ms",
+        ],
+    }
+    return tool
+
+
+def _manifest_fingerprint(tools: List[Dict[str, Any]]) -> str:
+    payload = [
+        {
+            "name": t.get("name", ""),
+            "inputSchema": t.get("inputSchema", {}),
+            "metadata": t.get("metadata", {}),
+        }
+        for t in tools
+    ]
+    raw = json_dumps(payload)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def json_dumps(value: Any) -> str:
+    """Stable JSON helper kept local to avoid importing heavier utilities."""
+    import json
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _core_tool_defs_from_handler(handler: Dict[str, Any]) -> List[Dict[str, Any]]:
+    tools = [_enrich_core_tool_def(t) for t in handler.get("TOOLS", [])]
+    tools.append(_enrich_core_tool_def(CORE_CAPABILITY_MANIFEST_TOOL))
+    return tools
+
+
 def get_core_tool_defs():
     """Return flyto-core MCP tool definitions (empty list if not installed)."""
     handler = _get_mcp_handler()
-    return handler["TOOLS"] if handler else []
+    return _core_tool_defs_from_handler(handler) if handler else []
+
+
+def get_core_capability_manifest(
+    include_tools: bool = True,
+    include_categories: bool = True,
+) -> Dict[str, Any]:
+    """Build the flyto-core MCP manifest used by agents and cloud diagnostics."""
+    handler = _get_mcp_handler()
+    if handler is None:
+        return {
+            "ok": False,
+            "source": "flyto-core",
+            "contract_version": CORE_MCP_CONTRACT_VERSION,
+            "error": "flyto-core not installed. Run: pip install flyto-core",
+        }
+
+    tools = _core_tool_defs_from_handler(handler)
+    manifest: Dict[str, Any] = {
+        "ok": True,
+        "source": "flyto-core",
+        "contract_version": CORE_MCP_CONTRACT_VERSION,
+        "core_version": _core_package_version(),
+        "tool_count": len(tools),
+        "tool_fingerprint": _manifest_fingerprint(tools),
+        "recipes_available": bool(handler.get("list_recipes") and handler.get("run_recipe")),
+        "approval_model": {
+            "execute_module": "module category decides runtime approval",
+            "run_recipe": "recipe content decides runtime approval",
+            "sensitive_inputs": "runtime secrets only; never request credentials through MCP elicitation",
+        },
+    }
+
+    if include_tools:
+        manifest["tools"] = [
+            {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "inputSchema": t.get("inputSchema", {}),
+                "annotations": t.get("annotations", {}),
+                "metadata": t.get("metadata", {}),
+            }
+            for t in tools
+        ]
+
+    if include_categories:
+        try:
+            categories = handler["list_modules"](category=None).get("categories", [])
+            manifest["categories"] = categories
+            manifest["module_count"] = sum(c.get("count", 0) for c in categories)
+        except Exception as e:
+            manifest["categories_error"] = str(e)
+
+    return manifest
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +438,12 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
     if name == "list_modules":
         return handler["list_modules"](category=arguments.get("category"))
 
+    elif name == "get_core_capability_manifest":
+        return get_core_capability_manifest(
+            include_tools=arguments.get("include_tools", True),
+            include_categories=arguments.get("include_categories", True),
+        )
+
     elif name == "search_modules":
         query = arguments.get("query", "")
         result = handler["search_modules"](
@@ -325,6 +515,10 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
                 with _browser_sessions_lock:
                     _browser_sessions.clear()
 
+        validation = _validate_execute_module_args(handler, module_id, arguments.get("params", {}))
+        if validation is not None:
+            return validation
+
         # Sandbox: route dangerous categories to Docker container
         if _sandbox_mgr and _sandbox_mgr.needs_sandbox(module_id):
             return await _sandbox_mgr.execute(
@@ -374,3 +568,37 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
         )
 
     return {"ok": False, "error": "Unknown core tool: {}".format(name)}
+
+
+def _validate_execute_module_args(
+    handler: Dict[str, Any],
+    module_id: str,
+    params: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Validate module params before execution when flyto-core exposes validation."""
+    validate = handler.get("validate_params")
+    if not validate or not module_id:
+        return None
+    try:
+        result = validate(module_id=module_id, params=params or {})
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "flyto-core validate_params failed before execute_module: {}".format(e),
+            "module_id": module_id,
+            "params_valid": False,
+        }
+
+    if isinstance(result, dict):
+        valid = result.get("valid")
+        ok = result.get("ok")
+        errors = result.get("errors") or result.get("error")
+        if valid is False or ok is False:
+            return {
+                "ok": False,
+                "error": "Invalid params for {}: {}".format(module_id, errors or "schema validation failed"),
+                "module_id": module_id,
+                "params_valid": False,
+                "validation": result,
+            }
+    return None

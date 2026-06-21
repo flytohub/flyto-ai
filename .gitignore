@@ -13,4 +13,5 @@ env/
 .env
 *.db
 .flyto/
+.flyto-index/
 eval/results/

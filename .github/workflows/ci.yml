@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip build
+          python -m pip install -e ".[dev]"
+      - name: Lint imports with compileall
+        run: |
+          echo "lint: compile imports"
+          python -m compileall flyto_ai
+      - name: Verify MCP contract smoke
+        run: |
+          echo "verify: mcp contract smoke"
+          python -m pytest \
+            tests/test_core_mcp_contract.py \
+            tests/test_mcp_server.py \
+            tests/test_browser_retry.py \
+            tests/test_tool_registry.py \
+            tests/test_validation.py \
+            -q
+      - name: Build distribution
+        run: python -m build
+
+  local-audit:
+    name: Local audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install audit deps
+        run: python -m pip install --upgrade pip
+      - name: Lint secret patterns
+        run: |
+          echo "lint: secret pattern scan"
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          patterns = [
+              re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+              re.compile(r"AKIA[0-9A-Z]{16}"),
+              re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+          ]
+          skip_parts = {".git", ".venv", "venv", "__pycache__", "dist", "build", ".flyto-index"}
+          findings = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in skip_parts for part in path.parts):
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              for idx, line in enumerate(text.splitlines(), 1):
+                  if any(p.search(line) for p in patterns):
+                      findings.append(f"{path}:{idx}")
+          if findings:
+              raise SystemExit("Potential secrets found:\n" + "\n".join(findings))
+          PY

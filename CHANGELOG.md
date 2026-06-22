@@ -17,3 +17,5 @@
 - Added MCP evidence metadata to provider tool-call logs.
 - Added CI workflow and `.flyto-index/` ignore.
 - Added repo memory and workflow handoff scaffold.
+- Added `docs/architecture-map.md` so Flyto2 workspace release packets can
+  verify `flyto-ai` cross-repo architecture and product-line boundaries.

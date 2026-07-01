@@ -1,8 +1,6 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for JSONL transcript recording and replay."""
-import json
-import os
 import tempfile
 import shutil
 

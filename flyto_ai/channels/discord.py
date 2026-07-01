@@ -80,8 +80,6 @@ class DiscordAdapter(ChannelAdapter):
     async def send(self, message: OutgoingMessage) -> bool:
         """Send message to Discord channel."""
         try:
-            import aiohttp
-
             text = message.text
             chunks = [text[i:i + _MAX_MESSAGE_LENGTH] for i in range(0, len(text), _MAX_MESSAGE_LENGTH)]
 

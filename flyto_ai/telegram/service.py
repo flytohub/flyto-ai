@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 import tempfile
-import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from flyto_ai.channels.telegram import TelegramAdapter

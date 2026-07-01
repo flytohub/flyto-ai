@@ -1,7 +1,6 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """SQLite-backed job queue for Telegram tasks."""
-import json
 import logging
 import os
 import time

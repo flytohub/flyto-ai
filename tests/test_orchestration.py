@@ -1,11 +1,10 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for sub-agent orchestration system."""
-import asyncio
 import pytest
 
 from flyto_ai.orchestration.policies import OrchestrationPolicy
-from flyto_ai.orchestration.sub_agent import SubAgent, SubAgentStatus, SubAgentResult
+from flyto_ai.orchestration.sub_agent import SubAgent, SubAgentStatus
 from flyto_ai.orchestration.orchestrator import AgentOrchestrator
 
 

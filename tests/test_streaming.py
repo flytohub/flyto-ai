@@ -9,7 +9,7 @@ from flyto_ai.models import StreamEvent, StreamEventType
 
 def _make_agent(monkeypatch, mock_chat_fn):
     """Helper: create agent with mocked LLM provider."""
-    config = AgentConfig(provider="ollama", api_key="test")
+    config = AgentConfig(provider="ollama", api_key="test", enable_deterministic=False)
     agent = Agent(config=config)
     agent._tools = [{"name": "execute_module", "description": "run", "inputSchema": {}}]
 

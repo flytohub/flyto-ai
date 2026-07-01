@@ -7,7 +7,7 @@ Security-first design (unlike OpenClaw's marketplace where 36% have vulnerabilit
 - Extensions declare what permissions they need
 - The loader validates manifest before loading
 """
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 

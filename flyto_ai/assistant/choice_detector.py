@@ -66,7 +66,7 @@ def detect_choices(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     link_group = _find_choice_group(links, min_size=3, max_size=30)
     if link_group and not btn_group:
-        opts = [l.get("text", "").strip() for l in link_group if l.get("text", "").strip()]
+        opts = [link.get("text", "").strip() for link in link_group if link.get("text", "").strip()]
         if opts:
             fields.append({
                 "id": "link_choice",
@@ -74,8 +74,8 @@ def detect_choices(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "label": "Please select",
                 "options": opts,
                 "_selectors": {
-                    l.get("text", "").strip(): l.get("_click_selector", l.get("selector", l.get("href", "")))
-                    for l in link_group
+                    link.get("text", "").strip(): link.get("_click_selector", link.get("selector", link.get("href", "")))
+                    for link in link_group
                 },
             })
 
@@ -164,8 +164,8 @@ def _find_choice_group(
         avg_len = sum(lengths) / len(lengths)
         if avg_len > 0:
             similar = [
-                c for c, l in zip(candidates, lengths)
-                if 0.3 * avg_len <= l <= 3 * avg_len
+                candidate for candidate, text_length in zip(candidates, lengths)
+                if 0.3 * avg_len <= text_length <= 3 * avg_len
             ]
             if len(similar) >= min_size:
                 return similar[:max_size]

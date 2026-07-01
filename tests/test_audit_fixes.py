@@ -24,6 +24,7 @@ from flyto_ai.tools.blueprint_tools import (
     get_blueprint_tool_defs, dispatch_blueprint_tool,
 )
 from flyto_ai.tools.inspect_page import INSPECT_PAGE_TOOL, inspect_page
+from flyto_ai.providers import openai as openai_provider
 from flyto_ai.providers.openai import OpenAIProvider
 from flyto_ai.providers.anthropic import AnthropicProvider
 
@@ -59,7 +60,7 @@ class TestProviderLogFormatSource:
         assert 'log_entry["ok"]' in src
 
     def test_openai_uses_shared_dispatch(self):
-        src = inspect.getsource(OpenAIProvider.chat)
+        src = inspect.getsource(OpenAIProvider.chat) + inspect.getsource(openai_provider._content_with_finish_note)
         assert "_dispatch_tool_calls" in src
         helper_src = inspect.getsource(OpenAIProvider._dispatch_tool_calls)
         assert "dispatch_and_log_tool" in helper_src
@@ -70,7 +71,7 @@ class TestProviderLogFormatSource:
 
     def test_openai_no_inline_log_entry(self):
         """OpenAI should not build log_entry inline (moved to shared function)."""
-        src = inspect.getsource(OpenAIProvider.chat)
+        src = inspect.getsource(OpenAIProvider.chat) + inspect.getsource(openai_provider._content_with_finish_note)
         assert 'log_entry: Dict' not in src
 
     def test_anthropic_no_inline_log_entry(self):
@@ -655,7 +656,7 @@ class TestTruncationDetection:
 
     def test_openai_detects_length_finish(self):
         """OpenAI provider source must check finish_reason == 'length'."""
-        src = inspect.getsource(OpenAIProvider.chat)
+        src = inspect.getsource(OpenAIProvider.chat) + inspect.getsource(openai_provider._content_with_finish_note)
         assert "finish_reason" in src
         assert '"length"' in src or "'length'" in src
         assert "truncated" in src.lower()

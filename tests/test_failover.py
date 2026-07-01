@@ -1,14 +1,12 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for provider failover chain."""
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from flyto_ai.providers.failover import (
     ProviderChain,
     _is_failover_error,
-    _FAILOVER_KEYWORDS,
 )
 
 

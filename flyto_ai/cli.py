@@ -5,6 +5,9 @@ import argparse
 import asyncio
 import importlib.resources
 import json
+import os as _os
+import re as _re
+import shutil as _shutil
 import sys
 import time
 from urllib.request import Request, urlopen
@@ -259,9 +262,6 @@ def _print_markdown(text: str) -> None:
             print("  {}".format(line))
 
 
-# UI helpers
-import re as _re
-import shutil as _shutil
 _ANSI_RE = _re.compile(r'\033\[[0-9;]*m')
 
 # ---------------------------------------------------------------------------
@@ -303,8 +303,6 @@ class _RateLimiter:
             del self._buckets[ip]
 
 
-# Server API key auth (optional — set FLYTO_AI_SERVER_KEY to enable)
-import os as _os
 _SERVER_KEY = _os.getenv("FLYTO_AI_SERVER_KEY", "")
 
 # CORS allowed origins (set FLYTO_AI_CORS_ORIGINS=http://localhost:3000,https://app.flyto.dev)
@@ -508,12 +506,12 @@ def _cmd_prompt_lab(args):
 def _prompt_lab_eval(args):
     """Run eval on current baseline prompt (rule-based, no API key needed)."""
     from flyto_ai.evolution.blocks import get_baseline_candidate
-    from flyto_ai.evolution.runner import load_eval_cases, load_rubric, format_score_report, _generate_mock_response
+    from flyto_ai.evolution.runner import load_eval_cases, load_rubric, _generate_mock_response
     from flyto_ai.evolution.scorer import score_response
 
     cases = load_eval_cases(getattr(args, "cases", None))
     config = load_rubric(getattr(args, "rubric", None))
-    baseline = get_baseline_candidate(config.mode)
+    get_baseline_candidate(config.mode)
 
     print()
     print("  {}{}Prompt Lab — Eval{} ".format(_BOLD, _CYAN, _RESET))
@@ -1132,7 +1130,6 @@ def _cmd_serve(args):
 
 def _cmd_serve_aiohttp(args):
     """Async HTTP server using aiohttp — native async, supports concurrent requests."""
-    import aiohttp.web
     from aiohttp import web
     from flyto_ai import Agent, AgentConfig
     from flyto_ai.models import ChatRequest

@@ -55,6 +55,7 @@ class ChatAuditEntry:
         record = {
             "event": "chat_audit",
             "timestamp": self.timestamp,
+            "ts": self.timestamp,
             "user_message": self.user_message[:200],
             "provider": self.provider,
             "model": self.model,

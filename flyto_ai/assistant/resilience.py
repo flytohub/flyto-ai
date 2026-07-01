@@ -15,17 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 # Import shared resilience primitives from flyto-core (canonical source)
 try:
-    from core.modules.atomic.llm._resilience import (
-        SnapshotGuard as _CoreSnapshotGuard,
-        CircuitBreaker,
-        is_transient_error,
-        is_session_dead,
-        truncate_tool_result,
-        scan_for_injection,
-        BROWSER_POLICIES,
-        _SNAPSHOT_MODULES,
-        _INTERACT_MODULES,
-    )
+    from core.modules.atomic.llm._resilience import _INTERACT_MODULES, _SNAPSHOT_MODULES
     _HAS_CORE_RESILIENCE = True
 except ImportError:
     _HAS_CORE_RESILIENCE = False

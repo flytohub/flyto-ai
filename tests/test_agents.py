@@ -7,14 +7,13 @@ import os
 import shutil
 import tempfile
 from dataclasses import asdict
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from flyto_ai.agents.models import (
     CodeTaskRequest,
     CodeTaskResponse,
-    EvidenceRecord,
     VerificationResult,
 )
 from flyto_ai.agents.guardian_hook import (
@@ -27,7 +26,7 @@ from flyto_ai.agents.guardian_hook import (
     _is_extension_allowed,
 )
 from flyto_ai.agents.evidence import EvidenceCollector, evidence_post_hook
-from flyto_ai.agents.prompts import build_system_prompt, ROLE_PREAMBLE, GUARDIAN_NOTICE, VERIFICATION_NOTICE
+from flyto_ai.agents.prompts import build_system_prompt, ROLE_PREAMBLE, GUARDIAN_NOTICE
 from flyto_ai.agents.verifier import VerificationEngine
 from flyto_ai.config import AgentConfig, ClaudeCodeConfig
 
@@ -667,9 +666,6 @@ class TestPackageExports:
         from flyto_ai.agents import (
             ClaudeCodeAgent,
             CodeTaskRequest,
-            CodeTaskResponse,
-            EvidenceRecord,
-            VerificationResult,
         )
         assert ClaudeCodeAgent is not None
         assert CodeTaskRequest is not None

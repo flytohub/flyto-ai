@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """Hook registry — manages extension hook points."""
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from flyto_ai.extensions.base import ExtensionBase
 from flyto_ai.extensions.shell_hook import HookDecision

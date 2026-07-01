@@ -1,7 +1,6 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for AgentConfig — env/dict loading, defaults."""
-import os
 
 from flyto_ai.config import AgentConfig
 

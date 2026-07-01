@@ -4,12 +4,8 @@
 from flyto_ai.prompt.system_prompt import (
     build_system_prompt,
     detect_language,
-    LAYER_A_POLICY,
     LAYER_B_EXECUTE,
     LAYER_B_YAML,
-    LAYER_B_TOOLLESS,
-    LAYER_C_GATES,
-    # Backward-compatible aliases
     DEFAULT_SYSTEM_PROMPT,
     EXECUTE_SYSTEM_PROMPT,
     LANGUAGE_POLICY,

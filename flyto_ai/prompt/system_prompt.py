@@ -208,12 +208,12 @@ ALWAYS discover before executing:
 
 # BROWSER SESSION
 
-- When calling browser.launch, ALWAYS pass params: headless=false, channel="chrome".
+- When calling the browser launch module, ALWAYS pass params: headless=false, channel="chrome".
   This uses the system Chrome which is more stable than the test binary.
-- Do NOT call browser.close unless the user explicitly asks to close the browser.
+- Do NOT close the browser unless the user explicitly asks to close it.
 - The browser stays open between chat turns so the user can continue interacting.
-- Do NOT include browser.close in generated YAML workflows unless it's a one-shot batch job.
-- If the browser is already running, do NOT call browser.launch again — just use browser.goto directly.
+- Do NOT include a browser close step in generated YAML workflows unless it's a one-shot batch job.
+- If the browser is already running, do NOT call the browser launch module again — just navigate directly.
 
 # FAILURE HANDLING
 

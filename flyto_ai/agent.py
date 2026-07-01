@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.config import AgentConfig
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
-from flyto_ai.permissions import PermissionDecision, PermissionEnforcer, PermissionLevel
+from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
 from flyto_ai.prompt.system_prompt import build_system_prompt, detect_language
 from flyto_ai.protocols import ApiClient, ToolExecutor
@@ -346,7 +346,6 @@ class Agent:
             )
 
             try:
-                import aiosqlite
                 from flyto_ai.memory.embeddings import EmbeddingStore
                 from flyto_ai.memory.bm25 import BM25Index
                 from flyto_ai.memory.search import MemorySearch
@@ -472,8 +471,6 @@ class Agent:
 
         # 4. Check if execution succeeded
         ok = any(r["ok"] for r in results)
-        failed = [r for r in results if not r["ok"]]
-
         # Build tool_calls list for audit
         tool_calls = [
             {"function": "execute_module", "module_id": r["module_id"],
@@ -611,7 +608,7 @@ class Agent:
         await self._init_memory()
 
         # ── Deterministic pipeline (try before LLM) ──
-        if mode == "execute" and self._dispatch_fn:
+        if mode == "execute" and self._config.enable_deterministic and self._dispatch_fn:
             det_result = await self._try_deterministic(message, on_tool_call, on_stream, dispatch_wrapper)
             if det_result is not None:
                 # Record cost, memory, audit

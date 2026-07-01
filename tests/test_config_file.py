@@ -39,6 +39,7 @@ def test_load_yaml(tmpdir):
     # YAML needs pyyaml
     try:
         import yaml
+        assert yaml is not None
         assert loaded is True
         assert cfg.get("provider") == "openai"
     except ImportError:

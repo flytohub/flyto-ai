@@ -15,7 +15,7 @@ No patches, no middleware layers, no context loss.
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict
 
 from flyto_ai.assistant.choice_detector import detect_choices
 
@@ -63,11 +63,8 @@ def set_dispatch(dispatch_fn):
 
 async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Navigate a website, detect choices, and return them for user selection."""
-    from flyto_ai.tools.ask_user import ASK_USER_MARKER
 
     url = arguments.get("url", "")
-    goal = arguments.get("goal", "")
-
     if not url:
         return {"ok": False, "error": "URL is required"}
 
@@ -76,7 +73,6 @@ async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, 
         return {"ok": False, "error": "Navigator dispatch not initialized"}
 
     # Step 1: Launch browser (clean stale locks first)
-    import os
     from pathlib import Path
     profile_dir = Path.home() / '.flyto' / 'chrome-profile'
     for lock_name in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
@@ -87,7 +83,7 @@ async def dispatch_navigator(name: str, arguments: Dict[str, Any]) -> Dict[str, 
             except OSError:
                 pass
 
-    launch_result = await dispatch("execute_module", {
+    await dispatch("execute_module", {
         "module_id": "browser.launch",
         "params": {"headless": False},
     })

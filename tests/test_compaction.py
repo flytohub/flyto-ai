@@ -1,7 +1,6 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for context window compaction."""
-import pytest
 
 from flyto_ai.memory.compaction import (
     ContextCompactor,

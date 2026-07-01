@@ -27,7 +27,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 # Ensure flyto_ai directory is on the path
 _BASE = os.path.join(os.path.dirname(__file__), "..")
@@ -88,7 +88,7 @@ class TestProtocols(unittest.TestCase):
     """Test ApiClient and ToolExecutor protocol definitions."""
 
     def test_protocol_classes_exist(self):
-        from flyto_ai.protocols import ApiClient, ToolExecutor, DispatchFn
+        from flyto_ai.protocols import ApiClient, ToolExecutor
         self.assertTrue(hasattr(ApiClient, 'chat'))
         self.assertTrue(hasattr(ToolExecutor, 'tools'))
         self.assertTrue(hasattr(ToolExecutor, 'dispatch'))
@@ -389,6 +389,7 @@ class TestTranscriptRotation(unittest.TestCase):
         # At least one file should exist
         files = list(Path(self.tmpdir).glob("test-session*.jsonl"))
         self.assertGreaterEqual(len(files), 1)
+        self.assertTrue(rotated.name.startswith("test-session"))
 
     def test_max_rotated_files(self):
         from flyto_ai.transcript import TranscriptWriter, MAX_FILE_SIZE_BYTES, MAX_ROTATED_FILES
@@ -679,7 +680,7 @@ class TestTelemetry(unittest.TestCase):
         self.assertEqual(len(sink2.events), 1)
 
     def test_session_tracer_sequence(self):
-        from flyto_ai.telemetry import SessionTracer, MemoryTelemetrySink, TelemetryEventType
+        from flyto_ai.telemetry import SessionTracer, MemoryTelemetrySink
         sink = MemoryTelemetrySink()
         tracer = SessionTracer("sess-123", sinks=[sink])
 
@@ -755,7 +756,7 @@ class TestMockApiClient(unittest.TestCase):
         self.assertEqual(executor.calls, [("search_modules", {"query": "auth"})])
 
     def test_default_response_when_exhausted(self):
-        from flyto_ai.testing import MockApiClient, MockResponse
+        from flyto_ai.testing import MockApiClient
         client = MockApiClient(responses=[])
         msg, _, _, _ = asyncio.get_event_loop().run_until_complete(
             client.chat([], "", [], None)
@@ -880,7 +881,7 @@ class TestCrossPhaseIntegration(unittest.TestCase):
         from flyto_ai.testing import MockToolExecutor
         from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 
-        executor = MockToolExecutor(
+        _executor = MockToolExecutor(
             tool_defs=[{"name": "execute_module", "description": "exec", "inputSchema": {}}],
             responses={"execute_module": {"ok": True}},
         )

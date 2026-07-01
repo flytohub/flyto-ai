@@ -1,7 +1,6 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for prompt injection detection."""
-import pytest
 
 from flyto_ai.prompt.injection_detector import (
     scan_text,

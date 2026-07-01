@@ -26,7 +26,7 @@ from typing import List, Optional
 
 from flyto_ai.evolution.blocks import get_baseline_candidate
 from flyto_ai.evolution.models import (
-    CandidateScore, EvolutionConfig, EvolutionReport,
+    EvolutionConfig, EvolutionReport,
     GenerationResult, PromptCandidate,
 )
 from flyto_ai.evolution.mutator import PromptMutator
@@ -213,11 +213,9 @@ class EvolutionLoop:
 
         # Compare best candidate's per-case scores against baseline
         best_cand, best_score = scored_candidates[0]
-        baseline_cand = None
         baseline_score = None
         for cand, score in scored_candidates:
             if cand.mutation_type == "baseline" or "elite" in cand.id:
-                baseline_cand = cand
                 baseline_score = score
                 break
 

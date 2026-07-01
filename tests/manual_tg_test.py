@@ -2,8 +2,6 @@
 """Manual integration test: starts a fake Telegram API + flyto-ai server,
 sends curl-like requests and prints the actual replies that would go to TG."""
 import asyncio
-import json
-import sys
 from aiohttp import web
 
 # --- Collect replies sent to "Telegram" ---
@@ -32,8 +30,6 @@ async def main():
     # 2) Monkey-patch _tg_send to use our fake server
     import flyto_ai.cli as cli
     import aiohttp as _aio
-
-    original_send = cli._tg_send
 
     async def patched_tg_send(token, chat_id, text):
         url = "http://127.0.0.1:19443/bot{}/sendMessage".format(token)

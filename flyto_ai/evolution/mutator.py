@@ -9,7 +9,6 @@ Mutation strategies:
   D. Reorder — change block priorities
   E. Strengthen — add emphasis to weak rules
 """
-import hashlib
 import logging
 import random
 import re
@@ -19,7 +18,7 @@ from flyto_ai.evolution.blocks import (
     crossover, get_baseline_candidate, remove_block, reorder_blocks,
     replace_block,
 )
-from flyto_ai.evolution.models import EvolutionConfig, PromptBlock, PromptCandidate
+from flyto_ai.evolution.models import EvolutionConfig, PromptCandidate
 
 logger = logging.getLogger(__name__)
 

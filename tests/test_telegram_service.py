@@ -6,8 +6,6 @@ Covers: JobQueue, ConfirmationManager, CommandRouter, TelegramService,
 callback_query parsing, multi-turn history, steer injection.
 """
 import asyncio
-import os
-import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -641,7 +639,7 @@ class TestDispatchWrapper:
             api_key="fake-key",
             model="claude-sonnet-4-5",
         )
-        agent = Agent(config=config)
+        _agent = Agent(config=config)
 
         # Track if wrapper was called
         wrapper_called = []

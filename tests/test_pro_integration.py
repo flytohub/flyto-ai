@@ -16,12 +16,10 @@ Tests cover:
 """
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from flyto_ai.config import AgentConfig
 from flyto_ai.validation import (
-    extract_yaml_from_response,
-    validate_workflow_steps,
     validate_workflow_deep,
 )
 
@@ -391,6 +389,7 @@ def _make_test_agent(monkeypatch, mock_chat_fn, *, enable_pro=True):
         enable_ems=enable_pro,
         enable_knowledge=enable_pro,
         enable_contract_validation=enable_pro,
+        enable_deterministic=False,
     )
     from flyto_ai.agent import Agent
     agent = Agent(config=config)
@@ -495,7 +494,7 @@ async def test_agent_failure_records_ems_via_middleware(monkeypatch):
     mock_bridge.get_catalog_outline = MagicMock(return_value=None)
     agent._pro = mock_bridge
 
-    result = await agent.chat("click the button")
+    _result = await agent.chat("click the button")
 
     # EMS should have been called via middleware._on_result
     if agent._assistant:
@@ -720,7 +719,7 @@ class TestEdgeCases:
         async def noop_dispatch(name, args):
             return {"ok": True}
 
-        result = await mw._on_result(
+        _result = await mw._on_result(
             func_name="search_modules",
             func_args={"query": "test"},
             result={"ok": False, "error": "not found"},
@@ -749,7 +748,7 @@ class TestEdgeCases:
         async def noop_dispatch(name, args):
             return {"ok": True}
 
-        result = await mw._on_result(
+        _result = await mw._on_result(
             func_name="execute_module",
             func_args={"module_id": "test.run", "params": {}},
             result={"data": "something"},  # No 'ok' key

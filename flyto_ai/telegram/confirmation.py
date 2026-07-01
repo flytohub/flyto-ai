@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Callable, Dict
 
 from flyto_ai.telegram.sender import TelegramSender
 

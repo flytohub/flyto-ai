@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 from flyto_ai.extensions.base import ExtensionBase, ExtensionManifest
 from flyto_ai.extensions.hooks import HookRegistry

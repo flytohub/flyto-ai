@@ -4,7 +4,7 @@
 import contextvars
 import logging
 import time
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List
 
 logger = logging.getLogger(__name__)
 

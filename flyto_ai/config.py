@@ -109,6 +109,7 @@ class AgentConfig:
     enable_knowledge: bool = True  # Knowledge-powered module discovery
     enable_contract_validation: bool = True  # Deep workflow validation
     enable_evolution: bool = False  # Auto-generate missing modules (opt-in)
+    enable_deterministic: bool = True  # Zero-LLM planner before provider fallback
 
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
@@ -157,6 +158,7 @@ class AgentConfig:
             enable_knowledge=data.get("enable_knowledge", True),
             enable_contract_validation=data.get("enable_contract_validation", True),
             enable_evolution=data.get("enable_evolution", False),
+            enable_deterministic=data.get("enable_deterministic", True),
         )
 
     @classmethod
@@ -234,6 +236,7 @@ class AgentConfig:
             enable_knowledge=os.getenv("FLYTO_AI_ENABLE_KNOWLEDGE", "true").lower() != "false",
             enable_contract_validation=os.getenv("FLYTO_AI_ENABLE_CONTRACT_VALIDATION", "true").lower() != "false",
             enable_evolution=os.getenv("FLYTO_AI_ENABLE_EVOLUTION", "false").lower() == "true",
+            enable_deterministic=os.getenv("FLYTO_AI_ENABLE_DETERMINISTIC", "true").lower() != "false",
         )
 
     def __post_init__(self):

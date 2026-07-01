@@ -1,5 +1,4 @@
 """Tests for flyto_ai.security — blueprint generation + safety checks."""
-import os
 
 import pytest
 import yaml
@@ -246,7 +245,7 @@ class TestErrorHandling:
             generate_test_from_finding(finding, "https://staging.example.com")
 
     def test_unknown_category_lists_available(self):
-        finding = _make_finding(category="ssrf")  # type: ignore[arg-type]
+        finding = _make_finding(category="ldap_injection")  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="sql_injection"):
             generate_test_from_finding(finding, "https://staging.example.com")
 

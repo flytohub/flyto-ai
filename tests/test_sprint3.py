@@ -12,12 +12,11 @@ Gap 6: Async serve (aiohttp / stdlib fallback)
 import json
 import logging
 import os
-import time
 
 import pytest
 
 from flyto_ai import Agent, AgentConfig
-from flyto_ai.models import ChatResponse, UsageStats, StreamEvent, StreamEventType
+from flyto_ai.models import ChatResponse, UsageStats, StreamEventType
 
 
 # Skip all real-LLM tests if no API key available
@@ -318,7 +317,8 @@ class TestMCPServer:
 
         assert resp["jsonrpc"] == "2.0"
         assert resp["id"] == 1
-        assert resp["result"]["protocolVersion"] == "2024-11-05"
+        from flyto_ai.mcp_server import SUPPORTED_PROTOCOL_VERSIONS
+        assert resp["result"]["protocolVersion"] == SUPPORTED_PROTOCOL_VERSIONS[0]
         assert resp["result"]["serverInfo"]["name"] == "flyto-ai"
         assert resp["result"]["capabilities"]["tools"]["listChanged"] is False
 

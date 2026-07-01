@@ -2,7 +2,6 @@
 # Licensed under the Apache License, Version 2.0
 """Tests for SQLiteSessionStore — real SQLite, using tmp_path."""
 import asyncio
-import os
 
 import pytest
 import pytest_asyncio

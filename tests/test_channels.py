@@ -1,10 +1,8 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Tests for multi-channel adapter framework."""
-import asyncio
 import pytest
 
-from flyto_ai.channels.base import IncomingMessage, OutgoingMessage
 from flyto_ai.channels.telegram import TelegramAdapter
 from flyto_ai.channels.discord import DiscordAdapter
 from flyto_ai.channels.slack import SlackAdapter

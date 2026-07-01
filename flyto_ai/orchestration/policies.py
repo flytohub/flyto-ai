@@ -1,8 +1,8 @@
 # Copyright 2024 Flyto
 # Licensed under the Apache License, Version 2.0
 """Orchestration policies — depth limits, tool access control, timeouts."""
-from dataclasses import dataclass, field
-from typing import FrozenSet, Optional, Set
+from dataclasses import dataclass
+from typing import FrozenSet, Optional
 
 # Default allowed tools per depth level.
 # Deeper agents get fewer tools (security-first).

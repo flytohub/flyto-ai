@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """Telegram command router — /help /status /cancel /cost /clear /yaml /cd /model /agent."""
 import logging
-from typing import Any, Callable, Coroutine, Dict, List, Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from flyto_ai.telegram.sender import TelegramSender
 

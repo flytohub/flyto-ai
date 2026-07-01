@@ -2,12 +2,10 @@
 # Licensed under the Apache License, Version 2.0
 """Deep integration tests — 10 scenarios covering streaming, browser retry,
 model config, and cross-cutting concerns. All 10 must pass consecutively."""
-import json
 import pytest
 
 from flyto_ai import Agent, AgentConfig, StreamEvent, StreamEventType
 from flyto_ai.config import FUNCTION_CALLING_SUPPORT
-from flyto_ai.models import StreamCallback
 from flyto_ai.tools.core_tools import (
     _is_transient_error,
     _is_session_dead,
@@ -20,7 +18,7 @@ from flyto_ai.tools.core_tools import (
 # ---------------------------------------------------------------------------
 
 def _agent(monkeypatch, mock_chat_fn, *, provider="ollama"):
-    config = AgentConfig(provider=provider, api_key="test")
+    config = AgentConfig(provider=provider, api_key="test", enable_deterministic=False)
     agent = Agent(config=config)
     agent._tools = [
         {"name": "execute_module", "description": "run", "inputSchema": {}},

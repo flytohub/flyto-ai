@@ -9,10 +9,7 @@ Updated to use the refactored flyto_ai.telegram package.
 """
 import argparse
 import asyncio
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import dataclass, field
-from typing import List, Optional
 
 import pytest
 import pytest_asyncio

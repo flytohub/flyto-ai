@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Container entry point — reads JSON from stdin, executes module, writes JSON to stdout."""
 import asyncio

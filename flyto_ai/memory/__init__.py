@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Persistent memory system — SQLite sessions, summarizer, vector search."""
 from flyto_ai.memory.sqlite_store import SQLiteSessionStore

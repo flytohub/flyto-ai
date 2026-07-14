@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Hybrid memory search — vector + BM25 with Reciprocal Rank Fusion."""
 import hashlib

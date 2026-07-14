@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Telegram message sender — enhanced send with inline keyboard, edit, delete."""
 import logging

@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Telegram approval notifications — push approval requests to chat,
 handle approve/reject via inline keyboard callbacks.

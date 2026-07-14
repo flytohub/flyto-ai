@@ -1,9 +1,9 @@
 # Project
 
-`flyto-ai` turns natural language into schema-validated Flyto automation. It is the agent layer that chooses `flyto-core` MCP modules, executes them through guarded adapters, learns reusable blueprints, and exposes the same contract to Flyto Cloud.
+`flyto-ai` turns natural language into schema-validated Flyto2 automation. It is the agent layer that chooses `flyto-core` MCP modules, executes them through guarded adapters, learns reusable blueprints, and exposes the same contract to Flyto2 Cloud.
 
 Primary users:
-- Flyto Cloud users invoking AI assistant features.
+- Flyto2 Cloud users invoking AI assistant features.
 - Developers using `flyto-ai` CLI or MCP server.
 - Agent workflows that need deterministic tool execution instead of generated shell code.
 

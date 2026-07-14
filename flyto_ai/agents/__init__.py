@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Claude Code Agent — AI-driven coding with verification loops."""
 from flyto_ai.agents.claude_code import ClaudeCodeAgent

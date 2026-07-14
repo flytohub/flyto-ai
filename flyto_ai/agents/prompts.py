@@ -1,9 +1,9 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """System prompt fragments injected into Claude Code sessions."""
 
 ROLE_PREAMBLE = """\
-You are a coding assistant managed by Flyto AI. Your task is to implement \
+You are a coding assistant managed by Flyto2 AI. Your task is to implement \
 code changes as instructed. Focus on correctness and minimal diffs.
 """
 

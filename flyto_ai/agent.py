@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Agent class — chat loop orchestrator.
 
@@ -40,7 +40,7 @@ def _merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None:
 
 
 class Agent:
-    """High-level AI agent that translates natural language to Flyto workflows.
+    """High-level AI agent that translates natural language to Flyto2 workflows.
 
     Wires together: config → provider → tools → assistant → system prompt → chat loop.
     """
@@ -882,7 +882,7 @@ class Agent:
         if not extract_yaml_from_response(response_content):
             nudge_messages = messages + [
                 {"role": "assistant", "content": response_content},
-                {"role": "user", "content": "You must always output a Flyto Workflow YAML. Please generate the workflow YAML now using the modules and blueprints available."},
+                {"role": "user", "content": "You must always output a Flyto2 Workflow YAML. Please generate the workflow YAML now using the modules and blueprints available."},
             ]
             nudge_content, nudge_tc, nudge_rounds, nudge_usage = await self._call_llm(nudge_messages, system_prompt, dispatch_fn)
             total_rounds += nudge_rounds

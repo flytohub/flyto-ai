@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Output intent tracker — detect 'save to X' and auto-write if LLM forgets.
 

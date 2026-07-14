@@ -20,7 +20,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 echo "╭──────────────────────────────────────────────╮"
-echo "│  Flyto AI Demo — Hacker News Top Stories     │"
+echo "│  Flyto2 AI Demo — Hacker News Top Stories     │"
 echo "╰──────────────────────────────────────────────╯"
 echo ""
 

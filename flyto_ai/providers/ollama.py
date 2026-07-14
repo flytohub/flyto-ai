@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Local Ollama provider (OpenAI-compatible endpoint)."""
 from flyto_ai.providers.openai import OpenAIProvider

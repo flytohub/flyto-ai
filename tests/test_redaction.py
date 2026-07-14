@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Tests for sensitive key detection and redaction."""
 from flyto_ai.redaction import is_sensitive_key, redact_args

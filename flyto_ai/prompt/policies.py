@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Tool/module/URL allowlists and validation — pure logic, no I/O."""
 import ipaddress

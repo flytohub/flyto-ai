@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Tests for three-layer system prompt architecture."""
 from flyto_ai.prompt.system_prompt import (

@@ -45,12 +45,12 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
           labels: |
-            org.opencontainers.image.title=Flyto AI Sandbox
-            org.opencontainers.image.description=Sandbox runtime for Flyto AI workflow generation and self-repair
+            org.opencontainers.image.title=Flyto2 AI Sandbox
+            org.opencontainers.image.description=Sandbox runtime for Flyto2 AI workflow generation and self-repair
             org.opencontainers.image.url=https://flyto2.com
             org.opencontainers.image.source=https://github.com/flytohub/flyto-ai
             org.opencontainers.image.documentation=https://docs.flyto2.com
-            org.opencontainers.image.vendor=Flyto
+            org.opencontainers.image.vendor=Flyto2
 
       - uses: docker/build-push-action@v5
         with:

@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Sandbox manager — routes dangerous modules to Docker containers."""
 import asyncio

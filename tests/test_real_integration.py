@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Real integration tests — NO mocks. Tests actual code paths with real I/O."""
 import asyncio

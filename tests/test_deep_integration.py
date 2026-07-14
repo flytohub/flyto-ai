@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Deep integration tests — 10 scenarios covering streaming, browser retry,
 model config, and cross-cutting concerns. All 10 must pass consecutively."""

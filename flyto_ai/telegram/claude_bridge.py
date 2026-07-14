@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """CLIBridge — generic per-chat CLI subprocess bridge for Telegram.
 

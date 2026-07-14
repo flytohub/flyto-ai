@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Plugin / Extension system — secure, signed extensions."""
 from flyto_ai.extensions.base import ExtensionBase, ExtensionManifest

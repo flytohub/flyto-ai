@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Tests for YAML extraction."""
 from flyto_ai.validation import extract_yaml_from_response

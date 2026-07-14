@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Orchestration policies — depth limits, tool access control, timeouts."""
 from dataclasses import dataclass

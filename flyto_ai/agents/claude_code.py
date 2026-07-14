@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Claude Code Agent — orchestrates Claude Code via Agent SDK with
 indexer context gathering, guardian hooks, and YAML recipe verification.

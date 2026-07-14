@@ -1,4 +1,4 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """OpenAI and OpenAI-compatible provider (function calling loop)."""
 import json
@@ -55,7 +55,7 @@ def _fill_remaining_tool_responses(
 
 
 def _to_openai_tools(tools: List[Dict]) -> List[Dict[str, Any]]:
-    """Convert Flyto tool definitions to OpenAI function tool definitions."""
+    """Convert Flyto2 tool definitions to OpenAI function tool definitions."""
     return [
         {
             "type": "function",

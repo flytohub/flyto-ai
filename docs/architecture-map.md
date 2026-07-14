@@ -39,7 +39,7 @@
 ## Provider Boundary
 
 ```text
-Flyto Cloud / CLI / MCP client
+Flyto2 Cloud / CLI / MCP client
   -> flyto-ai agent / orchestration
   -> provider adapter
   -> tool-call request

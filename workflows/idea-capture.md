@@ -2,7 +2,7 @@
 
 Capture:
 - User problem and target user.
-- Which Flyto surface is affected: CLI, MCP server, Cloud AI, blueprint, provider, or guardrail.
+- Which Flyto2 surface is affected: CLI, MCP server, Cloud AI, blueprint, provider, or guardrail.
 - Expected closed loop and evidence artifact.
 
 Exit:

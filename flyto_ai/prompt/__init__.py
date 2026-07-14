@@ -1,3 +1,3 @@
-# Copyright 2024 Flyto
+# Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Prompt policy, system prompt, and injection-detection helpers."""

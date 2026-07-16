@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Prepared a metadata-only PyPI patch release so live registry backlinks,
+  project URLs, and the 451-module Flyto2 package description can replace the
+  stale 412-module listing.
 - Refactored OpenAI provider chat tool-call dispatch into a shared helper
   pipeline with direct regression tests for text completion, tool dispatch, and
   `ask_user` pause handling.

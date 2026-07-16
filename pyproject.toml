@@ -33,7 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 lite = ["pyyaml>=6.0", "pydantic>=2.0.0"]
 serve = ["aiohttp>=3.8"]
-agent = ["claude-agent-sdk>=0.1.0"]
+agent = ["claude-agent-sdk>=0.2.120"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0"]
 
 [project.scripts]

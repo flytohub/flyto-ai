@@ -64,7 +64,7 @@ export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 
-One install, one command — interactive chat with **450 automation modules**, browser automation, and self-learning blueprints.
+One install, one command — interactive chat with **451 registry-backed modules**, browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
@@ -178,9 +178,9 @@ steps:
     condition: "${{steps.check.status_code}} != 200"
 ```
 
-## 450 Batteries Included
+## 451 Registry-Backed Modules
 
-Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 450 automation modules across 83 categories:
+Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 451 automation modules across 84 catalog categories:
 
 | Category | Modules | Examples |
 |----------|---------|---------|
@@ -460,9 +460,9 @@ The `--dir` flag sets the default working directory for Claude Code. You can cha
 - **Claude Code as default** — plain text messages go to Claude Code CLI, with full file read/write, command execution, and persistent multi-turn context
 - **Real-time streaming** — CLI output streams to Telegram by editing the status message in real time
 - **CLI-agnostic** — `CLIProfile` abstraction supports any AI CLI (Claude, Codex, Gemini, etc.)
-- **MCP tools built-in** — Claude Code inherits your MCP config (flyto-core 450 modules, flyto-indexer, etc.)
+- **MCP tools built-in** — Claude Code inherits your MCP config (flyto-core 451 registry-backed modules, flyto-indexer, etc.)
 - **Session resume** — each chat maintains a CLI session; context is preserved across messages
-- **flyto-ai agent via `/agent`** — browser automation, scraping, and 450-module workflows remain available as a slash command
+- **flyto-ai agent via `/agent`** — browser automation, scraping, and 451-module workflows remain available as a slash command
 - **Persistent job queue** — agent tasks survive server restarts, with status tracking
 - **Mid-execution steering** — send a message while an agent task is running to redirect it
 

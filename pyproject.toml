@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
-    "pydantic>=2.0.0",
+    "pydantic>=2.13.4",
     "openai>=1.0.0",
     "anthropic>=0.20.0",
     "flyto-core[browser]>=2.16.1",
@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-lite = ["pyyaml>=6.0", "pydantic>=2.0.0"]
+lite = ["pyyaml>=6.0", "pydantic>=2.13.4"]
 serve = ["aiohttp>=3.8"]
 agent = ["claude-agent-sdk>=0.1.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0"]

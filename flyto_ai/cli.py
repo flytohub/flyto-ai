@@ -355,7 +355,7 @@ def _cmd_version():
         print("{}{}{}".format(color, line, _RESET))
 
     print()
-    print("  {}{}v{}{}  {}412 batteries included{}".format(
+    print("  {}{}v{}{}  {}451 registry-backed modules{}".format(
         _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
     ))
     print()

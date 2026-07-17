@@ -2,12 +2,12 @@
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/logo.svg" alt="flyto-ai" width="120">
 </p>
 
-<h1 align="center">flyto-ai</h1>
+<h1 align="center">Flyto2 AI</h1>
 
 <h3 align="center">Natural language → executable automation workflows</h3>
 
 <p align="center">
-  <em>Most AI agents have the LLM write shell commands and pray. <strong>flyto-ai uses 450 pre-built, schema-validated modules instead.</strong></em>
+  <em>Most AI agents have the LLM write shell commands and hope. <strong>Flyto2 AI selects registry-backed, schema-validated modules instead.</strong></em>
 </p>
 
 <p align="center">
@@ -22,6 +22,17 @@
 
 ## The Problem
 
+Flyto2 AI is the open-source agent layer for turning natural language into
+deterministic Flyto2 workflows. Use it for AI workflow generation, browser
+automation prompts, MCP-compatible tool selection, model-provider routing,
+workflow repair, and reusable YAML recipes.
+
+Official links: [flyto2.com](https://flyto2.com) ·
+[Docs](https://docs.flyto2.com/ai/) ·
+[PyPI](https://pypi.org/project/flyto-ai/) ·
+[flyto-core](https://github.com/flytohub/flyto-core) ·
+[flyto-blueprint](https://github.com/flytohub/flyto-blueprint)
+
 Most AI agents have the LLM generate shell commands or raw code on every run. This means:
 
 - **Non-deterministic** — the same prompt can produce different commands each time
@@ -31,7 +42,10 @@ Most AI agents have the LLM generate shell commands or raw code on every run. Th
 
 ## The Fix
 
-flyto-ai flips the model: **the LLM never writes code.** It searches and selects from 450 pre-built modules, fills in parameters (validated against schemas), and executes them deterministically. Every run produces a reusable YAML workflow.
+Flyto2 AI flips the model: **the LLM never writes code.** It searches and
+selects from the Flyto2 module registry, fills in parameters validated against
+schemas, and executes deterministically. Every run produces a reusable YAML
+workflow.
 
 ```
 ❯ scrape the title from example.com
@@ -64,7 +78,8 @@ export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 
-One install, one command — interactive chat with **451 registry-backed modules**, browser automation, and self-learning blueprints.
+One install, one command — interactive chat with the Flyto2 module registry,
+browser automation, and self-learning blueprints.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">

@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "flyto-ai"
 version = "0.14.3"
-description = "Flyto2 AI agent layer for executable automation workflows with 451 registry-backed modules."
+description = "Open-source AI agent layer for natural-language workflow automation with 451 registry-backed modules and reusable YAML recipes."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-keywords = ["ai-agent", "automation", "llm", "workflow", "mcp", "openai", "anthropic", "ollama"]
+keywords = ["ai-agent", "ai-agent-framework", "automation", "workflow-automation", "llm", "workflow", "mcp", "browser-automation", "openai", "anthropic", "ollama"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",

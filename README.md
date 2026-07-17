@@ -4,7 +4,7 @@
 
 <h1 align="center">Flyto2 AI</h1>
 
-<h3 align="center">Natural language → executable automation workflows</h3>
+<h3 align="center">Natural language → executable automation workflows for AI agents</h3>
 
 <p align="center">
   <em>Most AI agents have the LLM write shell commands and hope. <strong>Flyto2 AI selects registry-backed, schema-validated modules instead.</strong></em>
@@ -23,9 +23,18 @@
 ## The Problem
 
 Flyto2 AI is the open-source agent layer for turning natural language into
-deterministic Flyto2 workflows. Use it for AI workflow generation, browser
+deterministic Flyto2 workflows. You describe the job in plain English; Flyto2 AI
+chooses registry-backed modules, validates the parameters, and saves the result
+as a reusable YAML workflow. Use it for AI workflow generation, browser
 automation prompts, MCP-compatible tool selection, model-provider routing,
-workflow repair, and reusable YAML recipes.
+workflow repair, and reusable recipes.
+
+Good fit if you searched for:
+
+- AI agent framework for browser automation
+- natural language workflow automation
+- open-source AI workflow generator
+- MCP-compatible tool selection for AI agents
 
 Official links: [flyto2.com](https://flyto2.com) ·
 [Docs](https://docs.flyto2.com/ai/) ·
@@ -74,7 +83,7 @@ steps:
 ```bash
 pip install flyto-ai
 playwright install chromium     # download browser for web automation
-export OPENAI_API_KEY=sk-...   # or ANTHROPIC_API_KEY
+export OPENAI_API_KEY=<your-openai-key>   # or ANTHROPIC_API_KEY
 flyto-ai
 ```
 

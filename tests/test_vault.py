@@ -78,7 +78,7 @@ def vault_with_data(tmpdir):
         vault_path=os.path.join(tmpdir, "test.enc"),
         passphrase="test-pass",
     )
-    vault.set("API_KEY", "sk-test-12345678")
+    vault.set("API_KEY", "redaction-placeholder-value")
     vault.set("DB_PASS", "super-secret")
     return vault
 
@@ -91,7 +91,7 @@ def test_vault_save_load(vault_with_data, tmpdir):
         passphrase="test-pass",
     )
     assert vault2.load() is True
-    assert vault2.get("API_KEY") == "sk-test-12345678"
+    assert vault2.get("API_KEY") == "redaction-placeholder-value"
     assert vault2.get("DB_PASS") == "super-secret"
 
 
@@ -129,7 +129,7 @@ def test_vault_inject_to_env(vault_with_data):
 
     count = vault_with_data.inject_to_env()
     assert count == 2
-    assert os.environ.get("API_KEY") == "sk-test-12345678"
+    assert os.environ.get("API_KEY") == "redaction-placeholder-value"
     assert os.environ.get("DB_PASS") == "super-secret"
 
     # Cleanup
@@ -149,11 +149,11 @@ def test_vault_inject_selective(vault_with_data):
 
 def test_redact_vault_values():
     vault = Vault.__new__(Vault)
-    vault._credentials = {"API_KEY": "sk-test-12345678", "SHORT": "ab"}
+    vault._credentials = {"API_KEY": "redaction-placeholder-value", "SHORT": "ab"}
 
-    text = "The key is sk-test-12345678 and short is ab"
+    text = "The key is redaction-placeholder-value and short is ab"
     redacted = redact_vault_values(text, vault)
-    assert "sk-test-12345678" not in redacted
+    assert "redaction-placeholder-value" not in redacted
     assert "[REDACTED:API_KEY]" in redacted
     # Short values (<8 chars) are NOT redacted (too many false positives)
     assert "ab" in redacted

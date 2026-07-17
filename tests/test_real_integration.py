@@ -222,14 +222,14 @@ class TestVaultReal:
         vault_path = os.path.join(self.tmpdir, "test.enc")
 
         v1 = Vault(vault_path=vault_path, passphrase="my-secret-pass")
-        v1.set("API_KEY", "sk-1234567890abcdef")
+        v1.set("API_KEY", "redaction-placeholder-value")
         v1.set("DB_PASSWORD", "p@ssw0rd!#$%^&*()")
         v1.set("UNICODE_SECRET", "密碼是中文的🔑")
         v1.save()
 
         v2 = Vault(vault_path=vault_path, passphrase="my-secret-pass")
         assert v2.load() is True
-        assert v2.get("API_KEY") == "sk-1234567890abcdef"
+        assert v2.get("API_KEY") == "redaction-placeholder-value"
         assert v2.get("DB_PASSWORD") == "p@ssw0rd!#$%^&*()"
         assert v2.get("UNICODE_SECRET") == "密碼是中文的🔑"
 

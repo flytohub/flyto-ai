@@ -303,16 +303,16 @@ class TestDispatchRecursionLimit:
 class TestApiKeyRedaction:
 
     def test_openai_repr_hides_key(self):
-        provider = OpenAIProvider(api_key="sk-1234567890abcdef")
+        provider = OpenAIProvider(api_key="openai-redaction-placeholder")
         r = repr(provider)
-        assert "sk-1234567890abcdef" not in r
-        assert "sk-1..." in r
+        assert "openai-redaction-placeholder" not in r
+        assert "open..." in r
 
     def test_anthropic_repr_hides_key(self):
-        provider = AnthropicProvider(api_key="sk-ant-secret-key-here")
+        provider = AnthropicProvider(api_key="anthropic-redaction-placeholder")
         r = repr(provider)
-        assert "sk-ant-secret-key-here" not in r
-        assert "sk-a..." in r
+        assert "anthropic-redaction-placeholder" not in r
+        assert "anth..." in r
 
     def test_openai_repr_short_key(self):
         provider = OpenAIProvider(api_key="abc")

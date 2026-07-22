@@ -1,0 +1,141 @@
+{
+  "$schema": "https://docs.flyto2.com/schemas/documentation-contract-v1.json",
+  "schema_version": 1,
+  "repository": "flyto-ai",
+  "status": "active",
+  "audiences": ["AI application developers", "automation operators", "MCP integrators", "security engineers", "Flyto2 maintainers"],
+  "documentation": {
+    "index": "docs/README.md",
+    "architecture": "ARCHITECTURE.md",
+    "state": "STATE.md",
+    "security": "SECURITY.md",
+    "changelog": "CHANGELOG.md",
+    "feature_reference": "docs/FEATURES.md"
+  },
+  "source_areas": [
+    {
+      "id": "agent-runtime",
+      "description": "Agent loop, assistant middleware, deterministic intelligence, shared models, configuration, session, cache, transcript, audit, validation, and steering.",
+      "paths": ["flyto_ai/agent.py", "flyto_ai/assistant/**", "flyto_ai/intelligence/**", "flyto_ai/models.py", "flyto_ai/config*.py", "flyto_ai/session.py", "flyto_ai/cache.py", "flyto_ai/transcript.py", "flyto_ai/audit.py", "flyto_ai/validation.py", "flyto_ai/steer.py"],
+      "documentation": ["docs/FEATURES.md#agent-runtime", "docs/API.md", "docs/WHITEPAPER.md", "docs/reference/python/README.md"]
+    },
+    {
+      "id": "providers-tools-mcp",
+      "description": "Provider adapters and failover, static/local tools, Flyto2 Core tool bridge, tool registry, MCP client/server, and capability manifests.",
+      "paths": ["flyto_ai/providers/**", "flyto_ai/tools/**", "flyto_ai/mcp_client.py", "flyto_ai/mcp_server.py", "flyto_ai/protocols.py"],
+      "documentation": ["docs/FEATURES.md#providers-and-failover", "docs/FEATURES.md#flyto2-core-and-mcp", "docs/CLI_AND_MCP.md", "docs/reference/tools-and-mcp.md"]
+    },
+    {
+      "id": "memory-evolution",
+      "description": "SQLite and hybrid memory, compaction, summarization, blueprint feedback, prompt blocks, eval cases, mutation, scoring, regression detection, and reports.",
+      "paths": ["flyto_ai/memory/**", "flyto_ai/evolution/**", "eval/**"],
+      "documentation": ["docs/FEATURES.md#memory-learning-and-evaluation", "docs/CLI_AND_MCP.md#cli-modes", "docs/reference/python/memory.md", "docs/reference/python/evolution.md"]
+    },
+    {
+      "id": "safety-execution",
+      "description": "Permissions, prompt policy and injection detection, redaction, encrypted vault, sandbox, Guardian hooks, coding-agent verification, and evidence handling.",
+      "paths": ["flyto_ai/permissions.py", "flyto_ai/prompt/**", "flyto_ai/redaction.py", "flyto_ai/vault.py", "flyto_ai/sandbox/**", "flyto_ai/agents/**"],
+      "documentation": ["docs/FEATURES.md#safety-and-permissions", "docs/FEATURES.md#coding-agent-and-evidence", "docs/WHITEPAPER.md#trust-boundaries", "SECURITY.md"]
+    },
+    {
+      "id": "channels-scheduling-extensions",
+      "description": "Channel adapters and routing, Telegram operations, scheduling, extension manifests/loaders/hooks, telemetry, and operator integration surfaces.",
+      "paths": ["flyto_ai/channels/**", "flyto_ai/telegram/**", "flyto_ai/scheduler/**", "flyto_ai/extensions/**", "flyto_ai/telemetry.py"],
+      "documentation": ["docs/FEATURES.md#channels-and-scheduling", "docs/FEATURES.md#extensions-and-observability", "docs/reference/python/channels.md", "docs/reference/python/telegram.md"]
+    },
+    {
+      "id": "security-workflows",
+      "description": "Structured security finding schema, authorized-target safety policy, and Flyto2 Core workflow blueprints for supported vulnerability categories.",
+      "paths": ["flyto_ai/security/**"],
+      "documentation": ["docs/FEATURES.md#security-test-workflow-generation", "docs/WHITEPAPER.md#trust-boundaries", "docs/reference/python/security.md"]
+    },
+    {
+      "id": "packaging-operations",
+      "description": "CLI and package metadata, environment contract, release/demo scripts, sandbox image, distribution metadata, and CI/security/publishing workflows.",
+      "paths": ["flyto_ai/cli.py", "flyto_ai/package_metadata.py", "flyto_ai/static/**", "scripts/**", "pyproject.toml", ".env.example", ".github/workflows/**", "flyto_ai/sandbox/Dockerfile"],
+      "documentation": ["docs/CLI_AND_MCP.md", "docs/CONFIGURATION.md", "docs/OPERATIONS.md", "docs/reference/cli.md", "docs/reference/environment.md", "docs/reference/scripts.md"]
+    }
+  ],
+  "feature_surfaces": [
+    {
+      "id": "agent-api",
+      "title": "Agent and Python API",
+      "kind": "api",
+      "status": "active",
+      "description": "Exposes provider-agnostic agent, configuration, chat, streaming, usage, permissions, protocols, and coding-agent contracts through the package facade.",
+      "source": ["flyto_ai/__init__.py", "flyto_ai/agent.py", "flyto_ai/config.py", "flyto_ai/models.py", "flyto_ai/protocols.py"],
+      "documentation": ["docs/API.md", "docs/reference/python/package-root.md"],
+      "tests": ["tests/test_agents.py", "tests/test_streaming.py", "tests/test_config.py"]
+    },
+    {
+      "id": "cli-http-mcp",
+      "title": "CLI, HTTP, and MCP entrypoints",
+      "kind": "cli",
+      "status": "active",
+      "description": "Provides interactive/chat/code/blueprint/prompt-lab/server commands and JSON-RPC MCP discovery/call behavior over STDIO.",
+      "source": ["flyto_ai/cli.py", "flyto_ai/mcp_server.py", "flyto_ai/__main__.py"],
+      "documentation": ["docs/CLI_AND_MCP.md", "docs/reference/cli.md", "docs/reference/tools-and-mcp.md"],
+      "tests": ["tests/test_cli.py", "tests/test_mcp_server.py", "tests/test_sprint3.py"]
+    },
+    {
+      "id": "core-tool-execution",
+      "title": "Flyto2 Core tool execution",
+      "kind": "workflow",
+      "status": "active",
+      "description": "Discovers runtime Core tools, publishes capability/risk metadata, validates module parameters, dispatches recipes/modules, and records evidence with browser recovery.",
+      "source": ["flyto_ai/tools/core_tools.py", "flyto_ai/tools/registry.py"],
+      "documentation": ["docs/FEATURES.md#flyto2-core-and-mcp", "docs/AI_MCP_CLOSED_LOOP.md", "docs/reference/tools-and-mcp.md"],
+      "tests": ["tests/test_core_mcp_contract.py", "tests/test_browser_retry.py", "tests/test_tool_registry.py", "tests/test_validation.py"]
+    },
+    {
+      "id": "memory-eval-learning",
+      "title": "Memory, blueprints, and prompt evaluation",
+      "kind": "library",
+      "status": "active",
+      "description": "Stores/searches/compacts sessions, learns reusable workflow blueprints, and evaluates prompt candidates with scoring, adversarial checks, and regression reports.",
+      "source": ["flyto_ai/memory/**", "flyto_ai/evolution/**", "flyto_ai/tools/blueprint_tools.py", "eval/**"],
+      "documentation": ["docs/FEATURES.md#memory-learning-and-evaluation", "docs/CLI_AND_MCP.md#cli-modes"],
+      "tests": ["tests/test_memory_search.py", "tests/test_compaction.py", "tests/test_evolution.py"]
+    },
+    {
+      "id": "safety-controls",
+      "title": "Permission and safety controls",
+      "kind": "governance",
+      "status": "active",
+      "description": "Applies permission tiers, URL policy, injection detection, redaction, encrypted vault handling, Guardian hooks, sandbox limits, budgets, and evidence controls.",
+      "source": ["flyto_ai/permissions.py", "flyto_ai/prompt/**", "flyto_ai/redaction.py", "flyto_ai/vault.py", "flyto_ai/sandbox/**", "flyto_ai/agents/guardian_hook.py"],
+      "documentation": ["docs/FEATURES.md#safety-and-permissions", "docs/WHITEPAPER.md#trust-boundaries", "SECURITY.md"],
+      "tests": ["tests/test_policies.py", "tests/test_injection_detector.py", "tests/test_redaction.py", "tests/test_vault.py", "tests/test_sandbox.py"]
+    },
+    {
+      "id": "channels-and-jobs",
+      "title": "Channels, Telegram, and scheduling",
+      "kind": "workflow",
+      "status": "active",
+      "description": "Routes messages and files through Telegram, Slack, Discord, and webhooks, with Telegram confirmations/steering/jobs plus persistent scheduled agent tasks.",
+      "source": ["flyto_ai/channels/**", "flyto_ai/telegram/**", "flyto_ai/scheduler/**"],
+      "documentation": ["docs/FEATURES.md#channels-and-scheduling", "docs/CONFIGURATION.md#secrets"],
+      "tests": ["tests/test_channels.py", "tests/test_telegram.py", "tests/test_telegram_service.py", "tests/test_scheduler.py"]
+    },
+    {
+      "id": "security-blueprints",
+      "title": "Authorized security test workflows",
+      "kind": "library",
+      "status": "active",
+      "description": "Transforms structured findings into guarded Flyto2 Core YAML test workflows for thirteen vulnerability categories while rejecting unsafe targets by default.",
+      "source": ["flyto_ai/security/**"],
+      "documentation": ["docs/FEATURES.md#security-test-workflow-generation", "docs/WHITEPAPER.md#trust-boundaries"],
+      "tests": ["tests/test_security_generator.py"]
+    },
+    {
+      "id": "reference-generation",
+      "title": "Complete source reference",
+      "kind": "workflow",
+      "status": "active",
+      "description": "Generates and drift-checks every package function/class/method, CLI option, static tool definition, environment read, and maintainer script.",
+      "source": ["scripts/generate_reference.py"],
+      "documentation": ["docs/reference/README.md", "docs/reference/python/README.md"],
+      "verification": ["python3 scripts/generate_reference.py --check"]
+    }
+  ]
+}

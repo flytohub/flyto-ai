@@ -5,9 +5,10 @@ from flyto_ai.agent import Agent
 from flyto_ai.config import AgentConfig
 from flyto_ai.models import ChatMessage, ChatRequest, ChatResponse, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
+from flyto_ai.package_metadata import package_version
 from flyto_ai.protocols import ApiClient, ToolExecutor
 
-__version__ = "0.14.0"
+__version__ = package_version()
 __all__ = [
     "Agent", "AgentConfig",
     "ApiClient", "ToolExecutor",

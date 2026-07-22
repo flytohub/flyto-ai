@@ -341,7 +341,7 @@ def _select_template(
 
 
 def build_system_prompt(
-    module_count: int = 300,
+    module_count: int = 0,
     template: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     admin_addition: Optional[str] = None,

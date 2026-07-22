@@ -348,6 +348,7 @@ def _term_width():
 
 def _cmd_version():
     from flyto_ai import __version__
+    from flyto_ai.package_metadata import runtime_module_count
 
     print()
     for i, line in enumerate(_LOGO_LINES):
@@ -355,8 +356,10 @@ def _cmd_version():
         print("{}{}{}".format(color, line, _RESET))
 
     print()
-    print("  {}{}v{}{}  {}451 registry-backed modules{}".format(
-        _BOLD, _CYAN, __version__, _RESET, _DIM, _RESET,
+    count = runtime_module_count()
+    module_label = "{} registry-backed modules".format(count) if count is not None else "runtime-discovered registry modules"
+    print("  {}{}v{}{}  {}{}{}".format(
+        _BOLD, _CYAN, __version__, _RESET, _DIM, module_label, _RESET,
     ))
     print()
 

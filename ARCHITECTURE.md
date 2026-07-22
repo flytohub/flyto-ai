@@ -19,6 +19,20 @@ Key boundaries:
 - Blueprint learning stores successful tool chains and failure evidence, not secrets.
 - MCP metadata is additive: existing tool names, schemas, and result shapes stay compatible.
 
+Runtime packages:
+- `assistant` and `intelligence` perform deterministic pre-routing, recovery, selector resolution, and interaction control before provider fallback.
+- `providers` normalize model chat, streaming, tool calls, usage, failover, and cost records.
+- `tools` owns definitions and handlers; Core registry definitions are discovered lazily instead of copied.
+- `memory`, `evolution`, `cache`, `session`, and `transcript` retain bounded learning and evidence state.
+- `permissions`, `prompt`, `redaction`, `vault`, `sandbox`, and `agents` enforce execution and data boundaries.
+- `channels`, `telegram`, `scheduler`, and `extensions` adapt external events without bypassing the agent/tool contract.
+
+Interface surfaces:
+- Python consumers import the package facade documented in `docs/API.md`.
+- CLI and HTTP/SSE clients use contracts documented in `docs/CLI_AND_MCP.md`.
+- MCP hosts negotiate JSON-RPC protocol versions and discover tools at runtime.
+- Generated symbol and operator references under `docs/reference/` remain source-derived and are checked in CI.
+
 Core contract:
 - `get_core_capability_manifest` reports contract version, installed core version, tool fingerprint, recipes support, module categories, and per-tool risk metadata.
 - `execute_module` validates params before execution when `flyto-core` exposes `validate_params`.

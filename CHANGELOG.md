@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+- Added a documentation contract, feature/API/configuration/operations guides,
+  technical whitepaper, and generated references covering every declared
+  Python function/class method, CLI option, static tool, environment read, and
+  maintainer script.
+- Unified package, CLI, and MCP version reporting and changed Core module totals
+  to runtime discovery so installed capabilities cannot drift from source text.
+- Added version/capability regression tests and a reusable documentation CI gate.
 - Prepared a metadata-only PyPI patch release so live registry backlinks,
-  project URLs, and the 451-module Flyto2 package description can replace the
-  stale 412-module listing.
+  project URLs, and runtime-discovered capability wording replace stale
+  hard-coded module totals.
 - Refactored OpenAI provider chat tool-call dispatch into a shared helper
   pipeline with direct regression tests for text completion, tool dispatch, and
   `ask_user` pause handling.

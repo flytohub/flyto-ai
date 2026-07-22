@@ -1,14 +1,44 @@
-# Documentation Index
+# Flyto2 AI Documentation
 
-This directory holds durable documentation for `flyto-ai`.
+Use this index to move from product behavior to exact implementation contracts.
 
-Start with these root memory files:
+## Start Here
 
-- `../PROJECT.md`
-- `../ARCHITECTURE.md`
-- `../STATE.md`
-- `../ROADMAP.md`
-- `../DECISIONS.md`
-- `../tasks.md`
+- [Feature and package map](FEATURES.md): shipped behavior and source ownership.
+- [Python API guide](API.md): stable package-level integration contracts.
+- [CLI, HTTP, and MCP](CLI_AND_MCP.md): operator and protocol entrypoints.
+- [Configuration](CONFIGURATION.md): resolution, storage, safety, and secrets.
+- [Operations](OPERATIONS.md): installation, verification, release, and incident handling.
+- [Technical whitepaper](WHITEPAPER.md): architecture, trust model, determinism, and evidence.
 
-Frontend or public-surface documentation must follow the Flyto2 Frontend Quality Gate in `../AGENTS.md`.
+## Generated Reference
+
+- [Reference index](reference/README.md): generated inventory overview.
+- [Python symbol index](reference/python/README.md): every top-level class/function and direct class method, including internal helpers.
+- [CLI reference](reference/cli.md): parser-declared commands and options.
+- [Tool and MCP reference](reference/tools-and-mcp.md): static tool/protocol definitions and ownership.
+- [Environment reference](reference/environment.md): every statically named runtime environment read.
+- [Maintainer scripts](reference/scripts.md): operational script inventory and side effects.
+
+Regenerate with `python3 scripts/generate_reference.py`; CI rejects stale output.
+
+## Design And Integration
+
+- [AI/MCP closed loop](AI_MCP_CLOSED_LOOP.md)
+- [Model compatibility](MODEL_COMPATIBILITY.md)
+- [Architecture map](architecture-map.md)
+- [Demo asset](demo.svg)
+
+## Project Memory
+
+- [Project](../PROJECT.md)
+- [Architecture](../ARCHITECTURE.md)
+- [Current state](../STATE.md)
+- [Roadmap](../ROADMAP.md)
+- [Decisions](../DECISIONS.md)
+- [Task history](../tasks.md)
+- [Changelog](../CHANGELOG.md)
+- [Security policy](../SECURITY.md)
+- [Contributing](../CONTRIBUTING.md)
+
+Public surfaces must follow the Flyto2 Frontend Quality Gate in [AGENTS.md](../AGENTS.md).

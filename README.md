@@ -108,6 +108,17 @@ flyto-ai blueprints --export > blueprints.yaml
 For local or CI configuration, copy `.env.example` and fill only the providers
 you use. Never commit real API keys or bot tokens.
 
+## Documentation
+
+- [Feature map](docs/FEATURES.md) connects shipped behavior to source packages.
+- [Python API](docs/API.md), [CLI/MCP](docs/CLI_AND_MCP.md), and
+  [configuration](docs/CONFIGURATION.md) cover integration contracts.
+- [Operations](docs/OPERATIONS.md) covers verification, releases, and incidents.
+- [Technical whitepaper](docs/WHITEPAPER.md) explains the architecture and trust model.
+- [Generated reference](docs/reference/README.md) inventories every Python
+  function/class method, CLI declaration, static tool, environment read, and
+  maintainer script from source. CI fails when that reference becomes stale.
+
 ## How It's Different
 
 The core difference is **what the LLM does during execution**:
@@ -202,24 +213,12 @@ steps:
     condition: "${{steps.check.status_code}} != 200"
 ```
 
-## 451 Registry-Backed Modules
+## Runtime-Discovered Registry Modules
 
-Powered by [flyto-core](https://pypi.org/project/flyto-core/) — 451 automation modules across 84 catalog categories:
-
-| Category | Modules | Examples |
-|----------|---------|---------|
-| Browser | 39 | launch, goto, click, type, extract, screenshot, wait |
-| Atomic | 35 | reusable building-block operations |
-| Flow | 23 | conditionals, loops, branching, error handling |
-| Cloud | 14 | S3, GCS, cloud storage and APIs |
-| Data | 13 | JSON, CSV, parsing, transformation |
-| Array | 12 | filter, map, sort, flatten, unique |
-| String | 11 | split, replace, template, regex, slugify |
-| Productivity | 10 | email, calendar, document integrations |
-| Image | 9 | resize, crop, convert, watermark, compress |
-| HTTP / API | 9 | GET, POST, download, upload, GraphQL |
-| Notification | 9 | email, Slack, Telegram, webhook |
-| + 44 more | 200+ | database, crypto, docker, k8s, testing, ... |
+Powered by [flyto-core](https://pypi.org/project/flyto-core/), the agent discovers
+the installed registry instead of assuming a frozen module count. Catalog areas
+include browser, flow, cloud, data, array, string, productivity, image, HTTP/API,
+notification, database, cryptography, containers, Kubernetes, and testing.
 
 Browse available modules:
 
@@ -484,9 +483,9 @@ The `--dir` flag sets the default working directory for Claude Code. You can cha
 - **Claude Code as default** — plain text messages go to Claude Code CLI, with full file read/write, command execution, and persistent multi-turn context
 - **Real-time streaming** — CLI output streams to Telegram by editing the status message in real time
 - **CLI-agnostic** — `CLIProfile` abstraction supports any AI CLI (Claude, Codex, Gemini, etc.)
-- **MCP tools built-in** — Claude Code inherits your MCP config (flyto-core 451 registry-backed modules, flyto-indexer, etc.)
+- **MCP tools built-in** — Claude Code inherits your MCP config (runtime-discovered flyto-core modules, flyto-indexer, etc.)
 - **Session resume** — each chat maintains a CLI session; context is preserved across messages
-- **flyto-ai agent via `/agent`** — browser automation, scraping, and 451-module workflows remain available as a slash command
+- **flyto-ai agent via `/agent`** — browser automation, scraping, and registry-backed workflows remain available as a slash command
 - **Persistent job queue** — agent tasks survive server restarts, with status tracking
 - **Mid-execution steering** — send a message while an agent task is running to redirect it
 
@@ -522,6 +521,10 @@ Seven layers of system intelligence that run automatically on every tool call:
 - **Credential masking** — passwords and secrets are never exposed in LLM context. The vault injects credentials at execution time, after the LLM has selected the action.
 
 ## Environment Variables
+
+The table below covers the most common values. See the complete generated
+[environment reference](docs/reference/environment.md) and annotated
+[`.env.example`](.env.example) for every runtime setting and fallback slot.
 
 | Variable | Description |
 |----------|-------------|

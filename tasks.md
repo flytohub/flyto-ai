@@ -10,4 +10,6 @@
 - [x] Split OpenAI provider chat dispatch into test-backed helper pipeline.
 - [x] Split prompt-evolution mock response generation into test-backed helpers.
 - [ ] Refactor provider chat complexity in small, test-backed steps.
-- [ ] Repair full-suite pytest drift after deterministic planning and Python 3.11 event loop changes.
+- [x] Repair full-suite pytest drift after deterministic planning and Python 3.11 event loop changes.
+- [x] Add an exhaustive source-generated implementation reference and strict documentation contract.
+- [x] Eliminate hard-coded runtime module totals from package, CLI, MCP, and demo behavior.

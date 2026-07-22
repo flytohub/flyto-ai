@@ -9,3 +9,15 @@ Primary users:
 
 Current priority:
 - Keep `flyto-core` MCP integration provider-agnostic, validated, observable, and safe for Cloud UI consumption.
+
+Shipped surfaces:
+- Python package facade and provider-agnostic agent runtime.
+- Interactive, batch, coding-agent, blueprint, prompt-lab, HTTP/SSE, Telegram, and MCP entrypoints.
+- OpenAI-compatible, Anthropic, Ollama, and ordered failover providers.
+- Registry-backed Flyto2 Core tools with schema validation, permission checks, retry, evidence, and runtime capability discovery.
+- Memory, transcript, blueprint learning, prompt evaluation/evolution, scheduling, channels, extensions, vault, sandbox, and security-workflow generation.
+
+Documentation contract:
+- `docs/documentation-manifest.json` maps every source area and product surface to owner documentation and tests.
+- `scripts/generate_reference.py` inventories all Python functions/classes/methods plus CLI, tools, environment, and maintainer scripts.
+- `.github/workflows/documentation.yml` rejects broken links, stale generated output, missing test paths, retired branding, or non-`flyto2.com` public email domains.

@@ -845,12 +845,9 @@ class Agent:
         except Exception:
             pass
 
-        _module_count = 300
-        try:
-            from core.modules.registry import ModuleRegistry
-            _module_count = len(ModuleRegistry.get_all_metadata())
-        except Exception:
-            pass
+        from flyto_ai.package_metadata import runtime_module_count
+
+        _module_count = runtime_module_count() or 0
 
         # Pro: inject catalog outline for LLM module discovery
         if self._pro and self._config.enable_knowledge:

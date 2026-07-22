@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """MCP server — JSON-RPC 2.0 STDIO transport.
 
-Exposes flyto-ai's 451 registry-backed modules + a meta ``chat`` tool to Claude Desktop,
+Exposes flyto-core's runtime-discovered registry modules plus a meta ``chat`` tool to Claude Desktop,
 ChatGPT, VSCode, and other MCP-compatible hosts.
 
 No external MCP library required — raw JSON-RPC over stdin/stdout,
@@ -13,6 +13,8 @@ import json
 import logging
 import sys
 from typing import Any, Dict, Optional
+
+from flyto_ai import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ SERVER_CAPABILITIES = {
     "capabilities": {"tools": {"listChanged": False}},
     "serverInfo": {
         "name": "flyto-ai",
-        "version": "0.9.20",
+        "version": __version__,
     },
 }
 
@@ -56,7 +58,7 @@ CHAT_TOOL = {
     "description": (
         "Send a natural language message to the flyto-ai agent. "
         "The agent will plan and execute automation workflows using "
-        "451 registry-backed modules "
+        "runtime-discovered registry modules "
         "(browser, file, image, API, database, etc.). "
         "Returns the agent's response, tool calls made, and execution results."
     ),

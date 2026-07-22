@@ -118,7 +118,7 @@ class EvolutionConfig(BaseModel):
 
     # Prompt rendering
     mode: str = "execute"
-    module_count: int = 300
+    module_count: int = 0
 
 
 class GenerationResult(BaseModel):

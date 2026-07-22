@@ -115,7 +115,6 @@ def render_group(group: str, paths: list[Path]) -> str:
         nodes = module_nodes(tree)
         if not nodes:
             continue
-        rel = path.relative_to(ROOT).as_posix()
         module = ".".join(path.relative_to(ROOT).with_suffix("").parts)
         lines.extend([f"## `{module}`", ""])
         for node in nodes:

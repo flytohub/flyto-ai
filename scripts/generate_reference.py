@@ -89,7 +89,14 @@ def source_link(path: Path, line: int, depth: int = 3) -> str:
 
 
 def module_nodes(tree: ast.Module) -> list[ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef]:
-    return [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))]
+    top_level = [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))]
+    top_level_ids = {id(node) for node in top_level}
+    nested_classes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and id(node) not in top_level_ids
+    ]
+    return sorted([*top_level, *nested_classes], key=lambda node: node.lineno)
 
 
 def group_for(path: Path) -> str:
@@ -98,7 +105,7 @@ def group_for(path: Path) -> str:
 
 
 def render_group(group: str, paths: list[Path]) -> str:
-    lines = [f"# Python Symbols: {group}", "", NOTICE, "", "Includes public and underscore-prefixed implementation symbols so every declared function and class method remains discoverable.", ""]
+    lines = [f"# Python Symbols: {group}", "", NOTICE, "", "Includes public and underscore-prefixed implementation symbols plus nested classes so every declared callable remains discoverable.", ""]
     symbol_count = 0
     method_count = 0
     for path in paths:
@@ -117,7 +124,7 @@ def render_group(group: str, paths: list[Path]) -> str:
             if isinstance(node, ast.ClassDef):
                 bases = ", ".join(ast.unparse(base) for base in node.bases)
                 declaration = f"class {node.name}" + (f"({bases})" if bases else "")
-                lines.extend([f"### `{node.name}` ({visibility})", "", f"`{declaration}`  ", f"Source: {source_link(path, node.lineno)}", "", purpose(node), ""])
+                lines.extend([f"### `{node.name}` ({visibility})", "", f"`{declaration}`", "", f"Source: {source_link(path, node.lineno)}", "", purpose(node), ""])
                 methods = [item for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
                 if methods:
                     lines.extend(["| Method | Visibility | Purpose | Source |", "|---|---|---|---|"])
@@ -131,7 +138,7 @@ def render_group(group: str, paths: list[Path]) -> str:
             else:
                 sig = signature(node, method=False)
                 lines.extend([f"### `{node.name}` ({visibility})", "", f"`{sig}`  ", f"Source: {source_link(path, node.lineno)}", "", purpose(node), ""])
-    lines[5:5] = [f"Inventory: **{symbol_count} top-level symbols** and **{method_count} class methods**.", ""]
+    lines[5:5] = [f"Inventory: **{symbol_count} declared symbols** and **{method_count} class methods**.", ""]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -142,7 +149,7 @@ def python_references() -> dict[Path, str]:
         if tree and module_nodes(tree):
             grouped[group_for(path)].append(path)
     result: dict[Path, str] = {}
-    index = ["# Python Symbol Index", "", NOTICE, "", "All top-level functions/classes and all direct class methods are included, including internal implementation symbols.", ""]
+    index = ["# Python Symbol Index", "", NOTICE, "", "All module-level functions/classes, nested classes, and direct class methods are included, including internal implementation symbols.", ""]
     for group, paths in sorted(grouped.items()):
         filename = f"{group}.md"
         top = sum(len(module_nodes(parse(path))) for path in paths if parse(path))

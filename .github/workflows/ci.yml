@@ -48,7 +48,7 @@ jobs:
             -q
       - name: Verify with flyto-indexer
         run: |
-          python -m pip install flyto-indexer
+          python -m pip install "flyto-indexer @ git+https://github.com/flytohub/flyto-indexer@7ad6917887ffde8e43a3cee029c849a1a0ba2909"
           flyto-index verify . --full-scan --strict
       - name: Build distribution
         run: python -m build

@@ -6,7 +6,7 @@
   assertions, workflow identity, executor version, and selection mode.
   Deterministic exact reuse now records `planner_model_calls_used=0` with an
   explicit planner scope. Blueprint can accept the old `model_calls_used`
-  compatibility field, but new Flyto-AI reports do not emit it. Model-selected
+  compatibility field, but new Flyto2 AI reports do not emit it. Model-selected
   paths leave counts unknown instead of fabricating a baseline.
 - Rewrote the Blueprint/agent comparison to remove unsupported replay-token
   estimates and explain the Evidence Card proof boundary in plain language.

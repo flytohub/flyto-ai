@@ -4,7 +4,7 @@ Date: 2026-07-26
 
 Summary:
 
-- Wired `export_blueprint` and `import_blueprint` through the Flyto AI
+- Wired `export_blueprint` and `import_blueprint` through the Flyto2 AI
   Blueprint dispatcher without exposing signing keys or trusted publishers.
 - Direct model-facing `report_blueprint_outcome` calls now record community
   observations.

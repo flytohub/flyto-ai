@@ -7,7 +7,7 @@
 <h3 align="center">Turn successful agent runs into workflows you can trust—and run again.</h3>
 
 <p align="center">
-  <em>Most agents remember the chat. Flyto remembers the working procedure.</em>
+  <em>Most agents remember the chat. Flyto2 AI remembers the working procedure.</em>
 </p>
 
 <p align="center">
@@ -41,9 +41,9 @@ matching request → fill new arguments → run checked steps → record evidenc
 The result is not another chat memory. It is an executable procedure with
 arguments, retries, assertions, trust rules, and a history of real outcomes.
 
-On an exact deterministic reuse, Flyto records
+On an exact deterministic reuse, Flyto2 AI records
 `planner_model_calls_used=0`: the outer agent did not call a model to plan the
-job again. A saved workflow may still contain an `llm.*` step, so Flyto does not
+job again. A saved workflow may still contain an `llm.*` step, so Flyto2 AI does not
 pretend the entire workflow is token-free.
 
 ## Quickstart
@@ -147,12 +147,12 @@ The core difference is **when the LLM is still needed**:
 | **Token evidence** | Provider bill/log | `planner_model_calls_used=0` on deterministic exact reuse |
 | **Shared procedures** | Trust is often implicit | Unknown imports stay quarantined |
 
-Flyto does not publish a made-up “60–80% savings” number. It records what it can
+Flyto2 AI does not publish a made-up “60–80% savings” number. It records what it can
 prove: how many trusted runs passed, how many retried, how assertions behaved,
 latency p50/p95, and how many exact reuses skipped the agent's planning call.
 
 That last number is intentionally scoped to agent planning. A Blueprint can
-still contain an `llm.*` step. Flyto does not call the whole workflow
+still contain an `llm.*` step. Flyto2 AI does not call the whole workflow
 “token-free” unless those step-level model calls are measured too.
 
 ## Use Cases

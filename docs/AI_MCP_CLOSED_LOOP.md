@@ -49,7 +49,7 @@ The `get_core_capability_manifest` tool exposes:
   instead of guessing. This proves that the outer agent skipped re-planning; it
   does not claim that an `llm.*` workflow step used zero tokens. Blueprint can
   still read the older `model_calls_used` field for compatibility, but new
-  Flyto-AI reports do not emit it.
+  Flyto2 AI reports do not emit it.
 - Portable `export_blueprint` and `import_blueprint` calls never accept signing
   keys or trusted-publisher mappings. Unsigned imports are quarantined by
   `flyto-blueprint`.

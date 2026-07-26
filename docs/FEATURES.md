@@ -15,7 +15,7 @@ exact functions and methods, including internal helpers, are listed in the
 | Reliability view | Read traces by hand | Evidence Card |
 | Token claim | Usually estimated | Zero re-planning calls counted only at the measured planner boundary |
 
-The point is not that Flyto never uses an LLM. It uses one where judgment helps,
+The point is not that Flyto2 AI never uses an LLM. It uses one where judgment helps,
 then moves stable repeated work out of the model path.
 
 ## Agent Runtime
@@ -78,8 +78,8 @@ The trusted report includes an allowlisted execution summary: duration, step
 count, total attempts, assertion result, workflow hash, executor version, and
 selection mode. Only deterministic exact reuse adds
 `planner_model_calls_used=0` and `model_call_scope=planner`. Blueprint can read
-the older `model_calls_used` field, but new Flyto-AI reports do not emit it.
-Flyto-Blueprint turns those reports into
+the older `model_calls_used` field, but new Flyto2 AI reports do not emit it.
+Flyto2 Blueprint turns those reports into
 sample/success counts, Wilson 95% lower bound, retry/assertion rates, p50/p95
 duration, and zero-planner-call counts. This does not count model calls made by
 `llm.*` workflow steps. Prompts, parameters, credentials, and raw tool results

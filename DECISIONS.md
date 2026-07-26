@@ -5,7 +5,7 @@
 - Only deterministic exact Blueprint reuse records
   `planner_model_calls_used=0` with `model_call_scope=planner`.
 - Blueprint still accepts the old `model_calls_used=0` compatibility field,
-  but new Flyto-AI reports do not emit it. It must not be described as
+  but new Flyto2 AI reports do not emit it. It must not be described as
   workflow-wide zero tokens because an `llm.*` step can still call a model.
 - Model-selected paths do not assume whether one or several model calls were
   used.

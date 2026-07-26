@@ -17,7 +17,7 @@ Key boundaries:
 - Providers never call `flyto-core` directly.
 - Cloud imports `flyto-ai` contracts and dispatchers, not `flyto-core` internals.
 - Blueprint learning stores successful tool chains and redacted evidence, not
-  secrets. Portable exchange is explicit; Flyto AI does not publish bundles by
+  secrets. Portable exchange is explicit; Flyto2 AI does not publish bundles by
   itself.
 - Model-facing Blueprint outcome calls are community observations. Only the
   deterministic closed-loop executor can attach the in-process capability that

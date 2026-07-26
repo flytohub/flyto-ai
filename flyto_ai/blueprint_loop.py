@@ -22,6 +22,7 @@ from flyto_ai.closed_loop_v3 import (
     repair_from_result,
 )
 from flyto_ai.redaction import redact_args
+from flyto_ai.tools.blueprint_tools import _CLOSED_LOOP_EVIDENCE_CAPABILITY
 
 DispatchFn = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
 PreflightFn = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -378,6 +379,7 @@ async def execute_blueprint_loop(
     checkpoint_store: Optional[CheckpointStore] = None,
     repair: Optional[RepairFn] = None,
     max_repairs: int = 1,
+    selection_mode: str = "model_selected",
 ) -> Dict[str, Any]:
     """Validate and execute blueprint steps, then report one idempotent outcome.
 
@@ -390,6 +392,9 @@ async def execute_blueprint_loop(
     first module executes.
     """
     started = time.monotonic()
+    selection_mode = (
+        "deterministic" if selection_mode == "deterministic" else "model_selected"
+    )
     execution_id = "bp_{}".format(uuid.uuid4().hex)
     plan_ir = PlanIR.compile(blueprint_id, steps)
     steps = plan_ir.to_steps()
@@ -982,12 +987,32 @@ async def execute_blueprint_loop(
         "checkpoint_error": checkpoint_error or None,
         "checkpoint_contains_step_results": checkpoint_store is not None,
         "duration_ms": int((time.monotonic() - started) * 1000),
+        "selection_mode": selection_mode,
     }
+    if selection_mode == "deterministic":
+        evidence["planner_model_calls_used"] = 0
+        evidence["model_call_scope"] = "planner"
 
     outcome = await _call(dispatch, "report_blueprint_outcome", {
         "blueprint_id": blueprint_id,
         "success": success,
         "execution_id": execution_id,
+        "_evidence_capability": _CLOSED_LOOP_EVIDENCE_CAPABILITY,
+        "_execution_evidence": {
+            field: evidence[field]
+            for field in (
+                "duration_ms",
+                "step_count",
+                "total_attempts",
+                "assertion_passed",
+                "selection_mode",
+                "planner_model_calls_used",
+                "model_call_scope",
+                "workflow_hash",
+                "executor_version",
+            )
+            if field in evidence
+        },
     })
     outcome_reported = isinstance(outcome, dict) and bool(outcome.get("ok"))
     if success and outcome_reported and checkpoint_store is not None:

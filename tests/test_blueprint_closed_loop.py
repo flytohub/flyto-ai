@@ -88,6 +88,14 @@ async def test_blueprint_loop_validates_executes_and_reports_once():
     assert result["evidence"]["step_count"] == 2
     assert result["evidence"]["passed_steps"] == 2
     assert calls[-1][1]["execution_id"] == result["execution_id"]
+    runtime_evidence = calls[-1][1]["_execution_evidence"]
+    assert runtime_evidence["step_count"] == 2
+    assert runtime_evidence["total_attempts"] == 2
+    assert runtime_evidence["assertion_passed"] is True
+    assert runtime_evidence["selection_mode"] == "model_selected"
+    assert "planner_model_calls_used" not in runtime_evidence
+    assert "model_calls_used" not in runtime_evidence
+    assert "model_call_scope" not in runtime_evidence
 
 
 @pytest.mark.asyncio
@@ -507,7 +515,7 @@ def test_planner_matches_blueprint_summary_and_extracts_explicit_args(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_deterministic_blueprint_reuse_is_zero_llm(monkeypatch):
+async def test_deterministic_blueprint_reuse_is_zero_planner_model_calls(monkeypatch):
     calls = []
 
     async def raw_dispatch(name, arguments):
@@ -553,12 +561,55 @@ async def test_deterministic_blueprint_reuse_is_zero_llm(monkeypatch):
     assert response.rounds_used == 0
     assert response.execution_results[0]["module_id"] == "string.uppercase"
     assert response.tool_calls[0]["outcome_reported"] is True
+    assert response.tool_calls[0]["evidence"]["selection_mode"] == "deterministic"
+    assert response.tool_calls[0]["evidence"]["planner_model_calls_used"] == 0
+    assert "model_calls_used" not in response.tool_calls[0]["evidence"]
+    assert response.tool_calls[0]["evidence"]["model_call_scope"] == "planner"
+    report_arguments = calls[-1][1]
+    assert report_arguments["_execution_evidence"]["selection_mode"] == "deterministic"
+    assert report_arguments["_execution_evidence"]["planner_model_calls_used"] == 0
+    assert "model_calls_used" not in report_arguments["_execution_evidence"]
+    assert report_arguments["_execution_evidence"]["model_call_scope"] == "planner"
     assert [name for name, _ in calls] == [
         "use_blueprint",
         "validate_params",
         "execute_module",
         "report_blueprint_outcome",
     ]
+
+
+@pytest.mark.asyncio
+async def test_planner_call_scope_does_not_claim_llm_step_is_token_free():
+    calls = []
+
+    async def dispatch(name, arguments):
+        calls.append((name, arguments))
+        if name == "validate_params":
+            return {"valid": True}
+        if name == "execute_module":
+            return {"status": "success", "data": {"value": "mocked"}}
+        if name == "report_blueprint_outcome":
+            return {"ok": True}
+        raise AssertionError(name)
+
+    result = await execute_blueprint_loop(
+        blueprint_id="model-backed-step",
+        steps=[
+            {
+                "module": "llm.chat",
+                "params": {"prompt": "This call is mocked in the test."},
+            },
+        ],
+        dispatch=dispatch,
+        selection_mode="deterministic",
+    )
+
+    runtime_evidence = calls[-1][1]["_execution_evidence"]
+    assert result["ok"] is True
+    assert runtime_evidence["planner_model_calls_used"] == 0
+    assert runtime_evidence["model_call_scope"] == "planner"
+    assert "model_calls_used" not in runtime_evidence
+    assert "workflow_model_calls_used" not in runtime_evidence
 
 
 def test_feedback_reused_blueprint_is_idempotent_and_not_relearned(monkeypatch):
@@ -597,14 +648,55 @@ def test_feedback_reused_blueprint_is_idempotent_and_not_relearned(monkeypatch):
     assert engine.learned == []
 
 
+def test_feedback_does_not_verify_blueprint_without_execution_evidence(
+    monkeypatch,
+):
+    class FakeEngine:
+        def __init__(self):
+            self.reported = []
+
+        def report_outcome(self, *args, **kwargs):
+            self.reported.append((args, kwargs))
+
+    engine = FakeEngine()
+    import flyto_blueprint
+
+    monkeypatch.setattr(flyto_blueprint, "get_engine", lambda: engine)
+
+    feedback(
+        tool_calls=[{
+            "function": "use_blueprint",
+            "arguments": {"blueprint_id": "selected_only"},
+            "execution_id": "bp_no_execution",
+        }],
+        execution_results=[],
+        user_message="select but do not execute",
+    )
+
+    assert engine.reported == []
+
+
 @pytest.mark.asyncio
 async def test_blueprint_tool_forwards_execution_id(monkeypatch):
     class FakeEngine:
         def __init__(self):
             self.reported = None
 
-        def report_outcome(self, blueprint_id, success, execution_id=""):
-            self.reported = (blueprint_id, success, execution_id)
+        def report_outcome(
+            self,
+            blueprint_id,
+            success,
+            execution_id="",
+            evidence_tier="local_verified",
+            evidence=None,
+        ):
+            self.reported = (
+                blueprint_id,
+                success,
+                execution_id,
+                evidence_tier,
+                evidence,
+            )
             return {"ok": True}
 
     engine = FakeEngine()
@@ -622,7 +714,121 @@ async def test_blueprint_tool_forwards_execution_id(monkeypatch):
     )
 
     assert result == {"ok": True}
-    assert engine.reported == ("learned_copy", True, "bp_execution_1")
+    assert engine.reported == (
+        "learned_copy",
+        True,
+        "bp_execution_1",
+        "community",
+        None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_closed_loop_capability_marks_only_host_execution_verified(
+    monkeypatch,
+):
+    class FakeEngine:
+        def __init__(self):
+            self.reported = []
+
+        def report_outcome(
+            self,
+            blueprint_id,
+            success,
+            execution_id="",
+            evidence_tier="local_verified",
+            evidence=None,
+        ):
+            self.reported.append({
+                "blueprint_id": blueprint_id,
+                "success": success,
+                "execution_id": execution_id,
+                "evidence_tier": evidence_tier,
+                "evidence": evidence,
+            })
+            return {"ok": True, "evidence_tier": evidence_tier}
+
+    engine = FakeEngine()
+    import flyto_blueprint
+
+    monkeypatch.setattr(flyto_blueprint, "get_engine", lambda: engine)
+
+    async def dispatch(name, arguments):
+        if name == "validate_params":
+            return {"valid": True}
+        if name == "execute_module":
+            return {"status": "success", "data": {"result": "HELLO"}}
+        return await dispatch_blueprint_tool(name, arguments)
+
+    result = await execute_blueprint_loop(
+        blueprint_id="learned_copy",
+        steps=[{
+            "module": "string.uppercase",
+            "params": {"text": "hello"},
+        }],
+        dispatch=dispatch,
+    )
+    forged = await dispatch_blueprint_tool(
+        "report_blueprint_outcome",
+        {
+            "blueprint_id": "learned_copy",
+            "success": True,
+            "execution_id": "forged",
+            "_evidence_capability": "flyto-ai.closed-loop-verified",
+            "_execution_evidence": {
+                "model_calls_used": 0,
+                "selection_mode": "deterministic",
+            },
+        },
+    )
+
+    assert result["closed_loop_ok"] is True
+    assert result["outcome"]["evidence_tier"] == "local_verified"
+    assert forged["evidence_tier"] == "community"
+    assert [item["evidence_tier"] for item in engine.reported] == [
+        "local_verified",
+        "community",
+    ]
+    assert engine.reported[0]["evidence"]["step_count"] == 1
+    assert engine.reported[0]["evidence"]["selection_mode"] == "model_selected"
+    assert engine.reported[1]["evidence"] is None
+
+
+@pytest.mark.asyncio
+async def test_blueprint_tool_dispatches_portable_bundles_without_host_keys(
+    monkeypatch,
+):
+    class FakeEngine:
+        def __init__(self):
+            self.calls = []
+
+        def export_blueprint(self, blueprint_id, publisher=""):
+            self.calls.append(("export", blueprint_id, publisher))
+            return {"ok": True, "bundle": {"blueprint": {"id": blueprint_id}}}
+
+        def import_blueprint(self, bundle):
+            self.calls.append(("import", bundle))
+            return {"ok": True, "trust_tier": "community"}
+
+    engine = FakeEngine()
+    import flyto_blueprint
+
+    monkeypatch.setattr(flyto_blueprint, "get_engine", lambda: engine)
+
+    exported = await dispatch_blueprint_tool(
+        "export_blueprint",
+        {"blueprint_id": "portable", "publisher": "team-a"},
+    )
+    imported = await dispatch_blueprint_tool(
+        "import_blueprint",
+        {"bundle": exported["bundle"]},
+    )
+
+    assert imported == {"ok": True, "trust_tier": "community"}
+    assert engine.calls == [
+        ("export", "portable", "team-a"),
+        ("import", {"blueprint": {"id": "portable"}}),
+    ]
 
 
 @pytest.mark.asyncio

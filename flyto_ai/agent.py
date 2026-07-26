@@ -589,6 +589,7 @@ class Agent:
             dispatch_fn, _ = self._build_dispatch(
                 message, on_tool_call, on_stream, dispatch_wrapper,
                 mode="execute",
+                blueprint_selection_mode="deterministic",
             )
             if dispatch_fn is None:
                 return None
@@ -719,6 +720,7 @@ class Agent:
         self,
         user_message: str = "",
         execute_blueprints: bool = True,
+        blueprint_selection_mode: str = "model_selected",
     ):
         """Create a dispatch function with permission + hooks + policy enforcement + assistant middleware."""
         base_dispatch = self._dispatch_fn
@@ -811,6 +813,7 @@ class Agent:
                         "max_repair_attempts",
                         1,
                     ),
+                    selection_mode=blueprint_selection_mode,
                 )
 
             # Extension hooks: after_tool_call
@@ -1044,6 +1047,7 @@ class Agent:
     def _build_dispatch(
         self, message: str, on_tool_call, on_stream, dispatch_wrapper,
         mode: str = "execute",
+        blueprint_selection_mode: str = "model_selected",
     ) -> Tuple:
         """Build the final dispatch function with middleware + instrumentation.
 
@@ -1053,6 +1057,7 @@ class Agent:
         dispatch_fn = self._make_safe_dispatch(
             user_message=message,
             execute_blueprints=mode == "execute",
+            blueprint_selection_mode=blueprint_selection_mode,
         )
         if dispatch_wrapper and dispatch_fn:
             dispatch_fn = dispatch_wrapper(dispatch_fn)

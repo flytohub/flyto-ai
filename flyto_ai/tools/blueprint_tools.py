@@ -7,6 +7,15 @@ from typing import Any, Dict, List
 logger = logging.getLogger(__name__)
 
 
+class _EvidenceCapability(str):
+    """In-process capability that cannot survive a model JSON round trip."""
+
+
+_CLOSED_LOOP_EVIDENCE_CAPABILITY = _EvidenceCapability(
+    "flyto-ai.closed-loop-verified",
+)
+
+
 def get_blueprint_tool_defs() -> List[Dict]:
     """Return blueprint MCP tool definitions (empty list if not installed)."""
     try:
@@ -74,10 +83,32 @@ async def dispatch_blueprint_tool(
         )
 
     elif name == "report_blueprint_outcome":
+        host_verified = (
+            arguments.get("_evidence_capability")
+            is _CLOSED_LOOP_EVIDENCE_CAPABILITY
+        )
+        report_args = {
+            "blueprint_id": arguments.get("blueprint_id", ""),
+            "success": arguments.get("success", False),
+            "execution_id": arguments.get("execution_id", ""),
+            "evidence_tier": "local_verified" if host_verified else "community",
+        }
+        execution_evidence = arguments.get("_execution_evidence")
+        if host_verified and isinstance(execution_evidence, dict):
+            report_args["evidence"] = execution_evidence
         return engine.report_outcome(
+            **report_args,
+        )
+
+    elif name == "export_blueprint":
+        return engine.export_blueprint(
             blueprint_id=arguments.get("blueprint_id", ""),
-            success=arguments.get("success", False),
-            execution_id=arguments.get("execution_id", ""),
+            publisher=arguments.get("publisher", ""),
+        )
+
+    elif name == "import_blueprint":
+        return engine.import_blueprint(
+            bundle=arguments.get("bundle", {}),
         )
 
     return {"ok": False, "error": "Unknown blueprint tool: {}".format(name)}

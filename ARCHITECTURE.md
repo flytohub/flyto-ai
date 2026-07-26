@@ -16,7 +16,14 @@ user/cloud/CLI
 Key boundaries:
 - Providers never call `flyto-core` directly.
 - Cloud imports `flyto-ai` contracts and dispatchers, not `flyto-core` internals.
-- Blueprint learning stores successful tool chains and failure evidence, not secrets.
+- Blueprint learning stores successful tool chains and redacted evidence, not
+  secrets. Portable exchange is explicit; Flyto AI does not publish bundles by
+  itself.
+- Model-facing Blueprint outcome calls are community observations. Only the
+  deterministic closed-loop executor can attach the in-process capability that
+  records `local_verified` evidence.
+- Blueprint signing keys and trusted publisher mappings stay host-controlled
+  and are never exposed through model tool schemas.
 - MCP metadata is additive: existing tool names, schemas, and result shapes stay compatible.
 
 Runtime packages:

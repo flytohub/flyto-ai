@@ -1,5 +1,34 @@
 # Decisions
 
+## 2026-07-26: Prove token reduction at the execution boundary
+
+- Only deterministic exact Blueprint reuse records
+  `planner_model_calls_used=0` with `model_call_scope=planner`.
+- Blueprint still accepts the old `model_calls_used=0` compatibility field,
+  but new Flyto-AI reports do not emit it. It must not be described as
+  workflow-wide zero tokens because an `llm.*` step can still call a model.
+- Model-selected paths do not assume whether one or several model calls were
+  used.
+- The closed loop forwards only allowlisted runtime facts to the Blueprint
+  Evidence Card; prompts, params, secrets, and raw results stay out.
+- Documentation must describe measured zero re-planning calls, not estimated
+  percentage savings or workflow-wide zero tokens.
+
+This makes the “lower token use” claim falsifiable and keeps the evidence
+surface small enough to inspect.
+
+## 2026-07-26: Blueprint evidence authority is an in-process capability
+
+- Model-facing outcome reports are always community observations.
+- The deterministic Blueprint loop adds a non-serializable object-identity
+  capability only after guarded execution; only this path writes
+  `local_verified` evidence.
+- Model-facing portable exchange cannot supply signing keys or trusted
+  publisher mappings; those remain host configuration.
+
+This prevents JSON tool calls from self-promoting shared procedures while
+retaining continuous evidence-backed learning.
+
 ## 2026-07-26: Closed-loop verification rejects ambiguous plan state
 
 - Omitting both verification identifiers remains a request-shape error.

@@ -10,21 +10,21 @@ Inventory: **148 declared symbols** and **224 class methods**.
 
 ### `_lazy_claude_code_agent` (internal)
 
-`_lazy_claude_code_agent()`  
+`_lazy_claude_code_agent()`
 Source: [`flyto_ai/__init__.py:23`](../../../flyto_ai/__init__.py#L23)
 
 Internal `_lazy_claude_code_agent` implementation on this module; the linked source is authoritative.
 
 ### `__getattr__` (internal)
 
-`__getattr__(name)`  
+`__getattr__(name)`
 Source: [`flyto_ai/__init__.py:28`](../../../flyto_ai/__init__.py#L28)
 
 Internal `__getattr__` implementation on this module; the linked source is authoritative.
 
 ### `create_agent` (public)
 
-`create_agent(provider: str = '', api_key: str = '', model: str = '', **kwargs) -> Agent`  
+`create_agent(provider: str = '', api_key: str = '', model: str = '', **kwargs) -> Agent`
 Source: [`flyto_ai/__init__.py:34`](../../../flyto_ai/__init__.py#L34)
 
 Convenience factory for creating an Agent.
@@ -33,7 +33,7 @@ Convenience factory for creating an Agent.
 
 ### `_merge_usage` (internal)
 
-`_merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None`  
+`_merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None`
 Source: [`flyto_ai/agent.py:39`](../../../flyto_ai/agent.py#L39)
 
 Merge new usage stats into accumulated dict (in-place).
@@ -77,32 +77,32 @@ High-level AI agent that translates natural language to Flyto2 workflows.
 | `_select_model_route(message: str, *, deterministic_available: bool = False, prior_failure: bool = False, plan_steps: int = 0) -> ModelRoute` | internal | Internal `_select_model_route` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:434`](../../../flyto_ai/agent.py#L434) |
 | `_make_provider() -> LLMProvider` | internal | Internal `_make_provider` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:484`](../../../flyto_ai/agent.py#L484) |
 | `async _try_deterministic(message: str, on_tool_call, on_stream, dispatch_wrapper) -> Optional[ChatResponse]` | internal | Try to handle the message with deterministic planning (zero LLM). | [`flyto_ai/agent.py:528`](../../../flyto_ai/agent.py#L528) |
-| `_make_safe_dispatch(user_message: str = '', execute_blueprints: bool = True)` | internal | Create a dispatch function with permission + hooks + policy enforcement + assistant middleware. | [`flyto_ai/agent.py:718`](../../../flyto_ai/agent.py#L718) |
-| `async chat(message: str, history: Optional[List[Dict[str, Any]]] = None, template_context: Optional[Dict[str, Any]] = None, mode: str = 'execute', on_tool_call = None, on_stream: Optional[StreamCallback] = None, dispatch_wrapper = None) -> ChatResponse` | public | Run one chat turn: message → tool loop → validation → response. | [`flyto_ai/agent.py:847`](../../../flyto_ai/agent.py#L847) |
-| `_detect_injection(message: str) -> Optional[str]` | internal | Scan user message for prompt injection patterns. | [`flyto_ai/agent.py:1033`](../../../flyto_ai/agent.py#L1033) |
-| `_build_dispatch(message: str, on_tool_call, on_stream, dispatch_wrapper, mode: str = 'execute') -> Tuple` | internal | Build the final dispatch function with middleware + instrumentation. | [`flyto_ai/agent.py:1044`](../../../flyto_ai/agent.py#L1044) |
-| `async _build_prompt(message: str, mode: str, has_tools: bool, template_context: Optional[Dict[str, Any]], injection_note: Optional[str]) -> Tuple[str, bool]` | internal | Build the system prompt with memory, injection notes, and blueprint hints. | [`flyto_ai/agent.py:1085`](../../../flyto_ai/agent.py#L1085) |
-| `async _handle_yaml_validation(response_content: str, tool_calls: List[Dict], messages: List[Dict], system_prompt: str, dispatch_fn, total_rounds: int, total_usage: Dict[str, int]) -> Tuple[str, List[Dict], int, Dict[str, int]]` | internal | Nudge LLM to produce YAML and validate it iteratively. | [`flyto_ai/agent.py:1153`](../../../flyto_ai/agent.py#L1153) |
-| `async _handle_failure_guard(response_content: str, execution_results: List[Dict], messages: List[Dict], system_prompt: str, on_stream: Optional[StreamCallback], total_rounds: int, total_usage: Dict[str, int]) -> Tuple[str, int, Dict[str, int]]` | internal | If ALL executions failed, force LLM to acknowledge failures. | [`flyto_ai/agent.py:1223`](../../../flyto_ai/agent.py#L1223) |
-| `async _record_memory(message: str, response_content: str) -> None` | internal | Record conversation turn in memory store, summarizer, and search index. | [`flyto_ai/agent.py:1271`](../../../flyto_ai/agent.py#L1271) |
-| `_record_transcript(response_content: str, tool_calls: List[Dict]) -> None` | internal | Record assistant response and tool calls to transcript. | [`flyto_ai/agent.py:1292`](../../../flyto_ai/agent.py#L1292) |
-| `_record_cost(usage_dict: Dict[str, int]) -> None` | internal | Record token usage in cost tracker + pro CostController. | [`flyto_ai/agent.py:1304`](../../../flyto_ai/agent.py#L1304) |
-| `_emit_audit(user_message, mode, tool_calls, execution_results, ok, error, duration_ms, usage)` | internal | Internal `_emit_audit` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:1337`](../../../flyto_ai/agent.py#L1337) |
-| `async _call_llm(messages, system_prompt, dispatch_fn, on_stream = None)` | internal | Internal `_call_llm` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:1361`](../../../flyto_ai/agent.py#L1361) |
-| `async _call_llm_toolless(messages, system_prompt, on_stream = None)` | internal | Internal `_call_llm_toolless` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:1372`](../../../flyto_ai/agent.py#L1372) |
+| `_make_safe_dispatch(user_message: str = '', execute_blueprints: bool = True, blueprint_selection_mode: str = 'model_selected')` | internal | Create a dispatch function with permission + hooks + policy enforcement + assistant middleware. | [`flyto_ai/agent.py:719`](../../../flyto_ai/agent.py#L719) |
+| `async chat(message: str, history: Optional[List[Dict[str, Any]]] = None, template_context: Optional[Dict[str, Any]] = None, mode: str = 'execute', on_tool_call = None, on_stream: Optional[StreamCallback] = None, dispatch_wrapper = None) -> ChatResponse` | public | Run one chat turn: message → tool loop → validation → response. | [`flyto_ai/agent.py:850`](../../../flyto_ai/agent.py#L850) |
+| `_detect_injection(message: str) -> Optional[str]` | internal | Scan user message for prompt injection patterns. | [`flyto_ai/agent.py:1036`](../../../flyto_ai/agent.py#L1036) |
+| `_build_dispatch(message: str, on_tool_call, on_stream, dispatch_wrapper, mode: str = 'execute', blueprint_selection_mode: str = 'model_selected') -> Tuple` | internal | Build the final dispatch function with middleware + instrumentation. | [`flyto_ai/agent.py:1047`](../../../flyto_ai/agent.py#L1047) |
+| `async _build_prompt(message: str, mode: str, has_tools: bool, template_context: Optional[Dict[str, Any]], injection_note: Optional[str]) -> Tuple[str, bool]` | internal | Build the system prompt with memory, injection notes, and blueprint hints. | [`flyto_ai/agent.py:1090`](../../../flyto_ai/agent.py#L1090) |
+| `async _handle_yaml_validation(response_content: str, tool_calls: List[Dict], messages: List[Dict], system_prompt: str, dispatch_fn, total_rounds: int, total_usage: Dict[str, int]) -> Tuple[str, List[Dict], int, Dict[str, int]]` | internal | Nudge LLM to produce YAML and validate it iteratively. | [`flyto_ai/agent.py:1158`](../../../flyto_ai/agent.py#L1158) |
+| `async _handle_failure_guard(response_content: str, execution_results: List[Dict], messages: List[Dict], system_prompt: str, on_stream: Optional[StreamCallback], total_rounds: int, total_usage: Dict[str, int]) -> Tuple[str, int, Dict[str, int]]` | internal | If ALL executions failed, force LLM to acknowledge failures. | [`flyto_ai/agent.py:1228`](../../../flyto_ai/agent.py#L1228) |
+| `async _record_memory(message: str, response_content: str) -> None` | internal | Record conversation turn in memory store, summarizer, and search index. | [`flyto_ai/agent.py:1276`](../../../flyto_ai/agent.py#L1276) |
+| `_record_transcript(response_content: str, tool_calls: List[Dict]) -> None` | internal | Record assistant response and tool calls to transcript. | [`flyto_ai/agent.py:1297`](../../../flyto_ai/agent.py#L1297) |
+| `_record_cost(usage_dict: Dict[str, int]) -> None` | internal | Record token usage in cost tracker + pro CostController. | [`flyto_ai/agent.py:1309`](../../../flyto_ai/agent.py#L1309) |
+| `_emit_audit(user_message, mode, tool_calls, execution_results, ok, error, duration_ms, usage)` | internal | Internal `_emit_audit` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:1342`](../../../flyto_ai/agent.py#L1342) |
+| `async _call_llm(messages, system_prompt, dispatch_fn, on_stream = None)` | internal | Internal `_call_llm` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:1366`](../../../flyto_ai/agent.py#L1366) |
+| `async _call_llm_toolless(messages, system_prompt, on_stream = None)` | internal | Internal `_call_llm_toolless` implementation on `Agent`; the linked source is authoritative. | [`flyto_ai/agent.py:1377`](../../../flyto_ai/agent.py#L1377) |
 
 ## `flyto_ai.audit`
 
 ### `_ensure_dir` (internal)
 
-`_ensure_dir()`  
+`_ensure_dir()`
 Source: [`flyto_ai/audit.py:23`](../../../flyto_ai/audit.py#L23)
 
 Internal `_ensure_dir` implementation on this module; the linked source is authoritative.
 
 ### `_today_file` (internal)
 
-`_today_file() -> Path`  
+`_today_file() -> Path`
 Source: [`flyto_ai/audit.py:27`](../../../flyto_ai/audit.py#L27)
 
 Internal `_today_file` implementation on this module; the linked source is authoritative.
@@ -121,7 +121,7 @@ One chat interaction audit record.
 
 ### `get_recent_entries` (public)
 
-`get_recent_entries(limit: int = 50) -> List[Dict[str, Any]]`  
+`get_recent_entries(limit: int = 50) -> List[Dict[str, Any]]`
 Source: [`flyto_ai/audit.py:104`](../../../flyto_ai/audit.py#L104)
 
 Get recent audit entries.
@@ -130,120 +130,120 @@ Get recent audit entries.
 
 ### `_is_ok` (internal)
 
-`_is_ok(result: Any) -> bool`  
-Source: [`flyto_ai/blueprint_loop.py:46`](../../../flyto_ai/blueprint_loop.py#L46)
+`_is_ok(result: Any) -> bool`
+Source: [`flyto_ai/blueprint_loop.py:47`](../../../flyto_ai/blueprint_loop.py#L47)
 
 Normalize flyto-core's supported success result shapes.
 
 ### `_preview` (internal)
 
-`_preview(value: Any) -> str`  
-Source: [`flyto_ai/blueprint_loop.py:55`](../../../flyto_ai/blueprint_loop.py#L55)
+`_preview(value: Any) -> str`
+Source: [`flyto_ai/blueprint_loop.py:56`](../../../flyto_ai/blueprint_loop.py#L56)
 
 Build a bounded, redacted preview suitable for audit logs.
 
 ### `_validation_ok` (internal)
 
-`_validation_ok(result: Any) -> bool`  
-Source: [`flyto_ai/blueprint_loop.py:61`](../../../flyto_ai/blueprint_loop.py#L61)
+`_validation_ok(result: Any) -> bool`
+Source: [`flyto_ai/blueprint_loop.py:62`](../../../flyto_ai/blueprint_loop.py#L62)
 
 Normalize validate_params results without treating missing ``ok`` as failure.
 
 ### `_call` (internal)
 
-`async _call(dispatch: DispatchFn, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]`  
-Source: [`flyto_ai/blueprint_loop.py:70`](../../../flyto_ai/blueprint_loop.py#L70)
+`async _call(dispatch: DispatchFn, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]`
+Source: [`flyto_ai/blueprint_loop.py:71`](../../../flyto_ai/blueprint_loop.py#L71)
 
 Convert dispatcher exceptions into structured failures.
 
 ### `_workflow_hash` (internal)
 
-`_workflow_hash(steps: List[Dict[str, Any]]) -> str`  
-Source: [`flyto_ai/blueprint_loop.py:89`](../../../flyto_ai/blueprint_loop.py#L89)
+`_workflow_hash(steps: List[Dict[str, Any]]) -> str`
+Source: [`flyto_ai/blueprint_loop.py:90`](../../../flyto_ai/blueprint_loop.py#L90)
 
 Return a stable content hash without exposing workflow parameters.
 
 ### `_collect_references` (internal)
 
-`_collect_references(value: Any) -> List[str]`  
-Source: [`flyto_ai/blueprint_loop.py:101`](../../../flyto_ai/blueprint_loop.py#L101)
+`_collect_references(value: Any) -> List[str]`
+Source: [`flyto_ai/blueprint_loop.py:102`](../../../flyto_ai/blueprint_loop.py#L102)
 
 Collect Core-style ``${step_id.field}`` references recursively.
 
 ### `_parse_path` (internal)
 
-`_parse_path(path: str) -> List[Any]`  
-Source: [`flyto_ai/blueprint_loop.py:115`](../../../flyto_ai/blueprint_loop.py#L115)
+`_parse_path(path: str) -> List[Any]`
+Source: [`flyto_ai/blueprint_loop.py:116`](../../../flyto_ai/blueprint_loop.py#L116)
 
 Parse dotted keys and numeric indexes into lookup tokens.
 
 ### `_get_path` (internal)
 
-`_get_path(value: Any, path: str) -> Tuple[bool, Any]`  
-Source: [`flyto_ai/blueprint_loop.py:123`](../../../flyto_ai/blueprint_loop.py#L123)
+`_get_path(value: Any, path: str) -> Tuple[bool, Any]`
+Source: [`flyto_ai/blueprint_loop.py:124`](../../../flyto_ai/blueprint_loop.py#L124)
 
 Read a nested value without conflating missing keys with ``None``.
 
 ### `_lookup_step_value` (internal)
 
-`_lookup_step_value(context: Dict[str, Any], expression: str) -> Any`  
-Source: [`flyto_ai/blueprint_loop.py:140`](../../../flyto_ai/blueprint_loop.py#L140)
+`_lookup_step_value(context: Dict[str, Any], expression: str) -> Any`
+Source: [`flyto_ai/blueprint_loop.py:141`](../../../flyto_ai/blueprint_loop.py#L141)
 
 Resolve one Core-compatible step expression for the fallback resolver.
 
 ### `_fallback_resolve` (internal)
 
-`_fallback_resolve(value: Any, context: Dict[str, Any]) -> Any`  
-Source: [`flyto_ai/blueprint_loop.py:164`](../../../flyto_ai/blueprint_loop.py#L164)
+`_fallback_resolve(value: Any, context: Dict[str, Any]) -> Any`
+Source: [`flyto_ai/blueprint_loop.py:165`](../../../flyto_ai/blueprint_loop.py#L165)
 
 Resolve Core-style expressions when flyto-core is not importable.
 
 ### `_resolve_params` (internal)
 
-`_resolve_params(params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]`  
-Source: [`flyto_ai/blueprint_loop.py:185`](../../../flyto_ai/blueprint_loop.py#L185)
+`_resolve_params(params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]`
+Source: [`flyto_ai/blueprint_loop.py:186`](../../../flyto_ai/blueprint_loop.py#L186)
 
 Resolve prior-step outputs with flyto-core's canonical resolver.
 
 ### `_normalize_retry` (internal)
 
-`_normalize_retry(raw: Any) -> Dict[str, Any]`  
-Source: [`flyto_ai/blueprint_loop.py:208`](../../../flyto_ai/blueprint_loop.py#L208)
+`_normalize_retry(raw: Any) -> Dict[str, Any]`
+Source: [`flyto_ai/blueprint_loop.py:209`](../../../flyto_ai/blueprint_loop.py#L209)
 
 Validate Core-compatible retry configuration with safe upper bounds.
 
 ### `_retry_wait_seconds` (internal)
 
-`_retry_wait_seconds(retry: Dict[str, Any], retry_index: int) -> float`  
-Source: [`flyto_ai/blueprint_loop.py:233`](../../../flyto_ai/blueprint_loop.py#L233)
+`_retry_wait_seconds(retry: Dict[str, Any], retry_index: int) -> float`
+Source: [`flyto_ai/blueprint_loop.py:234`](../../../flyto_ai/blueprint_loop.py#L234)
 
 Calculate bounded retry delay using flyto-core-compatible strategies.
 
 ### `_normalize_assertions` (internal)
 
-`_normalize_assertions(step: Dict[str, Any]) -> List[Dict[str, Any]]`  
-Source: [`flyto_ai/blueprint_loop.py:243`](../../../flyto_ai/blueprint_loop.py#L243)
+`_normalize_assertions(step: Dict[str, Any]) -> List[Dict[str, Any]]`
+Source: [`flyto_ai/blueprint_loop.py:244`](../../../flyto_ai/blueprint_loop.py#L244)
 
 Validate declarative output assertions before execution.
 
 ### `_evaluate_assertions` (internal)
 
-`_evaluate_assertions(result: Dict[str, Any], assertions: List[Dict[str, Any]]) -> List[Dict[str, Any]]`  
-Source: [`flyto_ai/blueprint_loop.py:269`](../../../flyto_ai/blueprint_loop.py#L269)
+`_evaluate_assertions(result: Dict[str, Any], assertions: List[Dict[str, Any]]) -> List[Dict[str, Any]]`
+Source: [`flyto_ai/blueprint_loop.py:270`](../../../flyto_ai/blueprint_loop.py#L270)
 
 Evaluate output assertions and return redacted evidence.
 
 ### `_prepare_steps` (internal)
 
-`_prepare_steps(steps: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]`  
-Source: [`flyto_ai/blueprint_loop.py:304`](../../../flyto_ai/blueprint_loop.py#L304)
+`_prepare_steps(steps: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]`
+Source: [`flyto_ai/blueprint_loop.py:305`](../../../flyto_ai/blueprint_loop.py#L305)
 
 Perform side-effect-free structural preflight for the whole workflow.
 
 ### `execute_blueprint_loop` (public)
 
-`async execute_blueprint_loop(blueprint_id: str, steps: List[Dict[str, Any]], dispatch: DispatchFn, preflight: Optional[PreflightFn] = None, *, checkpoint_store: Optional[CheckpointStore] = None, repair: Optional[RepairFn] = None, max_repairs: int = 1) -> Dict[str, Any]`  
-Source: [`flyto_ai/blueprint_loop.py:372`](../../../flyto_ai/blueprint_loop.py#L372)
+`async execute_blueprint_loop(blueprint_id: str, steps: List[Dict[str, Any]], dispatch: DispatchFn, preflight: Optional[PreflightFn] = None, *, checkpoint_store: Optional[CheckpointStore] = None, repair: Optional[RepairFn] = None, max_repairs: int = 1, selection_mode: str = 'model_selected') -> Dict[str, Any]`
+Source: [`flyto_ai/blueprint_loop.py:373`](../../../flyto_ai/blueprint_loop.py#L373)
 
 Validate and execute blueprint steps, then report one idempotent outcome.
 
@@ -251,7 +251,7 @@ Validate and execute blueprint steps, then report one idempotent outcome.
 
 ### `fnv1a_64` (public)
 
-`fnv1a_64(data: str) -> int`  
+`fnv1a_64(data: str) -> int`
 Source: [`flyto_ai/cache.py:29`](../../../flyto_ai/cache.py#L29)
 
 FNV-1a 64-bit hash of a string.
@@ -291,21 +291,21 @@ Client-side prompt cache fingerprint tracker.
 
 ### `main` (public)
 
-`main()`  
+`main()`
 Source: [`flyto_ai/cli.py:17`](../../../flyto_ai/cli.py#L17)
 
 Public `main` implementation on this module; the linked source is authoritative.
 
 ### `_cmd_code` (internal)
 
-`_cmd_code(args)`  
+`_cmd_code(args)`
 Source: [`flyto_ai/cli.py:130`](../../../flyto_ai/cli.py#L130)
 
 Run Claude Code Agent with optional verification loop.
 
 ### `_print_markdown` (internal)
 
-`_print_markdown(text: str) -> None`  
+`_print_markdown(text: str) -> None`
 Source: [`flyto_ai/cli.py:256`](../../../flyto_ai/cli.py#L256)
 
 Render markdown with rich if available, otherwise plain print.
@@ -326,147 +326,147 @@ Token bucket rate limiter per IP with periodic cleanup.
 
 ### `_check_server_auth` (internal)
 
-`_check_server_auth(auth_header: str) -> bool`  
+`_check_server_auth(auth_header: str) -> bool`
 Source: [`flyto_ai/cli.py:316`](../../../flyto_ai/cli.py#L316)
 
 Check Bearer token against FLYTO_AI_SERVER_KEY.
 
 ### `_get_cors_origin` (internal)
 
-`_get_cors_origin(request_origin: str) -> str`  
+`_get_cors_origin(request_origin: str) -> str`
 Source: [`flyto_ai/cli.py:327`](../../../flyto_ai/cli.py#L327)
 
 Return allowed CORS origin.
 
 ### `_term_width` (internal)
 
-`_term_width()`  
+`_term_width()`
 Source: [`flyto_ai/cli.py:345`](../../../flyto_ai/cli.py#L345)
 
 Internal `_term_width` implementation on this module; the linked source is authoritative.
 
 ### `_cmd_version` (internal)
 
-`_cmd_version()`  
+`_cmd_version()`
 Source: [`flyto_ai/cli.py:349`](../../../flyto_ai/cli.py#L349)
 
 Internal `_cmd_version` implementation on this module; the linked source is authoritative.
 
 ### `_get_pkg_version` (internal)
 
-`_get_pkg_version(pkg_name)`  
+`_get_pkg_version(pkg_name)`
 Source: [`flyto_ai/cli.py:388`](../../../flyto_ai/cli.py#L388)
 
 Get package version from importlib.metadata.
 
 ### `_cmd_blueprints` (internal)
 
-`_cmd_blueprints(args)`  
+`_cmd_blueprints(args)`
 Source: [`flyto_ai/cli.py:397`](../../../flyto_ai/cli.py#L397)
 
 Internal `_cmd_blueprints` implementation on this module; the linked source is authoritative.
 
 ### `_export_blueprints` (internal)
 
-`_export_blueprints(blueprints)`  
+`_export_blueprints(blueprints)`
 Source: [`flyto_ai/cli.py:456`](../../../flyto_ai/cli.py#L456)
 
 Export learned blueprints as YAML to stdout.
 
 ### `_cmd_prompt_lab` (internal)
 
-`_cmd_prompt_lab(args)`  
+`_cmd_prompt_lab(args)`
 Source: [`flyto_ai/cli.py:484`](../../../flyto_ai/cli.py#L484)
 
 Prompt evolution system — eval, evolve, report, cases.
 
 ### `_prompt_lab_eval` (internal)
 
-`_prompt_lab_eval(args)`  
+`_prompt_lab_eval(args)`
 Source: [`flyto_ai/cli.py:509`](../../../flyto_ai/cli.py#L509)
 
 Run eval on current baseline prompt (rule-based, no API key needed).
 
 ### `_prompt_lab_evolve` (internal)
 
-`_prompt_lab_evolve(args)`  
+`_prompt_lab_evolve(args)`
 Source: [`flyto_ai/cli.py:579`](../../../flyto_ai/cli.py#L579)
 
 Run the evolution loop.
 
 ### `_prompt_lab_cases` (internal)
 
-`_prompt_lab_cases(args)`  
+`_prompt_lab_cases(args)`
 Source: [`flyto_ai/cli.py:636`](../../../flyto_ai/cli.py#L636)
 
 List all eval test cases.
 
 ### `_prompt_lab_report` (internal)
 
-`_prompt_lab_report(args)`  
+`_prompt_lab_report(args)`
 Source: [`flyto_ai/cli.py:659`](../../../flyto_ai/cli.py#L659)
 
 Show the latest evolution report.
 
 ### `_cmd_mcp` (internal)
 
-`_cmd_mcp()`  
+`_cmd_mcp()`
 Source: [`flyto_ai/cli.py:685`](../../../flyto_ai/cli.py#L685)
 
 Start MCP server (JSON-RPC 2.0 over STDIO).
 
 ### `_handle_memory_cmd` (internal)
 
-`_handle_memory_cmd(subcmd, args_list, agent, loop)`  
+`_handle_memory_cmd(subcmd, args_list, agent, loop)`
 Source: [`flyto_ai/cli.py:691`](../../../flyto_ai/cli.py#L691)
 
 Handle /memory subcommands: list, search <query>, clear.
 
 ### `_cmd_interactive` (internal)
 
-`_cmd_interactive(args)`  
+`_cmd_interactive(args)`
 Source: [`flyto_ai/cli.py:738`](../../../flyto_ai/cli.py#L738)
 
 Interactive chat REPL — like Claude Code but for automation workflows.
 
 ### `_cmd_pipe` (internal)
 
-`_cmd_pipe(args)`  
+`_cmd_pipe(args)`
 Source: [`flyto_ai/cli.py:1029`](../../../flyto_ai/cli.py#L1029)
 
 Handle piped stdin: echo "scrape example.com" | flyto-ai.
 
 ### `_cmd_chat` (internal)
 
-`_cmd_chat(args)`  
+`_cmd_chat(args)`
 Source: [`flyto_ai/cli.py:1048`](../../../flyto_ai/cli.py#L1048)
 
 Internal `_cmd_chat` implementation on this module; the linked source is authoritative.
 
 ### `_post_webhook` (internal)
 
-`_post_webhook(url, result)`  
+`_post_webhook(url, result)`
 Source: [`flyto_ai/cli.py:1114`](../../../flyto_ai/cli.py#L1114)
 
 POST chat result to a webhook URL (user-specified, not SSRF-protected).
 
 ### `_cmd_serve` (internal)
 
-`_cmd_serve(args)`  
+`_cmd_serve(args)`
 Source: [`flyto_ai/cli.py:1125`](../../../flyto_ai/cli.py#L1125)
 
 Start HTTP server.
 
 ### `_cmd_serve_aiohttp` (internal)
 
-`_cmd_serve_aiohttp(args)`  
+`_cmd_serve_aiohttp(args)`
 Source: [`flyto_ai/cli.py:1134`](../../../flyto_ai/cli.py#L1134)
 
 Async HTTP server using aiohttp — native async, supports concurrent requests.
 
 ### `_cmd_serve_stdlib` (internal)
 
-`_cmd_serve_stdlib(args)`  
+`_cmd_serve_stdlib(args)`
 Source: [`flyto_ai/cli.py:1365`](../../../flyto_ai/cli.py#L1365)
 
 Synchronous HTTP server using stdlib — fallback when aiohttp not installed.
@@ -493,56 +493,56 @@ Public `Handler` implementation on this module; the linked source is authoritati
 
 ### `_annotations` (internal)
 
-`_annotations(*, read_only: bool, destructive: bool, idempotent: bool) -> Dict[str, bool]`  
+`_annotations(*, read_only: bool, destructive: bool, idempotent: bool) -> Dict[str, bool]`
 Source: [`flyto_ai/closed_loop_mcp.py:48`](../../../flyto_ai/closed_loop_mcp.py#L48)
 
 Internal `_annotations` implementation on this module; the linked source is authoritative.
 
 ### `_make_error` (internal)
 
-`_make_error(req_id: Any, code: int, message: str) -> Dict[str, Any]`  
+`_make_error(req_id: Any, code: int, message: str) -> Dict[str, Any]`
 Source: [`flyto_ai/closed_loop_mcp.py:185`](../../../flyto_ai/closed_loop_mcp.py#L185)
 
 Internal `_make_error` implementation on this module; the linked source is authoritative.
 
 ### `_make_result` (internal)
 
-`_make_result(req_id: Any, result: Any) -> Dict[str, Any]`  
+`_make_result(req_id: Any, result: Any) -> Dict[str, Any]`
 Source: [`flyto_ai/closed_loop_mcp.py:193`](../../../flyto_ai/closed_loop_mcp.py#L193)
 
 Internal `_make_result` implementation on this module; the linked source is authoritative.
 
 ### `_tool_result` (internal)
 
-`_tool_result(data: Dict[str, Any], *, message: str, is_error: bool = False) -> Dict[str, Any]`  
+`_tool_result(data: Dict[str, Any], *, message: str, is_error: bool = False) -> Dict[str, Any]`
 Source: [`flyto_ai/closed_loop_mcp.py:197`](../../../flyto_ai/closed_loop_mcp.py#L197)
 
 Return modern structured MCP content with a tiny legacy text fallback.
 
 ### `_json_chars` (internal)
 
-`_json_chars(value: Any) -> int`  
+`_json_chars(value: Any) -> int`
 Source: [`flyto_ai/closed_loop_mcp.py:211`](../../../flyto_ai/closed_loop_mcp.py#L211)
 
 Internal `_json_chars` implementation on this module; the linked source is authoritative.
 
 ### `_clamped_int` (internal)
 
-`_clamped_int(value: Any, *, default: int, minimum: int, maximum: int) -> int`  
+`_clamped_int(value: Any, *, default: int, minimum: int, maximum: int) -> int`
 Source: [`flyto_ai/closed_loop_mcp.py:221`](../../../flyto_ai/closed_loop_mcp.py#L221)
 
 Internal `_clamped_int` implementation on this module; the linked source is authoritative.
 
 ### `_permission_level` (internal)
 
-`_permission_level() -> PermissionLevel`  
+`_permission_level() -> PermissionLevel`
 Source: [`flyto_ai/closed_loop_mcp.py:235`](../../../flyto_ai/closed_loop_mcp.py#L235)
 
 Internal `_permission_level` implementation on this module; the linked source is authoritative.
 
 ### `_candidate_list` (internal)
 
-`_candidate_list(raw: Any) -> List[ModelCandidate]`  
+`_candidate_list(raw: Any) -> List[ModelCandidate]`
 Source: [`flyto_ai/closed_loop_mcp.py:246`](../../../flyto_ai/closed_loop_mcp.py#L246)
 
 Internal `_candidate_list` implementation on this module; the linked source is authoritative.
@@ -572,14 +572,14 @@ Stateful, local-only closed-loop MCP server.
 
 ### `async_main` (public)
 
-`async async_main() -> None`  
+`async async_main() -> None`
 Source: [`flyto_ai/closed_loop_mcp.py:782`](../../../flyto_ai/closed_loop_mcp.py#L782)
 
 Run the newline-delimited JSON-RPC STDIO loop.
 
 ### `main` (public)
 
-`main() -> None`  
+`main() -> None`
 Source: [`flyto_ai/closed_loop_mcp.py:822`](../../../flyto_ai/closed_loop_mcp.py#L822)
 
 Entry point for ``flyto-closed-loop-mcp``.
@@ -588,14 +588,14 @@ Entry point for ``flyto-closed-loop-mcp``.
 
 ### `stable_hash` (public)
 
-`stable_hash(value: Any) -> str`  
+`stable_hash(value: Any) -> str`
 Source: [`flyto_ai/closed_loop_v3.py:52`](../../../flyto_ai/closed_loop_v3.py#L52)
 
 Hash a JSON-compatible value deterministically.
 
 ### `_collect_step_refs` (internal)
 
-`_collect_step_refs(value: Any) -> List[str]`  
+`_collect_step_refs(value: Any) -> List[str]`
 Source: [`flyto_ai/closed_loop_v3.py:64`](../../../flyto_ai/closed_loop_v3.py#L64)
 
 Internal `_collect_step_refs` implementation on this module; the linked source is authoritative.
@@ -673,7 +673,7 @@ Atomic 0600 JSON checkpoints.
 
 ### `checkpoint_key` (public)
 
-`checkpoint_key(blueprint_id: str, workflow_hash: str) -> str`  
+`checkpoint_key(blueprint_id: str, workflow_hash: str) -> str`
 Source: [`flyto_ai/closed_loop_v3.py:257`](../../../flyto_ai/closed_loop_v3.py#L257)
 
 Return the stable key shared by failed and resumed executions.
@@ -688,7 +688,7 @@ A bounded strategy change for one failed logical step.
 
 ### `repair_from_result` (public)
 
-`repair_from_result(current_module: str, current_params: Dict[str, Any], failure: Dict[str, Any]) -> Optional[RepairDecision]`  
+`repair_from_result(current_module: str, current_params: Dict[str, Any], failure: Dict[str, Any]) -> Optional[RepairDecision]`
 Source: [`flyto_ai/closed_loop_v3.py:279`](../../../flyto_ai/closed_loop_v3.py#L279)
 
 Consume a structured repair hint emitted by Core or middleware.
@@ -740,21 +740,21 @@ One model-independent agent benchmark case.
 
 ### `_response_field` (internal)
 
-`_response_field(response: Any, name: str, default: Any) -> Any`  
+`_response_field(response: Any, name: str, default: Any) -> Any`
 Source: [`flyto_ai/closed_loop_v3.py:442`](../../../flyto_ai/closed_loop_v3.py#L442)
 
 Internal `_response_field` implementation on this module; the linked source is authoritative.
 
 ### `_cost_value` (internal)
 
-`_cost_value(response: Any) -> float`  
+`_cost_value(response: Any) -> float`
 Source: [`flyto_ai/closed_loop_v3.py:448`](../../../flyto_ai/closed_loop_v3.py#L448)
 
 Internal `_cost_value` implementation on this module; the linked source is authoritative.
 
 ### `run_model_benchmark` (public)
 
-`async run_model_benchmark(agents: Mapping[str, Any], cases: Sequence[BenchmarkCase]) -> Dict[str, Any]`  
+`async run_model_benchmark(agents: Mapping[str, Any], cases: Sequence[BenchmarkCase]) -> Dict[str, Any]`
 Source: [`flyto_ai/closed_loop_v3.py:457`](../../../flyto_ai/closed_loop_v3.py#L457)
 
 Run the same closed-loop cases across agent/model implementations.
@@ -769,7 +769,7 @@ Eligibility result for turning one success into a verified Blueprint.
 
 ### `evaluate_distillation` (public)
 
-`evaluate_distillation(tool_calls: Sequence[Dict[str, Any]], execution_results: Sequence[Dict[str, Any]], user_message: str, *, min_steps: int = 3) -> DistillationDecision`  
+`evaluate_distillation(tool_calls: Sequence[Dict[str, Any]], execution_results: Sequence[Dict[str, Any]], user_message: str, *, min_steps: int = 3) -> DistillationDecision`
 Source: [`flyto_ai/closed_loop_v3.py:541`](../../../flyto_ai/closed_loop_v3.py#L541)
 
 Allow learning only from successful, runtime-verified executions.
@@ -811,14 +811,14 @@ Configuration for the AI agent.
 
 ### `_load_yaml_or_json` (internal)
 
-`_load_yaml_or_json(path: Path) -> Dict[str, Any]`  
+`_load_yaml_or_json(path: Path) -> Dict[str, Any]`
 Source: [`flyto_ai/config_file.py:19`](../../../flyto_ai/config_file.py#L19)
 
 Load a YAML or JSON config file.
 
 ### `_merge_dicts` (internal)
 
-`_merge_dicts(base: Dict, override: Dict) -> Dict`  
+`_merge_dicts(base: Dict, override: Dict) -> Dict`
 Source: [`flyto_ai/config_file.py:50`](../../../flyto_ai/config_file.py#L50)
 
 Deep merge override into base (override wins).
@@ -845,7 +845,7 @@ Manages a layered config file with optional hot-reload.
 
 ### `load_global_config` (public)
 
-`load_global_config(config_path: Optional[str] = None, agent_config_path: Optional[str] = None) -> Dict[str, Any]`  
+`load_global_config(config_path: Optional[str] = None, agent_config_path: Optional[str] = None) -> Dict[str, Any]`
 Source: [`flyto_ai/config_file.py:183`](../../../flyto_ai/config_file.py#L183)
 
 Load layered config: global → agent-specific.
@@ -854,14 +854,14 @@ Load layered config: global → agent-specific.
 
 ### `_match_model_cost` (internal)
 
-`_match_model_cost(model: str) -> tuple`  
+`_match_model_cost(model: str) -> tuple`
 Source: [`flyto_ai/cost.py:45`](../../../flyto_ai/cost.py#L45)
 
 Find the best matching cost entry for a model name.
 
 ### `estimate_cost` (public)
 
-`estimate_cost(model: str, prompt_tokens: int, completion_tokens: int, cache_read_tokens: int = 0) -> float`  
+`estimate_cost(model: str, prompt_tokens: int, completion_tokens: int, cache_read_tokens: int = 0) -> float`
 Source: [`flyto_ai/cost.py:71`](../../../flyto_ai/cost.py#L71)
 
 Estimate cost in USD for a single LLM call.
@@ -950,28 +950,28 @@ Lifecycle-managed MCP client connection over stdio.
 
 ### `negotiate_protocol_version` (public)
 
-`negotiate_protocol_version(client_version: Optional[str]) -> str`  
+`negotiate_protocol_version(client_version: Optional[str]) -> str`
 Source: [`flyto_ai/mcp_server.py:41`](../../../flyto_ai/mcp_server.py#L41)
 
 Echo client's requested MCP protocol version when supported, else server preferred.
 
 ### `build_initialize_response` (public)
 
-`build_initialize_response(client_version: Optional[str]) -> Dict`  
+`build_initialize_response(client_version: Optional[str]) -> Dict`
 Source: [`flyto_ai/mcp_server.py:48`](../../../flyto_ai/mcp_server.py#L48)
 
 Public `build_initialize_response` implementation on this module; the linked source is authoritative.
 
 ### `_make_error` (internal)
 
-`_make_error(req_id: Any, code: int, message: str) -> Dict`  
+`_make_error(req_id: Any, code: int, message: str) -> Dict`
 Source: [`flyto_ai/mcp_server.py:84`](../../../flyto_ai/mcp_server.py#L84)
 
 Internal `_make_error` implementation on this module; the linked source is authoritative.
 
 ### `_make_result` (internal)
 
-`_make_result(req_id: Any, result: Any) -> Dict`  
+`_make_result(req_id: Any, result: Any) -> Dict`
 Source: [`flyto_ai/mcp_server.py:88`](../../../flyto_ai/mcp_server.py#L88)
 
 Internal `_make_result` implementation on this module; the linked source is authoritative.
@@ -994,14 +994,14 @@ Stateless MCP server — processes one JSON-RPC request at a time.
 
 ### `async_main` (public)
 
-`async async_main()`  
+`async async_main()`
 Source: [`flyto_ai/mcp_server.py:182`](../../../flyto_ai/mcp_server.py#L182)
 
 STDIO MCP server loop — read JSON-RPC from stdin, write to stdout.
 
 ### `main` (public)
 
-`main()`  
+`main()`
 Source: [`flyto_ai/mcp_server.py:224`](../../../flyto_ai/mcp_server.py#L224)
 
 Entry point for ``flyto-ai-mcp`` and ``flyto-ai mcp``.
@@ -1060,14 +1060,14 @@ Chat response.
 
 ### `package_version` (public)
 
-`package_version() -> str`  
+`package_version() -> str`
 Source: [`flyto_ai/package_metadata.py:11`](../../../flyto_ai/package_metadata.py#L11)
 
 Return the source-tree version during development, then installed metadata.
 
 ### `runtime_module_count` (public)
 
-`runtime_module_count() -> Optional[int]`  
+`runtime_module_count() -> Optional[int]`
 Source: [`flyto_ai/package_metadata.py:25`](../../../flyto_ai/package_metadata.py#L25)
 
 Return the installed flyto-core registry size when it can be discovered.
@@ -1092,7 +1092,7 @@ Result of a permission check.
 
 ### `_required_level_for_module` (internal)
 
-`_required_level_for_module(module_id: str) -> PermissionLevel`  
+`_required_level_for_module(module_id: str) -> PermissionLevel`
 Source: [`flyto_ai/permissions.py:71`](../../../flyto_ai/permissions.py#L71)
 
 Determine the permission level required for a specific module.
@@ -1163,14 +1163,14 @@ Protocol for tool dispatch backends.
 
 ### `is_sensitive_key` (public)
 
-`is_sensitive_key(key: str) -> bool`  
+`is_sensitive_key(key: str) -> bool`
 Source: [`flyto_ai/redaction.py:15`](../../../flyto_ai/redaction.py#L15)
 
 Check if a key name looks sensitive.
 
 ### `redact_args` (public)
 
-`redact_args(obj: Any) -> Any`  
+`redact_args(obj: Any) -> Any`
 Source: [`flyto_ai/redaction.py:23`](../../../flyto_ai/redaction.py#L23)
 
 Recursively redact sensitive values in dicts and lists.
@@ -1223,7 +1223,7 @@ Thread-safe message queue for mid-execution steering.
 
 ### `build_steer_injection` (public)
 
-`build_steer_injection(message: str) -> dict`  
+`build_steer_injection(message: str) -> dict`
 Source: [`flyto_ai/steer.py:91`](../../../flyto_ai/steer.py#L91)
 
 Build a user message dict for injecting a steer message into conversation.
@@ -1393,14 +1393,14 @@ Append-only JSONL writer for a single session.
 
 ### `load_transcript` (public)
 
-`load_transcript(path: str) -> List[Dict]`  
+`load_transcript(path: str) -> List[Dict]`
 Source: [`flyto_ai/transcript.py:187`](../../../flyto_ai/transcript.py#L187)
 
 Load a transcript JSONL file and return all events.
 
 ### `replay_messages` (public)
 
-`replay_messages(events: List[Dict]) -> List[Dict[str, str]]`  
+`replay_messages(events: List[Dict]) -> List[Dict[str, str]]`
 Source: [`flyto_ai/transcript.py:208`](../../../flyto_ai/transcript.py#L208)
 
 Extract user/assistant messages from transcript events for replay.
@@ -1409,21 +1409,21 @@ Extract user/assistant messages from transcript events for replay.
 
 ### `extract_yaml_from_response` (public)
 
-`extract_yaml_from_response(text: str) -> Optional[str]`  
+`extract_yaml_from_response(text: str) -> Optional[str]`
 Source: [`flyto_ai/validation.py:18`](../../../flyto_ai/validation.py#L18)
 
 Extract YAML content from markdown code blocks in AI response.
 
 ### `validate_workflow_steps` (public)
 
-`validate_workflow_steps(yaml_str: str) -> List[str]`  
+`validate_workflow_steps(yaml_str: str) -> List[str]`
 Source: [`flyto_ai/validation.py:24`](../../../flyto_ai/validation.py#L24)
 
 Validate module existence and param names for each workflow step.
 
 ### `validate_workflow_deep` (public)
 
-`async validate_workflow_deep(yaml_str: str, pro_bridge = None) -> Dict[str, List[str]]`  
+`async validate_workflow_deep(yaml_str: str, pro_bridge = None) -> Dict[str, List[str]]`
 Source: [`flyto_ai/validation.py:90`](../../../flyto_ai/validation.py#L90)
 
 Deep validation using flyto-pro ContractEngine + basic validation.
@@ -1432,21 +1432,21 @@ Deep validation using flyto-pro ContractEngine + basic validation.
 
 ### `_get_machine_id` (internal)
 
-`_get_machine_id() -> str`  
+`_get_machine_id() -> str`
 Source: [`flyto_ai/vault.py:24`](../../../flyto_ai/vault.py#L24)
 
 Get a machine-specific identifier for default key derivation.
 
 ### `_derive_key` (internal)
 
-`_derive_key(passphrase: str, salt: bytes) -> bytes`  
+`_derive_key(passphrase: str, salt: bytes) -> bytes`
 Source: [`flyto_ai/vault.py:34`](../../../flyto_ai/vault.py#L34)
 
 Derive a Fernet key from a passphrase using PBKDF2.
 
 ### `_get_or_create_salt` (internal)
 
-`_get_or_create_salt(salt_path: str) -> bytes`  
+`_get_or_create_salt(salt_path: str) -> bytes`
 Source: [`flyto_ai/vault.py:40`](../../../flyto_ai/vault.py#L40)
 
 Load or create the salt file.
@@ -1476,7 +1476,7 @@ Encrypted credential store.
 
 ### `redact_vault_values` (public)
 
-`redact_vault_values(text: str, vault: Vault) -> str`  
+`redact_vault_values(text: str, vault: Vault) -> str`
 Source: [`flyto_ai/vault.py:210`](../../../flyto_ai/vault.py#L210)
 
 Redact any vault credential values found in text.

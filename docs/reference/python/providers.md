@@ -10,21 +10,21 @@ Inventory: **25 declared symbols** and **22 class methods**.
 
 ### `detect_provider` (public)
 
-`detect_provider(model: str, api_key: str = '') -> str`  
+`detect_provider(model: str, api_key: str = '') -> str`
 Source: [`flyto_ai/providers/__init__.py:48`](../../../flyto_ai/providers/__init__.py#L48)
 
 Auto-detect provider from model name prefix, with env-var fallback.
 
 ### `create_provider` (public)
 
-`create_provider(provider_name: str, **kwargs) -> LLMProvider`  
+`create_provider(provider_name: str, **kwargs) -> LLMProvider`
 Source: [`flyto_ai/providers/__init__.py:82`](../../../flyto_ai/providers/__init__.py#L82)
 
 Create an LLM provider by name using the registry.
 
 ### `create_provider_chain` (public)
 
-`create_provider_chain(configs)`  
+`create_provider_chain(configs)`
 Source: [`flyto_ai/providers/__init__.py:95`](../../../flyto_ai/providers/__init__.py#L95)
 
 Create a ProviderChain from a list of provider config dicts.
@@ -49,14 +49,14 @@ Anthropic Claude provider with tool use loop.
 
 ### `fire_stream` (public)
 
-`fire_stream(on_stream: Optional[StreamCallback], event: StreamEvent) -> None`  
+`fire_stream(on_stream: Optional[StreamCallback], event: StreamEvent) -> None`
 Source: [`flyto_ai/providers/base.py:28`](../../../flyto_ai/providers/base.py#L28)
 
 Safely invoke the stream callback.
 
 ### `dispatch_and_log_tool` (public)
 
-`async dispatch_and_log_tool(func_name: str, func_args: dict, dispatch_fn: DispatchFn, round_num: int, on_stream: Optional[StreamCallback] = None) -> Tuple[str, Dict[str, Any], List[Dict[str, str]]]`  
+`async dispatch_and_log_tool(func_name: str, func_args: dict, dispatch_fn: DispatchFn, round_num: int, on_stream: Optional[StreamCallback] = None) -> Tuple[str, Dict[str, Any], List[Dict[str, str]]]`
 Source: [`flyto_ai/providers/base.py:38`](../../../flyto_ai/providers/base.py#L38)
 
 Dispatch a tool call, log it, truncate result.
@@ -77,7 +77,7 @@ Abstract base class for LLM providers (OpenAI, Anthropic, etc.).
 
 ### `_is_failover_error` (internal)
 
-`_is_failover_error(exc: Exception) -> bool`  
+`_is_failover_error(exc: Exception) -> bool`
 Source: [`flyto_ai/providers/failover.py:35`](../../../flyto_ai/providers/failover.py#L35)
 
 Check if an exception should trigger provider failover.
@@ -104,7 +104,7 @@ Wraps multiple LLM providers with automatic failover.
 
 ### `create_provider_chain` (public)
 
-`create_provider_chain(configs: List[Dict[str, Any]]) -> ProviderChain`  
+`create_provider_chain(configs: List[Dict[str, Any]]) -> ProviderChain`
 Source: [`flyto_ai/providers/failover.py:198`](../../../flyto_ai/providers/failover.py#L198)
 
 Create a ProviderChain from a list of provider configs.
@@ -127,91 +127,91 @@ Ollama provider using the OpenAI-compatible API endpoint.
 
 ### `_looks_like_browser_task` (internal)
 
-`_looks_like_browser_task(messages: list) -> bool`  
+`_looks_like_browser_task(messages: list) -> bool`
 Source: [`flyto_ai/providers/openai.py:24`](../../../flyto_ai/providers/openai.py#L24)
 
 Check if the user query requires browser automation.
 
 ### `_fill_remaining_tool_responses` (internal)
 
-`_fill_remaining_tool_responses(tc_list: list, current_tc: Any, full_messages: list, *, id_key: str = 'id') -> None`  
+`_fill_remaining_tool_responses(tc_list: list, current_tc: Any, full_messages: list, *, id_key: str = 'id') -> None`
 Source: [`flyto_ai/providers/openai.py:36`](../../../flyto_ai/providers/openai.py#L36)
 
 Fill remaining tool calls with 'paused' responses after ask_user break.
 
 ### `_to_openai_tools` (internal)
 
-`_to_openai_tools(tools: List[Dict]) -> List[Dict[str, Any]]`  
+`_to_openai_tools(tools: List[Dict]) -> List[Dict[str, Any]]`
 Source: [`flyto_ai/providers/openai.py:57`](../../../flyto_ai/providers/openai.py#L57)
 
 Convert Flyto2 tool definitions to OpenAI function tool definitions.
 
 ### `_accumulate_usage` (internal)
 
-`_accumulate_usage(total_usage: Dict[str, int], usage: Any) -> None`  
+`_accumulate_usage(total_usage: Dict[str, int], usage: Any) -> None`
 Source: [`flyto_ai/providers/openai.py:72`](../../../flyto_ai/providers/openai.py#L72)
 
 Accumulate OpenAI usage objects into the provider usage dict.
 
 ### `_content_with_finish_note` (internal)
 
-`_content_with_finish_note(content: str, finish_reason: Optional[str]) -> str`  
+`_content_with_finish_note(content: str, finish_reason: Optional[str]) -> str`
 Source: [`flyto_ai/providers/openai.py:81`](../../../flyto_ai/providers/openai.py#L81)
 
 Append the token-limit note when OpenAI truncated the response.
 
 ### `_tool_call_id` (internal)
 
-`_tool_call_id(tc: Any) -> str`  
+`_tool_call_id(tc: Any) -> str`
 Source: [`flyto_ai/providers/openai.py:88`](../../../flyto_ai/providers/openai.py#L88)
 
 Internal `_tool_call_id` implementation on this module; the linked source is authoritative.
 
 ### `_tool_call_name` (internal)
 
-`_tool_call_name(tc: Any) -> str`  
+`_tool_call_name(tc: Any) -> str`
 Source: [`flyto_ai/providers/openai.py:92`](../../../flyto_ai/providers/openai.py#L92)
 
 Internal `_tool_call_name` implementation on this module; the linked source is authoritative.
 
 ### `_tool_call_arguments` (internal)
 
-`_tool_call_arguments(tc: Any) -> str`  
+`_tool_call_arguments(tc: Any) -> str`
 Source: [`flyto_ai/providers/openai.py:96`](../../../flyto_ai/providers/openai.py#L96)
 
 Internal `_tool_call_arguments` implementation on this module; the linked source is authoritative.
 
 ### `_parse_tool_args` (internal)
 
-`_parse_tool_args(arguments: str) -> Dict[str, Any]`  
+`_parse_tool_args(arguments: str) -> Dict[str, Any]`
 Source: [`flyto_ai/providers/openai.py:100`](../../../flyto_ai/providers/openai.py#L100)
 
 Internal `_parse_tool_args` implementation on this module; the linked source is authoritative.
 
 ### `_assistant_message_from_tool_calls` (internal)
 
-`_assistant_message_from_tool_calls(tool_calls: list)`  
+`_assistant_message_from_tool_calls(tool_calls: list)`
 Source: [`flyto_ai/providers/openai.py:107`](../../../flyto_ai/providers/openai.py#L107)
 
 Build an OpenAI assistant message containing tool calls and no text.
 
 ### `_vision_user_message` (internal)
 
-`_vision_user_message(func_name: str, images: List[Dict[str, str]]) -> Dict[str, Any]`  
+`_vision_user_message(func_name: str, images: List[Dict[str, str]]) -> Dict[str, Any]`
 Source: [`flyto_ai/providers/openai.py:129`](../../../flyto_ai/providers/openai.py#L129)
 
 Build a native OpenAI vision message from tool image sidebands.
 
 ### `_stream_tool_call_list` (internal)
 
-`_stream_tool_call_list(collected_tool_calls: Dict[int, Dict[str, Any]]) -> list`  
+`_stream_tool_call_list(collected_tool_calls: Dict[int, Dict[str, Any]]) -> list`
 Source: [`flyto_ai/providers/openai.py:143`](../../../flyto_ai/providers/openai.py#L143)
 
 Convert accumulated streaming tool deltas into OpenAI tool-call dicts.
 
 ### `_collect_stream_response` (internal)
 
-`async _collect_stream_response(stream: Any, total_usage: Dict[str, int], on_stream: StreamCallback)`  
+`async _collect_stream_response(stream: Any, total_usage: Dict[str, int], on_stream: StreamCallback)`
 Source: [`flyto_ai/providers/openai.py:158`](../../../flyto_ai/providers/openai.py#L158)
 
 Collect text and tool calls from an OpenAI streaming response.

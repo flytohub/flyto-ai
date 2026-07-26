@@ -154,6 +154,12 @@ def feedback(
             break
 
     if used_blueprint_id:
+        if not execution_results:
+            logger.debug(
+                "Blueprint outcome skipped without execution evidence: %s",
+                used_blueprint_id,
+            )
+            return
         try:
             engine.report_outcome(
                 used_blueprint_id,

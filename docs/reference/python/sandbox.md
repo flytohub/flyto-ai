@@ -26,7 +26,7 @@ Execute flyto-core modules inside Docker containers for isolation.
 
 ### `run` (public)
 
-`async run()`  
+`async run()`
 Source: [`flyto_ai/sandbox/runner.py:10`](../../../flyto_ai/sandbox/runner.py#L10)
 
 Run the primary operation implemented by this module.

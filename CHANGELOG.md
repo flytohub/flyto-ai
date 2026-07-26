@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added trusted Blueprint execution evidence for duration, steps, attempts,
+  assertions, workflow identity, executor version, and selection mode.
+  Deterministic exact reuse now records `planner_model_calls_used=0` with an
+  explicit planner scope. Blueprint can accept the old `model_calls_used`
+  compatibility field, but new Flyto-AI reports do not emit it. Model-selected
+  paths leave counts unknown instead of fabricating a baseline.
+- Rewrote the Blueprint/agent comparison to remove unsupported replay-token
+  estimates and explain the Evidence Card proof boundary in plain language.
+- Added Blueprint portable export/import dispatch and separated direct model
+  outcome reports from host-verified closed-loop evidence with an in-process
+  capability boundary. Blueprint selection without module execution evidence
+  no longer counts as a verified success.
 - Fixed closed-loop MCP verification so a missing identifier, an unknown
   `plan_id`, and a valid plan without execution evidence return distinct
   structured errors.

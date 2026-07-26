@@ -10,63 +10,63 @@ Inventory: **13 declared symbols** and **20 class methods**.
 
 ### `extract_intent_llm` (public)
 
-`async extract_intent_llm(message: str, provider) -> Optional[Dict[str, Any]]`  
+`async extract_intent_llm(message: str, provider) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/intelligence/planner.py:45`](../../../flyto_ai/intelligence/planner.py#L45)
 
 Extract structured intent using 1 cheap LLM call.
 
 ### `extract_intent` (public)
 
-`extract_intent(message: str) -> Optional[Dict[str, Any]]`  
+`extract_intent(message: str) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/intelligence/planner.py:83`](../../../flyto_ai/intelligence/planner.py#L83)
 
 Synchronous intent extraction — pure data-driven, zero hardcoding.
 
 ### `_match_from_blueprint` (internal)
 
-`_match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]`  
+`_match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/intelligence/planner.py:118`](../../../flyto_ai/intelligence/planner.py#L118)
 
 Match user message against learned blueprints.
 
 ### `_match_from_registry` (internal)
 
-`_match_from_registry(msg: str) -> Optional[Dict[str, Any]]`  
+`_match_from_registry(msg: str) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/intelligence/planner.py:149`](../../../flyto_ai/intelligence/planner.py#L149)
 
 Match user message to a single module using the module registry.
 
 ### `_extract_params_from_message` (internal)
 
-`_extract_params_from_message(msg: str, schema: dict) -> dict`  
+`_extract_params_from_message(msg: str, schema: dict) -> dict`
 Source: [`flyto_ai/intelligence/planner.py:211`](../../../flyto_ai/intelligence/planner.py#L211)
 
 Extract parameter values from message text based on schema hints.
 
 ### `plan_execution` (public)
 
-`plan_execution(intent: Dict[str, Any], has_browser: bool = False) -> List[Dict[str, Any]]`  
+`plan_execution(intent: Dict[str, Any], has_browser: bool = False) -> List[Dict[str, Any]]`
 Source: [`flyto_ai/intelligence/planner.py:296`](../../../flyto_ai/intelligence/planner.py#L296)
 
 Plan a deterministic execution sequence from an intent.
 
 ### `execute_plan` (public)
 
-`async execute_plan(steps: List[Dict[str, Any]], dispatch: Callable) -> Tuple[List[Dict[str, Any]], str]`  
+`async execute_plan(steps: List[Dict[str, Any]], dispatch: Callable) -> Tuple[List[Dict[str, Any]], str]`
 Source: [`flyto_ai/intelligence/planner.py:363`](../../../flyto_ai/intelligence/planner.py#L363)
 
 Execute a deterministic plan step by step.
 
 ### `_resolve_url` (internal)
 
-`_resolve_url(text: str) -> Optional[str]`  
+`_resolve_url(text: str) -> Optional[str]`
 Source: [`flyto_ai/intelligence/planner.py:442`](../../../flyto_ai/intelligence/planner.py#L442)
 
 Resolve a site name or URL to a full URL.
 
 ### `_find_selector_from_structured` (internal)
 
-`_find_selector_from_structured(snapshot_result: dict, hint: str, element_type: str = '') -> Optional[str]`  
+`_find_selector_from_structured(snapshot_result: dict, hint: str, element_type: str = '') -> Optional[str]`
 Source: [`flyto_ai/intelligence/planner.py:459`](../../../flyto_ai/intelligence/planner.py#L459)
 
 Find a CSS selector from structured snapshot data (inputs, buttons, links).
@@ -75,21 +75,21 @@ Find a CSS selector from structured snapshot data (inputs, buttons, links).
 
 ### `_check_core_available` (internal)
 
-`_check_core_available() -> bool`  
+`_check_core_available() -> bool`
 Source: [`flyto_ai/intelligence/pro_bridge.py:33`](../../../flyto_ai/intelligence/pro_bridge.py#L33)
 
 Check if flyto-pro-core (open source) is installed.
 
 ### `_check_pro_available` (internal)
 
-`_check_pro_available() -> bool`  
+`_check_pro_available() -> bool`
 Source: [`flyto_ai/intelligence/pro_bridge.py:42`](../../../flyto_ai/intelligence/pro_bridge.py#L42)
 
 Check if flyto-pro (licensed) is installed.
 
 ### `_check_license_tier` (internal)
 
-`_check_license_tier() -> str`  
+`_check_license_tier() -> str`
 Source: [`flyto_ai/intelligence/pro_bridge.py:51`](../../../flyto_ai/intelligence/pro_bridge.py#L51)
 
 Get license tier.

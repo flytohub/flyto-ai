@@ -10,63 +10,63 @@ Inventory: **57 declared symbols** and **15 class methods**.
 
 ### `get_baseline_candidate` (public)
 
-`get_baseline_candidate(mode: str = 'execute') -> PromptCandidate`  
+`get_baseline_candidate(mode: str = 'execute') -> PromptCandidate`
 Source: [`flyto_ai/evolution/blocks.py:18`](../../../flyto_ai/evolution/blocks.py#L18)
 
 Create a PromptCandidate from the current production prompt.
 
 ### `_decompose_layer` (internal)
 
-`_decompose_layer(text: str, category: str, priority_start: int) -> List[PromptBlock]`  
+`_decompose_layer(text: str, category: str, priority_start: int) -> List[PromptBlock]`
 Source: [`flyto_ai/evolution/blocks.py:48`](../../../flyto_ai/evolution/blocks.py#L48)
 
 Split a layer into blocks by ## headings.
 
 ### `_split_by_headings` (internal)
 
-`_split_by_headings(text: str) -> List[tuple]`  
+`_split_by_headings(text: str) -> List[tuple]`
 Source: [`flyto_ai/evolution/blocks.py:66`](../../../flyto_ai/evolution/blocks.py#L66)
 
 Split text into (heading, body) tuples by ## markers.
 
 ### `_heading_to_name` (internal)
 
-`_heading_to_name(heading: str, category: str, index: int) -> str`  
+`_heading_to_name(heading: str, category: str, index: int) -> str`
 Source: [`flyto_ai/evolution/blocks.py:93`](../../../flyto_ai/evolution/blocks.py#L93)
 
 Convert a heading to a block name like 'policy_output_contract'.
 
 ### `compose_prompt` (public)
 
-`compose_prompt(blocks: List[PromptBlock], **kwargs) -> str`  
+`compose_prompt(blocks: List[PromptBlock], **kwargs) -> str`
 Source: [`flyto_ai/evolution/blocks.py:103`](../../../flyto_ai/evolution/blocks.py#L103)
 
 Compose a full system prompt from ordered blocks.
 
 ### `replace_block` (public)
 
-`replace_block(candidate: PromptCandidate, block_name: str, new_content: str, new_id: Optional[str] = None, mutation_desc: str = '') -> PromptCandidate`  
+`replace_block(candidate: PromptCandidate, block_name: str, new_content: str, new_id: Optional[str] = None, mutation_desc: str = '') -> PromptCandidate`
 Source: [`flyto_ai/evolution/blocks.py:113`](../../../flyto_ai/evolution/blocks.py#L113)
 
 Create a new candidate with one block replaced.
 
 ### `reorder_blocks` (public)
 
-`reorder_blocks(candidate: PromptCandidate, new_order: Dict[str, int], new_id: Optional[str] = None) -> PromptCandidate`  
+`reorder_blocks(candidate: PromptCandidate, new_order: Dict[str, int], new_id: Optional[str] = None) -> PromptCandidate`
 Source: [`flyto_ai/evolution/blocks.py:149`](../../../flyto_ai/evolution/blocks.py#L149)
 
 Create a new candidate with blocks reordered by new priorities.
 
 ### `remove_block` (public)
 
-`remove_block(candidate: PromptCandidate, block_name: str, new_id: Optional[str] = None) -> PromptCandidate`  
+`remove_block(candidate: PromptCandidate, block_name: str, new_id: Optional[str] = None) -> PromptCandidate`
 Source: [`flyto_ai/evolution/blocks.py:176`](../../../flyto_ai/evolution/blocks.py#L176)
 
 Create a new candidate with one block removed.
 
 ### `crossover` (public)
 
-`crossover(parent_a: PromptCandidate, parent_b: PromptCandidate, blocks_from_b: List[str], new_id: Optional[str] = None) -> PromptCandidate`  
+`crossover(parent_a: PromptCandidate, parent_b: PromptCandidate, blocks_from_b: List[str], new_id: Optional[str] = None) -> PromptCandidate`
 Source: [`flyto_ai/evolution/blocks.py:197`](../../../flyto_ai/evolution/blocks.py#L197)
 
 Create a child candidate by taking some blocks from parent B.
@@ -91,7 +91,7 @@ Orchestrates the prompt evolution process.
 
 ### `format_evolution_report` (public)
 
-`format_evolution_report(report: EvolutionReport) -> str`  
+`format_evolution_report(report: EvolutionReport) -> str`
 Source: [`flyto_ai/evolution/loop.py:284`](../../../flyto_ai/evolution/loop.py#L284)
 
 Format a human-readable evolution report.
@@ -190,7 +190,7 @@ Generate prompt variants using rule-based mutation strategies.
 
 ### `mutate_with_llm` (public)
 
-`async mutate_with_llm(candidate: PromptCandidate, block_name: str, instruction: str, provider, generation: int = 0) -> Optional[PromptCandidate]`  
+`async mutate_with_llm(candidate: PromptCandidate, block_name: str, instruction: str, provider, generation: int = 0) -> Optional[PromptCandidate]`
 Source: [`flyto_ai/evolution/mutator.py:259`](../../../flyto_ai/evolution/mutator.py#L259)
 
 Use an LLM to rewrite a specific block.
@@ -199,147 +199,147 @@ Use an LLM to rewrite a specific block.
 
 ### `load_eval_cases` (public)
 
-`load_eval_cases(path: Optional[str] = None) -> List[EvalCase]`  
+`load_eval_cases(path: Optional[str] = None) -> List[EvalCase]`
 Source: [`flyto_ai/evolution/runner.py:30`](../../../flyto_ai/evolution/runner.py#L30)
 
 Load eval cases from a YAML file.
 
 ### `load_rubric` (public)
 
-`load_rubric(path: Optional[str] = None) -> EvolutionConfig`  
+`load_rubric(path: Optional[str] = None) -> EvolutionConfig`
 Source: [`flyto_ai/evolution/runner.py:52`](../../../flyto_ai/evolution/runner.py#L52)
 
 Load scoring rubric/config from YAML.
 
 ### `eval_candidate` (public)
 
-`async eval_candidate(candidate: PromptCandidate, cases: List[EvalCase], config: Optional[EvolutionConfig] = None, provider = None, subset: Optional[int] = None) -> CandidateScore`  
+`async eval_candidate(candidate: PromptCandidate, cases: List[EvalCase], config: Optional[EvolutionConfig] = None, provider = None, subset: Optional[int] = None) -> CandidateScore`
 Source: [`flyto_ai/evolution/runner.py:67`](../../../flyto_ai/evolution/runner.py#L67)
 
 Evaluate a prompt candidate against all eval cases.
 
 ### `_eval_single_case` (internal)
 
-`async _eval_single_case(case: EvalCase, system_prompt: str, config: EvolutionConfig, provider = None) -> ScoreBreakdown`  
+`async _eval_single_case(case: EvalCase, system_prompt: str, config: EvolutionConfig, provider = None) -> ScoreBreakdown`
 Source: [`flyto_ai/evolution/runner.py:117`](../../../flyto_ai/evolution/runner.py#L117)
 
 Evaluate a single case — get LLM response, then score it.
 
 ### `_generate_response` (internal)
 
-`async _generate_response(case: EvalCase, system_prompt: str, execution_results: List[Dict[str, Any]], tool_calls: List[Dict[str, Any]], provider, config: EvolutionConfig) -> str`  
+`async _generate_response(case: EvalCase, system_prompt: str, execution_results: List[Dict[str, Any]], tool_calls: List[Dict[str, Any]], provider, config: EvolutionConfig) -> str`
 Source: [`flyto_ai/evolution/runner.py:145`](../../../flyto_ai/evolution/runner.py#L145)
 
 Generate an LLM response for an eval case using mock tool dispatch.
 
 ### `_failed_results` (internal)
 
-`_failed_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]`  
+`_failed_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]`
 Source: [`flyto_ai/evolution/runner.py:186`](../../../flyto_ai/evolution/runner.py#L186)
 
 Internal `_failed_results` implementation on this module; the linked source is authoritative.
 
 ### `_successful_results` (internal)
 
-`_successful_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]`  
+`_successful_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]`
 Source: [`flyto_ai/evolution/runner.py:190`](../../../flyto_ai/evolution/runner.py#L190)
 
 Internal `_successful_results` implementation on this module; the linked source is authoritative.
 
 ### `_format_failed_steps` (internal)
 
-`_format_failed_steps(results: List[Dict[str, Any]], label: str = 'failed') -> List[str]`  
+`_format_failed_steps(results: List[Dict[str, Any]], label: str = 'failed') -> List[str]`
 Source: [`flyto_ai/evolution/runner.py:194`](../../../flyto_ai/evolution/runner.py#L194)
 
 Internal `_format_failed_steps` implementation on this module; the linked source is authoritative.
 
 ### `_mock_adversarial_response` (internal)
 
-`_mock_adversarial_response(case: EvalCase, results: List[Dict[str, Any]]) -> str`  
+`_mock_adversarial_response(case: EvalCase, results: List[Dict[str, Any]]) -> str`
 Source: [`flyto_ai/evolution/runner.py:201`](../../../flyto_ai/evolution/runner.py#L201)
 
 Internal `_mock_adversarial_response` implementation on this module; the linked source is authoritative.
 
 ### `_mock_edge_case_response` (internal)
 
-`_mock_edge_case_response(case: EvalCase) -> str`  
+`_mock_edge_case_response(case: EvalCase) -> str`
 Source: [`flyto_ai/evolution/runner.py:225`](../../../flyto_ai/evolution/runner.py#L225)
 
 Internal `_mock_edge_case_response` implementation on this module; the linked source is authoritative.
 
 ### `_failure_guidance` (internal)
 
-`_failure_guidance(results: List[Dict[str, Any]]) -> str`  
+`_failure_guidance(results: List[Dict[str, Any]]) -> str`
 Source: [`flyto_ai/evolution/runner.py:244`](../../../flyto_ai/evolution/runner.py#L244)
 
 Internal `_failure_guidance` implementation on this module; the linked source is authoritative.
 
 ### `_mock_all_failed_response` (internal)
 
-`_mock_all_failed_response(results: List[Dict[str, Any]]) -> str`  
+`_mock_all_failed_response(results: List[Dict[str, Any]]) -> str`
 Source: [`flyto_ai/evolution/runner.py:255`](../../../flyto_ai/evolution/runner.py#L255)
 
 Internal `_mock_all_failed_response` implementation on this module; the linked source is authoritative.
 
 ### `_result_detail` (internal)
 
-`_result_detail(result: Dict[str, Any]) -> str`  
+`_result_detail(result: Dict[str, Any]) -> str`
 Source: [`flyto_ai/evolution/runner.py:262`](../../../flyto_ai/evolution/runner.py#L262)
 
 Internal `_result_detail` implementation on this module; the linked source is authoritative.
 
 ### `_mock_partial_failure_response` (internal)
 
-`_mock_partial_failure_response(results: List[Dict[str, Any]]) -> str`  
+`_mock_partial_failure_response(results: List[Dict[str, Any]]) -> str`
 Source: [`flyto_ai/evolution/runner.py:273`](../../../flyto_ai/evolution/runner.py#L273)
 
 Internal `_mock_partial_failure_response` implementation on this module; the linked source is authoritative.
 
 ### `_mock_language_response` (internal)
 
-`_mock_language_response(case: EvalCase) -> str`  
+`_mock_language_response(case: EvalCase) -> str`
 Source: [`flyto_ai/evolution/runner.py:282`](../../../flyto_ai/evolution/runner.py#L282)
 
 Internal `_mock_language_response` implementation on this module; the linked source is authoritative.
 
 ### `_mock_success_response` (internal)
 
-`_mock_success_response(results: List[Dict[str, Any]]) -> Optional[str]`  
+`_mock_success_response(results: List[Dict[str, Any]]) -> Optional[str]`
 Source: [`flyto_ai/evolution/runner.py:293`](../../../flyto_ai/evolution/runner.py#L293)
 
 Internal `_mock_success_response` implementation on this module; the linked source is authoritative.
 
 ### `_mock_yaml_workflow_response` (internal)
 
-`_mock_yaml_workflow_response() -> str`  
+`_mock_yaml_workflow_response() -> str`
 Source: [`flyto_ai/evolution/runner.py:310`](../../../flyto_ai/evolution/runner.py#L310)
 
 Internal `_mock_yaml_workflow_response` implementation on this module; the linked source is authoritative.
 
 ### `_generate_mock_response` (internal)
 
-`_generate_mock_response(case: EvalCase) -> str`  
+`_generate_mock_response(case: EvalCase) -> str`
 Source: [`flyto_ai/evolution/runner.py:321`](../../../flyto_ai/evolution/runner.py#L321)
 
 Generate a realistic mock response for rule-based eval (no LLM needed).
 
 ### `_build_mock_tool_defs` (internal)
 
-`_build_mock_tool_defs(tool_calls: List[Dict[str, Any]]) -> List[Dict]`  
+`_build_mock_tool_defs(tool_calls: List[Dict[str, Any]]) -> List[Dict]`
 Source: [`flyto_ai/evolution/runner.py:346`](../../../flyto_ai/evolution/runner.py#L346)
 
 Build minimal tool definitions for mock dispatch.
 
 ### `_aggregate_scores` (internal)
 
-`_aggregate_scores(candidate_id: str, scores: List[ScoreBreakdown], config: EvolutionConfig) -> CandidateScore`  
+`_aggregate_scores(candidate_id: str, scores: List[ScoreBreakdown], config: EvolutionConfig) -> CandidateScore`
 Source: [`flyto_ai/evolution/runner.py:402`](../../../flyto_ai/evolution/runner.py#L402)
 
 Aggregate individual case scores into a candidate score.
 
 ### `format_score_report` (public)
 
-`format_score_report(candidate: PromptCandidate, score: CandidateScore) -> str`  
+`format_score_report(candidate: PromptCandidate, score: CandidateScore) -> str`
 Source: [`flyto_ai/evolution/runner.py:450`](../../../flyto_ai/evolution/runner.py#L450)
 
 Format a human-readable score report for a candidate.
@@ -348,105 +348,105 @@ Format a human-readable score report for a candidate.
 
 ### `score_response` (public)
 
-`score_response(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], config: Optional[EvolutionConfig] = None) -> ScoreBreakdown`  
+`score_response(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], config: Optional[EvolutionConfig] = None) -> ScoreBreakdown`
 Source: [`flyto_ai/evolution/scorer.py:24`](../../../flyto_ai/evolution/scorer.py#L24)
 
 Score a response against an eval case using rule-based checks.
 
 ### `_check_success_claim` (internal)
 
-`_check_success_claim(response: str, success_patterns: List[str], negation_prefixes: List[str]) -> bool`  
+`_check_success_claim(response: str, success_patterns: List[str], negation_prefixes: List[str]) -> bool`
 Source: [`flyto_ai/evolution/scorer.py:72`](../../../flyto_ai/evolution/scorer.py#L72)
 
 Check if response claims success, ignoring negated patterns.
 
 ### `_score_task` (internal)
 
-`_score_task(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], notes: List[str]) -> float`  
+`_score_task(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], notes: List[str]) -> float`
 Source: [`flyto_ai/evolution/scorer.py:91`](../../../flyto_ai/evolution/scorer.py#L91)
 
 Score task success based on expected behavior keywords.
 
 ### `_score_compliance` (internal)
 
-`_score_compliance(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], notes: List[str]) -> float`  
+`_score_compliance(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], notes: List[str]) -> float`
 Source: [`flyto_ai/evolution/scorer.py:147`](../../../flyto_ai/evolution/scorer.py#L147)
 
 Score rule compliance.
 
 ### `_score_ux` (internal)
 
-`_score_ux(response: str, notes: List[str]) -> float`  
+`_score_ux(response: str, notes: List[str]) -> float`
 Source: [`flyto_ai/evolution/scorer.py:191`](../../../flyto_ai/evolution/scorer.py#L191)
 
 Score UX quality: clarity, conciseness, structure.
 
 ### `_check_hallucination` (internal)
 
-`_check_hallucination(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], config: EvolutionConfig, notes: List[str]) -> float`  
+`_check_hallucination(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], config: EvolutionConfig, notes: List[str]) -> float`
 Source: [`flyto_ai/evolution/scorer.py:233`](../../../flyto_ai/evolution/scorer.py#L233)
 
 Detect hallucinated results — claiming data that wasn't in tool results.
 
 ### `_check_forbidden` (internal)
 
-`_check_forbidden(case: EvalCase, response: str, config: EvolutionConfig, notes: List[str]) -> float`  
+`_check_forbidden(case: EvalCase, response: str, config: EvolutionConfig, notes: List[str]) -> float`
 Source: [`flyto_ai/evolution/scorer.py:273`](../../../flyto_ai/evolution/scorer.py#L273)
 
 Apply rule violation penalties for forbidden behaviors.
 
 ### `score_with_llm_judge` (public)
 
-`async score_with_llm_judge(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], provider) -> ScoreBreakdown`  
+`async score_with_llm_judge(case: EvalCase, response: str, execution_results: List[Dict[str, Any]], provider) -> ScoreBreakdown`
 Source: [`flyto_ai/evolution/scorer.py:301`](../../../flyto_ai/evolution/scorer.py#L301)
 
 Use an LLM as judge for semantic evaluation.
 
 ### `_noop_dispatch` (internal)
 
-`async _noop_dispatch(name: str, args: dict) -> dict`  
+`async _noop_dispatch(name: str, args: dict) -> dict`
 Source: [`flyto_ai/evolution/scorer.py:339`](../../../flyto_ai/evolution/scorer.py#L339)
 
 Internal `_noop_dispatch` implementation on this module; the linked source is authoritative.
 
 ### `_build_judge_prompt` (internal)
 
-`_build_judge_prompt(case: EvalCase, response: str, execution_results: List[Dict[str, Any]]) -> str`  
+`_build_judge_prompt(case: EvalCase, response: str, execution_results: List[Dict[str, Any]]) -> str`
 Source: [`flyto_ai/evolution/scorer.py:343`](../../../flyto_ai/evolution/scorer.py#L343)
 
 Internal `_build_judge_prompt` implementation on this module; the linked source is authoritative.
 
 ### `_parse_judge_output` (internal)
 
-`_parse_judge_output(content: str) -> Dict[str, Any]`  
+`_parse_judge_output(content: str) -> Dict[str, Any]`
 Source: [`flyto_ai/evolution/scorer.py:371`](../../../flyto_ai/evolution/scorer.py#L371)
 
 Parse JSON from LLM judge output.
 
 ### `_extract_check_phrases` (internal)
 
-`_extract_check_phrases(text: str) -> List[str]`  
+`_extract_check_phrases(text: str) -> List[str]`
 Source: [`flyto_ai/evolution/scorer.py:387`](../../../flyto_ai/evolution/scorer.py#L387)
 
 Extract meaningful check keywords from expected/forbidden behavior text.
 
 ### `_split_forbidden_phrases` (internal)
 
-`_split_forbidden_phrases(text: str) -> List[str]`  
+`_split_forbidden_phrases(text: str) -> List[str]`
 Source: [`flyto_ai/evolution/scorer.py:425`](../../../flyto_ai/evolution/scorer.py#L425)
 
 Split forbidden behavior text into check phrases.
 
 ### `_phrase_in_text` (internal)
 
-`_phrase_in_text(phrase: str, text: str) -> bool`  
+`_phrase_in_text(phrase: str, text: str) -> bool`
 Source: [`flyto_ai/evolution/scorer.py:447`](../../../flyto_ai/evolution/scorer.py#L447)
 
 Check if a phrase/keyword appears in text.
 
 ### `_check_language_mismatch` (internal)
 
-`_check_language_mismatch(user_input: str, response: str) -> str`  
+`_check_language_mismatch(user_input: str, response: str) -> str`
 Source: [`flyto_ai/evolution/scorer.py:491`](../../../flyto_ai/evolution/scorer.py#L491)
 
 Check if response language matches user input language.

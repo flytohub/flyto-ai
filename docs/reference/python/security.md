@@ -10,14 +10,14 @@ Inventory: **28 declared symbols** and **0 class methods**.
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/auth_bypass.py:9`](../../../flyto_ai/security/blueprints/auth_bypass.py#L9)
 
 Generate a flyto-core workflow YAML for auth bypass verification.
 
 ### `_auth_headers` (internal)
 
-`_auth_headers(auth_token: str | None) -> dict[str, str]`  
+`_auth_headers(auth_token: str | None) -> dict[str, str]`
 Source: [`flyto_ai/security/blueprints/auth_bypass.py:137`](../../../flyto_ai/security/blueprints/auth_bypass.py#L137)
 
 Build auth headers from token, or empty dict.
@@ -26,14 +26,14 @@ Build auth headers from token, or empty dict.
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/command_injection.py:22`](../../../flyto_ai/security/blueprints/command_injection.py#L22)
 
 Generate a flyto-core workflow YAML for command-injection verification.
 
 ### `_build_request` (internal)
 
-`_build_request(method: str, base: str, param: str, value: str, auth_token: str | None) -> dict`  
+`_build_request(method: str, base: str, param: str, value: str, auth_token: str | None) -> dict`
 Source: [`flyto_ai/security/blueprints/command_injection.py:133`](../../../flyto_ai/security/blueprints/command_injection.py#L133)
 
 Internal `_build_request` implementation on this module; the linked source is authoritative.
@@ -42,14 +42,14 @@ Internal `_build_request` implementation on this module; the linked source is au
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/crlf_injection.py:22`](../../../flyto_ai/security/blueprints/crlf_injection.py#L22)
 
 Public `generate` implementation on this module; the linked source is authoritative.
 
 ### `_req` (internal)
 
-`_req(method, base, param, value, auth_token)`  
+`_req(method, base, param, value, auth_token)`
 Source: [`flyto_ai/security/blueprints/crlf_injection.py:96`](../../../flyto_ai/security/blueprints/crlf_injection.py#L96)
 
 Internal `_req` implementation on this module; the linked source is authoritative.
@@ -58,7 +58,7 @@ Internal `_req` implementation on this module; the linked source is authoritativ
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/insecure_deserialization.py:30`](../../../flyto_ai/security/blueprints/insecure_deserialization.py#L30)
 
 Public `generate` implementation on this module; the linked source is authoritative.
@@ -67,7 +67,7 @@ Public `generate` implementation on this module; the linked source is authoritat
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/mass_assignment.py:24`](../../../flyto_ai/security/blueprints/mass_assignment.py#L24)
 
 Public `generate` implementation on this module; the linked source is authoritative.
@@ -76,7 +76,7 @@ Public `generate` implementation on this module; the linked source is authoritat
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/nosql_injection.py:15`](../../../flyto_ai/security/blueprints/nosql_injection.py#L15)
 
 Public `generate` implementation on this module; the linked source is authoritative.
@@ -85,14 +85,14 @@ Public `generate` implementation on this module; the linked source is authoritat
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/open_redirect.py:24`](../../../flyto_ai/security/blueprints/open_redirect.py#L24)
 
 Generate a flyto-core workflow YAML for open-redirect verification.
 
 ### `_build_request` (internal)
 
-`_build_request(method: str, base: str, param: str, value: str, auth_token: str | None, follow: bool = False) -> dict`  
+`_build_request(method: str, base: str, param: str, value: str, auth_token: str | None, follow: bool = False) -> dict`
 Source: [`flyto_ai/security/blueprints/open_redirect.py:120`](../../../flyto_ai/security/blueprints/open_redirect.py#L120)
 
 Internal `_build_request` implementation on this module; the linked source is authoritative.
@@ -101,14 +101,14 @@ Internal `_build_request` implementation on this module; the linked source is au
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/path_traversal.py:24`](../../../flyto_ai/security/blueprints/path_traversal.py#L24)
 
 Public `generate` implementation on this module; the linked source is authoritative.
 
 ### `_req` (internal)
 
-`_req(method, base, param, value, auth_token)`  
+`_req(method, base, param, value, auth_token)`
 Source: [`flyto_ai/security/blueprints/path_traversal.py:100`](../../../flyto_ai/security/blueprints/path_traversal.py#L100)
 
 Internal `_req` implementation on this module; the linked source is authoritative.
@@ -117,21 +117,21 @@ Internal `_req` implementation on this module; the linked source is authoritativ
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/sql_injection.py:9`](../../../flyto_ai/security/blueprints/sql_injection.py#L9)
 
 Generate a flyto-core workflow YAML for SQL injection verification.
 
 ### `_build_request` (internal)
 
-`_build_request(method: str, base_url: str, param: str, value: str, auth_token: str | None) -> dict`  
+`_build_request(method: str, base_url: str, param: str, value: str, auth_token: str | None) -> dict`
 Source: [`flyto_ai/security/blueprints/sql_injection.py:145`](../../../flyto_ai/security/blueprints/sql_injection.py#L145)
 
 Build a single HTTP request dict for http.batch.
 
 ### `json_kv` (public)
 
-`json_kv(key: str, value: str) -> str`  
+`json_kv(key: str, value: str) -> str`
 Source: [`flyto_ai/security/blueprints/sql_injection.py:176`](../../../flyto_ai/security/blueprints/sql_injection.py#L176)
 
 Format a JSON key-value pair with proper escaping.
@@ -140,14 +140,14 @@ Format a JSON key-value pair with proper escaping.
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/ssrf.py:22`](../../../flyto_ai/security/blueprints/ssrf.py#L22)
 
 Generate a flyto-core workflow YAML for SSRF verification.
 
 ### `_build_request` (internal)
 
-`_build_request(method: str, base: str, param: str, value: str, auth_token: str | None) -> dict`  
+`_build_request(method: str, base: str, param: str, value: str, auth_token: str | None) -> dict`
 Source: [`flyto_ai/security/blueprints/ssrf.py:116`](../../../flyto_ai/security/blueprints/ssrf.py#L116)
 
 Build a single HTTP request dict for http.batch.
@@ -156,14 +156,14 @@ Build a single HTTP request dict for http.batch.
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/ssti.py:19`](../../../flyto_ai/security/blueprints/ssti.py#L19)
 
 Public `generate` implementation on this module; the linked source is authoritative.
 
 ### `_req` (internal)
 
-`_req(method, base, param, value, auth_token)`  
+`_req(method, base, param, value, auth_token)`
 Source: [`flyto_ai/security/blueprints/ssti.py:96`](../../../flyto_ai/security/blueprints/ssti.py#L96)
 
 Internal `_req` implementation on this module; the linked source is authoritative.
@@ -172,21 +172,21 @@ Internal `_req` implementation on this module; the linked source is authoritativ
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/xss_reflected.py:9`](../../../flyto_ai/security/blueprints/xss_reflected.py#L9)
 
 Generate a flyto-core workflow YAML for reflected XSS verification.
 
 ### `_build_get_request` (internal)
 
-`_build_get_request(base_url: str, param: str, value: str, auth_token: str | None) -> dict`  
+`_build_get_request(base_url: str, param: str, value: str, auth_token: str | None) -> dict`
 Source: [`flyto_ai/security/blueprints/xss_reflected.py:148`](../../../flyto_ai/security/blueprints/xss_reflected.py#L148)
 
 Build a GET request for http.batch.
 
 ### `_dom_check_script` (internal)
 
-`_dom_check_script() -> str`  
+`_dom_check_script() -> str`
 Source: [`flyto_ai/security/blueprints/xss_reflected.py:165`](../../../flyto_ai/security/blueprints/xss_reflected.py#L165)
 
 JavaScript to evaluate in the browser to detect XSS execution.
@@ -195,7 +195,7 @@ JavaScript to evaluate in the browser to detect XSS execution.
 
 ### `generate` (public)
 
-`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`  
+`generate(finding: SecurityFinding, target_url: str, auth_token: str | None) -> str`
 Source: [`flyto_ai/security/blueprints/xxe.py:21`](../../../flyto_ai/security/blueprints/xxe.py#L21)
 
 Public `generate` implementation on this module; the linked source is authoritative.
@@ -204,21 +204,21 @@ Public `generate` implementation on this module; the linked source is authoritat
 
 ### `generate_test_from_finding` (public)
 
-`generate_test_from_finding(finding: SecurityFinding, target_url: str, auth_token: str | None = None) -> str`  
+`generate_test_from_finding(finding: SecurityFinding, target_url: str, auth_token: str | None = None) -> str`
 Source: [`flyto_ai/security/generator.py:41`](../../../flyto_ai/security/generator.py#L41)
 
 Turn a structured finding into an executable flyto-core YAML string.
 
 ### `_validate_safety` (internal)
 
-`_validate_safety(target_url: str) -> None`  
+`_validate_safety(target_url: str) -> None`
 Source: [`flyto_ai/security/generator.py:71`](../../../flyto_ai/security/generator.py#L71)
 
 Block against accidental production targets and SSRF vectors.
 
 ### `_check_private_ip` (internal)
 
-`_check_private_ip(hostname: str) -> None`  
+`_check_private_ip(hostname: str) -> None`
 Source: [`flyto_ai/security/generator.py:103`](../../../flyto_ai/security/generator.py#L103)
 
 Reject RFC 1918 and link-local addresses.

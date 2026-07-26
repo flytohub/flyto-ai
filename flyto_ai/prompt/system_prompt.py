@@ -191,7 +191,8 @@ You have {module_count}+ modules but you do NOT know their names in advance.
 ALWAYS discover before executing:
 
 1. **list_blueprints(query)** — check for a reusable workflow pattern FIRST
-   → If found: call use_blueprint(blueprint_id, args) → execute each step → DONE
+   → If found: call use_blueprint(blueprint_id, args)
+   → It validates and executes every Core step, then reports the outcome automatically → DONE
 2. **search_modules(query)** — find individual modules by keyword (only if no blueprint)
 3. **get_module_info(module_id)** — read the full schema BEFORE calling execute_module
 4. **execute_module(module_id, params)** — run a module

@@ -109,8 +109,12 @@ class AssistantMiddleware:
     Three hooks — prepare / wrap / post_process — cover the full lifecycle.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, distillation_min_steps: int = 3) -> None:
         router.init_storage()
+        self._distillation_min_steps = max(
+            3,
+            min(int(distillation_min_steps), 20),
+        )
         self._output_tracker: Optional[OutputTracker] = None
         self._last_choices: Optional[Dict[str, Any]] = None
         # Set by Agent._init_pro_bridge() when flyto-pro is available
@@ -417,7 +421,12 @@ class AssistantMiddleware:
     ) -> Optional[Dict[str, Any]]:
         """Run post-execution logic. Returns pending_input if ask_user was triggered."""
         if mode == "execute" and execution_results:
-            router.feedback(tool_calls, execution_results, user_message)
+            router.feedback(
+                tool_calls,
+                execution_results,
+                user_message,
+                min_steps=self._distillation_min_steps,
+            )
 
         # Auto-write missing output files using the SAME dispatch chain
         # (preserves SANDBOX_DIR and other context)

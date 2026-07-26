@@ -45,16 +45,25 @@ async def dispatch_blueprint_tool(
         steps = raw["data"]["steps"]
         # Return a compact result with the execution instruction AT THE TOP
         # so it doesn't get truncated by the 8000-char limit
+        execution_steps = []
+        for step in steps:
+            execution_step = {
+                "module": step["module"],
+                "params": step.get("params", {}),
+            }
+            for field in ("id", "retry", "assert", "assertions"):
+                if field in step:
+                    execution_step[field] = step[field]
+            execution_steps.append(execution_step)
+
         return {
             "ok": True,
+            "blueprint_id": arguments.get("blueprint_id", ""),
             "action_required": (
                 "EXECUTE each step NOW with execute_module(module_id, params). "
                 "Do NOT stop. Do NOT just return the YAML."
             ),
-            "steps": [
-                {"module": s["module"], "params": s.get("params", {})}
-                for s in steps
-            ],
+            "steps": execution_steps,
         }
 
     elif name == "save_as_blueprint":
@@ -68,6 +77,7 @@ async def dispatch_blueprint_tool(
         return engine.report_outcome(
             blueprint_id=arguments.get("blueprint_id", ""),
             success=arguments.get("success", False),
+            execution_id=arguments.get("execution_id", ""),
         )
 
     return {"ok": False, "error": "Unknown blueprint tool: {}".format(name)}

@@ -1,8 +1,10 @@
 # State
 
-Last updated: 2026-07-22
+Last updated: 2026-07-26
 
 Implemented:
+- Closed-loop MCP verification distinguishes omitted identifiers, unknown
+  plans, and known plans that do not yet have execution evidence.
 - `flyto-core` MCP capability manifest exposed through `flyto-ai`.
 - Additive risk, approval, and evidence metadata on core tool definitions.
 - Pre-execution `validate_params` gate for `execute_module`.
@@ -18,7 +20,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 925 passed, 15 optional/live-integration skips;
+- full suite: 957 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

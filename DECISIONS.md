@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-07-26: Closed-loop verification rejects ambiguous plan state
+
+- Omitting both verification identifiers remains a request-shape error.
+- An unknown `plan_id` is reported as missing state instead of being folded
+  into the request-shape error.
+- A known plan without a recorded execution is reported as lacking execution
+  evidence, so callers can execute it before retrying verification.
+
 ## 2026-07-22: Generate exhaustive implementation references
 
 - Human-authored guides explain behavior, boundaries, and operations; generated references provide exhaustive symbol/CLI/tool/environment inventories.

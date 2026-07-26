@@ -12,6 +12,12 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from flyto_ai.closed_loop_v3 import (
+    CapabilityModelRouter,
+    JsonCheckpointStore,
+    ModelCandidate,
+    ModelRoute,
+)
 from flyto_ai.config import AgentConfig
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
@@ -58,6 +64,17 @@ class Agent:
     ) -> None:
         self._config = config
         self._provider = api_client or self._make_provider()
+        self._model_router = CapabilityModelRouter()
+        self._model_candidates = self._build_model_candidates()
+        self._last_model_route: Optional[ModelRoute] = None
+        self._checkpoint_store = None
+        if config.enable_checkpoints:
+            try:
+                self._checkpoint_store = JsonCheckpointStore(
+                    config.checkpoint_dir,
+                )
+            except Exception as exc:
+                logger.warning("Checkpoint store init failed: %s", exc)
         self._system_prompt = system_prompt
         self._policies = policies
 
@@ -149,6 +166,13 @@ class Agent:
         return self._pro
 
     @property
+    def model_route(self) -> Optional[Dict[str, Any]]:
+        """Return the most recent auditable model-routing decision."""
+        if self._last_model_route is None:
+            return None
+        return self._last_model_route.to_dict()
+
+    @property
     def transcript(self):
         return self._transcript
 
@@ -162,7 +186,9 @@ class Agent:
         """Initialize the AssistantMiddleware (blueprint, interactive, resilience)."""
         try:
             from flyto_ai.assistant import AssistantMiddleware
-            return AssistantMiddleware()
+            return AssistantMiddleware(
+                distillation_min_steps=self._config.distillation_min_steps,
+            )
         except Exception as e:
             logger.debug("Assistant middleware init failed: %s", e)
             return None
@@ -361,6 +387,100 @@ class Agent:
         except Exception as e:
             logger.warning("Memory system init failed: %s", e)
 
+    @staticmethod
+    def _default_model_for(provider: str) -> str:
+        if provider == "anthropic":
+            return "claude-sonnet-4-5-20250929"
+        if provider == "ollama":
+            return "llama3.2"
+        return "gpt-4o"
+
+    @staticmethod
+    def _model_cost_rank(provider: str, model: str) -> int:
+        lowered = model.lower()
+        if provider == "ollama":
+            return 0
+        if "mini" in lowered or "haiku" in lowered:
+            return 1
+        if "gpt-5" in lowered or "opus" in lowered or "sonnet" in lowered:
+            return 3
+        return 2
+
+    def _build_model_candidates(self) -> List[ModelCandidate]:
+        cfg = self._config
+        configured = [{
+            "provider": cfg.provider or "openai",
+            "model": cfg.resolved_model,
+        }]
+        configured.extend({
+            "provider": item.provider or "openai",
+            "model": item.model or self._default_model_for(item.provider),
+        } for item in cfg.fallback_providers)
+
+        candidates = []
+        seen = set()
+        for item in configured:
+            label = "{}:{}".format(item["provider"], item["model"])
+            if label in seen:
+                continue
+            seen.add(label)
+            candidates.append(ModelCandidate.from_name(
+                item["provider"],
+                item["model"],
+                self._model_cost_rank(item["provider"], item["model"]),
+            ))
+        return candidates
+
+    def _select_model_route(
+        self,
+        message: str,
+        *,
+        deterministic_available: bool = False,
+        prior_failure: bool = False,
+        plan_steps: int = 0,
+    ) -> ModelRoute:
+        if not self._config.enable_model_routing and not deterministic_available:
+            primary = self._model_candidates[0]
+            route = ModelRoute(
+                mode="llm",
+                required_tier=primary.tier,
+                reason="capability routing disabled",
+                provider=primary.provider,
+                model=primary.model,
+                candidate_label=primary.label,
+            )
+        else:
+            route = self._model_router.route(
+                message,
+                self._model_candidates,
+                deterministic_available=deterministic_available,
+                prior_failure=prior_failure,
+                plan_steps=plan_steps,
+            )
+
+        if route.mode == "llm" and route.candidate_label:
+            prefer = getattr(self._provider, "prefer_provider", None)
+            primary_label = self._model_candidates[0].label
+            if callable(prefer):
+                applied = bool(prefer(route.candidate_label))
+            else:
+                applied = route.candidate_label == primary_label
+            if not applied:
+                primary = self._model_candidates[0]
+                route = ModelRoute(
+                    mode="llm",
+                    required_tier=route.required_tier,
+                    reason="{}; selected provider cannot be activated".format(
+                        route.reason,
+                    ),
+                    provider=primary.provider,
+                    model=primary.model,
+                    candidate_label=primary.label,
+                    degraded=True,
+                )
+        self._last_model_route = route
+        return route
+
     def _make_provider(self) -> LLMProvider:
         from flyto_ai.providers import create_provider
 
@@ -455,6 +575,86 @@ class Agent:
             return None
 
         logger.info("Deterministic intent: %s", intent.get("intent"))
+        deterministic_route = None
+        if hasattr(self, "_model_router") and hasattr(self, "_model_candidates"):
+            deterministic_route = self._select_model_route(
+                message,
+                deterministic_available=True,
+            )
+
+        # Exact blueprint reuse: zero LLM, but never bypass the agent's safety
+        # boundary. ``use_blueprint`` expands the pattern and safe_dispatch
+        # executes every Core step with validation before reporting outcome.
+        if intent.get("intent") == "blueprint":
+            dispatch_fn, _ = self._build_dispatch(
+                message, on_tool_call, on_stream, dispatch_wrapper,
+                mode="execute",
+            )
+            if dispatch_fn is None:
+                return None
+
+            blueprint_args = {
+                "blueprint_id": intent.get("blueprint_id", ""),
+                "args": intent.get("args", {}),
+            }
+            result = await dispatch_fn("use_blueprint", blueprint_args)
+            if not isinstance(result, dict) or not result.get("workflow_executed"):
+                return None
+
+            executions = [
+                item for item in result.get("executions", [])
+                if isinstance(item, dict)
+            ]
+            evidence = result.get("evidence", {})
+            if deterministic_route is not None:
+                evidence["model_route"] = deterministic_route.to_dict()
+            modules = [
+                item.get("module_id", "") for item in executions
+                if item.get("module_id")
+            ]
+            closed_loop_ok = bool(result.get("closed_loop_ok"))
+            if closed_loop_ok:
+                response_text = "OK: blueprint {} → {}".format(
+                    blueprint_args["blueprint_id"],
+                    " → ".join(modules),
+                )
+            else:
+                failed_module = evidence.get("failed_module") or "outcome feedback"
+                response_text = "Failed: blueprint {} at {}".format(
+                    blueprint_args["blueprint_id"], failed_module,
+                )
+
+            tool_call = {
+                "function": "use_blueprint",
+                "arguments": blueprint_args,
+                "ok": bool(result.get("ok")),
+                "blueprint_id": blueprint_args["blueprint_id"],
+                "execution_id": result.get("execution_id", ""),
+                "outcome_reported": bool(result.get("outcome_reported")),
+                "evidence": evidence,
+                "executions": executions,
+                "result_preview": json.dumps(
+                    {
+                        "ok": result.get("ok"),
+                        "closed_loop_ok": closed_loop_ok,
+                        "evidence": evidence,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )[:500],
+            }
+            cost_summary = self._cost_tracker.summary() if self._cost_tracker else None
+            return ChatResponse(
+                ok=closed_loop_ok,
+                message=response_text,
+                session_id=self._session_id,
+                tool_calls=[tool_call],
+                execution_results=executions,
+                provider=self._config.provider,
+                model="deterministic",
+                rounds_used=0,
+                cost=cost_summary,
+            )
 
         # 2. Plan execution
         has_browser = bool(get_browser_status())
@@ -474,7 +674,12 @@ class Agent:
         # Build tool_calls list for audit
         tool_calls = [
             {"function": "execute_module", "module_id": r["module_id"],
-             "ok": r["ok"], "error": r.get("error", "")}
+             "ok": r["ok"], "error": r.get("error", ""),
+             "model_route": (
+                 deterministic_route.to_dict()
+                 if deterministic_route is not None
+                 else None
+             )}
             for r in results
         ]
 
@@ -510,7 +715,11 @@ class Agent:
 
     # ── Dispatch ──────────────────────────────────────────────────
 
-    def _make_safe_dispatch(self, user_message: str = ""):
+    def _make_safe_dispatch(
+        self,
+        user_message: str = "",
+        execute_blueprints: bool = True,
+    ):
         """Create a dispatch function with permission + hooks + policy enforcement + assistant middleware."""
         base_dispatch = self._dispatch_fn
         policies = self._policies
@@ -523,6 +732,30 @@ class Agent:
             assisted_dispatch = self._assistant.wrap(base_dispatch, user_message)
         else:
             assisted_dispatch = base_dispatch
+
+        async def preflight_blueprint_step(func_args: dict) -> dict:
+            """Check static module access before a blueprint starts side effects."""
+            decision = enforcer.check("execute_module", func_args)
+            if not decision.allowed:
+                return {"ok": False, "error": decision.reason}
+            if policies and not is_tool_allowed("execute_module", policies):
+                return {"ok": False, "error": "Tool not allowed: execute_module"}
+            if policies:
+                module_id = func_args.get("module_id", "")
+                if not is_module_allowed(module_id, policies):
+                    category = (
+                        module_id.split(".")[0] if "." in module_id else module_id
+                    )
+                    return {
+                        "ok": False,
+                        "error": "Module category '{}' is not allowed.".format(category),
+                    }
+            return {
+                "ok": True,
+                # Extension hooks remain runtime checks because their decisions
+                # may depend on resolved params or external state.
+                "dynamic_hooks_deferred": bool(hooks),
+            }
 
         async def safe_dispatch(func_name: str, func_args: dict) -> dict:
             # Permission tier enforcement
@@ -548,6 +781,37 @@ class Agent:
                     func_args = hook_result.modified_arguments
 
             result = await assisted_dispatch(func_name, func_args)
+
+            # An expanded blueprint is a deterministic execution contract.
+            # Run it through this same safe dispatcher so every nested module
+            # keeps permission, policy, hook, validation, and middleware checks.
+            if (
+                execute_blueprints
+                and func_name == "use_blueprint"
+                and isinstance(result, dict)
+                and result.get("ok")
+                and result.get("steps")
+            ):
+                from flyto_ai.blueprint_loop import execute_blueprint_loop
+
+                result = await execute_blueprint_loop(
+                    blueprint_id=func_args.get(
+                        "blueprint_id", result.get("blueprint_id", ""),
+                    ),
+                    steps=result["steps"],
+                    dispatch=safe_dispatch,
+                    preflight=preflight_blueprint_step,
+                    checkpoint_store=getattr(
+                        self,
+                        "_checkpoint_store",
+                        None,
+                    ),
+                    max_repairs=getattr(
+                        self._config,
+                        "max_repair_attempts",
+                        1,
+                    ),
+                )
 
             # Extension hooks: after_tool_call
             if hooks:
@@ -620,12 +884,14 @@ class Agent:
                 )
                 return det_result
 
+        model_route = self._select_model_route(message)
+
         messages = list(history or [])
         messages.append({"role": "user", "content": message})
 
         # Build dispatch + system prompt
         dispatch_fn, has_tools = self._build_dispatch(
-            message, on_tool_call, on_stream, dispatch_wrapper,
+            message, on_tool_call, on_stream, dispatch_wrapper, mode=mode,
         )
         system_prompt, has_blueprint_match = await self._build_prompt(
             message, mode, has_tools, template_context, injection_note,
@@ -671,7 +937,9 @@ class Agent:
         # System safety net: if LLM only used discovery tools (search/list)
         # but never executed anything, nudge once. Only accept if retry
         # results in actual execution.
-        _action_tools = {"execute_module", "navigate_website", "ask_user"}
+        _action_tools = {
+            "execute_module", "use_blueprint", "navigate_website", "ask_user",
+        }
         _has_action = any(tc.get("function") in _action_tools for tc in tool_calls)
         if (mode == "execute"
                 and self._assistant
@@ -694,7 +962,9 @@ class Agent:
                 )
                 # Only accept if LLM actually EXECUTED something (not just searched)
                 has_execution = any(
-                    tc.get("function") == "execute_module" or tc.get("function") == "ask_user"
+                    tc.get("function") in {
+                        "execute_module", "use_blueprint", "ask_user",
+                    }
                     for tc in retry_tc
                 )
                 if has_execution:
@@ -715,7 +985,16 @@ class Agent:
             )
 
         # Collect execution results
-        execution_results = [tc for tc in tool_calls if tc.get("function") == "execute_module"]
+        execution_results = []
+        for tool_call in tool_calls:
+            if tool_call.get("function") == "execute_module":
+                execution_results.append(tool_call)
+            elif tool_call.get("function") == "use_blueprint":
+                nested = tool_call.get("executions", [])
+                if isinstance(nested, list):
+                    execution_results.extend(
+                        item for item in nested if isinstance(item, dict)
+                    )
 
         # Guard: if ALL executions failed, force LLM to acknowledge
         response_content, total_rounds, total_usage = await self._handle_failure_guard(
@@ -743,7 +1022,8 @@ class Agent:
         return ChatResponse(
             ok=True, message=response_content, session_id=self._session_id,
             tool_calls=tool_calls, execution_results=execution_results,
-            provider=self._config.provider, model=self._config.resolved_model,
+            provider=model_route.provider or self._config.provider,
+            model=model_route.model or self._config.resolved_model,
             rounds_used=total_rounds, usage=usage, cost=cost_summary,
             pending_input=pending_input,
         )
@@ -763,13 +1043,17 @@ class Agent:
 
     def _build_dispatch(
         self, message: str, on_tool_call, on_stream, dispatch_wrapper,
+        mode: str = "execute",
     ) -> Tuple:
         """Build the final dispatch function with middleware + instrumentation.
 
         Returns:
             (dispatch_fn, has_tools)
         """
-        dispatch_fn = self._make_safe_dispatch(user_message=message)
+        dispatch_fn = self._make_safe_dispatch(
+            user_message=message,
+            execute_blueprints=mode == "execute",
+        )
         if dispatch_wrapper and dispatch_fn:
             dispatch_fn = dispatch_wrapper(dispatch_fn)
         if dispatch_fn and (on_tool_call or on_stream):
@@ -1056,9 +1340,14 @@ class Agent:
             cost_usd = 0.0
             if self._cost_tracker:
                 cost_usd = self._cost_tracker.session_total_usd
+            routed_model = (
+                self._last_model_route.model
+                if self._last_model_route is not None
+                else self._config.resolved_model
+            )
             ChatAuditEntry(
                 user_message=user_message[:200], provider=self._config.provider or "openai",
-                model=self._config.resolved_model, mode=mode,
+                model=routed_model, mode=mode,
                 tool_calls_count=len(tool_calls), execution_count=len(execution_results),
                 duration_ms=duration_ms, prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),

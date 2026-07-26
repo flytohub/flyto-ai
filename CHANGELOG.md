@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed closed-loop MCP verification so a missing identifier, an unknown
+  `plan_id`, and a valid plan without execution evidence return distinct
+  structured errors.
 - Added a documentation contract, feature/API/configuration/operations guides,
   technical whitepaper, and generated references covering every declared
   Python function/class method, CLI option, static tool, environment read, and

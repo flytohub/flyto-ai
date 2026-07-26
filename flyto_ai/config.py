@@ -111,6 +111,13 @@ class AgentConfig:
     enable_evolution: bool = False  # Auto-generate missing modules (opt-in)
     enable_deterministic: bool = True  # Zero-LLM planner before provider fallback
 
+    # Closed-loop v3
+    enable_checkpoints: bool = False
+    checkpoint_dir: str = "~/.flyto/checkpoints"
+    max_repair_attempts: int = 1
+    enable_model_routing: bool = True
+    distillation_min_steps: int = 3
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         fallbacks = []
@@ -159,6 +166,14 @@ class AgentConfig:
             enable_contract_validation=data.get("enable_contract_validation", True),
             enable_evolution=data.get("enable_evolution", False),
             enable_deterministic=data.get("enable_deterministic", True),
+            enable_checkpoints=data.get("enable_checkpoints", False),
+            checkpoint_dir=data.get(
+                "checkpoint_dir",
+                "~/.flyto/checkpoints",
+            ),
+            max_repair_attempts=data.get("max_repair_attempts", 1),
+            enable_model_routing=data.get("enable_model_routing", True),
+            distillation_min_steps=data.get("distillation_min_steps", 3),
         )
 
     @classmethod
@@ -237,6 +252,26 @@ class AgentConfig:
             enable_contract_validation=os.getenv("FLYTO_AI_ENABLE_CONTRACT_VALIDATION", "true").lower() != "false",
             enable_evolution=os.getenv("FLYTO_AI_ENABLE_EVOLUTION", "false").lower() == "true",
             enable_deterministic=os.getenv("FLYTO_AI_ENABLE_DETERMINISTIC", "true").lower() != "false",
+            enable_checkpoints=os.getenv(
+                "FLYTO_AI_ENABLE_CHECKPOINTS",
+                "false",
+            ).lower() == "true",
+            checkpoint_dir=os.getenv(
+                "FLYTO_AI_CHECKPOINT_DIR",
+                "~/.flyto/checkpoints",
+            ),
+            max_repair_attempts=int(os.getenv(
+                "FLYTO_AI_MAX_REPAIR_ATTEMPTS",
+                "1",
+            )),
+            enable_model_routing=os.getenv(
+                "FLYTO_AI_ENABLE_MODEL_ROUTING",
+                "true",
+            ).lower() != "false",
+            distillation_min_steps=int(os.getenv(
+                "FLYTO_AI_DISTILLATION_MIN_STEPS",
+                "3",
+            )),
         )
 
     def __post_init__(self):
@@ -255,6 +290,9 @@ class AgentConfig:
         elif self.max_tokens > 200_000:
             logger.warning("max_tokens %s > 200000, clamping to 200000", self.max_tokens)
             self.max_tokens = 200_000
+
+        self.max_repair_attempts = max(0, min(self.max_repair_attempts, 3))
+        self.distillation_min_steps = max(3, min(self.distillation_min_steps, 20))
 
         # Validate base_url against SSRF allowlist if set
         if self.base_url:

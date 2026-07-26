@@ -102,7 +102,7 @@ def extract_intent(message: str) -> Optional[Dict[str, Any]]:
         return {"intent": "open_website", "url": "https://" + domain_match.group(1), "site": domain_match.group(1)}
 
     # 2. Blueprint (learned from past executions)
-    blueprint_intent = _match_from_blueprint(msg.lower())
+    blueprint_intent = _match_from_blueprint(msg)
     if blueprint_intent:
         return blueprint_intent
 
@@ -128,14 +128,19 @@ def _match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]:
         if top.get("score", 0) < 50 or top.get("use_count", 0) < 1:
             return None
 
-        steps_data = top.get("steps", [])
-        if not steps_data:
+        args_schema = top.get("args", {})
+        args = _extract_params_from_message(msg, args_schema)
+        missing_required = [
+            name for name, meta in args_schema.items()
+            if meta.get("required") and name not in args
+        ]
+        if missing_required:
             return None
 
         return {
             "intent": "blueprint",
             "blueprint_id": top.get("id", ""),
-            "steps": steps_data,
+            "args": args,
         }
     except Exception:
         return None
@@ -213,6 +218,40 @@ def _extract_params_from_message(msg: str, schema: dict) -> dict:
     for param_name, param_def in schema.items():
         ptype = param_def.get("type", "")
         desc = (param_def.get("description", "") or "").lower()
+
+        # Explicit ``name=value`` or ``name: value`` wins over heuristics.
+        explicit = re.search(
+            r"(?:^|\s){}\s*(?:=|:)\s*(\"[^\"]*\"|'[^']*'|[^\s,]+)".format(
+                re.escape(param_name),
+            ),
+            msg,
+            flags=re.IGNORECASE,
+        )
+        if explicit:
+            raw = explicit.group(1).strip("\"'")
+            if ptype in ("integer", "int"):
+                try:
+                    params[param_name] = int(raw)
+                    continue
+                except ValueError:
+                    pass
+            elif ptype in ("number", "float"):
+                try:
+                    params[param_name] = float(raw)
+                    continue
+                except ValueError:
+                    pass
+            elif ptype in ("boolean", "bool"):
+                lowered = raw.lower()
+                if lowered in ("true", "yes", "1", "on"):
+                    params[param_name] = True
+                    continue
+                if lowered in ("false", "no", "0", "off"):
+                    params[param_name] = False
+                    continue
+            else:
+                params[param_name] = raw
+                continue
 
         # Number extraction (width, height, size, count, etc.)
         if ptype in ("integer", "number", "int", "float"):

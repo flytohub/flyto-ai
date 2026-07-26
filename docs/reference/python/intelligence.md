@@ -32,42 +32,42 @@ Match user message against learned blueprints.
 ### `_match_from_registry` (internal)
 
 `_match_from_registry(msg: str) -> Optional[Dict[str, Any]]`  
-Source: [`flyto_ai/intelligence/planner.py:144`](../../../flyto_ai/intelligence/planner.py#L144)
+Source: [`flyto_ai/intelligence/planner.py:149`](../../../flyto_ai/intelligence/planner.py#L149)
 
 Match user message to a single module using the module registry.
 
 ### `_extract_params_from_message` (internal)
 
 `_extract_params_from_message(msg: str, schema: dict) -> dict`  
-Source: [`flyto_ai/intelligence/planner.py:206`](../../../flyto_ai/intelligence/planner.py#L206)
+Source: [`flyto_ai/intelligence/planner.py:211`](../../../flyto_ai/intelligence/planner.py#L211)
 
 Extract parameter values from message text based on schema hints.
 
 ### `plan_execution` (public)
 
 `plan_execution(intent: Dict[str, Any], has_browser: bool = False) -> List[Dict[str, Any]]`  
-Source: [`flyto_ai/intelligence/planner.py:257`](../../../flyto_ai/intelligence/planner.py#L257)
+Source: [`flyto_ai/intelligence/planner.py:296`](../../../flyto_ai/intelligence/planner.py#L296)
 
 Plan a deterministic execution sequence from an intent.
 
 ### `execute_plan` (public)
 
 `async execute_plan(steps: List[Dict[str, Any]], dispatch: Callable) -> Tuple[List[Dict[str, Any]], str]`  
-Source: [`flyto_ai/intelligence/planner.py:324`](../../../flyto_ai/intelligence/planner.py#L324)
+Source: [`flyto_ai/intelligence/planner.py:363`](../../../flyto_ai/intelligence/planner.py#L363)
 
 Execute a deterministic plan step by step.
 
 ### `_resolve_url` (internal)
 
 `_resolve_url(text: str) -> Optional[str]`  
-Source: [`flyto_ai/intelligence/planner.py:403`](../../../flyto_ai/intelligence/planner.py#L403)
+Source: [`flyto_ai/intelligence/planner.py:442`](../../../flyto_ai/intelligence/planner.py#L442)
 
 Resolve a site name or URL to a full URL.
 
 ### `_find_selector_from_structured` (internal)
 
 `_find_selector_from_structured(snapshot_result: dict, hint: str, element_type: str = '') -> Optional[str]`  
-Source: [`flyto_ai/intelligence/planner.py:420`](../../../flyto_ai/intelligence/planner.py#L420)
+Source: [`flyto_ai/intelligence/planner.py:459`](../../../flyto_ai/intelligence/planner.py#L459)
 
 Find a CSS selector from structured snapshot data (inputs, buttons, links).
 

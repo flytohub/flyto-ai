@@ -9,8 +9,8 @@ four paired modes. That produces 800 metrics-only records:
 
 | Mode | What changes |
 | --- | --- |
-| `agent_baseline` | A local model makes the planning decision without Flyto routing. |
-| `flyto_no_blueprint` | Flyto routing is active, but Blueprint is disabled. |
+| `agent_baseline` | A local model makes the planning decision without Flyto2 routing. |
+| `flyto_no_blueprint` | Flyto2 routing is active, but Blueprint is disabled. |
 | `blueprint_cold` | Blueprint is installed without learned reusable experience. |
 | `blueprint_warm` | Verified compatible experience is available. |
 

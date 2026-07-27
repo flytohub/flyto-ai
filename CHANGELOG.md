@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Closed the GitHub security-and-quality backlog: CI now declares read-only
+  repository permissions, the vulnerable PyPI publishing action is pinned to
+  its patched release, and Checkout/Setup Python pins are current.
+- Changed Dependabot to keep genuine security updates enabled while suppressing
+  routine version-only branches that do not change CI's resolved dependencies.
+  Added regression tests for these repository security policies.
 - Rewrote the README opening around a concrete repeated-work story, plain
   language pain points, scoped token claims, routing/evidence safety, and the
   exact local verification numbers behind those claims.

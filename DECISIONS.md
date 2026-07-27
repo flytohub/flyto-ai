@@ -1,5 +1,20 @@
 # Decisions
 
+## 2026-07-27: Keep security updates, suppress routine dependency branches
+
+- Dependabot security updates remain enabled in repository settings.
+- Routine pip and GitHub Actions version-update PRs are disabled with
+  `open-pull-requests-limit: 0`.
+- A dependency branch is merged when it closes a security alert or has another
+  verified product need; lower-bound-only bumps are not merged merely because
+  a newer compatible version exists.
+- Repository policy tests pin the least-privilege CI permission and patched
+  publishing action so later edits cannot silently reopen the same alerts.
+
+The project has no dependency lockfile and CI already installs current
+compatible releases. Raising minimum versions alone would reduce compatibility
+without changing what CI scans or installs.
+
 ## 2026-07-26: Prove token reduction at the execution boundary
 
 - Only deterministic exact Blueprint reuse records

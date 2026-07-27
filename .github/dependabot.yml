@@ -4,10 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Routine lower-bound PRs add branches without changing the resolved
+    # packages used by CI. Repository security updates stay enabled separately.
+    open-pull-requests-limit: 0
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Security updates can still open PRs; routine version-only PRs stay closed.
+    open-pull-requests-limit: 0

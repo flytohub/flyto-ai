@@ -3,6 +3,13 @@
 Last updated: 2026-07-27
 
 Implemented:
+- GitHub Actions use current Checkout/Setup Python releases, and the PyPI
+  publishing action is pinned to the patched 1.14.1 commit.
+- CI declares top-level `contents: read` permissions. Dependabot keeps
+  repository security updates enabled while routine version-only PR creation
+  is disabled, preventing non-security branch accumulation.
+- Repository policy tests guard the least-privilege permission, patched action
+  pin, and Dependabot branch policy.
 - Deterministic intent routing now distinguishes explicit actions, current-data
   questions, answer-only requests, multilingual negation, quoted/meta examples,
   and declarative questions before any provider tool dispatch.
@@ -38,7 +45,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1150 passed, 15 optional/live-integration skips;
+- full suite: 1153 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

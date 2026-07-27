@@ -165,7 +165,7 @@
     <!-- Blueprint auto-learn -->
     <g class="l19">
       <text class="success" y="388">&#10003; Blueprint saved</text>
-      <text class="dim" x="140" y="388">&#8594; next time: instant replay, zero LLM cost</text>
+      <text class="dim" x="140" y="388">&#8594; next time: replay without agent re-planning</text>
     </g>
 
     <!-- Second prompt -->

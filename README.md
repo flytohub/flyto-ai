@@ -4,10 +4,10 @@
 
 <h1 align="center">Flyto2 AI</h1>
 
-<h3 align="center">Natural language → executable automation workflows for AI agents</h3>
+<h3 align="center">Stop paying an AI agent to rediscover work it already solved.</h3>
 
 <p align="center">
-  <em>Most AI agents have the LLM write shell commands and hope. <strong>Flyto2 AI selects registry-backed, schema-validated modules instead.</strong></em>
+  <em>Use the model for the unknown. Re-run the known path with checks and evidence.</em>
 </p>
 
 <p align="center">
@@ -20,14 +20,80 @@
 
 ---
 
-## The Problem
+## The Monday-morning problem
 
-Flyto2 AI is the open-source agent layer for turning natural language into
-deterministic Flyto2 workflows. You describe the job in plain English; Flyto2 AI
-chooses registry-backed modules, validates the parameters, and saves the result
-as a reusable YAML workflow. Use it for AI workflow generation, browser
-automation prompts, MCP-compatible tool selection, model-provider routing,
-workflow repair, and reusable recipes.
+Every Monday, you ask an agent to open the same dashboards, check the same
+numbers, and report the same failures.
+
+The first run is useful: the model figures out the job. On the next run, most
+agents start over. They read the instructions again, choose tools again, spend
+tokens again, and may take a different path. You are paying for rediscovery,
+not new intelligence.
+
+There is a second problem: a chat answer is not proof that the job ran
+correctly. A loose agent may treat “do not open GitHub” as an action, or trust a
+bad success score without checking whether its evidence makes sense.
+
+Flyto2 AI separates those problems:
+
+- **A question stays a question.** Conversation, current-data requests, and
+  actions are routed before tools are exposed, then enforced again when a tool
+  call reaches the dispatcher.
+- **“Do not” means do not.** Multilingual negation, quoted commands, and
+  hypothetical examples do not become accidental MCP actions.
+- **Evidence must add up.** Learned Blueprint evidence with missing,
+  contradictory, non-finite, or out-of-range values fails closed.
+- **Solved work becomes reusable.** A successful typed procedure can become a
+  Blueprint with arguments, permissions, retries, assertions, and real outcome
+  history.
+
+The model handles the new part. Checked execution handles the repeat:
+
+```text
+new task
+   ↓
+model selects typed modules
+   ↓  permission + schema + assertion gates
+verified execution ───────────────→ reusable Blueprint
+                                          ↓
+matching request → fill new arguments → run checked steps → record evidence
+```
+
+On an exact deterministic reuse, Flyto2 AI records
+`planner_model_calls_used=0`: the outer agent did not call a model to plan the
+job again. A saved workflow may still contain an `llm.*` step, so this does not
+pretend the entire workflow is token-free.
+
+### What the current tests actually prove
+
+The 2026-07-27 local verification covered:
+
+- 700 multilingual and presentation-mutated routing cases;
+- 5,000 seeded Unicode/noise inputs with zero routing crashes;
+- 408 permission combinations;
+- 4,500 Blueprint trust-boundary cases and 38 malformed-evidence cases;
+- 1,150 passing project tests, with 15 optional/live-integration skips;
+- 17/17 strict Flyto2 Indexer checks, with zero warnings.
+
+These numbers describe the checked test set. They are not a claim that every
+slang phrase, mixed-language message, model provider, or live third-party MCP
+has been proven perfect.
+
+## Quickstart
+
+```bash
+pip install flyto-ai
+playwright install chromium
+export OPENAI_API_KEY=<your-openai-key>   # or ANTHROPIC_API_KEY
+
+flyto-ai "open https://example.com and extract the h1 text"
+```
+
+Run `flyto-ai` with no prompt for an interactive session.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
+</p>
 
 Good fit if you searched for:
 
@@ -42,19 +108,16 @@ Official links: [flyto2.com](https://flyto2.com) ·
 [flyto-core](https://github.com/flytohub/flyto-core) ·
 [flyto-blueprint](https://github.com/flytohub/flyto-blueprint)
 
-Most AI agents have the LLM generate shell commands or raw code on every run. This means:
+## From prompt to checked workflow
 
-- **Non-deterministic** — the same prompt can produce different commands each time
-- **No validation** — wrong flags, hallucinated APIs, subtle bugs only found at runtime
-- **Not reusable** — each execution is ephemeral, nothing saved for next time
-- **Expensive** — LLM spends tokens figuring out *how* to execute, not just *what* to execute
+For automation, Flyto2 AI asks the model to select typed modules instead of
+executing arbitrary model-generated shell or Python. The separate coding-agent
+mode can write code, but it is wrapped in budgets, Guardian hooks, Indexer
+context, and verification loops.
 
-## The Fix
-
-Flyto2 AI flips the model: **the LLM never writes code.** It searches and
-selects from the Flyto2 module registry, fills in parameters validated against
-schemas, and executes deterministically. Every run produces a reusable YAML
-workflow.
+The bigger difference is reuse: a successful automation does not have to remain
+a chat transcript. It can become a parameterized Blueprint with an Evidence
+Card.
 
 ```
 ❯ scrape the title from example.com
@@ -77,22 +140,6 @@ steps:
     params:
       selector: "h1"
 ```
-
-## Quick Start
-
-```bash
-pip install flyto-ai
-playwright install chromium     # download browser for web automation
-export OPENAI_API_KEY=<your-openai-key>   # or ANTHROPIC_API_KEY
-flyto-ai
-```
-
-One install, one command — interactive chat with the Flyto2 module registry,
-browser automation, and self-learning blueprints.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/flytohub/flyto-ai/main/docs/demo.svg" alt="flyto-ai demo" width="800">
-</p>
 
 ## Usage
 
@@ -119,19 +166,30 @@ you use. Never commit real API keys or bot tokens.
   function/class method, CLI declaration, static tool, environment read, and
   maintainer script from source. CI fails when that reference becomes stale.
 
-## How It's Different
+## How it compares
 
-The core difference is **what the LLM does during execution**:
+The core difference is **when the LLM is still needed**:
 
 | | Traditional AI agents | flyto-ai |
 |---|---|---|
-| **LLM's job** | Write shell/Python code from scratch | Select modules + fill params |
-| **Execution** | `subprocess.run(llm_output)` | `execute_module("browser.extract", {validated_params})` |
-| **Validation** | None — errors at runtime | Schema validation before execution |
-| **Determinism** | Same prompt → different code | Same module + params → same result |
-| **Output** | One-time result | Result + reusable YAML workflow |
-| **Learning** | None | Self-learning blueprints (near-zero LLM replay) |
-| **Cost per replay** | Full LLM inference again | ~100-500 tokens (blueprint match + invoke, 60-80% savings) |
+| **New job** | Model reasons and acts | Model can select modules and parameters |
+| **Repeated job** | Model reasons again | Verified Blueprint can run directly |
+| **Ordinary conversation** | Tool use may be left to model judgment | Intent gate is enforced again at dispatch |
+| **Negation and quoted actions** | Can still look like tool instructions | Multilingual negative/meta requests stay answer-only |
+| **Execution** | Often trusts generated commands | Permission + schema + PlanIR + assertion gates |
+| **“It worked”** | Often inferred from the answer | Recorded from actual execution |
+| **Bad learned evidence** | Trust behavior varies | Malformed or impossible evidence fails closed |
+| **Learning** | Usually stays in chat history | Becomes reusable workflow + evidence |
+| **Token evidence** | Provider bill/log | `planner_model_calls_used=0` on deterministic exact reuse |
+| **Shared procedures** | Trust is often implicit | Unknown imports stay quarantined |
+
+Flyto2 AI does not publish a made-up “60–80% savings” number. It records what it can
+prove: how many trusted runs passed, how many retried, how assertions behaved,
+latency p50/p95, and how many exact reuses skipped the agent's planning call.
+
+That last number is intentionally scoped to agent planning. A Blueprint can
+still contain an `llm.*` step. Flyto2 AI does not call the whole workflow
+“token-free” unless those step-level model calls are measured too.
 
 ## Use Cases
 
@@ -228,19 +286,20 @@ flyto-ai version   # Shows installed module count
 
 ## Self-Learning Blueprints
 
-The agent remembers what works. Good workflows are automatically saved as **blueprints** — reusable patterns that make future tasks faster and free.
+“Learning” here means learning a procedure, not training model weights.
 
-```
-First time:  "screenshot example.com" → 15s (discover modules, build from scratch)
-Second time: "screenshot another.com" → 3s  (reuse learned blueprint, minimal LLM cost)
-```
+1. A successful multi-step execution can be parameterized and saved.
+2. Repository/runtime compatibility prevents unsafe cross-project reuse.
+3. The Blueprint runs behind the same permission, validation, checkpoint,
+   repair, and assertion gates as ordinary agent tools.
+4. A trusted outcome updates its Evidence Card; a failure lowers its score.
+5. Exact deterministic reuse records `planner_model_calls_used=0`.
+6. A score below 10 retires the pattern.
 
-How it works (closed-loop, no LLM involved):
-
-1. Execution succeeds with 3+ steps → auto-saved as blueprint (score 70)
-2. Blueprint reused successfully → score +5
-3. Blueprint fails → score -10
-4. Score < 10 → auto-retired, never suggested again
+The Evidence Card exposes sample count, success rate, Wilson 95% lower bound,
+retry rate, assertion pass rate, duration p50/p95, and zero-planner-call reuse.
+Direct model reports remain `community` observations and cannot add trusted
+detailed evidence.
 
 ```bash
 flyto-ai blueprints                             # View learned blueprints
@@ -421,7 +480,7 @@ User message
   → LLM (OpenAI / Anthropic / Ollama)
     → Function calling: search_modules, get_module_info, execute_module, ...
       → 450 flyto-core modules (schema-validated, deterministic)
-      → Self-learning blueprints (closed-loop, near-zero LLM)
+      → Self-learning blueprints (closed-loop, fewer repeated planning calls)
       → Browser page inspection
     → Execute mode: run modules, return results + YAML
     → Plan mode: YAML validation loop (auto-retry on errors)

@@ -10,35 +10,35 @@ Inventory: **27 declared symbols** and **29 class methods**.
 
 ### `detect_choices` (public)
 
-`detect_choices(result: Dict[str, Any]) -> Optional[Dict[str, Any]]`  
+`detect_choices(result: Dict[str, Any]) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/assistant/choice_detector.py:19`](../../../flyto_ai/assistant/choice_detector.py#L19)
 
 Detect choice groups in any browser result (snapshot, inspect_page, goto).
 
 ### `_extract_interactive` (internal)
 
-`_extract_interactive(result: Dict[str, Any]) -> Tuple[list, list, list]`  
+`_extract_interactive(result: Dict[str, Any]) -> Tuple[list, list, list]`
 Source: [`flyto_ai/assistant/choice_detector.py:91`](../../../flyto_ai/assistant/choice_detector.py#L91)
 
 Extract buttons, links, selects from various result formats.
 
 ### `_find_choice_group` (internal)
 
-`_find_choice_group(items: List[Dict[str, Any]], min_size: int = 3, max_size: int = 20) -> Optional[List[Dict[str, Any]]]`  
+`_find_choice_group(items: List[Dict[str, Any]], min_size: int = 3, max_size: int = 20) -> Optional[List[Dict[str, Any]]]`
 Source: [`flyto_ai/assistant/choice_detector.py:127`](../../../flyto_ai/assistant/choice_detector.py#L127)
 
 Find a group of similar items that represent choices.
 
 ### `build_click_action` (public)
 
-`build_click_action(field_id: str, selected_value: str, fields: List[Dict]) -> Optional[str]`  
+`build_click_action(field_id: str, selected_value: str, fields: List[Dict]) -> Optional[str]`
 Source: [`flyto_ai/assistant/choice_detector.py:176`](../../../flyto_ai/assistant/choice_detector.py#L176)
 
 Convert a user's selection back to a CSS selector for clicking.
 
 ### `_safe_id` (internal)
 
-`_safe_id(text: str) -> str`  
+`_safe_id(text: str) -> str`
 Source: [`flyto_ai/assistant/choice_detector.py:189`](../../../flyto_ai/assistant/choice_detector.py#L189)
 
 Convert text to a safe field ID.
@@ -47,7 +47,7 @@ Convert text to a safe field ID.
 
 ### `extract_pending_input` (public)
 
-`extract_pending_input(tool_calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]`  
+`extract_pending_input(tool_calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/assistant/interactive.py:13`](../../../flyto_ai/assistant/interactive.py#L13)
 
 Scan tool_calls for ASK_USER marker in any tool's result.
@@ -56,14 +56,14 @@ Scan tool_calls for ASK_USER marker in any tool's result.
 
 ### `_url_to_context_key` (internal)
 
-`_url_to_context_key(url: str) -> str`  
+`_url_to_context_key(url: str) -> str`
 Source: [`flyto_ai/assistant/middleware.py:30`](../../../flyto_ai/assistant/middleware.py#L30)
 
 Derive a vault context_key from a URL.
 
 ### `_derive_context_key` (internal)
 
-`_derive_context_key(current_url: str, ask_question: str) -> str`  
+`_derive_context_key(current_url: str, ask_question: str) -> str`
 Source: [`flyto_ai/assistant/middleware.py:59`](../../../flyto_ai/assistant/middleware.py#L59)
 
 Derive context_key from available runtime signals.
@@ -78,22 +78,22 @@ Transparent intelligence layer between Agent and tool dispatch.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__() -> None` | internal | Internal `__init__` implementation on `AssistantMiddleware`; the linked source is authoritative. | [`flyto_ai/assistant/middleware.py:112`](../../../flyto_ai/assistant/middleware.py#L112) |
-| `prepare(message: str, mode: str = 'execute') -> str` | public | Pre-resolve blueprint and return a prompt snippet to inject. | [`flyto_ai/assistant/middleware.py:121`](../../../flyto_ai/assistant/middleware.py#L121) |
-| `wrap(base_dispatch: Callable, user_message: str = '') -> Callable` | public | Wrap the tool dispatch function with assistant intelligence. | [`flyto_ai/assistant/middleware.py:130`](../../../flyto_ai/assistant/middleware.py#L130) |
-| `async _apply_blueprint_guard(func_name: str, func_args: dict, user_message: str, base_dispatch: Callable) -> Optional[dict]` | internal | Layer 1: Redirect to use_blueprint on first call if applicable. | [`flyto_ai/assistant/middleware.py:201`](../../../flyto_ai/assistant/middleware.py#L201) |
-| `_apply_ask_user_enrichment(func_name: str, func_args: dict, current_url: Dict[str, str]) -> None` | internal | Layer 2: Auto-derive context_key for ask_user calls. | [`flyto_ai/assistant/middleware.py:208`](../../../flyto_ai/assistant/middleware.py#L208) |
-| `async _apply_snapshot_guard(func_name: str, func_args: dict, snap_guard: 'resilience.SnapshotGuard', base_dispatch: Callable) -> Optional[dict]` | internal | Layer 3: Auto-inject snapshot before browser interact. | [`flyto_ai/assistant/middleware.py:222`](../../../flyto_ai/assistant/middleware.py#L222) |
-| `async _apply_param_correction(func_name: str, func_args: dict, base_dispatch: Callable, history: 'BoundedHistory') -> dict` | internal | Layer 4: Validate + auto-correct params, resolve variables, before execution. | [`flyto_ai/assistant/middleware.py:247`](../../../flyto_ai/assistant/middleware.py#L247) |
-| `_apply_circuit_breaker(func_name: str, func_args: dict, breaker: 'CircuitBreaker') -> Optional[dict]` | internal | Layer 5: Block modules that keep failing. | [`flyto_ai/assistant/middleware.py:290`](../../../flyto_ai/assistant/middleware.py#L290) |
-| `async _on_result(func_name: str, func_args: dict, result: dict, base_dispatch: Callable, breaker: 'CircuitBreaker', history: 'BoundedHistory', snap_guard: 'resilience.SnapshotGuard', antibot_guard: 'resilience.AntibotGuard', current_url: Dict[str, str]) -> dict` | internal | Post-dispatch: mask, track, auto-retry, heal. | [`flyto_ai/assistant/middleware.py:302`](../../../flyto_ai/assistant/middleware.py#L302) |
-| `async post_process(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str, mode: str = 'execute', dispatch: Optional[Callable] = None) -> Optional[Dict[str, Any]]` | public | Run post-execution logic. | [`flyto_ai/assistant/middleware.py:410`](../../../flyto_ai/assistant/middleware.py#L410) |
+| `__init__(distillation_min_steps: int = 3) -> None` | internal | Internal `__init__` implementation on `AssistantMiddleware`; the linked source is authoritative. | [`flyto_ai/assistant/middleware.py:112`](../../../flyto_ai/assistant/middleware.py#L112) |
+| `prepare(message: str, mode: str = 'execute') -> str` | public | Pre-resolve blueprint and return a prompt snippet to inject. | [`flyto_ai/assistant/middleware.py:125`](../../../flyto_ai/assistant/middleware.py#L125) |
+| `wrap(base_dispatch: Callable, user_message: str = '') -> Callable` | public | Wrap the tool dispatch function with assistant intelligence. | [`flyto_ai/assistant/middleware.py:134`](../../../flyto_ai/assistant/middleware.py#L134) |
+| `async _apply_blueprint_guard(func_name: str, func_args: dict, user_message: str, base_dispatch: Callable) -> Optional[dict]` | internal | Layer 1: Redirect to use_blueprint on first call if applicable. | [`flyto_ai/assistant/middleware.py:205`](../../../flyto_ai/assistant/middleware.py#L205) |
+| `_apply_ask_user_enrichment(func_name: str, func_args: dict, current_url: Dict[str, str]) -> None` | internal | Layer 2: Auto-derive context_key for ask_user calls. | [`flyto_ai/assistant/middleware.py:212`](../../../flyto_ai/assistant/middleware.py#L212) |
+| `async _apply_snapshot_guard(func_name: str, func_args: dict, snap_guard: 'resilience.SnapshotGuard', base_dispatch: Callable) -> Optional[dict]` | internal | Layer 3: Auto-inject snapshot before browser interact. | [`flyto_ai/assistant/middleware.py:226`](../../../flyto_ai/assistant/middleware.py#L226) |
+| `async _apply_param_correction(func_name: str, func_args: dict, base_dispatch: Callable, history: 'BoundedHistory') -> dict` | internal | Layer 4: Validate + auto-correct params, resolve variables, before execution. | [`flyto_ai/assistant/middleware.py:251`](../../../flyto_ai/assistant/middleware.py#L251) |
+| `_apply_circuit_breaker(func_name: str, func_args: dict, breaker: 'CircuitBreaker') -> Optional[dict]` | internal | Layer 5: Block modules that keep failing. | [`flyto_ai/assistant/middleware.py:294`](../../../flyto_ai/assistant/middleware.py#L294) |
+| `async _on_result(func_name: str, func_args: dict, result: dict, base_dispatch: Callable, breaker: 'CircuitBreaker', history: 'BoundedHistory', snap_guard: 'resilience.SnapshotGuard', antibot_guard: 'resilience.AntibotGuard', current_url: Dict[str, str]) -> dict` | internal | Post-dispatch: mask, track, auto-retry, heal. | [`flyto_ai/assistant/middleware.py:306`](../../../flyto_ai/assistant/middleware.py#L306) |
+| `async post_process(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str, mode: str = 'execute', dispatch: Optional[Callable] = None) -> Optional[Dict[str, Any]]` | public | Run post-execution logic. | [`flyto_ai/assistant/middleware.py:414`](../../../flyto_ai/assistant/middleware.py#L414) |
 
 ## `flyto_ai.assistant.output_tracker`
 
 ### `extract_output_paths` (public)
 
-`extract_output_paths(message: str) -> List[str]`  
+`extract_output_paths(message: str) -> List[str]`
 Source: [`flyto_ai/assistant/output_tracker.py:29`](../../../flyto_ai/assistant/output_tracker.py#L29)
 
 Extract intended output file paths from user message.
@@ -115,7 +115,7 @@ Track whether intended output files were actually written.
 
 ### `_extract_best_content` (internal)
 
-`_extract_best_content(exec_results: List[Dict[str, Any]]) -> Any`  
+`_extract_best_content(exec_results: List[Dict[str, Any]]) -> Any`
 Source: [`flyto_ai/assistant/output_tracker.py:113`](../../../flyto_ai/assistant/output_tracker.py#L113)
 
 Extract the most meaningful content from execution results.
@@ -124,7 +124,7 @@ Extract the most meaningful content from execution results.
 
 ### `should_heal` (public)
 
-`should_heal(func_name: str, func_args: dict, result: dict) -> bool`  
+`should_heal(func_name: str, func_args: dict, result: dict) -> bool`
 Source: [`flyto_ai/assistant/resilience.py:42`](../../../flyto_ai/assistant/resilience.py#L42)
 
 Check if a failed browser module call is a candidate for selector healing.
@@ -160,21 +160,21 @@ Detect anti-bot blocking after browser.goto and auto-retry with system Chrome.
 
 ### `try_heal` (public)
 
-`async try_heal(dispatch: Callable, original_args: dict) -> Optional[Dict[str, Any]]`  
+`async try_heal(dispatch: Callable, original_args: dict) -> Optional[Dict[str, Any]]`
 Source: [`flyto_ai/assistant/resilience.py:177`](../../../flyto_ai/assistant/resilience.py#L177)
 
 Attempt to heal a broken selector using snapshot data.
 
 ### `_extract_candidates` (internal)
 
-`_extract_candidates(snapshot: Dict[str, Any], module_id: str) -> List[Dict[str, str]]`  
+`_extract_candidates(snapshot: Dict[str, Any], module_id: str) -> List[Dict[str, str]]`
 Source: [`flyto_ai/assistant/resilience.py:247`](../../../flyto_ai/assistant/resilience.py#L247)
 
 Extract candidate selectors from snapshot interactive hints.
 
 ### `_find_best_match` (internal)
 
-`_find_best_match(broken_selector: str, candidates: List[Dict[str, str]]) -> Optional[str]`  
+`_find_best_match(broken_selector: str, candidates: List[Dict[str, str]]) -> Optional[str]`
 Source: [`flyto_ai/assistant/resilience.py:273`](../../../flyto_ai/assistant/resilience.py#L273)
 
 Find the best matching selector from candidates for a broken one.
@@ -183,28 +183,28 @@ Find the best matching selector from candidates for a broken one.
 
 ### `pre_resolve` (public)
 
-`pre_resolve(message: str) -> str`  
-Source: [`flyto_ai/assistant/router.py:16`](../../../flyto_ai/assistant/router.py#L16)
+`pre_resolve(message: str) -> str`
+Source: [`flyto_ai/assistant/router.py:19`](../../../flyto_ai/assistant/router.py#L19)
 
 Search blueprints BEFORE the LLM call.
 
 ### `guard` (public)
 
-`async guard(func_name: str, func_args: dict, user_message: str, dispatch: Callable) -> Optional[Dict[str, Any]]`  
-Source: [`flyto_ai/assistant/router.py:63`](../../../flyto_ai/assistant/router.py#L63)
+`async guard(func_name: str, func_args: dict, user_message: str, dispatch: Callable) -> Optional[Dict[str, Any]]`
+Source: [`flyto_ai/assistant/router.py:64`](../../../flyto_ai/assistant/router.py#L64)
 
 Blueprint guard — intercept the first non-blueprint tool call.
 
 ### `init_storage` (public)
 
-`init_storage() -> None`  
+`init_storage() -> None`
 Source: [`flyto_ai/assistant/router.py:115`](../../../flyto_ai/assistant/router.py#L115)
 
 Initialize flyto-blueprint with SQLite storage for local persistence.
 
 ### `feedback` (public)
 
-`feedback(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str) -> None`  
+`feedback(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str, *, min_steps: int = 3) -> None`
 Source: [`flyto_ai/assistant/router.py:125`](../../../flyto_ai/assistant/router.py#L125)
 
 Closed-loop blueprint learning.
@@ -213,7 +213,7 @@ Closed-loop blueprint learning.
 
 ### `mask_sensitive` (public)
 
-`mask_sensitive(data: Any, depth: int = 0) -> Any`  
+`mask_sensitive(data: Any, depth: int = 0) -> Any`
 Source: [`flyto_ai/assistant/safety.py:21`](../../../flyto_ai/assistant/safety.py#L21)
 
 Recursively mask sensitive values in dicts/lists.
@@ -250,14 +250,14 @@ Fixed-size execution history for param fixer data flow.
 
 ### `_resolve_variables` (internal)
 
-`_resolve_variables(params: dict, exec_history: List[Dict[str, Any]]) -> dict`  
+`_resolve_variables(params: dict, exec_history: List[Dict[str, Any]]) -> dict`
 Source: [`flyto_ai/assistant/safety.py:147`](../../../flyto_ai/assistant/safety.py#L147)
 
 Resolve ${steps.x.result} variables to actual values from exec history.
 
 ### `_find_step_value` (internal)
 
-`_find_step_value(step_ref: str, field_ref: str, exec_history: List[Dict[str, Any]]) -> Any`  
+`_find_step_value(step_ref: str, field_ref: str, exec_history: List[Dict[str, Any]]) -> Any`
 Source: [`flyto_ai/assistant/safety.py:182`](../../../flyto_ai/assistant/safety.py#L182)
 
 Find a value from execution history by step reference.

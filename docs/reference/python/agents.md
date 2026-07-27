@@ -46,7 +46,7 @@ Collects and persists evidence records for a coding session.
 
 ### `evidence_post_hook` (public)
 
-`async evidence_post_hook(collector: EvidenceCollector, tool_name: str, tool_input: Dict[str, Any], tool_result: Any, **kwargs) -> None`  
+`async evidence_post_hook(collector: EvidenceCollector, tool_name: str, tool_input: Dict[str, Any], tool_result: Any, **kwargs) -> None`
 Source: [`flyto_ai/agents/evidence.py:71`](../../../flyto_ai/agents/evidence.py#L71)
 
 Claude Agent SDK PostToolUse hook — record file changes.
@@ -55,28 +55,28 @@ Claude Agent SDK PostToolUse hook — record file changes.
 
 ### `_is_path_blocked` (internal)
 
-`_is_path_blocked(path: str) -> bool`  
+`_is_path_blocked(path: str) -> bool`
 Source: [`flyto_ai/agents/guardian_hook.py:64`](../../../flyto_ai/agents/guardian_hook.py#L64)
 
 Internal `_is_path_blocked` implementation on this module; the linked source is authoritative.
 
 ### `_is_extension_allowed` (internal)
 
-`_is_extension_allowed(path: str) -> bool`  
+`_is_extension_allowed(path: str) -> bool`
 Source: [`flyto_ai/agents/guardian_hook.py:69`](../../../flyto_ai/agents/guardian_hook.py#L69)
 
 Internal `_is_extension_allowed` implementation on this module; the linked source is authoritative.
 
 ### `_check_bash` (internal)
 
-`_check_bash(command: str) -> None`  
+`_check_bash(command: str) -> None`
 Source: [`flyto_ai/agents/guardian_hook.py:77`](../../../flyto_ai/agents/guardian_hook.py#L77)
 
 Internal `_check_bash` implementation on this module; the linked source is authoritative.
 
 ### `_check_file_tool` (internal)
 
-`_check_file_tool(tool_name: str, args: Dict[str, Any]) -> None`  
+`_check_file_tool(tool_name: str, args: Dict[str, Any]) -> None`
 Source: [`flyto_ai/agents/guardian_hook.py:84`](../../../flyto_ai/agents/guardian_hook.py#L84)
 
 Internal `_check_file_tool` implementation on this module; the linked source is authoritative.
@@ -91,7 +91,7 @@ Raised when guardian blocks a tool call.
 
 ### `guardian_pre_hook` (public)
 
-`async guardian_pre_hook(tool_name: str, tool_input: Dict[str, Any], tool_use_id: str = '', **kwargs) -> Dict[str, Any]`  
+`async guardian_pre_hook(tool_name: str, tool_input: Dict[str, Any], tool_use_id: str = '', **kwargs) -> Dict[str, Any]`
 Source: [`flyto_ai/agents/guardian_hook.py:100`](../../../flyto_ai/agents/guardian_hook.py#L100)
 
 Claude Agent SDK PreToolUse hook.
@@ -100,21 +100,21 @@ Claude Agent SDK PreToolUse hook.
 
 ### `_get_registry` (internal)
 
-`_get_registry() -> Any`  
+`_get_registry() -> Any`
 Source: [`flyto_ai/agents/indexer_context.py:17`](../../../flyto_ai/agents/indexer_context.py#L17)
 
 Lazily import flyto-indexer ToolRegistry.
 
 ### `gather_context` (public)
 
-`async gather_context(message: str, working_dir: str) -> str`  
+`async gather_context(message: str, working_dir: str) -> str`
 Source: [`flyto_ai/agents/indexer_context.py:33`](../../../flyto_ai/agents/indexer_context.py#L33)
 
 Gather impact analysis and references from the indexer.
 
 ### `_call` (internal)
 
-`async _call(registry: Any, tool_name: str, args: Dict[str, Any]) -> Optional[Dict]`  
+`async _call(registry: Any, tool_name: str, args: Dict[str, Any]) -> Optional[Dict]`
 Source: [`flyto_ai/agents/indexer_context.py:64`](../../../flyto_ai/agents/indexer_context.py#L64)
 
 Call an indexer tool, returning None on failure.
@@ -157,7 +157,7 @@ Final result returned by ClaudeCodeAgent.run().
 
 ### `build_system_prompt` (public)
 
-`build_system_prompt(indexer_context: str = '', has_verification: bool = False) -> str`  
+`build_system_prompt(indexer_context: str = '', has_verification: bool = False) -> str`
 Source: [`flyto_ai/agents/prompts.py:33`](../../../flyto_ai/agents/prompts.py#L33)
 
 Assemble the full system prompt for a Claude Code session.
@@ -166,7 +166,7 @@ Assemble the full system prompt for a Claude Code session.
 
 ### `_get_engine_cls` (internal)
 
-`_get_engine_cls() -> Any`  
+`_get_engine_cls() -> Any`
 Source: [`flyto_ai/agents/verifier.py:23`](../../../flyto_ai/agents/verifier.py#L23)
 
 Lazily import flyto-core WorkflowEngine.
@@ -189,14 +189,14 @@ Run a flyto-core recipe and optionally compare screenshots.
 
 ### `_load_image_b64` (internal)
 
-`_load_image_b64(path: str) -> str`  
+`_load_image_b64(path: str) -> str`
 Source: [`flyto_ai/agents/verifier.py:204`](../../../flyto_ai/agents/verifier.py#L204)
 
 Read an image file and return base64-encoded content.
 
 ### `_get_mcp_handler` (internal)
 
-`_get_mcp_handler() -> Any`  
+`_get_mcp_handler() -> Any`
 Source: [`flyto_ai/agents/verifier.py:217`](../../../flyto_ai/agents/verifier.py#L217)
 
 Internal `_get_mcp_handler` implementation on this module; the linked source is authoritative.

@@ -10,7 +10,7 @@ Inventory: **13 declared symbols** and **42 class methods**.
 
 ### `_tokenize` (internal)
 
-`_tokenize(text: str) -> List[str]`  
+`_tokenize(text: str) -> List[str]`
 Source: [`flyto_ai/memory/bm25.py:36`](../../../flyto_ai/memory/bm25.py#L36)
 
 Tokenize text into lowercase terms.
@@ -35,14 +35,14 @@ BM25 full-text search backed by SQLite.
 
 ### `estimate_tokens` (public)
 
-`estimate_tokens(text: str) -> int`  
+`estimate_tokens(text: str) -> int`
 Source: [`flyto_ai/memory/compaction.py:21`](../../../flyto_ai/memory/compaction.py#L21)
 
 Rough token estimate (4 chars ≈ 1 token for English, 2 chars for CJK).
 
 ### `estimate_messages_tokens` (public)
 
-`estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int`  
+`estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int`
 Source: [`flyto_ai/memory/compaction.py:29`](../../../flyto_ai/memory/compaction.py#L29)
 
 Estimate total tokens across a list of messages.
@@ -71,21 +71,21 @@ Monitors context window usage and compacts when thresholds are exceeded.
 
 ### `_pack_vector` (internal)
 
-`_pack_vector(vec: List[float]) -> bytes`  
+`_pack_vector(vec: List[float]) -> bytes`
 Source: [`flyto_ai/memory/embeddings.py:29`](../../../flyto_ai/memory/embeddings.py#L29)
 
 Pack a float vector into bytes.
 
 ### `_unpack_vector` (internal)
 
-`_unpack_vector(blob: bytes) -> List[float]`  
+`_unpack_vector(blob: bytes) -> List[float]`
 Source: [`flyto_ai/memory/embeddings.py:34`](../../../flyto_ai/memory/embeddings.py#L34)
 
 Unpack bytes into a float vector.
 
 ### `cosine_similarity` (public)
 
-`cosine_similarity(a: List[float], b: List[float]) -> float`  
+`cosine_similarity(a: List[float], b: List[float]) -> float`
 Source: [`flyto_ai/memory/embeddings.py:40`](../../../flyto_ai/memory/embeddings.py#L40)
 
 Pure Python cosine similarity.
@@ -112,7 +112,7 @@ Store and search embeddings using SQLite + cosine similarity.
 
 ### `_rrf_merge` (internal)
 
-`_rrf_merge(vector_results: List[Tuple[str, str, float]], bm25_results: List[Tuple[str, str, float]], k: int = 60) -> List[Tuple[str, str, float]]`  
+`_rrf_merge(vector_results: List[Tuple[str, str, float]], bm25_results: List[Tuple[str, str, float]], k: int = 60) -> List[Tuple[str, str, float]]`
 Source: [`flyto_ai/memory/search.py:14`](../../../flyto_ai/memory/search.py#L14)
 
 Reciprocal Rank Fusion — merge two ranked lists.

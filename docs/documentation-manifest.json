@@ -38,9 +38,9 @@
     },
     {
       "id": "memory-evolution",
-      "description": "SQLite and hybrid memory, compaction, summarization, blueprint feedback, prompt blocks, eval cases, mutation, scoring, regression detection, and reports.",
-      "paths": ["flyto_ai/memory/**", "flyto_ai/evolution/**", "eval/**"],
-      "documentation": ["docs/FEATURES.md#memory-learning-and-evaluation", "docs/CLI_AND_MCP.md#cli-modes", "docs/reference/python/memory.md", "docs/reference/python/evolution.md"]
+      "description": "SQLite and hybrid memory, compaction, summarization, Blueprint closed-loop execution/evidence, prompt blocks, eval cases, mutation, scoring, regression detection, and reports.",
+      "paths": ["flyto_ai/memory/**", "flyto_ai/evolution/**", "flyto_ai/blueprint_loop.py", "flyto_ai/tools/blueprint_tools.py", "eval/**"],
+      "documentation": ["docs/FEATURES.md#memory-learning-and-evaluation", "docs/AI_MCP_CLOSED_LOOP.md", "docs/CLI_AND_MCP.md#cli-modes", "docs/reference/python/memory.md", "docs/reference/python/evolution.md"]
     },
     {
       "id": "safety-execution",
@@ -103,10 +103,10 @@
       "title": "Memory, blueprints, and prompt evaluation",
       "kind": "library",
       "status": "active",
-      "description": "Stores/searches/compacts sessions, learns reusable workflow blueprints, and evaluates prompt candidates with scoring, adversarial checks, and regression reports.",
-      "source": ["flyto_ai/memory/**", "flyto_ai/evolution/**", "flyto_ai/tools/blueprint_tools.py", "eval/**"],
-      "documentation": ["docs/FEATURES.md#memory-learning-and-evaluation", "docs/CLI_AND_MCP.md#cli-modes"],
-      "tests": ["tests/test_memory_search.py", "tests/test_compaction.py", "tests/test_evolution.py"]
+      "description": "Stores/searches/compacts sessions, learns and exchanges reusable workflow Blueprints, separates community from host-verified outcomes, and evaluates prompt candidates with adversarial/regression checks.",
+      "source": ["flyto_ai/memory/**", "flyto_ai/evolution/**", "flyto_ai/blueprint_loop.py", "flyto_ai/tools/blueprint_tools.py", "eval/**"],
+      "documentation": ["docs/FEATURES.md#memory-learning-and-evaluation", "docs/AI_MCP_CLOSED_LOOP.md", "docs/CLI_AND_MCP.md#cli-modes"],
+      "tests": ["tests/test_memory_search.py", "tests/test_compaction.py", "tests/test_evolution.py", "tests/test_blueprint_closed_loop.py"]
     },
     {
       "id": "safety-controls",

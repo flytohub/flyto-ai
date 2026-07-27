@@ -16,8 +16,11 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_AI_CC_MAX_BUDGET` | `'5.0'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CC_MAX_FIX_ATTEMPTS` | `'3'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CC_MAX_TURNS` | `'30'` | `flyto_ai/config.py` |
+| `FLYTO_AI_CHECKPOINT_DIR` | `'~/.flyto/checkpoints'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CORS_ORIGINS` | `''` | `flyto_ai/cli.py` |
+| `FLYTO_AI_DISTILLATION_MIN_STEPS` | `'3'` | `flyto_ai/config.py` |
 | `FLYTO_AI_EMBEDDING_MODEL` | `'text-embedding-3-small'` | `flyto_ai/config.py` |
+| `FLYTO_AI_ENABLE_CHECKPOINTS` | `'false'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_CONTRACT_VALIDATION` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_DETERMINISTIC` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_EMS` | `'true'` | `flyto_ai/config.py` |
@@ -25,11 +28,13 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_AI_ENABLE_INJECTION_DETECTION` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_KNOWLEDGE` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_MEMORY` | `'true'` | `flyto_ai/config.py` |
+| `FLYTO_AI_ENABLE_MODEL_ROUTING` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_PRO` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_SANDBOX` | `'false'` | `flyto_ai/config.py` |
 | `FLYTO_AI_ENABLE_TRANSCRIPT` | `'true'` | `flyto_ai/config.py` |
 | `FLYTO_AI_GLOBAL_BUDGET_USD` | `''` | `flyto_ai/config.py` |
 | `FLYTO_AI_KEEP_BROWSER` | `'true'` | `flyto_ai/cli.py` |
+| `FLYTO_AI_MAX_REPAIR_ATTEMPTS` | `'1'` | `flyto_ai/config.py` |
 | `FLYTO_AI_MAX_TOKENS` | `'4096'` | `flyto_ai/config.py` |
 | `FLYTO_AI_MAX_TOOL_ROUNDS` | `'30'` | `flyto_ai/config.py` |
 | `FLYTO_AI_MEMORY_DB` | `'~/.flyto/memory.db'` | `flyto_ai/config.py` |
@@ -45,6 +50,10 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_AI_TRANSCRIPT_DIR` | `'~/.flyto/transcripts'` | `flyto_ai/config.py` |
 | `FLYTO_AI_VAULT_AUTO_INJECT` | `'false'` | `flyto_ai/config.py` |
 | `FLYTO_AI_VAULT_PATH` | `'~/.flyto/vault.enc'` | `flyto_ai/config.py` |
+| `FLYTO_CLOSED_LOOP_MAX_REPAIRS` | `required/None` | `flyto_ai/closed_loop_mcp.py` |
+| `FLYTO_CLOSED_LOOP_MCP_FAIL_ONCE_MODULE` | `''` | `flyto_ai/closed_loop_mcp.py` |
+| `FLYTO_CLOSED_LOOP_PERMISSION` | `'workspace_write'` | `flyto_ai/closed_loop_mcp.py` |
+| `FLYTO_CLOSED_LOOP_STATE_DIR` | `'~/.flyto/closed-loop-mcp'` | `flyto_ai/closed_loop_mcp.py` |
 | `FLYTO_ENGINE_URL` | `'http://localhost:8080'` | `flyto_ai/channels/telegram_approvals.py` |
 | `FLYTO_SERVICE_TOKEN` | `''` | `flyto_ai/channels/telegram_approvals.py` |
 | `FLYTO_VAULT_PASSPHRASE` | `'', required/None` | `flyto_ai/config.py`, `flyto_ai/vault.py` |

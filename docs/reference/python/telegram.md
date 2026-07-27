@@ -18,14 +18,14 @@ Describes how to invoke and parse an AI CLI.
 
 ### `_claude_build_args` (internal)
 
-`_claude_build_args(prompt: str, cwd: str, model: Optional[str] = None, session_id: Optional[str] = None, extra: Optional[dict] = None) -> List[str]`  
+`_claude_build_args(prompt: str, cwd: str, model: Optional[str] = None, session_id: Optional[str] = None, extra: Optional[dict] = None) -> List[str]`
 Source: [`flyto_ai/telegram/claude_bridge.py:54`](../../../flyto_ai/telegram/claude_bridge.py#L54)
 
 Build claude CLI args.
 
 ### `_claude_parse_line` (internal)
 
-`_claude_parse_line(data: dict) -> tuple`  
+`_claude_parse_line(data: dict) -> tuple`
 Source: [`flyto_ai/telegram/claude_bridge.py:78`](../../../flyto_ai/telegram/claude_bridge.py#L78)
 
 Parse a claude stream-json line.
@@ -72,7 +72,7 @@ Routes slash commands to handlers.
 
 ### `_list_blueprints` (internal)
 
-`_list_blueprints() -> str`  
+`_list_blueprints() -> str`
 Source: [`flyto_ai/telegram/commands.py:180`](../../../flyto_ai/telegram/commands.py#L180)
 
 List top blueprints from flyto-blueprint engine.
@@ -81,7 +81,7 @@ List top blueprints from flyto-blueprint engine.
 
 ### `_is_dangerous` (internal)
 
-`_is_dangerous(module_id: str) -> bool`  
+`_is_dangerous(module_id: str) -> bool`
 Source: [`flyto_ai/telegram/confirmation.py:32`](../../../flyto_ai/telegram/confirmation.py#L32)
 
 Check if a module requires user confirmation.
@@ -129,7 +129,7 @@ Persistent job queue backed by SQLite.
 
 ### `_row_to_dict` (internal)
 
-`_row_to_dict(row) -> Dict[str, Any]`  
+`_row_to_dict(row) -> Dict[str, Any]`
 Source: [`flyto_ai/telegram/jobs.py:169`](../../../flyto_ai/telegram/jobs.py#L169)
 
 Internal `_row_to_dict` implementation on this module; the linked source is authoritative.
@@ -183,14 +183,14 @@ Telegram bot service — coordinates all TG subsystems.
 
 ### `_safe_remove` (internal)
 
-`_safe_remove(path: str) -> None`  
+`_safe_remove(path: str) -> None`
 Source: [`flyto_ai/telegram/service.py:436`](../../../flyto_ai/telegram/service.py#L436)
 
 Remove a file if it exists, silently ignoring errors.
 
 ### `_transcribe_whisper` (internal)
 
-`async _transcribe_whisper(file_path: str, api_key: str) -> str`  
+`async _transcribe_whisper(file_path: str, api_key: str) -> str`
 Source: [`flyto_ai/telegram/service.py:444`](../../../flyto_ai/telegram/service.py#L444)
 
 Transcribe an audio file using OpenAI Whisper API.

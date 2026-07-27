@@ -9,7 +9,12 @@ from flyto_ai.models import StreamEvent, StreamEventType
 
 def _make_agent(monkeypatch, mock_chat_fn):
     """Helper: create agent with mocked LLM provider."""
-    config = AgentConfig(provider="ollama", api_key="test", enable_deterministic=False)
+    config = AgentConfig(
+        provider="ollama",
+        api_key="test",
+        enable_deterministic=False,
+        enable_memory=False,
+    )
     agent = Agent(config=config)
     agent._tools = [{"name": "execute_module", "description": "run", "inputSchema": {}}]
 
@@ -83,7 +88,11 @@ async def test_tool_events_emitted(monkeypatch):
     def _cb(event):
         events.append(event)
 
-    result = await agent.chat("test", mode="execute", on_stream=_cb)
+    result = await agent.chat(
+        "Please run the browser test",
+        mode="execute",
+        on_stream=_cb,
+    )
 
     assert result.ok
     tool_starts = [e for e in events if e.type == StreamEventType.TOOL_START]
@@ -117,7 +126,11 @@ async def test_callback_crash_safe(monkeypatch):
     def _bad_cb(event):
         raise RuntimeError("callback exploded")
 
-    result = await agent.chat("test", mode="execute", on_stream=_bad_cb)
+    result = await agent.chat(
+        "Please run the browser test",
+        mode="execute",
+        on_stream=_bad_cb,
+    )
     assert result.ok
     assert result.message == "Done!"
 
@@ -141,7 +154,7 @@ async def test_coexists_with_on_tool_call(monkeypatch):
         tool_calls.append(func_name)
 
     result = await agent.chat(
-        "test", mode="execute",
+        "Please run the browser test", mode="execute",
         on_tool_call=_tool_cb,
         on_stream=_stream_cb,
     )

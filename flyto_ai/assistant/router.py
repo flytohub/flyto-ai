@@ -10,6 +10,9 @@ import json
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from flyto_ai.closed_loop_v3 import evaluate_distillation
+from flyto_ai.intelligence.planner import blueprint_is_trusted
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,10 +31,8 @@ def pre_resolve(message: str) -> str:
             return ""
 
         top = results[0]
-        # Only enforce blueprint if score is very high AND has been used successfully
-        score = top.get("score", 0)
-        use_count = top.get("use_count", 0)
-        if score < 80 or use_count < 2:
+        # Automatic reuse requires a verified trust tier and runtime evidence.
+        if not blueprint_is_trusted(top, min_score=80, min_samples=2):
             return ""
         bp_id = top.get("id", "")
         bp_name = top.get("name", "")
@@ -90,8 +91,7 @@ async def guard(
             return None
 
         top = blueprints[0]
-        # Only redirect if blueprint is proven (high score + used successfully)
-        if top.get("score", 0) < 80 or top.get("use_count", 0) < 2:
+        if not blueprint_is_trusted(top, min_score=80, min_samples=2):
             return None
         return {
             "ok": True,
@@ -126,6 +126,8 @@ def feedback(
     tool_calls: List[Dict[str, Any]],
     execution_results: List[Dict[str, Any]],
     user_message: str,
+    *,
+    min_steps: int = 3,
 ) -> None:
     """Closed-loop blueprint learning. Pure code — zero LLM involvement.
 
@@ -142,38 +144,66 @@ def feedback(
 
     # Report outcome if a blueprint was used
     used_blueprint_id = None
+    blueprint_execution_id = ""
     for tc in tool_calls:
         if tc.get("function") == "use_blueprint":
             used_blueprint_id = tc.get("arguments", {}).get("blueprint_id", "")
+            blueprint_execution_id = tc.get("execution_id", "")
             break
 
     if used_blueprint_id:
+        if not execution_results:
+            logger.debug(
+                "Blueprint outcome skipped without execution evidence: %s",
+                used_blueprint_id,
+            )
+            return
         try:
-            engine.report_outcome(used_blueprint_id, success=all_ok)
+            engine.report_outcome(
+                used_blueprint_id,
+                success=all_ok,
+                execution_id=blueprint_execution_id,
+            )
             logger.info("Blueprint outcome: %s %s", used_blueprint_id, "OK" if all_ok else "FAIL")
         except Exception as e:
             logger.debug("Blueprint report_outcome failed: %s", e)
+        # Reuse should update the existing blueprint exactly once. Learning the
+        # same expanded steps again would deduplicate and boost it a second time.
+        return
 
-    # Learn new blueprint from successful execution
-    if not all_ok or len(execution_results) < 3:
+    # Distill only verified successes into a new reusable Blueprint.
+    decision = evaluate_distillation(
+        tool_calls,
+        execution_results,
+        user_message,
+        min_steps=min_steps,
+    )
+    if not decision.eligible or decision.workflow is None:
+        logger.debug("Blueprint distillation skipped: %s", decision.reason)
         return
 
     steps = []
-    for i, r in enumerate(execution_results):
-        mid = r.get("module_id", "")
+    for step in decision.workflow["steps"]:
+        mid = step.get("module", "")
         if not mid:
             continue
-        params = r.get("arguments", {}).get("params", {})
-        steps.append({"id": "step_{}".format(i + 1), "module": mid, "params": params})
-
+        steps.append(step)
     if len(steps) < 3:
         return
 
-    workflow = {"name": user_message[:80], "steps": steps}
     categories = list({s["module"].split(".")[0] for s in steps if "." in s["module"]})
 
     try:
-        engine.learn_from_execution(workflow=workflow, name=user_message[:80], tags=categories)
-        logger.info("Blueprint learned: %s (%d steps)", user_message[:40], len(steps))
+        engine.learn_from_execution(
+            workflow=decision.workflow,
+            name=user_message[:80],
+            tags=categories,
+        )
+        logger.info(
+            "Blueprint distilled: %s (%d steps, %d evidence)",
+            user_message[:40],
+            len(steps),
+            decision.evidence_count,
+        )
     except Exception as e:
         logger.debug("Blueprint learn failed: %s", e)

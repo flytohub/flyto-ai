@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Removed a third-party popularity-tracking image from the README.
 - Closed the GitHub security-and-quality backlog: CI now declares read-only
   repository permissions, the vulnerable PyPI publishing action is pinned to
   its patched release, and Checkout/Setup Python pins are current.

@@ -115,6 +115,21 @@ async def dispatch_and_log_tool(
         else:
             log_entry["ok"] = False
         log_entry["mcp"]["ok"] = log_entry["ok"]
+    elif func_name == "use_blueprint" and isinstance(result, dict):
+        # Preserve only the structured, already-redacted execution evidence.
+        # Raw module results remain in the tool response for the model, but do
+        # not enter transcripts, telemetry, or blueprint learning records.
+        nested = result.get("executions", [])
+        log_entry["ok"] = bool(result.get("ok"))
+        log_entry["blueprint_id"] = result.get(
+            "blueprint_id", func_args.get("blueprint_id", ""),
+        )
+        log_entry["execution_id"] = result.get("execution_id", "")
+        log_entry["outcome_reported"] = bool(result.get("outcome_reported"))
+        log_entry["evidence"] = result.get("evidence", {})
+        log_entry["executions"] = (
+            nested if isinstance(nested, list) else []
+        )
     elif func_name == "run_recipe":
         log_entry["mcp"]["recipe_name"] = func_args.get("recipe_name", "")
 

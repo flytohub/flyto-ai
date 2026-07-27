@@ -82,6 +82,19 @@ class ProviderChain(LLMProvider):
         """Number of providers in the chain."""
         return len(self._providers)
 
+    def prefer_provider(self, provider_name: str) -> bool:
+        """Prefer a configured provider for the next call.
+
+        Returns ``False`` without changing the active provider when the
+        requested label is not part of this chain.
+        """
+        try:
+            provider_index = self._names.index(provider_name)
+        except ValueError:
+            return False
+        self._pinned_index = provider_index
+        return True
+
     def _reset_failures(self, index: int) -> None:
         """Reset failure tracking for a provider after success."""
         self._consecutive_failures[index] = 0

@@ -31,6 +31,91 @@ _TRAD_CHARS = frozenset(
     "幫搜尋資訊買賣圖檔確認設檢視訊號碼據處歷歲歐歸歡歲歎歌歷歸歡歲歎"
     "網絡線練總統編緣績營聯職聽號獲環產畫當發監視覺記訪設許認識試語課請論證變讓負費資質較載辦過運達選遠邊還鄰鑰閃關難電響領頻題類顯風飛驗體點龍"
 )
+_SIMP_CHARS = frozenset(
+    "这个们对从与会国为来说学时经过还进当没动种长点开请问题应该让机关体书门车东号头条区结电乡亲发间"
+    "帮搜索资讯买卖图档确认设检视讯号码据处历岁欧归欢叹练总统编缘绩营联职听获环产画监觉记访许认试语课论证变负费质较载办运达选远边邻钥闪关难响领频题类显风飞验龙"
+)
+
+_EXPLICIT_LANGUAGE_PATTERNS = (
+    (
+        re.compile(
+            r"(?:繁體中文|繁体中文|traditional\s+chinese|zh[-_]?tw)",
+            re.IGNORECASE,
+        ),
+        "Traditional Chinese (zh-TW)",
+    ),
+    (
+        re.compile(
+            r"(?:簡體中文|简体中文|simplified\s+chinese|zh[-_]?cn)",
+            re.IGNORECASE,
+        ),
+        "Simplified Chinese (zh-CN)",
+    ),
+    (
+        re.compile(
+            r"(?:請用|请用|改用|切換到|切换到)\s*(?:英文|english)"
+            r"|(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+english",
+            re.IGNORECASE,
+        ),
+        "English",
+    ),
+    (
+        re.compile(
+            r"(?:日本語).{0,12}(?:で|に).{0,12}(?:回答|返事|話)"
+            r"|(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+japanese",
+            re.IGNORECASE,
+        ),
+        "Japanese (ja)",
+    ),
+    (
+        re.compile(
+            r"(?:한국어).{0,12}(?:답변|응답|사용)"
+            r"|(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+korean",
+            re.IGNORECASE,
+        ),
+        "Korean (ko)",
+    ),
+    (
+        re.compile(
+            r"(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+spanish"
+            r"|(?:responde|contesta|cambia|escribe)(?:\s+en)?\s+español",
+            re.IGNORECASE,
+        ),
+        "Spanish (es)",
+    ),
+    (
+        re.compile(
+            r"(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+french"
+            r"|(?:réponds|reponds|écris|ecris|passe)(?:\s+en)?\s+français",
+            re.IGNORECASE,
+        ),
+        "French (fr)",
+    ),
+    (
+        re.compile(
+            r"(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+german"
+            r"|(?:antworte|schreibe|wechsle)(?:\s+auf)?\s+deutsch",
+            re.IGNORECASE,
+        ),
+        "German (de)",
+    ),
+    (
+        re.compile(
+            r"(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+portuguese"
+            r"|(?:responda|escreva)(?:\s+em)?\s+português",
+            re.IGNORECASE,
+        ),
+        "Portuguese (pt)",
+    ),
+    (
+        re.compile(
+            r"(?:reply|respond|answer|switch|use|write)(?:\s+to|\s+in)?\s+italian"
+            r"|(?:rispondi|scrivi)(?:\s+in)?\s+italiano",
+            re.IGNORECASE,
+        ),
+        "Italian (it)",
+    ),
+)
 
 # langdetect code → human-readable label (non-CJK languages)
 _LANG_LABELS = {
@@ -79,20 +164,25 @@ _LANG_LABELS = {
 }
 
 
-def detect_language(text: str) -> str:
+def detect_language(text: str, preferred_language: Optional[str] = None) -> str:
     """Detect reply language from user message text.
 
     Strategy (hybrid):
-    1. CJK / Japanese / Korean — **regex** (deterministic, short-text safe)
-    2. Everything else — ``langdetect`` (55+ languages, needs ~20 chars)
-    3. Fallback — ``"English"``
+    1. An explicit language switch always wins.
+    2. CJK / Japanese / Korean — **regex** (deterministic, short-text safe).
+    3. Ambiguous short text inherits the conversation preference.
+    4. Everything else — ``langdetect`` (55+ languages, needs ~20 chars).
 
     Returns a human-readable label like ``"English"``,
     ``"Traditional Chinese (zh-TW)"``, ``"Japanese (ja)"``, etc.
     """
     stripped = text.strip()
     if not stripped:
-        return "English"
+        return preferred_language or "English"
+
+    for pattern, language in _EXPLICIT_LANGUAGE_PATTERNS:
+        if pattern.search(stripped):
+            return language
 
     # --- Phase 1: deterministic CJK / JP / KR detection via regex ---
     cjk_count = len(_CJK_RE.findall(stripped))
@@ -111,15 +201,22 @@ def detect_language(text: str) -> str:
     total = len(stripped)
     if total > 0 and cjk_count / total >= 0.1:
         has_trad = any(c in _TRAD_CHARS for c in stripped)
-        return (
-            "Traditional Chinese (zh-TW)" if has_trad
-            else "Simplified Chinese (zh-CN)"
-        )
+        has_simp = any(c in _SIMP_CHARS for c in stripped)
+        if has_trad and not has_simp:
+            return "Traditional Chinese (zh-TW)"
+        if has_simp and not has_trad:
+            return "Simplified Chinese (zh-CN)"
+        if preferred_language in {
+            "Traditional Chinese (zh-TW)",
+            "Simplified Chinese (zh-CN)",
+        }:
+            return preferred_language
+        return "Traditional Chinese (zh-TW)" if has_trad else "Simplified Chinese (zh-CN)"
 
     # --- Phase 2: non-CJK → langdetect (needs ~20+ chars for accuracy) ---
     # Short Latin text is unreliable in langdetect; fall back to English.
     if len(stripped) < 15:
-        return "English"
+        return preferred_language or "English"
 
     try:
         from langdetect import detect
@@ -191,7 +288,8 @@ You have {module_count}+ modules but you do NOT know their names in advance.
 ALWAYS discover before executing:
 
 1. **list_blueprints(query)** — check for a reusable workflow pattern FIRST
-   → If found: call use_blueprint(blueprint_id, args) → execute each step → DONE
+   → If found: call use_blueprint(blueprint_id, args)
+   → It validates and executes every Core step, then reports the outcome automatically → DONE
 2. **search_modules(query)** — find individual modules by keyword (only if no blueprint)
 3. **get_module_info(module_id)** — read the full schema BEFORE calling execute_module
 4. **execute_module(module_id, params)** — run a module

@@ -8,7 +8,12 @@ from flyto_ai import Agent, AgentConfig
 
 def _make_agent(monkeypatch, mock_chat_fn):
     """Helper: create agent with mocked LLM provider."""
-    config = AgentConfig(provider="ollama", api_key="test", enable_deterministic=False)
+    config = AgentConfig(
+        provider="ollama",
+        api_key="test",
+        enable_deterministic=False,
+        enable_memory=False,
+    )
     agent = Agent(config=config)
     agent._tools = [{"name": "execute_module", "description": "run", "inputSchema": {}}]
 
@@ -89,7 +94,7 @@ async def test_execute_mode_uses_execute_prompt(monkeypatch):
         return "Done!", [], 1, {}
 
     agent = _make_agent(monkeypatch, mock_chat)
-    await agent.chat("hello", mode="execute")
+    await agent.chat("Please run the task", mode="execute")
 
     assert "EXECUTE" in captured_prompt["value"]
     assert "ONLY generate" not in captured_prompt["value"]
@@ -153,7 +158,11 @@ async def test_on_tool_call_callback(monkeypatch):
     def _cb(func_name, func_args):
         calls.append(func_name)
 
-    result = await agent.chat("test", mode="execute", on_tool_call=_cb)
+    result = await agent.chat(
+        "Please run the browser test",
+        mode="execute",
+        on_tool_call=_cb,
+    )
 
     assert result.ok
     assert calls == ["search_modules", "execute_module"]

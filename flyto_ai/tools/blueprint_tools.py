@@ -7,6 +7,15 @@ from typing import Any, Dict, List
 logger = logging.getLogger(__name__)
 
 
+class _EvidenceCapability(str):
+    """In-process capability that cannot survive a model JSON round trip."""
+
+
+_CLOSED_LOOP_EVIDENCE_CAPABILITY = _EvidenceCapability(
+    "flyto-ai.closed-loop-verified",
+)
+
+
 def get_blueprint_tool_defs() -> List[Dict]:
     """Return blueprint MCP tool definitions (empty list if not installed)."""
     try:
@@ -45,16 +54,25 @@ async def dispatch_blueprint_tool(
         steps = raw["data"]["steps"]
         # Return a compact result with the execution instruction AT THE TOP
         # so it doesn't get truncated by the 8000-char limit
+        execution_steps = []
+        for step in steps:
+            execution_step = {
+                "module": step["module"],
+                "params": step.get("params", {}),
+            }
+            for field in ("id", "retry", "assert", "assertions"):
+                if field in step:
+                    execution_step[field] = step[field]
+            execution_steps.append(execution_step)
+
         return {
             "ok": True,
+            "blueprint_id": arguments.get("blueprint_id", ""),
             "action_required": (
                 "EXECUTE each step NOW with execute_module(module_id, params). "
                 "Do NOT stop. Do NOT just return the YAML."
             ),
-            "steps": [
-                {"module": s["module"], "params": s.get("params", {})}
-                for s in steps
-            ],
+            "steps": execution_steps,
         }
 
     elif name == "save_as_blueprint":
@@ -65,9 +83,32 @@ async def dispatch_blueprint_tool(
         )
 
     elif name == "report_blueprint_outcome":
+        host_verified = (
+            arguments.get("_evidence_capability")
+            is _CLOSED_LOOP_EVIDENCE_CAPABILITY
+        )
+        report_args = {
+            "blueprint_id": arguments.get("blueprint_id", ""),
+            "success": arguments.get("success", False),
+            "execution_id": arguments.get("execution_id", ""),
+            "evidence_tier": "local_verified" if host_verified else "community",
+        }
+        execution_evidence = arguments.get("_execution_evidence")
+        if host_verified and isinstance(execution_evidence, dict):
+            report_args["evidence"] = execution_evidence
         return engine.report_outcome(
+            **report_args,
+        )
+
+    elif name == "export_blueprint":
+        return engine.export_blueprint(
             blueprint_id=arguments.get("blueprint_id", ""),
-            success=arguments.get("success", False),
+            publisher=arguments.get("publisher", ""),
+        )
+
+    elif name == "import_blueprint":
+        return engine.import_blueprint(
+            bundle=arguments.get("bundle", {}),
         )
 
     return {"ok": False, "error": "Unknown blueprint tool: {}".format(name)}

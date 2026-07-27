@@ -1,6 +1,9 @@
 # Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Tests for three-layer system prompt architecture."""
+import pytest
+
+from flyto_ai.agent import Agent
 from flyto_ai.prompt.system_prompt import (
     build_system_prompt,
     detect_language,
@@ -188,6 +191,61 @@ class TestDetectLanguage:
 
     def test_empty_defaults_english(self):
         assert detect_language("") == "English"
+
+    def test_ambiguous_chinese_inherits_traditional_session(self):
+        assert detect_language(
+            "可以嗎",
+            preferred_language="Traditional Chinese (zh-TW)",
+        ) == "Traditional Chinese (zh-TW)"
+
+    def test_short_latin_inherits_session_language(self):
+        assert detect_language(
+            "OK",
+            preferred_language="Traditional Chinese (zh-TW)",
+        ) == "Traditional Chinese (zh-TW)"
+
+    def test_explicit_language_switch_wins(self):
+        assert detect_language(
+            "接下來請用英文回答",
+            preferred_language="Traditional Chinese (zh-TW)",
+        ) == "English"
+
+    @pytest.mark.parametrize(
+        ("message", "expected"),
+        [
+            ("接下來請用 English 回答", "English"),
+            ("Please answer in Japanese.", "Japanese (ja)"),
+            ("Please answer in Korean.", "Korean (ko)"),
+            ("Please answer in Spanish.", "Spanish (es)"),
+            ("Please answer in French.", "French (fr)"),
+            ("Please answer in German.", "German (de)"),
+            ("Responda em português.", "Portuguese (pt)"),
+            ("Rispondi in italiano.", "Italian (it)"),
+        ],
+    )
+    def test_explicit_multilingual_switch_wins(self, message, expected):
+        assert detect_language(
+            message,
+            preferred_language="Traditional Chinese (zh-TW)",
+        ) == expected
+
+    def test_language_name_in_question_is_not_a_switch(self):
+        assert detect_language(
+            "What is Japanese and how is it written?",
+            preferred_language="English",
+        ) == "English"
+
+    def test_agent_persists_explicit_switch_across_short_followups(self):
+        agent = Agent.__new__(Agent)
+
+        assert agent._resolve_reply_language(
+            "接下來請用 English 回答",
+        ) == "English"
+        assert agent._resolve_reply_language("好") == "English"
+        assert agent._resolve_reply_language("再說一次") == "English"
+        assert agent._resolve_reply_language(
+            "這段程式碼為什麼會失敗？",
+        ) == "Traditional Chinese (zh-TW)"
 
 
 class TestDetectLanguageEndToEnd:

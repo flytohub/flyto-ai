@@ -39,6 +39,7 @@ dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0"]
 [project.scripts]
 flyto-ai = "flyto_ai.cli:main"
 flyto-ai-mcp = "flyto_ai.mcp_server:main"
+flyto-closed-loop-mcp = "flyto_ai.closed_loop_mcp:main"
 
 [project.urls]
 Homepage = "https://flyto2.com"

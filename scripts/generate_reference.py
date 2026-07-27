@@ -272,6 +272,11 @@ Run `python3 scripts/generate_reference.py`; CI uses `--check` to reject drift.
 """
 
 
+def normalize_markdown(content: str) -> str:
+    """Return stable Markdown with no trailing whitespace and one final newline."""
+    return "\n".join(line.rstrip() for line in content.splitlines()) + "\n"
+
+
 def outputs() -> dict[Path, str]:
     result = python_references()
     result[REFERENCE / "README.md"] = index_reference()
@@ -279,7 +284,7 @@ def outputs() -> dict[Path, str]:
     result[REFERENCE / "tools-and-mcp.md"] = tool_reference()
     result[REFERENCE / "environment.md"] = environment_reference()
     result[REFERENCE / "scripts.md"] = scripts_reference()
-    return result
+    return {path: normalize_markdown(content) for path, content in result.items()}
 
 
 def main() -> int:

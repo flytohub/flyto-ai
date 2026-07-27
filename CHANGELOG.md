@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Rewrote the README opening around a concrete repeated-work story, plain
+  language pain points, scoped token claims, routing/evidence safety, and the
+  exact local verification numbers behind those claims.
+- Hardened multilingual intent routing for explicit actions, current-data
+  questions, negation, quoted/meta examples, and declarative questions. Route
+  permissions are now rechecked at dispatch so forged provider calls cannot
+  bypass answer-only or confirmation-required decisions.
+- Made learned Blueprint trust evidence fail closed for malformed, non-finite,
+  non-integral, inconsistent, or out-of-range values.
+- Improved explicit reply-language switching and persistence across short
+  follow-ups, with regression coverage for multilingual and mixed-language
+  conversations.
+- Added permanent routing, permission, Blueprint-boundary, malformed-evidence,
+  adversarial-provider, presentation-mutation, and seeded Unicode/noise tests.
+- Added trusted Blueprint execution evidence for duration, steps, attempts,
+  assertions, workflow identity, executor version, and selection mode.
+  Deterministic exact reuse now records `planner_model_calls_used=0` with an
+  explicit planner scope. Blueprint can accept the old `model_calls_used`
+  compatibility field, but new Flyto2 AI reports do not emit it. Model-selected
+  paths leave counts unknown instead of fabricating a baseline.
+- Rewrote the Blueprint/agent comparison to remove unsupported replay-token
+  estimates and explain the Evidence Card proof boundary in plain language.
+- Added Blueprint portable export/import dispatch and separated direct model
+  outcome reports from host-verified closed-loop evidence with an in-process
+  capability boundary. Blueprint selection without module execution evidence
+  no longer counts as a verified success.
+- Fixed closed-loop MCP verification so a missing identifier, an unknown
+  `plan_id`, and a valid plan without execution evidence return distinct
+  structured errors.
 - Added a documentation contract, feature/API/configuration/operations guides,
   technical whitepaper, and generated references covering every declared
   Python function/class method, CLI option, static tool, environment read, and

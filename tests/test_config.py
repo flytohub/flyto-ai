@@ -31,6 +31,21 @@ class TestAgentConfig:
         assert cfg.provider == ""
         assert cfg.max_tokens == 4096
 
+    def test_closed_loop_v3_settings_and_bounds(self):
+        cfg = AgentConfig.from_dict({
+            "enable_checkpoints": True,
+            "checkpoint_dir": "/tmp/flyto-test-checkpoints",
+            "max_repair_attempts": 99,
+            "enable_model_routing": False,
+            "distillation_min_steps": 1,
+        })
+
+        assert cfg.enable_checkpoints is True
+        assert cfg.checkpoint_dir == "/tmp/flyto-test-checkpoints"
+        assert cfg.max_repair_attempts == 3
+        assert cfg.enable_model_routing is False
+        assert cfg.distillation_min_steps == 3
+
     def test_resolved_model_openai(self):
         cfg = AgentConfig(provider="openai")
         assert cfg.resolved_model == "gpt-4o"

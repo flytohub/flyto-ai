@@ -18,21 +18,21 @@ A detected potential injection attempt.
 
 ### `scan_text` (public)
 
-`scan_text(text: str, source: str = 'user_input', max_warnings: int = 5) -> List[InjectionWarning]`  
+`scan_text(text: str, source: str = 'user_input', max_warnings: int = 5) -> List[InjectionWarning]`
 Source: [`flyto_ai/prompt/injection_detector.py:114`](../../../flyto_ai/prompt/injection_detector.py#L114)
 
 Scan text for prompt injection patterns.
 
 ### `scan_tool_result` (public)
 
-`scan_tool_result(name: str, result: str) -> List[InjectionWarning]`  
+`scan_tool_result(name: str, result: str) -> List[InjectionWarning]`
 Source: [`flyto_ai/prompt/injection_detector.py:181`](../../../flyto_ai/prompt/injection_detector.py#L181)
 
 Scan a tool result for prompt injection attempts.
 
 ### `format_warning_for_llm` (public)
 
-`format_warning_for_llm(warnings: List[InjectionWarning]) -> Optional[str]`  
+`format_warning_for_llm(warnings: List[InjectionWarning]) -> Optional[str]`
 Source: [`flyto_ai/prompt/injection_detector.py:190`](../../../flyto_ai/prompt/injection_detector.py#L190)
 
 Format injection warnings as a system-level note for the LLM.
@@ -41,35 +41,35 @@ Format injection warnings as a system-level note for the LLM.
 
 ### `validate_base_url` (public)
 
-`validate_base_url(url: str, policies: Dict[str, Any] = None) -> bool`  
+`validate_base_url(url: str, policies: Dict[str, Any] = None) -> bool`
 Source: [`flyto_ai/prompt/policies.py:57`](../../../flyto_ai/prompt/policies.py#L57)
 
 Validate base_url against policy domain allowlist.
 
 ### `is_tool_allowed` (public)
 
-`is_tool_allowed(name: str, policies: Dict[str, Any] = None) -> bool`  
+`is_tool_allowed(name: str, policies: Dict[str, Any] = None) -> bool`
 Source: [`flyto_ai/prompt/policies.py:95`](../../../flyto_ai/prompt/policies.py#L95)
 
 Check if a tool name is in the policy allowlist.
 
 ### `is_module_allowed` (public)
 
-`is_module_allowed(module_id: str, policies: Dict[str, Any] = None) -> bool`  
+`is_module_allowed(module_id: str, policies: Dict[str, Any] = None) -> bool`
 Source: [`flyto_ai/prompt/policies.py:104`](../../../flyto_ai/prompt/policies.py#L104)
 
 Check if a module's category is in the policy allowlist.
 
 ### `get_default_policies` (public)
 
-`get_default_policies() -> Dict[str, Any]`  
+`get_default_policies() -> Dict[str, Any]`
 Source: [`flyto_ai/prompt/policies.py:114`](../../../flyto_ai/prompt/policies.py#L114)
 
 Return the default policies dict.
 
 ### `is_safe_url` (public)
 
-`is_safe_url(url: str) -> bool`  
+`is_safe_url(url: str) -> bool`
 Source: [`flyto_ai/prompt/policies.py:123`](../../../flyto_ai/prompt/policies.py#L123)
 
 Validate a URL against SSRF patterns.
@@ -78,28 +78,28 @@ Validate a URL against SSRF patterns.
 
 ### `detect_language` (public)
 
-`detect_language(text: str) -> str`  
-Source: [`flyto_ai/prompt/system_prompt.py:82`](../../../flyto_ai/prompt/system_prompt.py#L82)
+`detect_language(text: str, preferred_language: Optional[str] = None) -> str`
+Source: [`flyto_ai/prompt/system_prompt.py:167`](../../../flyto_ai/prompt/system_prompt.py#L167)
 
 Detect reply language from user message text.
 
 ### `_select_template` (internal)
 
-`_select_template(template: Optional[str], has_tools: bool, mode: str) -> str`  
-Source: [`flyto_ai/prompt/system_prompt.py:326`](../../../flyto_ai/prompt/system_prompt.py#L326)
+`_select_template(template: Optional[str], has_tools: bool, mode: str) -> str`
+Source: [`flyto_ai/prompt/system_prompt.py:424`](../../../flyto_ai/prompt/system_prompt.py#L424)
 
 Pick the right Layer B template.
 
 ### `build_system_prompt` (public)
 
-`build_system_prompt(module_count: int = 0, template: Optional[str] = None, context: Optional[Dict[str, Any]] = None, admin_addition: Optional[str] = None, has_tools: bool = True, mode: str = 'execute', reply_language: Optional[str] = None) -> str`  
-Source: [`flyto_ai/prompt/system_prompt.py:343`](../../../flyto_ai/prompt/system_prompt.py#L343)
+`build_system_prompt(module_count: int = 0, template: Optional[str] = None, context: Optional[Dict[str, Any]] = None, admin_addition: Optional[str] = None, has_tools: bool = True, mode: str = 'execute', reply_language: Optional[str] = None) -> str`
+Source: [`flyto_ai/prompt/system_prompt.py:441`](../../../flyto_ai/prompt/system_prompt.py#L441)
 
 Build the full system prompt.
 
 ### `_build_context_suffix` (internal)
 
-`_build_context_suffix(template_context: Dict) -> str`  
-Source: [`flyto_ai/prompt/system_prompt.py:415`](../../../flyto_ai/prompt/system_prompt.py#L415)
+`_build_context_suffix(template_context: Dict) -> str`
+Source: [`flyto_ai/prompt/system_prompt.py:513`](../../../flyto_ai/prompt/system_prompt.py#L513)
 
 Build the template context suffix for the system prompt.

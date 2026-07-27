@@ -90,7 +90,7 @@ Discovers, validates, and loads extensions from a directory.
 
 ### `_safe_hook_env` (internal)
 
-`_safe_hook_env(hook_vars: Dict[str, str]) -> Dict[str, str]`  
+`_safe_hook_env(hook_vars: Dict[str, str]) -> Dict[str, str]`
 Source: [`flyto_ai/extensions/shell_hook.py:38`](../../../flyto_ai/extensions/shell_hook.py#L38)
 
 Build a minimal environment for hook subprocesses.

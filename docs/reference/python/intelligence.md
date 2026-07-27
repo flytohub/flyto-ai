@@ -12,96 +12,96 @@ Inventory: **17 declared symbols** and **22 class methods**.
 
 `class ToolIntentDecision`
 
-Source: [`flyto_ai/intelligence/planner.py:221`](../../../flyto_ai/intelligence/planner.py#L221)
+Source: [`flyto_ai/intelligence/planner.py:222`](../../../flyto_ai/intelligence/planner.py#L222)
 
 Deterministic, inspectable decision made before exposing any tool.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `tool_eligible() -> bool` | public | Public `tool_eligible` implementation on `ToolIntentDecision`; the linked source is authoritative. | [`flyto_ai/intelligence/planner.py:230`](../../../flyto_ai/intelligence/planner.py#L230) |
-| `to_dict() -> Dict[str, Any]` | public | Serialize `ToolIntentDecision` to a dictionary. | [`flyto_ai/intelligence/planner.py:233`](../../../flyto_ai/intelligence/planner.py#L233) |
+| `tool_eligible() -> bool` | public | Public `tool_eligible` implementation on `ToolIntentDecision`; the linked source is authoritative. | [`flyto_ai/intelligence/planner.py:231`](../../../flyto_ai/intelligence/planner.py#L231) |
+| `to_dict() -> Dict[str, Any]` | public | Serialize `ToolIntentDecision` to a dictionary. | [`flyto_ai/intelligence/planner.py:234`](../../../flyto_ai/intelligence/planner.py#L234) |
 
 ### `classify_tool_intent` (public)
 
 `classify_tool_intent(message: str) -> ToolIntentDecision`
-Source: [`flyto_ai/intelligence/planner.py:239`](../../../flyto_ai/intelligence/planner.py#L239)
+Source: [`flyto_ai/intelligence/planner.py:240`](../../../flyto_ai/intelligence/planner.py#L240)
 
 Classify a turn as answer-only, read-only ambiguous, or explicit action.
 
 ### `extract_intent_llm` (public)
 
 `async extract_intent_llm(message: str, provider) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/intelligence/planner.py:325`](../../../flyto_ai/intelligence/planner.py#L325)
+Source: [`flyto_ai/intelligence/planner.py:326`](../../../flyto_ai/intelligence/planner.py#L326)
 
 Extract structured intent using 1 cheap LLM call.
 
 ### `extract_intent` (public)
 
 `extract_intent(message: str) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/intelligence/planner.py:363`](../../../flyto_ai/intelligence/planner.py#L363)
+Source: [`flyto_ai/intelligence/planner.py:364`](../../../flyto_ai/intelligence/planner.py#L364)
 
 Synchronous intent extraction — pure data-driven, zero hardcoding.
 
 ### `blueprint_is_trusted` (public)
 
 `blueprint_is_trusted(candidate: Dict[str, Any], *, min_score: float = 50, min_samples: int = 1) -> bool`
-Source: [`flyto_ai/intelligence/planner.py:400`](../../../flyto_ai/intelligence/planner.py#L400)
+Source: [`flyto_ai/intelligence/planner.py:401`](../../../flyto_ai/intelligence/planner.py#L401)
 
 Return whether learned experience is authorized for automatic reuse.
 
 ### `trusted_blueprint_summary` (public)
 
 `trusted_blueprint_summary(blueprint_id: str) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/intelligence/planner.py:468`](../../../flyto_ai/intelligence/planner.py#L468)
+Source: [`flyto_ai/intelligence/planner.py:469`](../../../flyto_ai/intelligence/planner.py#L469)
 
 Resolve an exact Blueprint id and fail closed unless it is trusted.
 
 ### `_match_from_blueprint` (internal)
 
 `_match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/intelligence/planner.py:483`](../../../flyto_ai/intelligence/planner.py#L483)
+Source: [`flyto_ai/intelligence/planner.py:484`](../../../flyto_ai/intelligence/planner.py#L484)
 
 Match only Blueprint experience that has crossed a verification gate.
 
 ### `_match_from_registry` (internal)
 
 `_match_from_registry(msg: str) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/intelligence/planner.py:523`](../../../flyto_ai/intelligence/planner.py#L523)
+Source: [`flyto_ai/intelligence/planner.py:524`](../../../flyto_ai/intelligence/planner.py#L524)
 
 Match user message to a single module using the module registry.
 
 ### `_extract_params_from_message` (internal)
 
 `_extract_params_from_message(msg: str, schema: dict) -> dict`
-Source: [`flyto_ai/intelligence/planner.py:585`](../../../flyto_ai/intelligence/planner.py#L585)
+Source: [`flyto_ai/intelligence/planner.py:586`](../../../flyto_ai/intelligence/planner.py#L586)
 
 Extract parameter values from message text based on schema hints.
 
 ### `plan_execution` (public)
 
 `plan_execution(intent: Dict[str, Any], has_browser: bool = False) -> List[Dict[str, Any]]`
-Source: [`flyto_ai/intelligence/planner.py:670`](../../../flyto_ai/intelligence/planner.py#L670)
+Source: [`flyto_ai/intelligence/planner.py:671`](../../../flyto_ai/intelligence/planner.py#L671)
 
 Plan a deterministic execution sequence from an intent.
 
 ### `execute_plan` (public)
 
 `async execute_plan(steps: List[Dict[str, Any]], dispatch: Callable) -> Tuple[List[Dict[str, Any]], str]`
-Source: [`flyto_ai/intelligence/planner.py:737`](../../../flyto_ai/intelligence/planner.py#L737)
+Source: [`flyto_ai/intelligence/planner.py:738`](../../../flyto_ai/intelligence/planner.py#L738)
 
 Execute a deterministic plan step by step.
 
 ### `_resolve_url` (internal)
 
 `_resolve_url(text: str) -> Optional[str]`
-Source: [`flyto_ai/intelligence/planner.py:816`](../../../flyto_ai/intelligence/planner.py#L816)
+Source: [`flyto_ai/intelligence/planner.py:817`](../../../flyto_ai/intelligence/planner.py#L817)
 
 Resolve a site name or URL to a full URL.
 
 ### `_find_selector_from_structured` (internal)
 
 `_find_selector_from_structured(snapshot_result: dict, hint: str, element_type: str = '') -> Optional[str]`
-Source: [`flyto_ai/intelligence/planner.py:833`](../../../flyto_ai/intelligence/planner.py#L833)
+Source: [`flyto_ai/intelligence/planner.py:834`](../../../flyto_ai/intelligence/planner.py#L834)
 
 Find a CSS selector from structured snapshot data (inputs, buttons, links).
 

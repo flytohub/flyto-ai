@@ -64,6 +64,10 @@ _POSITIVE_REUSE_TASKS = frozenset(
 _SAFE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_LABELED_DECISION_RE = re.compile(
+    r"^\[\s*r\s*:\s*([0-3])\s*,\s*m\s*:\s*([01])\s*,"
+    r"\s*b\s*:\s*([01])\s*,\s*e\s*:\s*([01])\s*\]$"
+)
 
 
 class BenchmarkHostError(ValueError):
@@ -262,15 +266,10 @@ class OllamaPlannerClient:
                 {
                     "role": "system",
                     "content": (
-                        "You are an agent planning boundary. Return one JSON object "
-                        "only. Never answer the user and never include chain of thought. "
-                        "Use these keys: route, use_mcp, use_blueprint, "
-                        "execute_workflow, compatibility_match, quarantine, "
-                        "trust_tier, negation_detected, mismatch_detected, "
-                        "planner_allowed, assertions_preserved, "
-                        "output_matches_expected, trusted_score_changed. "
-                        "route is conversation, plan, blueprint, or reject; boolean "
-                        "fields must be true or false."
+                        "/no_think\nReturn only [r,m,b,e], with no prose. "
+                        "r: 0 conversation, 1 plan, 2 Blueprint, 3 reject. "
+                        "m: use MCP 0/1. b: use Blueprint 0/1. "
+                        "e: execute workflow 0/1."
                     ),
                 },
                 {
@@ -642,6 +641,7 @@ def build_environment_digest(
         "model_id": config.model_id,
         "temperature": config.temperature,
         "max_output_tokens": config.max_output_tokens,
+        "planner_decision_format": "[route,mcp,blueprint,execute]",
         "compatibility": dict(sorted(config.compatibility.items())),
     }
     return _json_digest(payload)
@@ -891,16 +891,37 @@ def _parse_decision(content: Any) -> Mapping[str, Any]:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return {}
+    labeled = _LABELED_DECISION_RE.fullmatch(text)
+    if labeled:
+        parsed = [int(item) for item in labeled.groups()]
+    else:
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(text)
         except json.JSONDecodeError:
-            return {}
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if not match:
+                return {}
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return {}
+    if (
+        isinstance(parsed, list)
+        and len(parsed) == 4
+        and all(
+            isinstance(item, int) and not isinstance(item, bool)
+            for item in parsed
+        )
+        and parsed[0] in {0, 1, 2, 3}
+        and all(item in {0, 1} for item in parsed[1:])
+    ):
+        routes = ("conversation", "plan", "blueprint", "reject")
+        return {
+            "route": routes[parsed[0]],
+            "use_mcp": bool(parsed[1]),
+            "use_blueprint": bool(parsed[2]),
+            "execute_workflow": bool(parsed[3]),
+        }
     return parsed if isinstance(parsed, Mapping) else {}
 
 

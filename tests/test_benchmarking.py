@@ -9,6 +9,7 @@ from flyto_ai.benchmarking import (
     HostConfig,
     MODES,
     PlannerObservation,
+    _parse_decision,
     build_environment_digest,
     write_runs,
 )
@@ -320,3 +321,19 @@ def test_environment_digest_changes_with_code_or_model():
 
     assert first.startswith("sha256:")
     assert first != second
+
+
+def test_compact_planner_decision_is_parsed_without_persisting_prose():
+    assert _parse_decision("[2,1,1,0]") == {
+        "route": "blueprint",
+        "use_mcp": True,
+        "use_blueprint": True,
+        "execute_workflow": False,
+    }
+    assert _parse_decision("[r:2, m:1, b:1, e:0]") == {
+        "route": "blueprint",
+        "use_mcp": True,
+        "use_blueprint": True,
+        "execute_workflow": False,
+    }
+    assert _parse_decision("[2,1,1,9]") == {}

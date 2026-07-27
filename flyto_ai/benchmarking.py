@@ -3,7 +3,7 @@
 """Trusted host runner for the Blueprint planner-effectiveness benchmark.
 
 The runner deliberately stores measurements, not prompts or model responses.
-It exercises Flyto AI's production intent router and Blueprint trust/search
+It exercises Flyto2's production intent router and Blueprint trust/search
 primitives, while an Ollama planning call supplies observable token counts for
 paths that still need a model.
 """
@@ -995,7 +995,7 @@ def build_cli_parser():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Run the paired Flyto AI / Blueprint effectiveness benchmark."
+        description="Run the paired Flyto2 / Blueprint effectiveness benchmark."
     )
     parser.add_argument("--suite", required=True)
     parser.add_argument("--config", required=True)

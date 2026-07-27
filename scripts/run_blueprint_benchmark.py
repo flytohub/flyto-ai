@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the trusted Flyto AI host for Blueprint benchmark evidence."""
+"""Run the trusted Flyto2 host for Blueprint benchmark evidence."""
 from flyto_ai.benchmarking import main
 
 

@@ -1,6 +1,6 @@
 # Blueprint benchmark host
 
-The benchmark answers one narrow question: when Flyto AI can safely reuse a
+The benchmark answers one narrow question: when Flyto2 can safely reuse a
 verified Blueprint, does the planner use fewer model calls and tokens without
 becoming less reliable?
 

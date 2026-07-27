@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Rewrote the README opening around a concrete repeated-work story, plain
+  language pain points, scoped token claims, routing/evidence safety, and the
+  exact local verification numbers behind those claims.
 - Hardened multilingual intent routing for explicit actions, current-data
   questions, negation, quoted/meta examples, and declarative questions. Route
   permissions are now rechecked at dispatch so forged provider calls cannot

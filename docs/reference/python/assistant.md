@@ -184,28 +184,28 @@ Find the best matching selector from candidates for a broken one.
 ### `pre_resolve` (public)
 
 `pre_resolve(message: str) -> str`
-Source: [`flyto_ai/assistant/router.py:18`](../../../flyto_ai/assistant/router.py#L18)
+Source: [`flyto_ai/assistant/router.py:19`](../../../flyto_ai/assistant/router.py#L19)
 
 Search blueprints BEFORE the LLM call.
 
 ### `guard` (public)
 
 `async guard(func_name: str, func_args: dict, user_message: str, dispatch: Callable) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/assistant/router.py:65`](../../../flyto_ai/assistant/router.py#L65)
+Source: [`flyto_ai/assistant/router.py:64`](../../../flyto_ai/assistant/router.py#L64)
 
 Blueprint guard — intercept the first non-blueprint tool call.
 
 ### `init_storage` (public)
 
 `init_storage() -> None`
-Source: [`flyto_ai/assistant/router.py:117`](../../../flyto_ai/assistant/router.py#L117)
+Source: [`flyto_ai/assistant/router.py:115`](../../../flyto_ai/assistant/router.py#L115)
 
 Initialize flyto-blueprint with SQLite storage for local persistence.
 
 ### `feedback` (public)
 
 `feedback(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str, *, min_steps: int = 3) -> None`
-Source: [`flyto_ai/assistant/router.py:127`](../../../flyto_ai/assistant/router.py#L127)
+Source: [`flyto_ai/assistant/router.py:125`](../../../flyto_ai/assistant/router.py#L125)
 
 Closed-loop blueprint learning.
 

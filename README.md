@@ -4,10 +4,10 @@
 
 <h1 align="center">Flyto2 AI</h1>
 
-<h3 align="center">Turn successful agent runs into workflows you can trust—and run again.</h3>
+<h3 align="center">Stop paying an AI agent to rediscover work it already solved.</h3>
 
 <p align="center">
-  <em>Most agents remember the chat. Flyto2 AI remembers the working procedure.</em>
+  <em>Use the model for the unknown. Re-run the known path with checks and evidence.</em>
 </p>
 
 <p align="center">
@@ -20,13 +20,34 @@
 
 ---
 
-## Use the model for discovery—not repetition
+## The Monday-morning problem
 
-AI agents are good at finding a way through a new task. They are expensive and
-unpredictable when asked to rediscover the same way on every run.
+Every Monday, you ask an agent to open the same dashboards, check the same
+numbers, and report the same failures.
 
-Flyto2 AI uses the model for the unknown part, then moves the known part into
-checked execution:
+The first run is useful: the model figures out the job. On the next run, most
+agents start over. They read the instructions again, choose tools again, spend
+tokens again, and may take a different path. You are paying for rediscovery,
+not new intelligence.
+
+There is a second problem: a chat answer is not proof that the job ran
+correctly. A loose agent may treat “do not open GitHub” as an action, or trust a
+bad success score without checking whether its evidence makes sense.
+
+Flyto2 AI separates those problems:
+
+- **A question stays a question.** Conversation, current-data requests, and
+  actions are routed before tools are exposed, then enforced again when a tool
+  call reaches the dispatcher.
+- **“Do not” means do not.** Multilingual negation, quoted commands, and
+  hypothetical examples do not become accidental MCP actions.
+- **Evidence must add up.** Learned Blueprint evidence with missing,
+  contradictory, non-finite, or out-of-range values fails closed.
+- **Solved work becomes reusable.** A successful typed procedure can become a
+  Blueprint with arguments, permissions, retries, assertions, and real outcome
+  history.
+
+The model handles the new part. Checked execution handles the repeat:
 
 ```text
 new task
@@ -38,13 +59,25 @@ verified execution ───────────────→ reusable Blu
 matching request → fill new arguments → run checked steps → record evidence
 ```
 
-The result is not another chat memory. It is an executable procedure with
-arguments, retries, assertions, trust rules, and a history of real outcomes.
-
 On an exact deterministic reuse, Flyto2 AI records
 `planner_model_calls_used=0`: the outer agent did not call a model to plan the
-job again. A saved workflow may still contain an `llm.*` step, so Flyto2 AI does not
+job again. A saved workflow may still contain an `llm.*` step, so this does not
 pretend the entire workflow is token-free.
+
+### What the current tests actually prove
+
+The 2026-07-27 local verification covered:
+
+- 700 multilingual and presentation-mutated routing cases;
+- 5,000 seeded Unicode/noise inputs with zero routing crashes;
+- 408 permission combinations;
+- 4,500 Blueprint trust-boundary cases and 38 malformed-evidence cases;
+- 1,150 passing project tests, with 15 optional/live-integration skips;
+- 17/17 strict Flyto2 Indexer checks, with zero warnings.
+
+These numbers describe the checked test set. They are not a claim that every
+slang phrase, mixed-language message, model provider, or live third-party MCP
+has been proven perfect.
 
 ## Quickstart
 
@@ -141,8 +174,11 @@ The core difference is **when the LLM is still needed**:
 |---|---|---|
 | **New job** | Model reasons and acts | Model can select modules and parameters |
 | **Repeated job** | Model reasons again | Verified Blueprint can run directly |
+| **Ordinary conversation** | Tool use may be left to model judgment | Intent gate is enforced again at dispatch |
+| **Negation and quoted actions** | Can still look like tool instructions | Multilingual negative/meta requests stay answer-only |
 | **Execution** | Often trusts generated commands | Permission + schema + PlanIR + assertion gates |
 | **“It worked”** | Often inferred from the answer | Recorded from actual execution |
+| **Bad learned evidence** | Trust behavior varies | Malformed or impossible evidence fails closed |
 | **Learning** | Usually stays in chat history | Becomes reusable workflow + evidence |
 | **Token evidence** | Provider bill/log | `planner_model_calls_used=0` on deterministic exact reuse |
 | **Shared procedures** | Trust is often implicit | Unknown imports stay quarantined |

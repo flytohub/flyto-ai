@@ -78,28 +78,28 @@ Validate a URL against SSRF patterns.
 
 ### `detect_language` (public)
 
-`detect_language(text: str) -> str`
-Source: [`flyto_ai/prompt/system_prompt.py:82`](../../../flyto_ai/prompt/system_prompt.py#L82)
+`detect_language(text: str, preferred_language: Optional[str] = None) -> str`
+Source: [`flyto_ai/prompt/system_prompt.py:167`](../../../flyto_ai/prompt/system_prompt.py#L167)
 
 Detect reply language from user message text.
 
 ### `_select_template` (internal)
 
 `_select_template(template: Optional[str], has_tools: bool, mode: str) -> str`
-Source: [`flyto_ai/prompt/system_prompt.py:327`](../../../flyto_ai/prompt/system_prompt.py#L327)
+Source: [`flyto_ai/prompt/system_prompt.py:424`](../../../flyto_ai/prompt/system_prompt.py#L424)
 
 Pick the right Layer B template.
 
 ### `build_system_prompt` (public)
 
 `build_system_prompt(module_count: int = 0, template: Optional[str] = None, context: Optional[Dict[str, Any]] = None, admin_addition: Optional[str] = None, has_tools: bool = True, mode: str = 'execute', reply_language: Optional[str] = None) -> str`
-Source: [`flyto_ai/prompt/system_prompt.py:344`](../../../flyto_ai/prompt/system_prompt.py#L344)
+Source: [`flyto_ai/prompt/system_prompt.py:441`](../../../flyto_ai/prompt/system_prompt.py#L441)
 
 Build the full system prompt.
 
 ### `_build_context_suffix` (internal)
 
 `_build_context_suffix(template_context: Dict) -> str`
-Source: [`flyto_ai/prompt/system_prompt.py:416`](../../../flyto_ai/prompt/system_prompt.py#L416)
+Source: [`flyto_ai/prompt/system_prompt.py:513`](../../../flyto_ai/prompt/system_prompt.py#L513)
 
 Build the template context suffix for the system prompt.

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -29,11 +29,20 @@ class PermissionLevel(IntEnum):
     DANGER_FULL = 2         # shell, docker, k8s, file write, unconstrained
 
 
+class PermissionOutcome(str, Enum):
+    """Machine-readable policy result for UI, audit, and evaluations."""
+
+    ALLOW = "allow"
+    REQUIRE_CONFIRMATION = "require_confirmation"
+    BLOCK = "block"
+
+
 @dataclass(frozen=True)
 class PermissionDecision:
     """Result of a permission check."""
     allowed: bool
     reason: str = ""
+    outcome: PermissionOutcome = PermissionOutcome.ALLOW
 
 
 # ── Per-tool permission requirements ──────────────────────────────────
@@ -102,6 +111,27 @@ class PermissionEnforcer:
     def level(self) -> PermissionLevel:
         return self._level
 
+    def required_level(
+        self,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> PermissionLevel:
+        """Return the effective permission requirement for an exact call."""
+        arguments = arguments or {}
+        required = self._overrides.get(tool_name)
+        if required is None:
+            required = TOOL_PERMISSION_MAP.get(
+                tool_name, PermissionLevel.WORKSPACE_WRITE,
+            )
+
+        if tool_name == "execute_module":
+            module_level = _required_level_for_module(
+                str(arguments.get("module_id", "")),
+            )
+            if module_level > required:
+                required = module_level
+        return required
+
     def check(self, tool_name: str, arguments: Dict[str, Any] = None) -> PermissionDecision:
         """Check whether the current session level allows this tool call.
 
@@ -109,30 +139,60 @@ class PermissionEnforcer:
         a decision with ``allowed=False`` and a human-readable ``reason``.
         """
         arguments = arguments or {}
-
-        # Per-tool override takes priority
-        required = self._overrides.get(tool_name)
-
-        if required is None:
-            required = TOOL_PERMISSION_MAP.get(tool_name)
-
-        if required is None:
-            # Unknown tool — default to WORKSPACE_WRITE
-            required = PermissionLevel.WORKSPACE_WRITE
-
-        # For execute_module, also check the module category
-        if tool_name == "execute_module":
-            module_id = arguments.get("module_id", "")
-            module_level = _required_level_for_module(module_id)
-            if module_level > required:
-                required = module_level
+        required = self.required_level(tool_name, arguments)
 
         if self._level >= required:
-            return PermissionDecision(allowed=True)
+            return PermissionDecision(
+                allowed=True, outcome=PermissionOutcome.ALLOW,
+            )
 
         return PermissionDecision(
             allowed=False,
             reason="Permission denied: '{}' requires {} but session is {}".format(
                 tool_name, required.name, self._level.name,
             ),
+            outcome=(
+                PermissionOutcome.REQUIRE_CONFIRMATION
+                if required == PermissionLevel.DANGER_FULL
+                else PermissionOutcome.BLOCK
+            ),
         )
+
+    def check_route(
+        self,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]],
+        route_mode: str,
+    ) -> PermissionDecision:
+        """Apply conversation intent before the regular permission tier.
+
+        Tool metadata is not trusted for authorization: the effective
+        requirement is calculated locally from the exact tool and arguments.
+        """
+        if route_mode == "answer_only":
+            return PermissionDecision(
+                allowed=False,
+                reason="Tool blocked: this turn is an answer-only conversation.",
+                outcome=PermissionOutcome.BLOCK,
+            )
+
+        if route_mode == "ambiguous":
+            required = self.required_level(tool_name, arguments)
+            if required > PermissionLevel.READ_ONLY:
+                return PermissionDecision(
+                    allowed=False,
+                    reason=(
+                        "Confirmation required: the user did not make an "
+                        "explicit action request."
+                    ),
+                    outcome=PermissionOutcome.REQUIRE_CONFIRMATION,
+                )
+
+        if route_mode not in {"ambiguous", "action"}:
+            return PermissionDecision(
+                allowed=False,
+                reason="Tool blocked: unknown conversation route.",
+                outcome=PermissionOutcome.BLOCK,
+            )
+
+        return self.check(tool_name, arguments)

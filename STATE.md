@@ -1,8 +1,17 @@
 # State
 
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
 Implemented:
+- Deterministic intent routing now distinguishes explicit actions, current-data
+  questions, answer-only requests, multilingual negation, quoted/meta examples,
+  and declarative questions before any provider tool dispatch.
+- Tool permissions enforce the selected route at dispatch time, so a provider
+  cannot turn a denied answer-only request into a raw MCP action.
+- Learned Blueprint trust evidence fails closed for malformed types, non-finite
+  numbers, non-integral counts, inconsistent counts, and out-of-range rates.
+- Explicit reply-language changes persist through short follow-ups and return
+  to the language of a later substantive message.
 - Closed-loop MCP verification distinguishes omitted identifiers, unknown
   plans, and known plans that do not yet have execution evidence.
 - `flyto-core` MCP capability manifest exposed through `flyto-ai`.
@@ -29,11 +38,17 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 962 passed, 15 optional/live-integration skips;
+- full suite: 1150 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;
 - Flyto2 Indexer closed loop: 17 passed, 0 warnings, 0 failures.
+
+The 2026-07-27 routing and evidence hardening was additionally verified with
+700 multilingual/presentation-mutated route cases, 5,000 seeded Unicode/noise
+inputs, a 408-case permission matrix, 4,500 Blueprint boundary cases, and 38
+malformed-evidence cases. These are bounded local test results, not a claim of
+perfect coverage for every language or live third-party MCP.
 
 The 2026-07-26 Blueprint evidence-boundary change was reverified with the full
 suite, generated-reference check, sdist/wheel build, and strict Indexer

@@ -11,6 +11,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from flyto_ai.closed_loop_v3 import evaluate_distillation
+from flyto_ai.intelligence.planner import blueprint_is_trusted
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,8 @@ def pre_resolve(message: str) -> str:
             return ""
 
         top = results[0]
-        # Only enforce blueprint if score is very high AND has been used successfully
-        score = top.get("score", 0)
-        use_count = top.get("use_count", 0)
-        if score < 80 or use_count < 2:
+        # Automatic reuse requires a verified trust tier and runtime evidence.
+        if not blueprint_is_trusted(top, min_score=80, min_samples=2):
             return ""
         bp_id = top.get("id", "")
         bp_name = top.get("name", "")
@@ -92,8 +91,7 @@ async def guard(
             return None
 
         top = blueprints[0]
-        # Only redirect if blueprint is proven (high score + used successfully)
-        if top.get("score", 0) < 80 or top.get("use_count", 0) < 2:
+        if not blueprint_is_trusted(top, min_score=80, min_samples=2):
             return None
         return {
             "ok": True,

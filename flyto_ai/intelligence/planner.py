@@ -12,7 +12,9 @@ Replaces LLM freestyle module selection with a deterministic pipeline:
 Falls back to LLM freestyle when no recipe matches.
 """
 import logging
+import math
 import re
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,284 @@ BUILTIN_RECIPES: Dict[str, List[Dict[str, Any]]] = {
         {"module": "browser.screenshot", "params_from": ["output_path"]},
     ],
 }
+
+_NO_TOOL_RE = re.compile(
+    r"(?:do\s+not|don't|dont|without|no)\s+"
+    r"(?:use|using|call|calling|run|running).{0,16}(?:tools?|mcp)"
+    r"|(?:answer|reply|respond).{0,20}(?:without|no).{0,10}(?:tools?|mcp)"
+    r"|(?:use\s+(?:your\s+)?knowledge\s+only|no\s+tool\s+calls?)"
+    r"|(?:不要|別|别|不准|禁止).{0,10}(?:使用|呼叫|调用|執行|执行).{0,10}"
+    r"(?:工具|tool|mcp)"
+    r"|(?:只|僅|仅).{0,8}(?:回答|說明|说明).{0,12}(?:不要|不使用|不用).{0,8}"
+    r"(?:工具|tool|mcp|執行|执行)"
+    r"|(?:ツール|mcp).{0,8}(?:使わず|使用せず)"
+    r"|(?:도구|mcp).{0,8}(?:사용하지\s*말고|없이)"
+    r"|(?:sin\s+usar|no\s+uses?).{0,8}(?:herramientas?|mcp)"
+    r"|(?:sans\s+utiliser|n'utilise\s+pas).{0,8}(?:outils?|mcp)"
+    r"|(?:ohne|nicht).{0,8}(?:werkzeuge?|tools?|mcp).{0,8}(?:benutzen|verwenden)?",
+    re.IGNORECASE,
+)
+_NEGATED_ACTION_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:do\s+not|don't|dont|never)\s+"
+    r"(?:open|visit|run|execute|delete|remove|modify|update|search|write|"
+    r"install|commit|deploy|send|upload|download|create|fix|scrape|inspect)"
+    r"|^\s*(?:can|could|would)\s+you\s+not\s+"
+    r"(?:open|run|execute|delete|modify|search|write|install|deploy)"
+    r"|^\s*without\s+(?:opening|visiting|running|executing|deleting|"
+    r"modifying|searching|using)"
+    r"|^\s*(?:請|请)?\s*(?:先)?(?:不要|別|别|不准|禁止)\s*"
+    r"(?:打開|打开|開啟|开启|執行|执行|運行|运行|刪除|删除|修改|"
+    r"搜尋|搜索|查詢|查询|寫入|写入|安裝|安装|提交|部署|下載|下载|"
+    r"上傳|上传|建立|创建|修復|修复)"
+    r"|(?:開かないで|実行しないで|削除しないで|変更しないで|検索しないで)"
+    r"|(?:열지\s*마세요|실행하지\s*마세요|삭제하지\s*마세요|"
+    r"수정하지\s*마세요|검색하지\s*마세요)"
+    r"|^\s*(?:por\s+favor,\s*)?no\s+"
+    r"(?:abras?|ejecutes?|borres?|modifiques?|busques?|instales?|despliegues?)"
+    r"|^\s*(?:n['’]|ne\s+).{0,30}\s+pas\b"
+    r"|^\s*(?:öffne|führe|lösche|ändere|suche|installiere).{0,30}\bnicht\b"
+    r"|^\s*n[aã]o\s+(?:abra|execute|exclua|modifique|procure|instale)"
+    r"|^\s*non\s+(?:aprire|eseguire|eliminare|modificare|cercare|installare)"
+    r"|^\s*не\s+(?:открывай|запускай|выполняй|удаляй|изменяй|ищи)"
+    r"|^\s*لا\s+(?:تفتح|تشغل|تنفذ|تحذف|تعدل|تبحث)",
+    re.IGNORECASE,
+)
+_META_REQUEST_RE = re.compile(
+    r"\b(?:explain|analyse|analyze)\s+(?:the\s+)?(?:sentence|phrase|wording)\b"
+    r"|\btell\s+me\s+about\b"
+    r"|\bif\s+(?:i|a\s+user|the\s+user|someone)\s+(?:say|says|said)\b"
+    r"|\bwhat\s+should\s+(?:the\s+)?(?:router|system|agent)\s+do\b"
+    r"|\b(?:readme|error|message|text)\s+(?:says|contains)\b"
+    r"|(?:這句話|这句话|這段話|这段话).{0,24}(?:意思|祈使|命令|怎麼|怎么)"
+    r"|(?:如果|假如).{0,60}(?:流程|怎麼|怎么|如何|系統|系统|判斷|判断)"
+    r"|(?:エラー|文).{0,20}(?:意味|説明)"
+    r"|(?:문장|오류).{0,20}(?:뜻|설명)",
+    re.IGNORECASE,
+)
+_DECLARATIVE_OR_ACTION_QUESTION_RE = re.compile(
+    r"^\s*(?:open\s+source|search\s+(?:algorithms?|engines?)|"
+    r"build\s+systems?|list\s+comprehensions?|read\s+consistency|"
+    r"write\s+amplification|commit\s+history|installation\s+process)\s+"
+    r"(?:is|are|was|were|means?|refers?)\b"
+    r"|^\s*(?:建立|创建|刪除|删除|執行|执行|修改|分析|搜尋|搜索).{0,48}"
+    r"(?:有什麼|有什么|會發生什麼|会发生什么|會怎樣|会怎样|"
+    r"是否|安全嗎|安全吗|優缺點|优缺点|風險|风险|後果|后果).{0,16}[？?]?$",
+    re.IGNORECASE,
+)
+_EXPLANATION_RE = re.compile(
+    r"\b(?:what\s+is|what\s+are|why|how\s+does|how\s+do|explain|"
+    r"tell\s+me\s+about|pros?\s+and\s+cons?|is\s+it\s+safe|"
+    r"is\s+https?://\S+\s+(?:a\s+)?valid)\b"
+    r"|(?:是什麼|是什么|為什麼|为什么|怎麼運作|怎么运作|解釋|解释|"
+    r"介紹|介绍|聊聊|優缺點|优缺点|安全嗎|安全吗|強嗎|强吗|會不會|会不会)"
+    r"|(?:とは|なぜ|説明して)"
+    r"|(?:무엇|왜|설명해)"
+    r"|(?:qué\s+es|por\s+qué|expl[ií]ca)"
+    r"|(?:qu['’]est-ce|pourquoi|explique)"
+    r"|(?:was\s+ist|warum|erkläre)",
+    re.IGNORECASE,
+)
+_EN_ACTION_RE = re.compile(
+    r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+|"
+    r"help\s+me(?:\s+to)?\s+)?"
+    r"(?:open|visit|go\s+to|search(?:\s+for)?|run|execute|click|download|"
+    r"upload|create|update|delete|remove|fix|repair|push|deploy|send|"
+    r"take\s+(?:a\s+)?screenshot|repeat|rewrite|fetch|find|check|write|"
+    r"install|commit|rerun|build|apply|read|summari[sz]e|analy[sz]e|"
+    r"inspect|list|scrape|extract|save|tell)\b",
+    re.IGNORECASE,
+)
+_CJK_ACTION_RE = re.compile(
+    r"^\s*(?:請|请|麻煩|麻烦|幫我|帮我|替我|可以幫我|可以帮我)?\s*"
+    r"(?:打開|打开|開啟|开启|前往|搜尋|搜索|查詢|查询|執行|执行|運行|运行|"
+    r"點擊|点击|下載|下载|上傳|上传|建立|創建|创建|更新|刪除|删除|修復|修复|"
+    r"部署|推送|上去|截圖|截图|重複|重复|重新執行|重新执行|修改|改寫|改写|"
+    r"重寫|重写|抓取|尋找|查找|找出|檢查|检查|寫入|写入|安裝|安装|提交|"
+    r"讀取|读取|分析|列出|套用|儲存|储存|摘要|截)"
+    r"|^\s*(?:把|將|将).{1,48}?(?:改|修改|改寫|改写|重寫|重写|寫|写|"
+    r"刪除|删除|更新|套用|儲存|储存|提交)"
+    r"|^\s*(?:到|去).{1,32}?(?:找|搜尋|搜索|查詢|查询)",
+    re.IGNORECASE,
+)
+_JA_ACTION_RE = re.compile(
+    r"^\s*.{0,48}(?:開いて|アクセスして|検索して|実行して|クリックして|"
+    r"ダウンロードして|アップロードして|作成して|更新して|削除して|"
+    r"修正して|書き直して|保存して|確認して|分析して|一覧にして)"
+    r"(?:ください|下さい|くれますか|[。.!]?$)"
+)
+_KO_ACTION_RE = re.compile(
+    r"^\s*.{0,48}(?:열어|실행해|작성해|수정해|검색해|저장해|삭제해|"
+    r"다운로드해|업로드해|배포해|확인해|분석해|나열해|스크린샷)"
+    r"(?:\s*주세요|\s*주십시오|\s*줘|세요|[.!]?$)"
+)
+_ES_ACTION_RE = re.compile(
+    r"^\s*[¡¿]?\s*(?:por\s+favor[,:]?\s*)?"
+    r"(?:abre|ejecuta|corrige|busca|escribe|crea|elimina|descarga|sube|"
+    r"despliega|guarda|analiza|lista|inspecciona|instala|toma)\b",
+    re.IGNORECASE,
+)
+_FR_ACTION_RE = re.compile(
+    r"^\s*(?:s['’]il\s+te\s+pla[iî]t[,:]?\s*)?"
+    r"(?:ouvre|ex[eé]cute|corrige|cherche|[eé]cris|cr[eé]e|supprime|"
+    r"t[eé]l[eé]charge|d[eé]ploie|enregistre|analyse|liste|inspecte|installe|prends)\b",
+    re.IGNORECASE,
+)
+_DE_ACTION_RE = re.compile(
+    r"^\s*(?:bitte\s+)?(?:öffne|oeffne|behebe|suche|schreibe|erstelle|"
+    r"lösche|loesche|speichere|analysiere|liste|prüfe|pruefe|installiere)\b"
+    r"|^\s*(?:bitte\s+)?führe\b.{0,36}\baus\b",
+    re.IGNORECASE,
+)
+_PT_IT_ACTION_RE = re.compile(
+    r"^\s*(?:por\s+favor[,:]?\s*)?(?:abra|execute|corrija|procure|escreva|"
+    r"crie|exclua|salve|analise|instale)\b"
+    r"|^\s*(?:per\s+favore[,:]?\s*)?(?:apri|esegui|correggi|cerca|scrivi|"
+    r"crea|elimina|salva|analizza|installa)\b",
+    re.IGNORECASE,
+)
+_RU_ACTION_RE = re.compile(
+    r"^\s*(?:пожалуйста[,:]?\s*)?(?:открой|запусти|выполни|исправь|"
+    r"найди|создай|удали|сохрани|установи|разверни|проверь|прочитай|"
+    r"проанализируй)\b",
+    re.IGNORECASE,
+)
+_AR_ACTION_RE = re.compile(
+    r"^\s*(?:من\s+فضلك[،,:]?\s*)?(?:افتح|شغ[ّ]?ل|نف[ّ]?ذ|أصلح|اصلح|"
+    r"ابحث|أنشئ|انشئ|احذف|احفظ|ثب[ّ]?ت|انشر|افحص|اقرأ|حل[ّ]?ل)\b",
+    re.IGNORECASE,
+)
+_STATUS_QUESTION_RE = re.compile(
+    r"\b(?:status|latest|today|weather|price|score|exchange\s+rate)\b"
+    r"|\b(?:currently\s+operational|current\s+(?:ceo|version|president)|"
+    r"what\s+time\s+is\s+it|this\s+weekend)\b"
+    r"|(?:最新|今天|今日|天氣|天气|價格|价格|比分|狀態|状态|匯率|汇率|"
+    r"幾點|几点|這週末|这周末|本週末|本周末|目前.{0,20}(?:正常|ceo|誰|谁|版本))"
+    r"|(?:現在の天気|今日の為替|最新|現在時刻)"
+    r"|(?:현재\s*날씨|오늘\s*환율|최신|현재\s*(?:시간|ceo|상태))"
+    r"|(?:tiempo.{0,12}ahora|tipo\s+de\s+cambio.{0,12}hoy|m[aá]s\s+reciente)"
+    r"|(?:temps.{0,12}maintenant|taux\s+de\s+change.{0,12}aujourd|plus\s+r[eé]cent)"
+    r"|(?:wetter.{0,12}jetzt|wechselkurs.{0,12}heute|neueste|aktuell)"
+    r"|(?:tempo.{0,12}agora|c[aâ]mbio.{0,12}hoje|mais\s+recente)"
+    r"|(?:(?:meteo|tempo).{0,12}ora|cambio.{0,12}oggi|pi[uù]\s+recente)"
+    r"|(?:погода.{0,12}сейчас|курс.{0,12}сегодня|последн(?:яя|ий|ие))"
+    r"|(?:الطقس.{0,12}الآن|سعر\s+الصرف.{0,12}اليوم|أحدث|احدث)",
+    re.IGNORECASE,
+)
+_STRUCTURED_MODULE_RE = re.compile(
+    r"(?<![/:])\b[a-z][\w-]*\.[a-z][\w.-]*\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_PARAMS_RE = re.compile(
+    r"\b[\w-]+\s*=\s*\S+|(?:params?|arguments?)\s*:\s*(?:\{|\S)|\{[^{}]*\}",
+    re.IGNORECASE,
+)
+_LEADING_EMOJI_RE = re.compile(
+    r"^\s*(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?\s*)+",
+)
+
+
+@dataclass(frozen=True)
+class ToolIntentDecision:
+    """Deterministic, inspectable decision made before exposing any tool."""
+
+    mode: str
+    confidence: float
+    reason: str
+    signals: Tuple[str, ...] = ()
+
+    @property
+    def tool_eligible(self) -> bool:
+        return self.mode == "action"
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        data["tool_eligible"] = self.tool_eligible
+        return data
+
+
+def classify_tool_intent(message: str) -> ToolIntentDecision:
+    """Classify a turn as answer-only, read-only ambiguous, or explicit action.
+
+    This deliberately avoids an LLM routing call.  It is a safety boundary:
+    explanation requests never reach Blueprint, registry matching, or write tools.
+    """
+    msg = (message or "").strip()
+    if not msg:
+        return ToolIntentDecision("answer_only", 1.0, "empty_message", ("empty",))
+    semantic_msg = _LEADING_EMOJI_RE.sub("", msg).strip()
+    if not semantic_msg:
+        return ToolIntentDecision("answer_only", 1.0, "empty_message", ("empty",))
+
+    if _NO_TOOL_RE.search(semantic_msg):
+        return ToolIntentDecision(
+            "answer_only", 1.0, "explicit_no_tool_request", ("no_tool",),
+        )
+
+    if _NEGATED_ACTION_RE.search(semantic_msg):
+        return ToolIntentDecision(
+            "answer_only", 1.0, "negated_action_request", ("negation",),
+        )
+
+    if _META_REQUEST_RE.search(semantic_msg):
+        return ToolIntentDecision(
+            "answer_only", 0.99, "quoted_or_hypothetical", ("meta_request",),
+        )
+
+    if _DECLARATIVE_OR_ACTION_QUESTION_RE.search(semantic_msg):
+        return ToolIntentDecision(
+            "answer_only", 0.98, "declarative_or_action_question", ("question",),
+        )
+
+    action_signals = []
+    action_patterns = (
+        ("action_verb_en", _EN_ACTION_RE),
+        ("action_verb_cjk", _CJK_ACTION_RE),
+        ("action_verb_ja", _JA_ACTION_RE),
+        ("action_verb_ko", _KO_ACTION_RE),
+        ("action_verb_es", _ES_ACTION_RE),
+        ("action_verb_fr", _FR_ACTION_RE),
+        ("action_verb_de", _DE_ACTION_RE),
+        ("action_verb_pt_it", _PT_IT_ACTION_RE),
+        ("action_verb_ru", _RU_ACTION_RE),
+        ("action_verb_ar", _AR_ACTION_RE),
+    )
+    for signal, pattern in action_patterns:
+        if pattern.search(semantic_msg):
+            action_signals.append(signal)
+    if action_signals:
+        return ToolIntentDecision(
+            "action", 0.96, "explicit_action_request", tuple(action_signals),
+        )
+
+    # Current-data questions may benefit from discovery, but never mutation.
+    if _STATUS_QUESTION_RE.search(semantic_msg):
+        return ToolIntentDecision(
+            "ambiguous", 0.82, "read_only_discovery_may_help", ("current_data",),
+        )
+
+    if _EXPLANATION_RE.search(semantic_msg):
+        return ToolIntentDecision(
+            "answer_only", 0.98, "explanation_or_opinion", ("explanation",),
+        )
+
+    # A module id plus explicit parameters is an action even without a natural
+    # language verb, e.g. ``image.resize width=800``.
+    if (
+        _STRUCTURED_MODULE_RE.search(semantic_msg)
+        and _EXPLICIT_PARAMS_RE.search(semantic_msg)
+    ):
+        return ToolIntentDecision(
+            "action", 0.92, "structured_module_request", ("module_id", "params"),
+        )
+
+    if semantic_msg.endswith(("?", "？")):
+        return ToolIntentDecision(
+            "answer_only", 0.78, "question_without_action", ("question",),
+        )
+
+    return ToolIntentDecision(
+        "answer_only", 0.86, "no_action_signal", ("conversation",),
+    )
 
 
 
@@ -90,6 +370,8 @@ def extract_intent(message: str) -> Optional[Dict[str, Any]]:
     4. Returns None → caller uses extract_intent_llm()
     """
     msg = message.strip()
+    if not classify_tool_intent(msg).tool_eligible:
+        return None
 
     # 1. Explicit URL → navigate directly
     url_match = re.search(r'(https?://\S+)', msg)
@@ -115,8 +397,91 @@ def extract_intent(message: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def blueprint_is_trusted(
+    candidate: Dict[str, Any],
+    *,
+    min_score: float = 50,
+    min_samples: int = 1,
+) -> bool:
+    """Return whether learned experience is authorized for automatic reuse."""
+    if not isinstance(candidate, dict):
+        return False
+
+    trust_tier = str(candidate.get("trust_tier", "community"))
+    if trust_tier == "official":
+        return True
+    if trust_tier not in {"local_verified", "ci_verified"}:
+        return False
+
+    evidence = candidate.get("evidence_card")
+    if not isinstance(evidence, dict):
+        return False
+
+    def finite_number(value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    score = finite_number(candidate.get("score"))
+    score_floor = finite_number(min_score)
+    samples_floor = finite_number(min_samples)
+    sample_count = finite_number(evidence.get("sample_count"))
+    success_count = finite_number(evidence.get("success_count"))
+    success_rate = finite_number(evidence.get("success_rate"))
+    values = (
+        score,
+        score_floor,
+        samples_floor,
+        sample_count,
+        success_count,
+        success_rate,
+    )
+    if any(value is None for value in values):
+        return False
+
+    assert score is not None
+    assert score_floor is not None
+    assert samples_floor is not None
+    assert sample_count is not None
+    assert success_count is not None
+    assert success_rate is not None
+    counts_are_integers = all(
+        value.is_integer()
+        for value in (samples_floor, sample_count, success_count)
+    )
+    return (
+        counts_are_integers
+        and samples_floor >= 1
+        and sample_count >= samples_floor
+        and success_count >= samples_floor
+        and success_count <= sample_count
+        and score >= score_floor
+        and 0.0 <= success_rate <= 1.0
+        and success_rate >= 0.8
+    )
+
+
+def trusted_blueprint_summary(blueprint_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve an exact Blueprint id and fail closed unless it is trusted."""
+    if not blueprint_id:
+        return None
+    try:
+        from flyto_blueprint import get_engine
+
+        for candidate in get_engine().list_blueprints():
+            if candidate.get("id") == blueprint_id:
+                return candidate if blueprint_is_trusted(candidate) else None
+    except Exception:
+        return None
+    return None
+
+
 def _match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]:
-    """Match user message against learned blueprints."""
+    """Match only Blueprint experience that has crossed a verification gate."""
     try:
         from flyto_blueprint import get_engine
         engine = get_engine()
@@ -125,8 +490,11 @@ def _match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]:
             return None
 
         top = results[0]
-        if top.get("score", 0) < 50 or top.get("use_count", 0) < 1:
+        trust_tier = str(top.get("trust_tier", "community"))
+        if not blueprint_is_trusted(top):
             return None
+
+        evidence = top.get("evidence_card") or {}
 
         args_schema = top.get("args", {})
         args = _extract_params_from_message(msg, args_schema)
@@ -141,6 +509,12 @@ def _match_from_blueprint(msg: str) -> Optional[Dict[str, Any]]:
             "intent": "blueprint",
             "blueprint_id": top.get("id", ""),
             "args": args,
+            "selection_evidence": {
+                "trust_tier": trust_tier,
+                "sample_count": int(evidence.get("sample_count", 0) or 0),
+                "success_count": int(evidence.get("success_count", 0) or 0),
+                "success_rate": float(evidence.get("success_rate", 0.0) or 0.0),
+            },
         }
     except Exception:
         return None

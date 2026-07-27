@@ -82,7 +82,10 @@ async def test_02_streaming_with_tools_interleaved(monkeypatch):
         ], 1, {}
 
     agent = _agent(monkeypatch, mock_chat)
-    result = await agent.chat("test", on_stream=lambda e: events.append(e))
+    result = await agent.chat(
+        "Search for HTTP modules and run api.get.",
+        on_stream=lambda e: events.append(e),
+    )
 
     assert result.ok
     types = [e.type for e in events]
@@ -117,7 +120,7 @@ async def test_03_multiple_callback_crashes(monkeypatch):
         crash_count[0] += 1
         raise ValueError("crash #{}".format(crash_count[0]))
 
-    result = await agent.chat("test", on_stream=_crasher)
+    result = await agent.chat("Search for test modules.", on_stream=_crasher)
     assert result.ok
     assert crash_count[0] >= 2  # At least TOOL_START + TOOL_END
 
@@ -226,7 +229,7 @@ async def test_07_full_chat_both_callbacks(monkeypatch):
 
     agent = _agent(monkeypatch, mock_chat)
     result = await agent.chat(
-        "scrape example.com",
+        "Please scrape example.com",
         mode="execute",
         on_tool_call=lambda name, args: tool_calls.append(name),
         on_stream=lambda e: stream_events.append(e),

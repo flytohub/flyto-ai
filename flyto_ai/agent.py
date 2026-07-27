@@ -19,6 +19,7 @@ from flyto_ai.closed_loop_v3 import (
     ModelRoute,
 )
 from flyto_ai.config import AgentConfig
+from flyto_ai.intelligence.planner import ToolIntentDecision, classify_tool_intent
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
@@ -90,6 +91,17 @@ class Agent:
         self._permission_enforcer = PermissionEnforcer(
             level=PermissionLevel[config.permission_level.upper()],
         )
+        self._preferred_language: Optional[str] = None
+        self._last_routing_decision: Optional[ToolIntentDecision] = None
+        self._routing_metrics = {
+            "turns": 0,
+            "answer_only_turns": 0,
+            "ambiguous_turns": 0,
+            "action_turns": 0,
+            "tool_calls_attempted": 0,
+            "tool_calls_executed": 0,
+            "tool_calls_blocked": 0,
+        }
 
         # Memory system (lazy init)
         self._memory_store = None
@@ -171,6 +183,20 @@ class Agent:
         if self._last_model_route is None:
             return None
         return self._last_model_route.to_dict()
+
+    @property
+    def routing_decision(self) -> Optional[Dict[str, Any]]:
+        """Return the latest deterministic conversation-routing evidence."""
+        self._ensure_routing_state()
+        if self._last_routing_decision is None:
+            return None
+        return self._last_routing_decision.to_dict()
+
+    @property
+    def routing_metrics(self) -> Dict[str, int]:
+        """Return counters suitable for false-activation and tool-use evals."""
+        self._ensure_routing_state()
+        return dict(self._routing_metrics)
 
     @property
     def transcript(self):
@@ -527,11 +553,16 @@ class Agent:
 
     async def _try_deterministic(
         self, message: str, on_tool_call, on_stream, dispatch_wrapper,
+        routing_decision: Optional[ToolIntentDecision] = None,
     ) -> Optional[ChatResponse]:
         """Try to handle the message with deterministic planning (zero LLM).
 
         Returns a ChatResponse if handled, None to fall back to LLM.
         """
+        routing_decision = routing_decision or classify_tool_intent(message)
+        if not routing_decision.tool_eligible:
+            return None
+
         try:
             from flyto_ai.intelligence.planner import extract_intent, extract_intent_llm, plan_execution, execute_plan, _resolve_url
             from flyto_ai.tools.core_tools import get_browser_status
@@ -582,18 +613,20 @@ class Agent:
                 deterministic_available=True,
             )
 
+        dispatch_fn, _ = self._build_dispatch(
+            message, on_tool_call, on_stream, dispatch_wrapper,
+            mode="execute",
+            blueprint_selection_mode="deterministic",
+            routing_decision=routing_decision,
+            active_tools=self._tools_for_route(routing_decision, "execute"),
+        )
+        if dispatch_fn is None:
+            return None
+
         # Exact blueprint reuse: zero LLM, but never bypass the agent's safety
         # boundary. ``use_blueprint`` expands the pattern and safe_dispatch
         # executes every Core step with validation before reporting outcome.
         if intent.get("intent") == "blueprint":
-            dispatch_fn, _ = self._build_dispatch(
-                message, on_tool_call, on_stream, dispatch_wrapper,
-                mode="execute",
-                blueprint_selection_mode="deterministic",
-            )
-            if dispatch_fn is None:
-                return None
-
             blueprint_args = {
                 "blueprint_id": intent.get("blueprint_id", ""),
                 "args": intent.get("args", {}),
@@ -663,11 +696,7 @@ class Agent:
         if not steps:
             return None
 
-        # 3. Execute with raw dispatch (bypass middleware for deterministic steps)
-        dispatch_fn = self._dispatch_fn
-        if dispatch_wrapper and dispatch_fn:
-            dispatch_fn = dispatch_wrapper(dispatch_fn)
-
+        # 3. Execute through the same policy boundary as model-selected tools.
         results, summary = await execute_plan(steps, dispatch_fn)
 
         # 4. Check if execution succeeded
@@ -721,13 +750,16 @@ class Agent:
         user_message: str = "",
         execute_blueprints: bool = True,
         blueprint_selection_mode: str = "model_selected",
+        routing_decision: Optional[ToolIntentDecision] = None,
     ):
         """Create a dispatch function with permission + hooks + policy enforcement + assistant middleware."""
+        self._ensure_routing_state()
         base_dispatch = self._dispatch_fn
         policies = self._policies
         enable_injection = self._config.enable_injection_detection
         enforcer = self._permission_enforcer
         hooks = self._hooks
+        route_mode = routing_decision.mode if routing_decision else "action"
 
         # Wrap with assistant middleware (blueprint guard + selector healing)
         if self._assistant and base_dispatch:
@@ -737,9 +769,16 @@ class Agent:
 
         async def preflight_blueprint_step(func_args: dict) -> dict:
             """Check static module access before a blueprint starts side effects."""
-            decision = enforcer.check("execute_module", func_args)
+            decision = enforcer.check_route(
+                "execute_module", func_args, route_mode,
+            )
             if not decision.allowed:
-                return {"ok": False, "error": decision.reason}
+                return {
+                    "ok": False,
+                    "error": decision.reason,
+                    "policy_outcome": decision.outcome.value,
+                    "routing_mode": route_mode,
+                }
             if policies and not is_tool_allowed("execute_module", policies):
                 return {"ok": False, "error": "Tool not allowed: execute_module"}
             if policies:
@@ -760,29 +799,64 @@ class Agent:
             }
 
         async def safe_dispatch(func_name: str, func_args: dict) -> dict:
-            # Permission tier enforcement
-            decision = enforcer.check(func_name, func_args)
+            self._routing_metrics["tool_calls_attempted"] += 1
+
+            # Conversation route + permission tier enforcement.  The exact
+            # call is checked at runtime; MCP annotations are never authority.
+            decision = enforcer.check_route(func_name, func_args, route_mode)
             if not decision.allowed:
-                return {"ok": False, "error": decision.reason}
+                self._routing_metrics["tool_calls_blocked"] += 1
+                return {
+                    "ok": False,
+                    "error": decision.reason,
+                    "policy_outcome": decision.outcome.value,
+                    "routing_mode": route_mode,
+                }
+
+            if func_name == "use_blueprint":
+                blueprint_id = str(func_args.get("blueprint_id", ""))
+                resolver = getattr(self, "_trusted_blueprint_resolver", None)
+                if resolver is None:
+                    from flyto_ai.intelligence.planner import (
+                        trusted_blueprint_summary,
+                    )
+                    trusted = trusted_blueprint_summary(blueprint_id)
+                else:
+                    trusted = resolver(blueprint_id)
+                if not trusted:
+                    self._routing_metrics["tool_calls_blocked"] += 1
+                    return {
+                        "ok": False,
+                        "error": (
+                            "Blueprint blocked: automatic execution requires "
+                            "verified runtime evidence."
+                        ),
+                        "policy_outcome": "block",
+                        "routing_mode": route_mode,
+                    }
 
             # Legacy policy enforcement (allowlists)
             if policies and not is_tool_allowed(func_name, policies):
+                self._routing_metrics["tool_calls_blocked"] += 1
                 return {"ok": False, "error": "Tool not allowed: {}".format(func_name)}
             if policies and func_name == "execute_module":
                 module_id = func_args.get("module_id", "")
                 if not is_module_allowed(module_id, policies):
                     category = module_id.split(".")[0] if "." in module_id else module_id
+                    self._routing_metrics["tool_calls_blocked"] += 1
                     return {"ok": False, "error": "Module category '{}' is not allowed.".format(category)}
 
             # Extension hooks: before_tool_call (deny = short-circuit)
             if hooks:
                 hook_result = await hooks.invoke_before_tool_call(func_name, func_args)
                 if not hook_result.allowed:
+                    self._routing_metrics["tool_calls_blocked"] += 1
                     return {"ok": False, "error": hook_result.reason}
                 if hook_result.modified_arguments is not None:
                     func_args = hook_result.modified_arguments
 
             result = await assisted_dispatch(func_name, func_args)
+            self._routing_metrics["tool_calls_executed"] += 1
 
             # An expanded blueprint is a deterministic execution contract.
             # Run it through this same safe dispatcher so every nested module
@@ -874,9 +948,26 @@ class Agent:
 
         await self._init_memory()
 
+        routing_decision = (
+            classify_tool_intent(message)
+            if mode == "execute"
+            else ToolIntentDecision(
+                "action", 1.0, "explicit_non_execute_mode", (mode,),
+            )
+        )
+        self._record_routing_decision(routing_decision)
+
         # ── Deterministic pipeline (try before LLM) ──
-        if mode == "execute" and self._config.enable_deterministic and self._dispatch_fn:
-            det_result = await self._try_deterministic(message, on_tool_call, on_stream, dispatch_wrapper)
+        if (
+            mode == "execute"
+            and routing_decision.tool_eligible
+            and self._config.enable_deterministic
+            and self._dispatch_fn
+        ):
+            det_result = await self._try_deterministic(
+                message, on_tool_call, on_stream, dispatch_wrapper,
+                routing_decision=routing_decision,
+            )
             if det_result is not None:
                 # Record cost, memory, audit
                 duration_ms = int((time.monotonic() - t0) * 1000)
@@ -893,11 +984,16 @@ class Agent:
         messages.append({"role": "user", "content": message})
 
         # Build dispatch + system prompt
+        active_tools = self._tools_for_route(routing_decision, mode)
         dispatch_fn, has_tools = self._build_dispatch(
             message, on_tool_call, on_stream, dispatch_wrapper, mode=mode,
+            routing_decision=routing_decision,
+            active_tools=active_tools,
         )
         system_prompt, has_blueprint_match = await self._build_prompt(
             message, mode, has_tools, template_context, injection_note,
+            history=history,
+            routing_decision=routing_decision,
         )
 
         if self._compactor:
@@ -915,6 +1011,7 @@ class Agent:
         if has_tools:
             response_content, tool_calls, rounds_used, usage_dict = await self._call_llm(
                 messages, system_prompt, dispatch_fn, on_stream=on_stream,
+                tools=active_tools,
             )
         else:
             response_content, tool_calls, rounds_used, usage_dict = await self._call_llm_toolless(
@@ -949,6 +1046,7 @@ class Agent:
                 and not _has_action
                 and response_content
                 and has_tools
+                and routing_decision.tool_eligible
                 and total_rounds <= 1
                 and self._config.provider != "ollama"):
             try:
@@ -962,6 +1060,7 @@ class Agent:
                 ]
                 retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(
                     nudge_messages, system_prompt, dispatch_fn, on_stream=on_stream,
+                    tools=active_tools,
                 )
                 # Only accept if LLM actually EXECUTED something (not just searched)
                 has_execution = any(
@@ -1033,6 +1132,93 @@ class Agent:
 
     # ── Chat phase helpers ────────────────────────────────────────
 
+    def _ensure_routing_state(self) -> None:
+        """Support lightweight test agents created without ``__init__``."""
+        if not hasattr(self, "_preferred_language"):
+            self._preferred_language = None
+        if not hasattr(self, "_last_routing_decision"):
+            self._last_routing_decision = None
+        if not hasattr(self, "_routing_metrics"):
+            self._routing_metrics = {
+                "turns": 0,
+                "answer_only_turns": 0,
+                "ambiguous_turns": 0,
+                "action_turns": 0,
+                "tool_calls_attempted": 0,
+                "tool_calls_executed": 0,
+                "tool_calls_blocked": 0,
+            }
+
+    def _record_routing_decision(
+        self,
+        decision: ToolIntentDecision,
+    ) -> None:
+        self._ensure_routing_state()
+        self._last_routing_decision = decision
+        self._routing_metrics["turns"] += 1
+        key = "{}_turns".format(decision.mode)
+        if key in self._routing_metrics:
+            self._routing_metrics[key] += 1
+
+    @staticmethod
+    def _tool_name(tool: Dict[str, Any]) -> str:
+        """Read either MCP-style or OpenAI-style tool definitions."""
+        if tool.get("name"):
+            return str(tool["name"])
+        function = tool.get("function")
+        if isinstance(function, dict):
+            return str(function.get("name", ""))
+        return ""
+
+    def _tools_for_route(
+        self,
+        decision: ToolIntentDecision,
+        mode: str,
+    ) -> List[Dict]:
+        """Expose the smallest schema set justified by this turn."""
+        tools = list(self._tools or [])
+        if mode != "execute":
+            return tools
+        if decision.mode == "answer_only":
+            return []
+
+        enforcer = self._permission_enforcer
+        maximum = (
+            PermissionLevel.READ_ONLY
+            if decision.mode == "ambiguous"
+            else enforcer.level
+        )
+        return [
+            tool for tool in tools
+            if enforcer.required_level(self._tool_name(tool), {}) <= maximum
+        ]
+
+    def _resolve_reply_language(
+        self,
+        message: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        self._ensure_routing_state()
+        preferred = self._preferred_language
+        if preferred is None:
+            for item in reversed(history or []):
+                if item.get("role") != "user":
+                    continue
+                content = str(item.get("content", "")).strip()
+                if len(content) >= 15 or any("\u4e00" <= c <= "\u9fff" for c in content):
+                    preferred = detect_language(content)
+                    break
+        language = detect_language(message, preferred_language=preferred)
+        meaningful_length = sum(char.isalnum() for char in message)
+        if (
+            preferred is not None
+            and meaningful_length <= 4
+            and language != preferred
+        ):
+            language = preferred
+        self._preferred_language = language
+        return language
+
     def _detect_injection(self, message: str) -> Optional[str]:
         """Scan user message for prompt injection patterns."""
         if not self._config.enable_injection_detection:
@@ -1048,6 +1234,8 @@ class Agent:
         self, message: str, on_tool_call, on_stream, dispatch_wrapper,
         mode: str = "execute",
         blueprint_selection_mode: str = "model_selected",
+        routing_decision: Optional[ToolIntentDecision] = None,
+        active_tools: Optional[List[Dict]] = None,
     ) -> Tuple:
         """Build the final dispatch function with middleware + instrumentation.
 
@@ -1058,6 +1246,7 @@ class Agent:
             user_message=message,
             execute_blueprints=mode == "execute",
             blueprint_selection_mode=blueprint_selection_mode,
+            routing_decision=routing_decision,
         )
         if dispatch_wrapper and dispatch_fn:
             dispatch_fn = dispatch_wrapper(dispatch_fn)
@@ -1084,13 +1273,16 @@ class Agent:
                 return result
 
             dispatch_fn = _instrumented
-        has_tools = bool(self._tools and dispatch_fn)
+        visible_tools = self._tools if active_tools is None else active_tools
+        has_tools = bool(visible_tools and dispatch_fn)
         return dispatch_fn, has_tools
 
     async def _build_prompt(
         self, message: str, mode: str, has_tools: bool,
         template_context: Optional[Dict[str, Any]],
         injection_note: Optional[str],
+        history: Optional[List[Dict[str, Any]]] = None,
+        routing_decision: Optional[ToolIntentDecision] = None,
     ) -> Tuple[str, bool]:
         """Build the system prompt with memory, injection notes, and blueprint hints.
 
@@ -1100,7 +1292,7 @@ class Agent:
         if self._system_prompt:
             return self._system_prompt, False
 
-        reply_language = detect_language(message)
+        reply_language = self._resolve_reply_language(message, history)
 
         memory_addition = None
         if self._memory_search:
@@ -1115,7 +1307,12 @@ class Agent:
                 logger.debug("Memory search failed: %s", e)
 
         blueprint_hint = ""
-        if self._assistant and mode == "execute" and has_tools:
+        if (
+            self._assistant
+            and mode == "execute"
+            and has_tools
+            and (routing_decision is None or routing_decision.tool_eligible)
+        ):
             blueprint_hint = self._assistant.prepare(message, mode)
             self._last_blueprint_hint = blueprint_hint
 
@@ -1363,10 +1560,18 @@ class Agent:
         except Exception:
             pass
 
-    async def _call_llm(self, messages, system_prompt, dispatch_fn, on_stream=None):
+    async def _call_llm(
+        self,
+        messages,
+        system_prompt,
+        dispatch_fn,
+        on_stream=None,
+        tools=None,
+    ):
         try:
+            active_tools = self._tools if tools is None else tools
             return await self._provider.chat(
-                messages, system_prompt, self._tools,
+                messages, system_prompt, active_tools,
                 dispatch_fn, self._config.max_tool_rounds,
                 on_stream=on_stream,
             )

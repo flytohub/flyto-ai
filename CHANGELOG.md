@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Hardened multilingual intent routing for explicit actions, current-data
+  questions, negation, quoted/meta examples, and declarative questions. Route
+  permissions are now rechecked at dispatch so forged provider calls cannot
+  bypass answer-only or confirmation-required decisions.
+- Made learned Blueprint trust evidence fail closed for malformed, non-finite,
+  non-integral, inconsistent, or out-of-range values.
+- Improved explicit reply-language switching and persistence across short
+  follow-ups, with regression coverage for multilingual and mixed-language
+  conversations.
+- Added permanent routing, permission, Blueprint-boundary, malformed-evidence,
+  adversarial-provider, presentation-mutation, and seeded Unicode/noise tests.
 - Added trusted Blueprint execution evidence for duration, steps, attempts,
   assertions, workflow identity, executor version, and selection mode.
   Deterministic exact reuse now records `planner_model_calls_used=0` with an

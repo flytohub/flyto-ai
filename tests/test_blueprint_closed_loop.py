@@ -44,6 +44,10 @@ def _bare_agent(dispatch, permission_level="workspace_write"):
     agent._hooks = None
     agent._pro = None
     agent._tools = [{"name": "use_blueprint"}]
+    agent._trusted_blueprint_resolver = lambda blueprint_id: {
+        "id": blueprint_id,
+        "trust_tier": "local_verified",
+    }
     agent._cost_tracker = None
     agent._session_id = "closed-loop-test"
     return agent
@@ -495,6 +499,12 @@ def test_planner_matches_blueprint_summary_and_extracts_explicit_args(monkeypatc
                 "id": "learned_copy",
                 "score": 70,
                 "use_count": 2,
+                "trust_tier": "local_verified",
+                "evidence_card": {
+                    "sample_count": 3,
+                    "success_count": 3,
+                    "success_rate": 1.0,
+                },
                 "args": {
                     "text": {"type": "string", "required": True},
                     "count": {"type": "integer", "required": True},
@@ -511,6 +521,12 @@ def test_planner_matches_blueprint_summary_and_extracts_explicit_args(monkeypatc
         "intent": "blueprint",
         "blueprint_id": "learned_copy",
         "args": {"text": "Flyto", "count": 3},
+        "selection_evidence": {
+            "trust_tier": "local_verified",
+            "sample_count": 3,
+            "success_count": 3,
+            "success_rate": 1.0,
+        },
     }
 
 

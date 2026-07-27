@@ -51,7 +51,8 @@ _NO_TOOL_RE = re.compile(
     r"(?:工具|tool|mcp)"
     r"|(?:只|僅|仅).{0,8}(?:回答|說明|说明).{0,12}(?:不要|不使用|不用).{0,8}"
     r"(?:工具|tool|mcp|執行|执行)"
-    r"|(?:ツール|mcp).{0,8}(?:使わず|使用せず)"
+    r"|(?:ツール|mcp|blueprint)(?:も)?.{0,16}"
+    r"(?:使わず|使用せず|使わないで|使用しないで)"
     r"|(?:도구|mcp).{0,8}(?:사용하지\s*말고|없이)"
     r"|(?:sin\s+usar|no\s+uses?).{0,8}(?:herramientas?|mcp)"
     r"|(?:sans\s+utiliser|n'utilise\s+pas).{0,8}(?:outils?|mcp)"
@@ -125,7 +126,7 @@ _EN_ACTION_RE = re.compile(
     r"upload|create|update|delete|remove|fix|repair|push|deploy|send|"
     r"take\s+(?:a\s+)?screenshot|repeat|rewrite|fetch|find|check|write|"
     r"install|commit|rerun|build|apply|read|summari[sz]e|analy[sz]e|"
-    r"inspect|list|scrape|extract|save|tell)\b",
+    r"inspect|list|scrape|extract|save|tell|reuse|convert|import)\b",
     re.IGNORECASE,
 )
 _CJK_ACTION_RE = re.compile(

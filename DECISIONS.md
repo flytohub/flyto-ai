@@ -8,6 +8,11 @@
 - A dependency branch is merged when it closes a security alert or has another
   verified product need; lower-bound-only bumps are not merged merely because
   a newer compatible version exists.
+- Grype ignores `GHSA-vxmw-7h4f-hqxh` only for the exact pinned
+  `pypa/gh-action-pypi-publish` 1.14.1 SHA. The advisory fixes the issue in
+  1.13.0, but Syft exposes a pinned Action's SHA as its version, which Grype
+  cannot compare semantically. A package-, type-, version-, or advisory-wide
+  exception is not allowed.
 - Repository policy tests pin the least-privilege CI permission and patched
   publishing action so later edits cannot silently reopen the same alerts.
 

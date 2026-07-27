@@ -5,6 +5,9 @@ Last updated: 2026-07-27
 Implemented:
 - GitHub Actions use current Checkout/Setup Python releases, and the PyPI
   publishing action is pinned to the patched 1.14.1 commit.
+- Grype has one exact four-field exception for that patched commit because the
+  scanner receives its SHA rather than semantic version 1.14.1. Other versions,
+  packages, package types, and advisories remain visible.
 - CI declares top-level `contents: read` permissions. Dependabot keeps
   repository security updates enabled while routine version-only PR creation
   is disabled, preventing non-security branch accumulation.
@@ -45,7 +48,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1153 passed, 15 optional/live-integration skips;
+- full suite: 1154 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

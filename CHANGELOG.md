@@ -5,6 +5,9 @@
 - Closed the GitHub security-and-quality backlog: CI now declares read-only
   repository permissions, the vulnerable PyPI publishing action is pinned to
   its patched release, and Checkout/Setup Python pins are current.
+- Added an exact Grype exception for the patched PyPI action SHA because Syft
+  reports that SHA as the package version instead of its 1.14.1 release. The
+  exception matches one advisory, package, package type, and SHA only.
 - Changed Dependabot to keep genuine security updates enabled while suppressing
   routine version-only branches that do not change CI's resolved dependencies.
   Added regression tests for these repository security policies.

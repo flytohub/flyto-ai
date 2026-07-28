@@ -469,111 +469,111 @@ Execute committed benchmark fixtures through real OS and HTTP paths.
 | `__init__(model: V3OllamaClient) -> None` | internal | Internal `__init__` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:247`](../../../flyto_ai/benchmarking_v3.py#L247) |
 | `close() -> None` | public | Release resources owned by `RealWorkloadExecutor`. | [`flyto_ai/benchmarking_v3.py:262`](../../../flyto_ai/benchmarking_v3.py#L262) |
 | `async execute(task_id: str, steps: Sequence[Mapping[str, Any]], *, seed: int) -> WorkloadObservation` | public | Public `execute` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:267`](../../../flyto_ai/benchmarking_v3.py#L267) |
-| `_execute_coding(modules: Sequence[str]) -> tuple[bool, str, int]` | internal | Internal `_execute_coding` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:321`](../../../flyto_ai/benchmarking_v3.py#L321) |
-| `_execute_browser(modules: Sequence[str]) -> tuple[bool, str, int]` | internal | Internal `_execute_browser` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:361`](../../../flyto_ai/benchmarking_v3.py#L361) |
-| `_execute_api(modules: Sequence[str]) -> tuple[bool, str, int]` | internal | Internal `_execute_api` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:382`](../../../flyto_ai/benchmarking_v3.py#L382) |
+| `_execute_coding(modules: Sequence[str]) -> tuple[bool, str, int]` | internal | Internal `_execute_coding` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:326`](../../../flyto_ai/benchmarking_v3.py#L326) |
+| `_execute_browser(modules: Sequence[str]) -> tuple[bool, str, int]` | internal | Internal `_execute_browser` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:370`](../../../flyto_ai/benchmarking_v3.py#L370) |
+| `_execute_api(modules: Sequence[str]) -> tuple[bool, str, int]` | internal | Internal `_execute_api` implementation on `RealWorkloadExecutor`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:395`](../../../flyto_ai/benchmarking_v3.py#L395) |
 
 ### `RealBlueprintBenchmarkHost` (public)
 
 `class RealBlueprintBenchmarkHost`
 
-Source: [`flyto_ai/benchmarking_v3.py:410`](../../../flyto_ai/benchmarking_v3.py#L410)
+Source: [`flyto_ai/benchmarking_v3.py:424`](../../../flyto_ai/benchmarking_v3.py#L424)
 
 Run the v3 paired suite against real Blueprint and workload paths.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(*, suite: Mapping[str, Any], config: V3HostConfig, model: V3OllamaClient, dataset_commit: str, environment_digest: str, run_id: str, host_identity: HostIdentity, sealed_prompts: Mapping[str, str]) -> None` | internal | Internal `__init__` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:413`](../../../flyto_ai/benchmarking_v3.py#L413) |
-| `async run() -> list[dict]` | public | Run the primary operation implemented by `RealBlueprintBenchmarkHost`. | [`flyto_ai/benchmarking_v3.py:469`](../../../flyto_ai/benchmarking_v3.py#L469) |
-| `async _run_one(task: Mapping[str, Any], prompt: str, mode: str, trial: int, seed: int, executor: RealWorkloadExecutor) -> dict` | internal | Internal `_run_one` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:498`](../../../flyto_ai/benchmarking_v3.py#L498) |
-| `async _evaluate(task: Mapping[str, Any], prompt: str, mode: str, seed: int, executor: RealWorkloadExecutor) -> tuple[V3Trace, PlannerObservation, WorkloadObservation]` | internal | Internal `_evaluate` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:583`](../../../flyto_ai/benchmarking_v3.py#L583) |
-| `_verified_steps(task_id: str, prompt: str) -> list[dict]` | internal | Internal `_verified_steps` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:684`](../../../flyto_ai/benchmarking_v3.py#L684) |
-| `_evaluate_incompatible(prompt: str, trace: V3Trace) -> V3Trace` | internal | Internal `_evaluate_incompatible` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:713`](../../../flyto_ai/benchmarking_v3.py#L713) |
-| `_task_prompt(task: Mapping[str, Any]) -> str` | internal | Internal `_task_prompt` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:734`](../../../flyto_ai/benchmarking_v3.py#L734) |
-| `_validate_sealed_prompts() -> None` | internal | Internal `_validate_sealed_prompts` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:739`](../../../flyto_ai/benchmarking_v3.py#L739) |
+| `__init__(*, suite: Mapping[str, Any], config: V3HostConfig, model: V3OllamaClient, dataset_commit: str, environment_digest: str, run_id: str, host_identity: HostIdentity, sealed_prompts: Mapping[str, str]) -> None` | internal | Internal `__init__` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:427`](../../../flyto_ai/benchmarking_v3.py#L427) |
+| `async run() -> list[dict]` | public | Run the primary operation implemented by `RealBlueprintBenchmarkHost`. | [`flyto_ai/benchmarking_v3.py:483`](../../../flyto_ai/benchmarking_v3.py#L483) |
+| `async _run_one(task: Mapping[str, Any], prompt: str, mode: str, trial: int, seed: int, executor: RealWorkloadExecutor) -> dict` | internal | Internal `_run_one` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:512`](../../../flyto_ai/benchmarking_v3.py#L512) |
+| `async _evaluate(task: Mapping[str, Any], prompt: str, mode: str, seed: int, executor: RealWorkloadExecutor) -> tuple[V3Trace, PlannerObservation, WorkloadObservation]` | internal | Internal `_evaluate` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:597`](../../../flyto_ai/benchmarking_v3.py#L597) |
+| `_verified_steps(task_id: str, prompt: str) -> list[dict]` | internal | Internal `_verified_steps` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:698`](../../../flyto_ai/benchmarking_v3.py#L698) |
+| `_evaluate_incompatible(prompt: str, trace: V3Trace) -> V3Trace` | internal | Internal `_evaluate_incompatible` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:727`](../../../flyto_ai/benchmarking_v3.py#L727) |
+| `_task_prompt(task: Mapping[str, Any]) -> str` | internal | Internal `_task_prompt` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:748`](../../../flyto_ai/benchmarking_v3.py#L748) |
+| `_validate_sealed_prompts() -> None` | internal | Internal `_validate_sealed_prompts` implementation on `RealBlueprintBenchmarkHost`; the linked source is authoritative. | [`flyto_ai/benchmarking_v3.py:753`](../../../flyto_ai/benchmarking_v3.py#L753) |
 
 ### `_LegacyTrace` (internal)
 
 `class _LegacyTrace`
 
-Source: [`flyto_ai/benchmarking_v3.py:758`](../../../flyto_ai/benchmarking_v3.py#L758)
+Source: [`flyto_ai/benchmarking_v3.py:772`](../../../flyto_ai/benchmarking_v3.py#L772)
 
 Internal `_LegacyTrace` implementation on this module; the linked source is authoritative.
 
 ### `_build_verified_engine` (internal)
 
 `_build_verified_engine(compatibility: Mapping[str, str])`
-Source: [`flyto_ai/benchmarking_v3.py:764`](../../../flyto_ai/benchmarking_v3.py#L764)
+Source: [`flyto_ai/benchmarking_v3.py:778`](../../../flyto_ai/benchmarking_v3.py#L778)
 
 Internal `_build_verified_engine` implementation on this module; the linked source is authoritative.
 
 ### `_reference_workflow` (internal)
 
 `_reference_workflow(task_id: str) -> dict`
-Source: [`flyto_ai/benchmarking_v3.py:811`](../../../flyto_ai/benchmarking_v3.py#L811)
+Source: [`flyto_ai/benchmarking_v3.py:825`](../../../flyto_ai/benchmarking_v3.py#L825)
 
 Internal `_reference_workflow` implementation on this module; the linked source is authoritative.
 
 ### `_evaluate_v3_assertion` (internal)
 
 `_evaluate_v3_assertion(name: str, trace: V3Trace) -> bool`
-Source: [`flyto_ai/benchmarking_v3.py:859`](../../../flyto_ai/benchmarking_v3.py#L859)
+Source: [`flyto_ai/benchmarking_v3.py:915`](../../../flyto_ai/benchmarking_v3.py#L915)
 
 Internal `_evaluate_v3_assertion` implementation on this module; the linked source is authoritative.
 
 ### `load_v3_host_config` (public)
 
 `load_v3_host_config(path: str | Path, *, model: Optional[str] = None, model_digest: Optional[str] = None) -> V3HostConfig`
-Source: [`flyto_ai/benchmarking_v3.py:884`](../../../flyto_ai/benchmarking_v3.py#L884)
+Source: [`flyto_ai/benchmarking_v3.py:940`](../../../flyto_ai/benchmarking_v3.py#L940)
 
 Load the v3 template and optionally bind a matrix model at runtime.
 
 ### `detect_host_identity` (public)
 
 `detect_host_identity() -> HostIdentity`
-Source: [`flyto_ai/benchmarking_v3.py:933`](../../../flyto_ai/benchmarking_v3.py#L933)
+Source: [`flyto_ai/benchmarking_v3.py:989`](../../../flyto_ai/benchmarking_v3.py#L989)
 
 Derive hardware and trust-boundary identity from the running host.
 
 ### `build_v3_environment_digest` (public)
 
 `build_v3_environment_digest(config: V3HostConfig, *, flyto_ai_commit: str, flyto_blueprint_commit: str, host_identity: HostIdentity) -> str`
-Source: [`flyto_ai/benchmarking_v3.py:954`](../../../flyto_ai/benchmarking_v3.py#L954)
+Source: [`flyto_ai/benchmarking_v3.py:1010`](../../../flyto_ai/benchmarking_v3.py#L1010)
 
 Bind v3 evidence to code, model bytes, host class, and runtime.
 
 ### `build_cli_parser` (public)
 
 `build_cli_parser()`
-Source: [`flyto_ai/benchmarking_v3.py:980`](../../../flyto_ai/benchmarking_v3.py#L980)
+Source: [`flyto_ai/benchmarking_v3.py:1036`](../../../flyto_ai/benchmarking_v3.py#L1036)
 
 Public `build_cli_parser` implementation on this module; the linked source is authoritative.
 
 ### `main` (public)
 
 `main(argv: Optional[Sequence[str]] = None) -> int`
-Source: [`flyto_ai/benchmarking_v3.py:1003`](../../../flyto_ai/benchmarking_v3.py#L1003)
+Source: [`flyto_ai/benchmarking_v3.py:1059`](../../../flyto_ai/benchmarking_v3.py#L1059)
 
 Public `main` implementation on this module; the linked source is authoritative.
 
 ### `_positive_telemetry` (internal)
 
 `_positive_telemetry(payload: Mapping[str, Any], field: str) -> int`
-Source: [`flyto_ai/benchmarking_v3.py:1079`](../../../flyto_ai/benchmarking_v3.py#L1079)
+Source: [`flyto_ai/benchmarking_v3.py:1135`](../../../flyto_ai/benchmarking_v3.py#L1135)
 
 Internal `_positive_telemetry` implementation on this module; the linked source is authoritative.
 
 ### `_digest` (internal)
 
 `_digest(value: str) -> str`
-Source: [`flyto_ai/benchmarking_v3.py:1088`](../../../flyto_ai/benchmarking_v3.py#L1088)
+Source: [`flyto_ai/benchmarking_v3.py:1144`](../../../flyto_ai/benchmarking_v3.py#L1144)
 
 Internal `_digest` implementation on this module; the linked source is authoritative.
 
 ### `_model_family` (internal)
 
 `_model_family(model: str) -> str`
-Source: [`flyto_ai/benchmarking_v3.py:1092`](../../../flyto_ai/benchmarking_v3.py#L1092)
+Source: [`flyto_ai/benchmarking_v3.py:1148`](../../../flyto_ai/benchmarking_v3.py#L1148)
 
 Internal `_model_family` implementation on this module; the linked source is authoritative.
 

@@ -292,7 +292,11 @@ class RealWorkloadExecutor:
             )
             input_tokens = output_tokens = model_calls = 0
         elif task_id == "real-llm-summary-with-usage":
-            if modules != ["benchmark.llm_summary"]:
+            if modules != [
+                "benchmark.api_fixture",
+                "benchmark.llm_summary",
+                "benchmark.output_digest",
+            ]:
                 success, digest, calls = False, _digest("invalid-steps"), 0
                 input_tokens = output_tokens = model_calls = 0
             else:
@@ -301,7 +305,8 @@ class RealWorkloadExecutor:
                 )
                 success = bool(content)
                 digest = _digest(content)
-                calls = model_calls = 1
+                calls = 3
+                model_calls = 1
         else:
             raise BenchmarkHostError(
                 "unsupported real workload '{}'".format(task_id)
@@ -319,7 +324,11 @@ class RealWorkloadExecutor:
         )
 
     def _execute_coding(self, modules: Sequence[str]) -> tuple[bool, str, int]:
-        if list(modules) != ["benchmark.code_apply", "benchmark.code_test"]:
+        if list(modules) != [
+            "benchmark.code_apply",
+            "benchmark.code_test",
+            "benchmark.code_verify",
+        ]:
             return False, _digest("invalid-steps"), 0
         with tempfile.TemporaryDirectory(prefix="flyto-v3-code-") as directory:
             root = Path(directory)
@@ -356,13 +365,17 @@ class RealWorkloadExecutor:
                 + tests
                 + str(completed.returncode)
             )
-            return completed.returncode == 0, digest, 2
+            return completed.returncode == 0, digest, 3
 
     def _execute_browser(
         self,
         modules: Sequence[str],
     ) -> tuple[bool, str, int]:
-        if list(modules) != ["benchmark.browser_fetch"]:
+        if list(modules) != [
+            "benchmark.browser_fetch",
+            "benchmark.html_parse",
+            "benchmark.heading_verify",
+        ]:
             return False, _digest("invalid-steps"), 0
         request = urllib.request.Request(
             self._base_url + "/page",
@@ -376,13 +389,14 @@ class RealWorkloadExecutor:
         return (
             heading == "Blueprint Real Browser Fixture",
             _digest(heading),
-            1,
+            3,
         )
 
     def _execute_api(self, modules: Sequence[str]) -> tuple[bool, str, int]:
         if list(modules) != [
             "benchmark.api_fetch",
             "benchmark.json_persist",
+            "benchmark.json_verify",
         ]:
             return False, _digest("invalid-steps"), 0
         request = urllib.request.Request(
@@ -403,7 +417,7 @@ class RealWorkloadExecutor:
             isinstance(reloaded, list)
             and [item.get("id") for item in reloaded] == [1, 2, 3],
             _digest(canonical),
-            2,
+            3,
         )
 
 
@@ -816,6 +830,11 @@ def _reference_workflow(task_id: str) -> dict:
             "steps": [
                 {"id": "apply", "module": "benchmark.code_apply", "params": {}},
                 {"id": "test", "module": "benchmark.code_test", "params": {}},
+                {
+                    "id": "verify",
+                    "module": "benchmark.code_verify",
+                    "params": {},
+                },
             ],
         },
         "real-browser-fetch-and-extract": {
@@ -826,7 +845,17 @@ def _reference_workflow(task_id: str) -> dict:
                     "id": "fetch",
                     "module": "benchmark.browser_fetch",
                     "params": {},
-                }
+                },
+                {
+                    "id": "parse",
+                    "module": "benchmark.html_parse",
+                    "params": {},
+                },
+                {
+                    "id": "verify",
+                    "module": "benchmark.heading_verify",
+                    "params": {},
+                },
             ],
         },
         "real-api-fetch-and-persist": {
@@ -839,17 +868,44 @@ def _reference_workflow(task_id: str) -> dict:
                     "module": "benchmark.json_persist",
                     "params": {},
                 },
+                {
+                    "id": "verify",
+                    "module": "benchmark.json_verify",
+                    "params": {},
+                },
             ],
         },
         "real-llm-summary-with-usage": {
             "name": "Real LLM summary with usage",
-            "tags": ["real", "llm", "summary", "usage", "tokens"],
+            "tags": [
+                "real",
+                "llm",
+                "summary",
+                "summarize",
+                "usage",
+                "tokens",
+                "token",
+                "account",
+                "planner",
+                "workflow",
+                "model",
+            ],
             "steps": [
+                {
+                    "id": "fixture",
+                    "module": "benchmark.api_fixture",
+                    "params": {},
+                },
                 {
                     "id": "summarize",
                     "module": "benchmark.llm_summary",
                     "params": {},
-                }
+                },
+                {
+                    "id": "digest",
+                    "module": "benchmark.output_digest",
+                    "params": {},
+                },
             ],
         },
     }

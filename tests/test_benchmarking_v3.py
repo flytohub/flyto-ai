@@ -9,6 +9,8 @@ from flyto_ai.benchmarking_v3 import (
     HostIdentity,
     RealBlueprintBenchmarkHost,
     RealWorkloadExecutor,
+    WORKFLOW_IDS,
+    _build_verified_engine,
     _reference_workflow,
     build_v3_environment_digest,
     load_v3_host_config,
@@ -68,7 +70,27 @@ def test_real_coding_browser_and_api_workloads_use_os_paths():
     assert all(item.executed for item in observations)
     assert all(item.success for item in observations)
     assert all(item.digest.startswith("sha256:") for item in observations)
-    assert [item.tool_calls for item in observations] == [2, 1, 2]
+    assert [item.tool_calls for item in observations] == [3, 3, 3]
+
+
+def test_verified_blueprints_learn_search_and_expand_through_real_engine():
+    compatibility = {
+        "repository": "flytohub/flyto-blueprint",
+        "runtime": "python3.11",
+        "framework": "flyto2",
+    }
+    engine = _build_verified_engine(compatibility)
+    suite = load_suite(SUITE_PATH)
+
+    for task in suite["tasks"]:
+        if task["id"] not in WORKFLOW_IDS:
+            continue
+        blueprint_id = WORKFLOW_IDS[task["id"]]
+        matches = engine.search(task["prompt"])
+        assert any(item["id"] == blueprint_id for item in matches)
+        expanded = engine.expand(blueprint_id, {})
+        assert expanded["ok"] is True
+        assert len(expanded["data"]["steps"]) == 3
 
 
 def test_v3_environment_binds_full_host_identity():

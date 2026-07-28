@@ -66,13 +66,40 @@ pretend the entire workflow is token-free.
 
 ### What the current tests actually prove
 
-The 2026-07-27 local verification covered:
+The 2026-07-28 Blueprint v3 evidence set contains five completed host runs:
+Qwen, Llama, and Gemma on Apple Silicon, plus an independent Qwen run on a
+GitHub-hosted Linux x86-64 runner. Each host ran 10 tasks 20 times in four
+modes—800 records per host, 4,000 records in total.
+
+The suite used the production Blueprint engine, real Ollama model calls, real
+subprocess and filesystem work for coding, real HTTP requests for browser/API
+cases, and a real SQLite lifecycle. It did not replace planner or workflow
+model calls with mocks. Across the five hosts:
+
+- workload success and warm-reuse success were 100%;
+- manual corrections and false reuse were both zero;
+- full measured tokens fell 71.25–72.90% versus re-planning without a
+  Blueprint, and 84.80–85.78% versus agent-only execution;
+- the paired 95% lower bound for the reduction versus no Blueprint stayed
+  between 63.29% and 64.43%;
+- the repeated Qwen run had zero success-rate drop and zero token increase.
+
+“Full measured tokens” means the benchmark adds planner tokens and any model
+tokens used inside the workflow. The browser/API cases use a real loopback HTTP
+service, not a public website; local Ollama reported no provider charge, so
+these runs do not prove cloud-model cost savings.
+
+Raw JSONL, scorecards, lifecycle evidence, rerun commands, and the independent
+GitHub run link live in
+[flyto-blueprint benchmark results](https://github.com/flytohub/flyto-blueprint/tree/main/benchmarks/results).
+
+The broader local verification also covered:
 
 - 700 multilingual and presentation-mutated routing cases;
 - 5,000 seeded Unicode/noise inputs with zero routing crashes;
 - 408 permission combinations;
 - 4,500 Blueprint trust-boundary cases and 38 malformed-evidence cases;
-- 1,150 passing project tests, with 15 optional/live-integration skips;
+- 1,173 passing project tests, with 15 optional/live-integration skips;
 - 17/17 strict Flyto2 Indexer checks, with zero warnings.
 
 These numbers describe the checked test set. They are not a claim that every
@@ -183,13 +210,16 @@ The core difference is **when the LLM is still needed**:
 | **Token evidence** | Provider bill/log | `planner_model_calls_used=0` on deterministic exact reuse |
 | **Shared procedures** | Trust is often implicit | Unknown imports stay quarantined |
 
-Flyto2 AI does not publish a made-up “60–80% savings” number. It records what it can
-prove: how many trusted runs passed, how many retried, how assertions behaved,
-latency p50/p95, and how many exact reuses skipped the agent's planning call.
+Flyto2 AI publishes the raw runs behind its savings claim instead of presenting
+one unexplained percentage. The v3 scorecards report planner and workflow
+tokens separately, then add them for the full measured total. They also report
+success, manual corrections, retries, assertions, latency, false reuse, paired
+confidence bounds, model digest, hardware, commit, and runner provenance.
 
-That last number is intentionally scoped to agent planning. A Blueprint can
-still contain an `llm.*` step. Flyto2 AI does not call the whole workflow
-“token-free” unless those step-level model calls are measured too.
+That distinction matters: deterministic Blueprint reuse can skip the outer
+planning call, but a saved workflow may still contain an `llm.*` step. It is
+only counted as a full-workflow reduction when those step-level model calls are
+measured too.
 
 ## Use Cases
 

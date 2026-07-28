@@ -1,6 +1,6 @@
 # State
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 Implemented:
 - GitHub Actions use current Checkout/Setup Python releases, and the PyPI
@@ -34,6 +34,13 @@ Implemented:
   Deterministic exact reuse records zero outer-agent planning calls;
   model-selected paths do not invent a count, and model-backed workflow steps
   are not mislabeled as token-free.
+- Blueprint benchmark v3 runs the production engine against real Ollama model
+  calls and real coding, loopback-browser, API, and LLM work. It records planner
+  and workflow tokens separately, verifies workload outputs, and publishes no
+  raw prompts or model responses.
+- The host matrix pins Qwen, Llama, and Gemma model digests. A separate GitHub
+  Linux runner uses a sealed prompt secret and uploads independently generated
+  raw runs, a scorecard, and a real SQLite lifecycle artifact.
 - Additive risk, approval, and evidence metadata on core tool definitions.
 - Pre-execution `validate_params` gate for `execute_module`.
 - Provider tool-call logs include MCP evidence metadata.
@@ -48,7 +55,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1154 passed, 15 optional/live-integration skips;
+- full suite: 1173 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;
@@ -60,6 +67,17 @@ inputs, a 408-case permission matrix, 4,500 Blueprint boundary cases, and 38
 malformed-evidence cases. These are bounded local test results, not a claim of
 perfect coverage for every language or live third-party MCP.
 
+The 2026-07-28 Blueprint v3 matrix produced 4,000 raw records from five
+800-record host runs: three model families on Apple Silicon and an independent
+GitHub-hosted Linux x86-64 run. All five scorecards verified 100% workload and
+warm-reuse success, zero manual corrections, zero false reuse, 71.25–72.90%
+full-token reduction versus re-planning without Blueprint, and 84.80–85.78%
+versus agent-only execution. The paired 95% lower bound versus no Blueprint was
+63.29–64.43%. Repeated Qwen history passed with zero success drop and zero token
+increase. Local and GitHub lifecycle evidence both verified learn, persist,
+reuse, failure downgrade, retirement, immediate refusal, and fresh-process
+non-reload from real SQLite state.
+
 The 2026-07-26 Blueprint evidence-boundary change was reverified with the full
 suite, generated-reference check, sdist/wheel build, and strict Indexer
 full-scan. Twine metadata validation was not rerun for this source-only change.
@@ -68,3 +86,8 @@ Known constraints:
 - Authenticated Cloud browser smoke requires runtime credentials and must not write them to files.
 - Cross-repo package tests need sibling repos on `PYTHONPATH` when run outside an installed workspace.
 - Provider, embedding, and live-channel tests that require external credentials remain opt-in and are skipped in credential-free verification.
+- The v3 browser/API workloads use real requests to a controlled loopback HTTP
+  fixture; they do not prove behavior against arbitrary public sites, proxies,
+  or authenticated third-party APIs.
+- Local Ollama runs expose zero provider charge and therefore prove token
+  reduction, not cloud billing reduction.

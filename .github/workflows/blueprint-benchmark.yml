@@ -1,0 +1,123 @@
+name: Blueprint real benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blueprint-real-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-benchmark:
+    name: Qwen 0.6B on independent Linux runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OLLAMA_VERSION: v0.32.5
+      OLLAMA_ASSET_SHA256: f7d6bdbcf71b83aa8670c4e7dc4b6936c0952fcf8b114eaf6a11cbadb9684214
+      FLYTO_BENCHMARK_SEALED_PROMPT: ${{ secrets.FLYTO_BENCHMARK_SEALED_PROMPT }}
+    steps:
+      - name: Check out flyto-ai
+        uses: actions/checkout@v7.0.1
+        with:
+          path: flyto-ai
+      - name: Check out flyto-blueprint
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: flytohub/flyto-blueprint
+          path: flyto-blueprint
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install benchmark packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ./flyto-blueprint -e ./flyto-ai
+      - name: Install pinned Ollama
+        run: |
+          curl --fail --location --silent --show-error \
+            "https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}/ollama-linux-amd64.tar.zst" \
+            --output "${RUNNER_TEMP}/ollama-linux-amd64.tar.zst"
+          echo "${OLLAMA_ASSET_SHA256}  ${RUNNER_TEMP}/ollama-linux-amd64.tar.zst" \
+            | sha256sum --check -
+          mkdir -p "${RUNNER_TEMP}/ollama"
+          tar --extract --use-compress-program=unzstd \
+            --file="${RUNNER_TEMP}/ollama-linux-amd64.tar.zst" \
+            --directory="${RUNNER_TEMP}/ollama"
+          echo "${RUNNER_TEMP}/ollama/bin" >> "${GITHUB_PATH}"
+      - name: Start Ollama and pull pinned model
+        run: |
+          test -n "${FLYTO_BENCHMARK_SEALED_PROMPT}"
+          "${RUNNER_TEMP}/ollama/bin/ollama" serve \
+            > "${RUNNER_TEMP}/ollama.log" 2>&1 &
+          for _attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:11434/api/tags >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:11434/api/tags >/dev/null
+          "${RUNNER_TEMP}/ollama/bin/ollama" pull qwen3:0.6b
+      - name: Bind model and repository digests
+        id: identity
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+          import subprocess
+
+          with urllib.request.urlopen("http://127.0.0.1:11434/api/tags") as response:
+              models = json.load(response)["models"]
+          match = next(item for item in models if item["name"] == "qwen3:0.6b")
+          blueprint_commit = subprocess.check_output(
+              ["git", "-C", "flyto-blueprint", "rev-parse", "HEAD"],
+              text=True,
+          ).strip()
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write(
+                  "model_digest={}\n".format(
+                      match["digest"].removeprefix("sha256:")
+                  )
+              )
+              handle.write("blueprint_commit={}\n".format(blueprint_commit))
+          PY
+      - name: Run 10 tasks x 20 paired trials x 4 modes
+        run: |
+          mkdir -p evidence
+          python flyto-ai/scripts/run_blueprint_benchmark_v3.py \
+            --suite flyto-blueprint/benchmarks/suites/blueprint-effectiveness-v3.yaml \
+            --config flyto-blueprint/benchmarks/templates/host-run-v3-template.yaml \
+            --dataset-commit "${{ steps.identity.outputs.blueprint_commit }}" \
+            --flyto-ai-commit "${GITHUB_SHA}" \
+            --flyto-blueprint-commit "${{ steps.identity.outputs.blueprint_commit }}" \
+            --run-id github-qwen3-0.6b \
+            --model qwen3:0.6b \
+            --model-digest "${{ steps.identity.outputs.model_digest }}" \
+            --output evidence/github-qwen3-0.6b.runs.jsonl
+          python flyto-blueprint/scripts/benchmark-scorecard.py score \
+            --suite flyto-blueprint/benchmarks/suites/blueprint-effectiveness-v3.yaml \
+            --runs evidence/github-qwen3-0.6b.runs.jsonl \
+            --output evidence/github-qwen3-0.6b.scorecard.json \
+            --fail-on-regression
+      - name: Run real SQLite learning lifecycle
+        run: |
+          python flyto-blueprint/scripts/run_longitudinal_evidence.py run \
+            --database "${RUNNER_TEMP}/blueprint-lifecycle.sqlite3" \
+            --repository-commit "${{ steps.identity.outputs.blueprint_commit }}" \
+            --run-id github-real-lifecycle \
+            --output evidence/github-longitudinal.evidence.json
+          python flyto-blueprint/scripts/run_longitudinal_evidence.py verify \
+            --evidence evidence/github-longitudinal.evidence.json
+      - name: Upload raw evidence and deterministic scorecards
+        uses: actions/upload-artifact@v6
+        with:
+          name: blueprint-v3-independent-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90

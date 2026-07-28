@@ -1,0 +1,14 @@
+schema_version: flyto-ai-blueprint-matrix.v1
+runs:
+  - run_id: local-qwen3-0.6b-a
+    model: qwen3:0.6b
+    model_digest: 7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435
+  - run_id: local-qwen3-0.6b-b
+    model: qwen3:0.6b
+    model_digest: 7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435
+  - run_id: local-llama3.2-1b
+    model: llama3.2:1b
+    model_digest: baf6a787fdffd633537aa2eb51cfd54cb93ff08e28040095462bb63daf552878
+  - run_id: local-gemma3-1b
+    model: gemma3:1b
+    model_digest: 8648f39daa8fbf5b18c7b4e6a8fb4990c692751d49917417b8842ca5758e7ffc

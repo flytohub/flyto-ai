@@ -57,6 +57,7 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_ENGINE_URL` | `'http://localhost:8080'` | `flyto_ai/channels/telegram_approvals.py` |
 | `FLYTO_SERVICE_TOKEN` | `''` | `flyto_ai/channels/telegram_approvals.py` |
 | `FLYTO_VAULT_PASSPHRASE` | `'', required/None` | `flyto_ai/config.py`, `flyto_ai/vault.py` |
+| `GITHUB_ACTIONS` | `required/None` | `flyto_ai/benchmarking_v3.py` |
 | `OPENAI_API_KEY` | `'', required/None` | `flyto_ai/config.py`, `flyto_ai/providers/__init__.py`, `flyto_ai/telegram/service.py` |
 | `SLACK_BOT_TOKEN` | `''` | `flyto_ai/channels/slack.py` |
 | `SLACK_WEBHOOK_URL` | `''` | `flyto_ai/channels/slack.py` |

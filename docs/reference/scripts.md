@@ -9,3 +9,5 @@ Scripts are operator tools, not stable Python APIs. Review side effects and requ
 | [`demo_hn.sh`](../../scripts/demo_hn.sh) | Demo: Fetch Hacker News top 5 stories and format as markdown. |
 | [`release.sh`](../../scripts/release.sh) | Release flyto-ai — auto-sync flyto-core + flyto-blueprint version pins |
 | [`run_blueprint_benchmark.py`](../../scripts/run_blueprint_benchmark.py) | Run the trusted Flyto2 host for Blueprint benchmark evidence. |
+| [`run_blueprint_benchmark_matrix.py`](../../scripts/run_blueprint_benchmark_matrix.py) | Run the real multi-model Flyto2 Blueprint benchmark matrix. |
+| [`run_blueprint_benchmark_v3.py`](../../scripts/run_blueprint_benchmark_v3.py) | Run the real-workload Flyto2 Blueprint v3 benchmark host. |

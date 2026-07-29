@@ -16,6 +16,13 @@ Implemented:
 - Deterministic intent routing now distinguishes explicit actions, current-data
   questions, answer-only requests, multilingual negation, quoted/meta examples,
   and declarative questions before any provider tool dispatch.
+- Provider-neutral capability routing now accepts versioned external manifests,
+  maps arbitrary-language or non-language inputs into
+  `flyto.goal-frame.v1`, applies source/domain/robot/sensor/resource/permission
+  hard filters, ranks canonical intent/affordance/effect/event IDs, consumes
+  only trusted Blueprint module hints, queries Core through `core_tools`, and
+  emits a bounded, snapshot-bound shortlist with semantic coverage and
+  ambiguity evidence. Alias matching remains legacy fallback only.
 - Tool permissions enforce the selected route at dispatch time, so a provider
   cannot turn a denied answer-only request into a raw MCP action.
 - Learned Blueprint trust evidence fails closed for malformed types, non-finite
@@ -55,7 +62,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1173 passed, 15 optional/live-integration skips;
+- full suite: 1182 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

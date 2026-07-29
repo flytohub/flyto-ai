@@ -25,6 +25,7 @@ Regenerate with `python3 scripts/generate_reference.py`; CI rejects stale output
 ## Design And Integration
 
 - [AI/MCP closed loop](AI_MCP_CLOSED_LOOP.md)
+- [Deterministic capability routing](CAPABILITY_ROUTING.md)
 - [Model compatibility](MODEL_COMPATIBILITY.md)
 - [Architecture map](architecture-map.md)
 - [Demo asset](demo.svg)

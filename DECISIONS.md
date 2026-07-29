@@ -1,5 +1,35 @@
 # Decisions
 
+## 2026-07-28: Natural language is an adapter, not a routing contract
+
+- Any language, UI, speech, schedule, or sensor event is normalized into
+  `flyto.goal-frame.v1`.
+- Capability manifests declare canonical intent IDs, affordances, effects, and
+  handled events. Exact semantic coverage is the production ranking signal.
+- Raw text, aliases, and examples are used only when a legacy caller provides
+  no Goal Frame.
+- Production callers can require a valid Goal Frame and fail closed before
+  catalog discovery.
+
+This prevents the router from accumulating per-language synonym tables and
+makes identical meaning produce identical candidates regardless of wording.
+
+## 2026-07-28: Capability catalogs are routed before provider dispatch
+
+- External runtimes publish versioned JSON manifests; Flyto AI does not import
+  their source trees.
+- Compatibility, permission, domain, and source scope are hard filters.
+- Blueprint may boost only module IDs from summaries that pass the existing
+  trust/evidence gate.
+- Core discovery flows only through `flyto_ai.tools.core_tools` and cannot
+  escape an explicit source scope.
+- The LLM receives a bounded, snapshot-bound shortlist and ambiguity evidence,
+  not the complete catalog.
+
+This keeps selection reproducible as registries grow and prevents a model or an
+upstream keyword score from turning an irrelevant module into executable
+authority.
+
 ## 2026-07-27: Keep security updates, suppress routine dependency branches
 
 - Dependabot security updates remain enabled in repository settings.

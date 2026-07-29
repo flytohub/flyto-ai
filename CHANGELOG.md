@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added language-neutral `flyto.goal-frame.v1` routing with canonical
+  intent/affordance/effect/event coverage, provider-neutral frame requests,
+  Unicode-only lexical fallback, and an optional production fail-closed policy
+  requiring a Goal Frame.
+- Added deterministic-first routing for large external capability manifests,
+  including runtime hard filters, deterministic shortlist ranking, trusted
+  Blueprint hints, scoped Core discovery, registry snapshots, ambiguity
+  evidence, and Robotics planner-request preparation.
+
 - Removed a third-party popularity-tracking image from the README.
 - Closed the GitHub security-and-quality backlog: CI now declares read-only
   repository permissions, the vulnerable PyPI publishing action is pinned to

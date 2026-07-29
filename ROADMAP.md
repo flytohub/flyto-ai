@@ -2,6 +2,8 @@
 
 Near term:
 - Expand agent eval datasets for tool selection, schema validity, guardrail blocks, and MCP execution regressions.
+- Add production service wiring and offline top-k recall/plan-validity datasets
+  for the capability-router contract.
 - Add trace graders for wrong tool, wrong handoff, missing approval, and unsafe credential handling.
 - Promote successful Cloud AI workflows into blueprint candidates with evidence links.
 

@@ -303,6 +303,17 @@ steps:
 
 ## Runtime-Discovered Registry Modules
 
+Large external capability catalogs can be routed with
+`flyto_ai.capability_router`. It applies source/domain/runtime compatibility
+filters, language-neutral `flyto.goal-frame.v1` semantic ranking, trusted
+Blueprint `module_ids` hints, and Core discovery through the existing
+`core_tools` bridge. Raw-language aliases are a backwards-compatible recall
+fallback, not the production routing authority. The LLM receives only a
+bounded shortlist with a registry snapshot, semantic coverage, score reasons,
+confidence, and ambiguity evidence. Robotics catalogs are source-scoped by
+default, so an unrelated Core result such as a web `robots.txt` module cannot
+enter a robot-motion shortlist merely because its words overlap.
+
 Powered by [flyto-core](https://pypi.org/project/flyto-core/), the agent discovers
 the installed registry instead of assuming a frozen module count. Catalog areas
 include browser, flow, cloud, data, array, string, productivity, image, HTTP/API,

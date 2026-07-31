@@ -1,5 +1,29 @@
 # Decisions
 
+## 2026-07-30: Let the model choose a complete route, not invent waypoints
+
+- Robotics supplies a bounded shortlist, trusted semantic location IDs, and
+  complete route candidates after deterministic compatibility, permission,
+  resource-health, and dependency filtering.
+- Flyto AI converts every surviving route into an exact JSON Schema step
+  template. The model chooses one candidate and fills bounded arguments; it
+  cannot omit an intermediate location or combine parts of different routes.
+- Every motion plan must end in `safe_stop`. Human approval and resume IDs must
+  pair before later movement. Direct control fields such as `cmd_vel`, wheel
+  speed, PWM, motor, shell, and ROS topics are rejected recursively.
+- The response attests request, schema, plan, model, provider, attempts, token
+  counters, timing, and selected route. Robotics independently verifies and
+  executes the same canonical plan bytes.
+- Repair is limited to one additional structured completion. If both proposals
+  fail, the planner returns no plan.
+
+This retains a visible AI decision at a multi-branch junction without moving
+real-time control or safety authority into an LLM.
+
+Rollback is additive: stop the loopback planner, remove the Robotics planner
+URL, and continue using existing prevalidated plan inputs. No provider or Core
+tool contract needs to change.
+
 ## 2026-07-28: Natural language is an adapter, not a routing contract
 
 - Any language, UI, speech, schedule, or sensor event is normalized into

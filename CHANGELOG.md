@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a provider-neutral structured Robotics planner with exact atomic
+  capability and complete-route schemas, independent safety validation, one
+  bounded repair, and tamper-evident request/schema/plan/provider attestation.
+- Added native Ollama JSON Schema completions and a loopback-only
+  `/v1/robotics/plan` development endpoint for live Physical AI planning.
+- Added regression coverage for unsafe controls, shortlist escape, skipped or
+  spliced branch locations, approval ordering, bounded repair, request limits,
+  loopback binding, and sanitized HTTP errors.
 - Added language-neutral `flyto.goal-frame.v1` routing with canonical
   intent/affordance/effect/event coverage, provider-neutral frame requests,
   Unicode-only lexical fallback, and an optional production fail-closed policy

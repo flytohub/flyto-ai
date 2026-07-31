@@ -44,3 +44,29 @@ Core contract:
 - `get_core_capability_manifest` reports contract version, installed core version, tool fingerprint, recipes support, module categories, and per-tool risk metadata.
 - `execute_module` validates params before execution when `flyto-core` exposes `validate_params`.
 - Tool logs include `mcp.source`, `mcp.contract_version`, and module or recipe identity.
+
+## Robotics planning boundary
+
+```text
+Flyto Robotics routed request
+  -> validate request size, shortlist, capabilities, locations, routes
+  -> compile provider-native JSON Schema
+  -> structured model completion
+  -> independent plan/safety/route validation
+  -> optional single bounded repair
+  -> plan + tamper-evident planning attestation
+  -> Flyto Robotics final validation and execution
+```
+
+- `robotics_planning.py` owns the provider-neutral request, response, and
+  attestation boundary. It does not import Flyto Robotics source.
+- The routed capability shortlist is the authority ceiling. Model output cannot
+  introduce a capability or argument field outside that contract.
+- Complete route candidates become exact JSON Schema `prefixItems` variants.
+  Model choice remains real, while waypoint omission and cross-route splicing
+  become structurally invalid.
+- Provider validation is not execution authorization. Flyto Robotics verifies
+  the hashes, route, policy, and executable plan again before movement.
+- `robotics_planner_server.py` is a loopback development adapter, not a public
+  authenticated service. It suppresses prompt-bearing access logs and bounds
+  request, response, timeout, and error detail sizes.

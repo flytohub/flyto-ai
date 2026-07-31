@@ -41,3 +41,47 @@ Underscore-prefixed symbols are documented for maintenance but may change withou
 the same compatibility guarantee. Provider-specific raw payloads must not leak
 into common model contracts.
 
+## Structured Robotics planner
+
+`flyto_ai.robotics_planning.RoboticsPlanningService` accepts
+`flyto.robotics.planner-request.v1` and returns:
+
+```json
+{
+  "contract_version": "flyto.ai.robotics-plan-response.v1",
+  "plan": {
+    "contract_version": "flyto.robotics.plan.v1",
+    "generated_by": {
+      "kind": "llm",
+      "provider": "flyto-ai",
+      "model": "flyto-qwen3-8b"
+    }
+  },
+  "attestation": {
+    "contract_version": "flyto.ai.robotics-planning-attestation.v1",
+    "mode": "live_llm",
+    "request_sha256": "...",
+    "schema_sha256": "...",
+    "plan_sha256": "...",
+    "selected_route_id": "orange-purple"
+  }
+}
+```
+
+The caller provides capability argument definitions, the routed shortlist,
+semantic location IDs, and optional route candidates. The service enforces:
+
+- request size at most 256 KiB, at most 64 capabilities, 32 routes, and 32
+  plan steps;
+- exact shortlist/capability parity and bounded argument schemas;
+- route candidates as exact, complete step templates when using semantic
+  navigation;
+- recursively forbidden actuator/control fields;
+- unique step IDs, paired `ask_human`/`resume`, and terminal `safe_stop` for
+  motion;
+- no more than two provider attempts.
+
+Providers implement `StructuredJsonProvider.complete_json_schema`. The native
+Ollama adapter is currently live-tested. The loopback HTTP adapter supports
+`GET /health` and `POST /v1/robotics/plan`; it is not a remotely authenticated
+API.

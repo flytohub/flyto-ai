@@ -182,6 +182,35 @@ flyto-ai blueprints --export > blueprints.yaml
 For local or CI configuration, copy `.env.example` and fill only the providers
 you use. Never commit real API keys or bot tokens.
 
+### Structured Physical AI planning
+
+Flyto2 AI can turn a provider-neutral Robotics request into a bounded,
+attested plan without giving the model direct motor authority. The caller
+supplies a routed shortlist, atomic capability schemas, semantic location IDs,
+and optional complete route candidates. Flyto2 AI converts those facts into a
+provider-native JSON Schema, validates the proposal independently, and permits
+at most one repair attempt.
+
+When route candidates are present, the schema encodes each complete candidate
+as an exact step template. The model may choose yellow or orange at one fork
+and blue, green, purple, or red at the next, but it cannot skip a required
+waypoint, splice two branches, continue before matching human approval, or end
+a motion plan without `safe_stop`.
+
+Run the local Ollama-backed boundary:
+
+```bash
+python3 -m flyto_ai.robotics_planner_server \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --model flyto-qwen3:8b
+```
+
+`POST /v1/robotics/plan` returns the validated plan plus hashes of the exact
+request, generated schema, and plan, provider counters, attempt results, and
+the selected route ID. The server binds only to loopback; authentication and
+remote deployment remain the responsibility of the embedding product.
+
 ## Documentation
 
 - [Feature map](docs/FEATURES.md) connects shipped behavior to source packages.

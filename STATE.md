@@ -1,8 +1,24 @@
 # State
 
-Last updated: 2026-07-28
+Last updated: 2026-07-30
 
 Implemented:
+- A provider-neutral Robotics planning service now validates bounded
+  `flyto.robotics.planner-request.v1` inputs, compiles the exact routed
+  capability and route constraints into JSON Schema, accepts only structured
+  provider output, independently validates plan safety and route integrity,
+  permits one repair, and emits a hashed live-model attestation.
+- Ollama supports native `/api/chat` JSON Schema completions with bounded
+  messages, timeouts, response bytes, and provider error details.
+- A loopback-only `/v1/robotics/plan` development server exposes the planner
+  without logging mission prompts. The boundary is not an authenticated public
+  deployment.
+- A live local `flyto-qwen3:8b` run chose yellow-purple from eight complete
+  two-stage routes. After Robotics changed corridor camera B from healthy to
+  unhealthy and excluded all four yellow routes, a second live call chose and
+  validated orange-purple. Both rounds produced request, schema, plan, attempt,
+  route, provider, and model evidence. This proves planning and re-planning; it
+  does not by itself prove the new Gazebo world or a physical robot run.
 - GitHub Actions use current Checkout/Setup Python releases, and the PyPI
   publishing action is pinned to the patched 1.14.1 commit.
 - Grype has one exact four-field exception for that patched commit because the
@@ -90,6 +106,11 @@ suite, generated-reference check, sdist/wheel build, and strict Indexer
 full-scan. Twine metadata validation was not rerun for this source-only change.
 
 Known constraints:
+- The Robotics planner server is loopback-only and has no production
+  authentication, RBAC, rate limiting, or remote TLS termination.
+- Current live Robotics planning evidence uses local Ollama and one installed
+  model. Other providers remain compatible through the
+  `StructuredJsonProvider` protocol but are not claimed as live-verified here.
 - Authenticated Cloud browser smoke requires runtime credentials and must not write them to files.
 - Cross-repo package tests need sibling repos on `PYTHONPATH` when run outside an installed workspace.
 - Provider, embedding, and live-channel tests that require external credentials remain opt-in and are skipped in credential-free verification.

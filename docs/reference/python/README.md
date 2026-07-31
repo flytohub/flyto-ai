@@ -12,7 +12,7 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [intelligence](intelligence.md): 2 modules, 17 top-level symbols, 22 methods
 - [memory](memory.md): 6 modules, 13 top-level symbols, 42 methods
 - [orchestration](orchestration.md): 3 modules, 5 top-level symbols, 17 methods
-- [package-root](package-root.md): 30 modules, 223 top-level symbols, 270 methods
+- [package-root](package-root.md): 30 modules, 230 top-level symbols, 271 methods
 - [prompt](prompt.md): 3 modules, 13 top-level symbols, 0 methods
 - [providers](providers.md): 6 modules, 25 top-level symbols, 22 methods
 - [sandbox](sandbox.md): 2 modules, 2 top-level symbols, 3 methods

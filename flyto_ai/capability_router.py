@@ -767,7 +767,7 @@ async def prepare_planner_request(
     core_dispatch: CoreDispatch | None = None,
     blueprint_search: BlueprintSearch | None = None,
 ) -> dict[str, Any]:
-    """Apply Flyto routing to a Robotics planner request before provider dispatch."""
+    """Apply Flyto2 routing to a Robotics planner request before provider dispatch."""
     if request.get("planner_contract") != "flyto.robotics.planner-request.v1":
         raise CapabilityRoutingError("unsupported planner_contract")
     goal = request.get("goal")

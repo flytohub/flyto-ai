@@ -16,7 +16,7 @@ makes identical meaning produce identical candidates regardless of wording.
 
 ## 2026-07-28: Capability catalogs are routed before provider dispatch
 
-- External runtimes publish versioned JSON manifests; Flyto AI does not import
+- External runtimes publish versioned JSON manifests; Flyto2 does not import
   their source trees.
 - Compatibility, permission, domain, and source scope are hard filters.
 - Blueprint may boost only module IDs from summaries that pass the existing

@@ -1,6 +1,6 @@
 # Capability Routing
 
-Flyto AI routes large capability catalogs with a deterministic-first boundary.
+Flyto2 routes large capability catalogs with a deterministic-first boundary.
 The model is a planner over a verified shortlist; it is not the catalog,
 compatibility, permission, or safety authority.
 

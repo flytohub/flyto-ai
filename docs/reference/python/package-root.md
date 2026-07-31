@@ -893,7 +893,7 @@ Route with trusted Blueprint hints and Core discovery through existing bridges.
 `async prepare_planner_request(request: Mapping[str, Any], *, context: Mapping[str, object] | None = None, limit: int = 8, require_goal_frame: bool = False, core_dispatch: CoreDispatch | None = None, blueprint_search: BlueprintSearch | None = None) -> dict[str, Any]`
 Source: [`flyto_ai/capability_router.py:761`](../../../flyto_ai/capability_router.py#L761)
 
-Apply Flyto routing to a Robotics planner request before provider dispatch.
+Apply Flyto2 routing to a Robotics planner request before provider dispatch.
 
 ### `_gather_calls` (internal)
 

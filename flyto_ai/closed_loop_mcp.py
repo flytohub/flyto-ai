@@ -96,6 +96,46 @@ TOOLS = [
                     },
                     "maxItems": 8,
                 },
+                "security_campaign": {
+                    "type": "object",
+                    "description": (
+                        "Optional fail-closed security campaign contract. "
+                        "Binds scope, authorization, modules, budgets, and "
+                        "planner rounds to the stored PlanIR."
+                    ),
+                    "properties": {
+                        "campaign_id": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["footprint", "pentest", "redteam"],
+                        },
+                        "objective": {"type": "string"},
+                        "target_scope": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": 100,
+                        },
+                        "authorization": {"type": "object"},
+                        "module_allowlist": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": _MAX_PLAN_STEPS,
+                        },
+                        "budgets": {"type": "object"},
+                        "round": {"type": "integer", "minimum": 1},
+                        "parent_execution_id": {"type": "string"},
+                    },
+                    "required": [
+                        "campaign_id",
+                        "mode",
+                        "target_scope",
+                        "authorization",
+                        "module_allowlist",
+                        "budgets",
+                    ],
+                },
             },
             "required": ["steps"],
         },
@@ -471,16 +511,28 @@ class ClosedLoopMCPServer:
         requested_blueprint_id = str(arguments.get("blueprint_id") or "")
         initial_id = requested_blueprint_id or "mcp_plan"
         plan_ir = PlanIR.compile(initial_id, steps)
-        digest = stable_hash({
+        campaign = None
+        campaign_errors: List[str] = []
+        campaign_raw = arguments.get("security_campaign")
+        if campaign_raw is not None:
+            from flyto_ai.security.campaign import compile_security_campaign
+
+            campaign = compile_security_campaign(campaign_raw, steps)
+            campaign_errors = list(campaign.get("gate_errors") or [])
+
+        identity = {
             "blueprint_id": requested_blueprint_id,
             "workflow_hash": plan_ir.workflow_hash,
-        }).split(":", 1)[1]
+        }
+        if campaign is not None:
+            identity["security_campaign_hash"] = campaign.get("contract_hash")
+        digest = stable_hash(identity).split(":", 1)[1]
         plan_id = "plan_{}".format(digest[:20])
         blueprint_id = requested_blueprint_id or plan_id
         if blueprint_id != initial_id:
             plan_ir = PlanIR.compile(blueprint_id, steps)
 
-        gate_errors = plan_ir.gate()
+        gate_errors = list(plan_ir.gate()) + campaign_errors
         candidates = _candidate_list(arguments.get("model_candidates"))
         route = self._router.route(
             str(arguments.get("message") or ""),
@@ -499,6 +551,12 @@ class ClosedLoopMCPServer:
             "gate_errors": gate_errors,
             "model_route": route.to_dict(),
             "module_call_counts": {},
+            "security_campaign": campaign,
+            "campaign_usage": (
+                dict(campaign.get("initial_usage") or {})
+                if campaign is not None
+                else {}
+            ),
         }
         self._save("plan", plan_id, record)
 
@@ -517,6 +575,14 @@ class ClosedLoopMCPServer:
             },
             "model_route": route.to_dict(),
         }
+        if campaign is not None:
+            compact["security_campaign"] = {
+                "campaign_id": campaign.get("campaign_id"),
+                "mode": campaign.get("mode"),
+                "round": campaign.get("round"),
+                "contract_hash": campaign.get("contract_hash"),
+                "gate_passed": not campaign_errors,
+            }
         return _tool_result(
             compact,
             message="Plan {}: {} step(s), gate {}".format(
@@ -548,18 +614,54 @@ class ClosedLoopMCPServer:
             )
 
         counts = dict(plan.get("module_call_counts") or {})
+        campaign = plan.get("security_campaign")
+        campaign_usage = dict(plan.get("campaign_usage") or {})
 
         async def preflight(func_args: Dict[str, Any]) -> Dict[str, Any]:
             decision = self._enforcer.check("execute_module", func_args)
+            if not decision.allowed:
+                return {
+                    "ok": False,
+                    "error": decision.reason,
+                }
+            if campaign is not None:
+                from flyto_ai.security.campaign import evaluate_campaign_action
+
+                campaign_decision = evaluate_campaign_action(
+                    campaign,
+                    campaign_usage,
+                    "execute_module",
+                    func_args,
+                )
+                if not campaign_decision["allowed"]:
+                    return {
+                        "ok": False,
+                        "error": campaign_decision["reason"],
+                    }
             return {
-                "ok": decision.allowed,
-                "error": decision.reason,
+                "ok": True,
+                "error": "",
             }
 
         async def dispatch(name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+            nonlocal campaign_usage
             decision = self._enforcer.check(name, tool_args)
             if not decision.allowed:
                 return {"ok": False, "error": decision.reason}
+            if campaign is not None:
+                from flyto_ai.security.campaign import evaluate_campaign_action
+
+                campaign_decision = evaluate_campaign_action(
+                    campaign,
+                    campaign_usage,
+                    name,
+                    tool_args,
+                )
+                if not campaign_decision["allowed"]:
+                    return {
+                        "ok": False,
+                        "error": campaign_decision["reason"],
+                    }
             if name == "report_blueprint_outcome":
                 execution_id = str(tool_args.get("execution_id") or "")
                 self._save("outcome", execution_id, {
@@ -583,7 +685,18 @@ class ClosedLoopMCPServer:
                         "ok": False,
                         "error": "intentional MCP checkpoint test interruption",
                     }
-            return await dispatch_core_tool(name, tool_args)
+            core_result = await dispatch_core_tool(name, tool_args)
+            if campaign is not None:
+                from flyto_ai.security.campaign import record_campaign_result
+
+                campaign_usage = record_campaign_result(
+                    campaign,
+                    campaign_usage,
+                    name,
+                    tool_args,
+                    core_result,
+                )
+            return core_result
 
         max_repairs = _clamped_int(
             arguments.get("max_repairs"),
@@ -607,11 +720,14 @@ class ClosedLoopMCPServer:
             "plan_id": plan_id,
             "execution_id": execution_id,
             "module_call_counts": counts,
+            "security_campaign": campaign,
+            "campaign_usage": campaign_usage,
             "result": result,
         }
         self._save("evidence", execution_id, evidence)
         plan["last_execution_id"] = execution_id
         plan["module_call_counts"] = counts
+        plan["campaign_usage"] = campaign_usage
         self._save("plan", plan_id, plan)
 
         compact = self._execution_summary(evidence)
@@ -641,7 +757,7 @@ class ClosedLoopMCPServer:
     def _execution_summary(self, evidence: Dict[str, Any]) -> Dict[str, Any]:
         result = evidence.get("result", {})
         runtime = result.get("evidence", {})
-        return {
+        summary = {
             "ok": bool(result.get("ok")),
             "closed_loop_ok": bool(result.get("closed_loop_ok")),
             "plan_id": evidence.get("plan_id"),
@@ -661,6 +777,21 @@ class ClosedLoopMCPServer:
             "repair_count": runtime.get("repair_count", 0),
             "module_call_counts": evidence.get("module_call_counts", {}),
         }
+        campaign = evidence.get("security_campaign")
+        if isinstance(campaign, dict):
+            usage = evidence.get("campaign_usage") or {}
+            summary["security_campaign"] = {
+                "campaign_id": campaign.get("campaign_id"),
+                "mode": campaign.get("mode"),
+                "round": campaign.get("round"),
+                "requests_used": usage.get("requests_used", 0),
+                "cost_units_used": usage.get("cost_units_used", 0),
+                "evidence_count": usage.get(
+                    "evidence_count",
+                    len(usage.get("evidence") or []),
+                ),
+            }
+        return summary
 
     async def _verify(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         execution_id = str(arguments.get("execution_id") or "")
@@ -712,6 +843,19 @@ class ClosedLoopMCPServer:
             "outcome": bool(result.get("outcome_reported")),
             "checkpoint_finalized": bool(runtime.get("checkpoint_cleared")),
         }
+        campaign_verification = None
+        campaign = evidence.get("security_campaign")
+        if isinstance(campaign, dict):
+            from flyto_ai.security.campaign import verify_security_campaign
+
+            campaign_verification = verify_security_campaign(
+                campaign,
+                evidence.get("campaign_usage") or {},
+                result,
+            )
+            checks["security_campaign"] = bool(
+                campaign_verification.get("verified"),
+            )
         verified = all(checks.values())
         min_steps = _clamped_int(
             arguments.get("min_steps"),
@@ -752,6 +896,8 @@ class ClosedLoopMCPServer:
             "checks": checks,
             "distillation": distillation,
         }
+        if campaign_verification is not None:
+            verification["security_campaign"] = campaign_verification
         self._save("verification", execution_id, verification)
         return _tool_result(
             verification,

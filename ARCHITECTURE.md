@@ -45,6 +45,36 @@ Core contract:
 - `execute_module` validates params before execution when `flyto-core` exposes `validate_params`.
 - Tool logs include `mcp.source`, `mcp.contract_version`, and module or recipe identity.
 
+## Adaptive security campaign boundary
+
+```text
+LLM planner
+  -> typed campaign + proposed PlanIR steps
+  -> scope / authorization / allowlist / budget gate
+  -> existing closed-loop MCP plan
+  -> permission gate + flyto-core validation and execution
+  -> assertions + compact proof evidence
+  -> allowlisted, raw-content-free planner projection
+  -> bounded re-plan or verified verdict
+```
+
+- The LLM is the decision and prioritization layer; it never becomes execution
+  authority. Every round enters through the existing four-tool MCP contract.
+- The campaign contract is part of plan identity. Changing target scope,
+  authorization, mode, module allowlist, budget, or prior usage changes the
+  stored plan hash.
+- Active probes, exploit validation, and credential validation require
+  progressively stronger authorization. Active steps also require an explicit
+  in-scope target and a proof assertion.
+- Authorization expiry, scope, module allowlist, request budget, and cost
+  budget are checked again at dispatch time, including repaired steps.
+- Evidence returned to a subsequent model round is an allowlisted projection
+  containing facts and fingerprints, never raw bodies, HTML, headers, cookies,
+  credentials, prompts, or attacker-controlled error text.
+- A successful Core call alone is not a security verdict. Verification requires
+  the runtime closed loop, assertions, budgets, and one proof record per
+  executed request; otherwise the verdict is `not_proved`.
+
 ## Robotics planning boundary
 
 ```text

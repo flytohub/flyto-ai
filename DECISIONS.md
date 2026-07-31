@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-07-31: The LLM plans security work; Core remains execution authority
+
+- Footprint, penetration-test, and red-team planning use one versioned
+  `flyto.security-campaign.v1` contract.
+- Scope, authorization tier and expiry, approved action classes, module
+  allowlist, request/round/token/cost budgets, and prior usage are frozen into
+  every plan identity.
+- All execution still passes through the existing closed-loop MCP and
+  `flyto_ai.tools.core_tools.dispatch_core_tool`; there is no security-only
+  dispatcher that bypasses Core validation or permissions.
+- Model-visible evidence is structurally allowlisted and omits raw target
+  content. Failed output is represented by bounded error classes and hashes.
+- A campaign can re-plan only within its original authority ceiling and
+  cumulative budgets. Missing proof yields `not_proved`, never an inferred
+  success.
+
+This lets a real LLM choose and adapt attacks while keeping authorization,
+scope, cost, evidence, and the final verdict independently enforceable.
+
 ## 2026-07-30: Let the model choose a complete route, not invent waypoints
 
 - Robotics supplies a bounded shortlist, trusted semantic location IDs, and

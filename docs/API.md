@@ -41,6 +41,48 @@ Underscore-prefixed symbols are documented for maintenance but may change withou
 the same compatibility guarantee. Provider-specific raw payloads must not leak
 into common model contracts.
 
+## Adaptive security campaigns
+
+`flyto_ai.security.run_security_campaign` accepts a versioned campaign request
+and a provider-neutral planner callable. The planner may be a real LLM adapter;
+its proposed steps still enter the existing MCP `plan`, `execute`, and `verify`
+path before Core can run them.
+
+```python
+from flyto_ai.security import run_security_campaign
+
+campaign = {
+    "campaign_id": "staging-pentest-2026-07",
+    "mode": "pentest",
+    "objective": "Validate the approved staging exposure.",
+    "target_scope": ["staging.example.com"],
+    "authorization": {
+        "level": "exploit",
+        "reference": "AUTH-2026-0001",
+        "expires_at": "2026-08-01T00:00:00Z",
+        "approved_actions": ["active_probe", "exploit_validation"],
+    },
+    "module_allowlist": ["http.request", "security.sqli_probe"],
+    "budgets": {
+        "max_steps": 10,
+        "max_requests": 20,
+        "max_rounds": 3,
+        "max_planner_tokens": 50000,
+        "max_cost_units": 100,
+    },
+}
+
+result = await run_security_campaign(campaign, planner)
+```
+
+The planner receives only the objective, authority ceiling, remaining budgets,
+and a bounded `flyto.security-planner-evidence.v1` projection. Raw target
+content and secrets are not placed back into the model prompt. Active steps
+must name an in-scope target and include assertions. Scope, authorization
+expiry, action class, module allowlist, and cumulative budgets are rechecked at
+runtime. Consumers must treat only `verified=True` / `verdict="proved"` as
+closed; all other results are `not_proved`.
+
 ## Structured Robotics planner
 
 `flyto_ai.robotics_planning.RoboticsPlanningService` accepts

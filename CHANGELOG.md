@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added the versioned adaptive security campaign loop for footprint,
+  penetration-test, and red-team planning. It binds every LLM proposal to
+  target scope, expiring authorization, approved action classes, a Core module
+  allowlist, cumulative step/request/round/token/cost budgets, proof assertions,
+  and a content-addressed plan identity.
+- Added runtime rechecks before Core execution and repair, compact proof
+  accounting, raw-content-free evidence projection for model re-planning, and
+  a `proved`/`not_proved` verifier that cannot turn missing evidence into
+  success.
+- Added exhaustive branch tests for the new campaign contract and adaptive
+  loop, including scope escape, metadata SSRF, private-target policy,
+  authorization downgrade/expiry, budget exhaustion, proof omission, prompt
+  injection in evidence, failed replanning, and successful bounded repair.
 - Added a provider-neutral structured Robotics planner with exact atomic
   capability and complete-route schemas, independent safety validation, one
   bounded repair, and tamper-evident request/schema/plan/provider attestation.

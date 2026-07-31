@@ -1,8 +1,25 @@
 # State
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 Implemented:
+- Adaptive footprint, penetration-test, and red-team campaigns now use
+  `flyto.security-campaign.v1`. The contract freezes scope, authorization
+  level/reference/expiry, approved action classes, Core module allowlist,
+  cumulative step/request/round/planner-token/cost budgets, and prior usage
+  into each PlanIR identity.
+- The existing closed-loop MCP rechecks campaign authority before validation,
+  execution, and repair; records compact proof facts and fingerprints; and
+  requires runtime, assertion, budget, and evidence checks for a `proved`
+  verdict. Failed or incomplete proof remains `not_proved` and may trigger only
+  a bounded re-plan.
+- Model re-planning receives an allowlisted evidence schema with no raw target
+  body, HTML, headers, cookies, credentials, prompts, or attacker-controlled
+  error text.
+- The new campaign module is locally verified at 100% statement and branch
+  coverage: 428 statements, 214 branches, and 44 passing tests. This is bounded
+  implementation coverage, not a claim that every possible real-world attack
+  succeeds.
 - A provider-neutral Robotics planning service now validates bounded
   `flyto.robotics.planner-request.v1` inputs, compiles the exact routed
   capability and route constraints into JSON Schema, accepts only structured
@@ -106,6 +123,11 @@ suite, generated-reference check, sdist/wheel build, and strict Indexer
 full-scan. Twine metadata validation was not rerun for this source-only change.
 
 Known constraints:
+- Campaign authorization proves enforcement of the supplied contract; a
+  production control plane must still authenticate the approving principal and
+  issue the authorization reference. Live offensive effectiveness must be
+  measured against controlled targets and cannot be inferred from unit
+  coverage.
 - The Robotics planner server is loopback-only and has no production
   authentication, RBAC, rate limiting, or remote TLS termination.
 - Current live Robotics planning evidence uses local Ollama and one installed

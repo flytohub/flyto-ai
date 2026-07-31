@@ -42,13 +42,18 @@ def generate_test_from_finding(
     finding: SecurityFinding,
     target_url: str,
     auth_token: str | None = None,
+    *,
+    authorization_verified: bool = False,
 ) -> str:
     """Turn a structured finding into an executable flyto-core YAML string.
 
     Args:
         finding: Structured vulnerability finding from flyto-indexer or flyto-engine.
-        target_url: Base URL to test against (staging, never production).
+        target_url: Base URL to test. Staging is required by default.
         auth_token: Optional bearer token for authenticated tests.
+        authorization_verified: Whether the trusted caller independently
+            verified a scoped, short-lived authorization for this target.
+            This bypasses only the staging-name requirement.
 
     Returns:
         YAML string ready to POST to flyto-core's /v1/workflow/run.
@@ -57,7 +62,10 @@ def generate_test_from_finding(
         ValueError: if finding.category has no blueprint, or target_url
                     fails safety validation.
     """
-    _validate_safety(target_url)
+    _validate_safety(
+        target_url,
+        authorization_verified=authorization_verified,
+    )
 
     generator = _BLUEPRINT_MAP.get(finding.category)
     if not generator:
@@ -68,7 +76,11 @@ def generate_test_from_finding(
     return generator(finding, target_url, auth_token)
 
 
-def _validate_safety(target_url: str) -> None:
+def _validate_safety(
+    target_url: str,
+    *,
+    authorization_verified: bool = False,
+) -> None:
     """Block against accidental production targets and SSRF vectors."""
     parsed = urlparse(target_url)
 
@@ -90,7 +102,10 @@ def _validate_safety(target_url: str) -> None:
     _check_private_ip(parsed.hostname)
 
     # Require explicit staging subdomain unless overridden
-    if not os.environ.get("FLYTO_AI_ALLOW_PROD_TARGETS"):
+    if (
+        not authorization_verified
+        and not os.environ.get("FLYTO_AI_ALLOW_PROD_TARGETS")
+    ):
         hostname = parsed.hostname
         safe_patterns = ("staging", "localhost", "127.0.0.1", "0.0.0.0")
         if not any(pat in hostname for pat in safe_patterns):

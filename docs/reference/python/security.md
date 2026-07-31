@@ -346,22 +346,22 @@ Run bounded LLM re-planning through the existing four-tool MCP loop.
 
 ### `generate_test_from_finding` (public)
 
-`generate_test_from_finding(finding: SecurityFinding, target_url: str, auth_token: str | None = None) -> str`
+`generate_test_from_finding(finding: SecurityFinding, target_url: str, auth_token: str | None = None, *, authorization_verified: bool = False) -> str`
 Source: [`flyto_ai/security/generator.py:41`](../../../flyto_ai/security/generator.py#L41)
 
 Turn a structured finding into an executable flyto-core YAML string.
 
 ### `_validate_safety` (internal)
 
-`_validate_safety(target_url: str) -> None`
-Source: [`flyto_ai/security/generator.py:71`](../../../flyto_ai/security/generator.py#L71)
+`_validate_safety(target_url: str, *, authorization_verified: bool = False) -> None`
+Source: [`flyto_ai/security/generator.py:79`](../../../flyto_ai/security/generator.py#L79)
 
 Block against accidental production targets and SSRF vectors.
 
 ### `_check_private_ip` (internal)
 
 `_check_private_ip(hostname: str) -> None`
-Source: [`flyto_ai/security/generator.py:103`](../../../flyto_ai/security/generator.py#L103)
+Source: [`flyto_ai/security/generator.py:118`](../../../flyto_ai/security/generator.py#L118)
 
 Reject RFC 1918 and link-local addresses.
 

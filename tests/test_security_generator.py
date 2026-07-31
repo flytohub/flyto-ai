@@ -223,6 +223,32 @@ class TestSafetyChecks:
         result = generate_test_from_finding(finding, "https://production.example.com")
         assert result
 
+    def test_allows_non_staging_target_with_verified_authorization(self):
+        finding = _make_finding()
+        result = generate_test_from_finding(
+            finding,
+            "https://production.example.com",
+            authorization_verified=True,
+        )
+        assert result
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "http://169.254.169.254/latest/meta-data",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://10.0.0.1/api",
+        ],
+    )
+    def test_verified_authorization_never_bypasses_ssrf_guards(self, target):
+        finding = _make_finding()
+        with pytest.raises(ValueError, match="SSRF"):
+            generate_test_from_finding(
+                finding,
+                target,
+                authorization_verified=True,
+            )
+
     def test_refuses_invalid_url(self):
         finding = _make_finding()
         with pytest.raises(ValueError, match="Invalid URL"):

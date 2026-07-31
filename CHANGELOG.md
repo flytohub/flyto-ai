@@ -15,6 +15,10 @@
   loop, including scope escape, metadata SSRF, private-target policy,
   authorization downgrade/expiry, budget exhaustion, proof omission, prompt
   injection in evidence, failed replanning, and successful bounded repair.
+- Added a per-call, control-plane-only authorization signal for generating
+  security Blueprints against an explicitly approved non-staging hostname.
+  The default remains staging-only and metadata/private-network SSRF checks
+  cannot be bypassed by the signal.
 - Added a provider-neutral structured Robotics planner with exact atomic
   capability and complete-route schemas, independent safety validation, one
   bounded repair, and tamper-evident request/schema/plan/provider attestation.

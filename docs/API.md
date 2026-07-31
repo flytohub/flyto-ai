@@ -83,6 +83,15 @@ expiry, action class, module allowlist, and cumulative budgets are rechecked at
 runtime. Consumers must treat only `verified=True` / `verdict="proved"` as
 closed; all other results are `not_proved`.
 
+Security Blueprint generation remains staging-only by default. A control-plane
+caller that has independently verified an exact target scope, a short-lived
+authorization reference, and the requested action class may pass the
+keyword-only `authorization_verified=True` argument to
+`generate_test_from_finding`. This bypasses only the staging-name requirement;
+scheme validation and metadata/private-network SSRF protections remain
+mandatory. Do not derive this flag from model output or a client-supplied
+boolean.
+
 ## Structured Robotics planner
 
 `flyto_ai.robotics_planning.RoboticsPlanningService` accepts

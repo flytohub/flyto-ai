@@ -596,10 +596,14 @@ def evaluate_campaign_action(
             }
 
     normalized_usage = _normalize_usage(usage)
-    cost_units = _ACTION_COST[action]
+    request_units = _request_units(module_id, call.get("params"))
+    cost_units = _ACTION_COST[action] * request_units
     if tool_name == "execute_module":
         budgets = contract.get("budgets") or {}
-        if normalized_usage["requests_used"] + 1 > budgets.get("max_requests", 0):
+        if (
+            normalized_usage["requests_used"] + request_units
+            > budgets.get("max_requests", 0)
+        ):
             return {
                 "allowed": False,
                 "reason": "campaign request budget exhausted",
@@ -619,9 +623,19 @@ def evaluate_campaign_action(
         "reason": "",
         "reason_code": "authorized",
         "action": action,
+        "request_units": request_units if tool_name == "execute_module" else 0,
         "cost_units": cost_units if tool_name == "execute_module" else 0,
         "targets": targets,
     }
+
+
+def _request_units(module_id: str, params: Any) -> int:
+    """Count bounded outbound request units hidden inside one Core call."""
+    values = params if isinstance(params, dict) else {}
+    requests = values.get("requests")
+    if module_id == "http.batch" and isinstance(requests, list):
+        return max(1, len(requests))
+    return 1
 
 
 def _safe_facts(result: Any) -> Dict[str, Any]:
@@ -667,9 +681,10 @@ def record_campaign_result(
         return normalized
     call = arguments if isinstance(arguments, dict) else {}
     response = result if isinstance(result, dict) else {}
-    normalized["requests_used"] += 1
+    request_units = int(decision.get("request_units") or 1)
+    normalized["requests_used"] += request_units
     normalized["cost_units_used"] += int(decision.get("cost_units") or 0)
-    normalized["evidence_count"] += 1
+    normalized["evidence_count"] += request_units
     error_class = _bounded_text(
         response.get("exception_type") or response.get("error_code"),
         80,
@@ -677,6 +692,7 @@ def record_campaign_result(
     evidence = {
         "module_id": _bounded_text(call.get("module_id"), 128),
         "action": decision.get("action"),
+        "request_units": request_units,
         "ok": bool(
             response.get("ok")
             if "ok" in response

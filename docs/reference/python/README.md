@@ -17,6 +17,6 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [providers](providers.md): 6 modules, 26 top-level symbols, 25 methods
 - [sandbox](sandbox.md): 2 modules, 2 top-level symbols, 3 methods
 - [scheduler](scheduler.md): 2 modules, 6 top-level symbols, 20 methods
-- [security](security.md): 16 modules, 48 top-level symbols, 0 methods
+- [security](security.md): 16 modules, 49 top-level symbols, 0 methods
 - [telegram](telegram.md): 6 modules, 14 top-level symbols, 54 methods
 - [tools](tools.md): 6 modules, 34 top-level symbols, 7 methods

@@ -83,6 +83,12 @@ expiry, action class, module allowlist, and cumulative budgets are rechecked at
 runtime. Consumers must treat only `verified=True` / `verdict="proved"` as
 closed; all other results are `not_proved`.
 
+Request and cost budgets are charged at the actual outbound-request unit.
+Consequently, one `http.batch` Core call containing four nested requests
+consumes four request units and four action-cost units. Its bounded evidence
+record declares the same unit count, so a batch cannot hide traffic behind a
+single module invocation.
+
 Security Blueprint generation remains staging-only by default. A control-plane
 caller that has independently verified an exact target scope, a short-lived
 authorization reference, and the requested action class may pass the

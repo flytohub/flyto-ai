@@ -533,9 +533,76 @@ def test_runtime_authorizer_enforces_request_and_cost_budgets():
         "reason": "",
         "reason_code": "authorized",
         "action": "active_probe",
+        "request_units": 1,
         "cost_units": 2,
         "targets": ["staging.example.com"],
     }
+
+
+def test_http_batch_charges_nested_request_cost_and_evidence_units():
+    requests = [
+        {"method": "GET", "url": f"https://staging.example.com/probe/{index}"}
+        for index in range(4)
+    ]
+    step = {
+        "id": "batch",
+        "module": "http.batch",
+        "params": {"requests": requests},
+        "assertions": {
+            "path": "status",
+            "op": "equals",
+            "value": "success",
+        },
+    }
+    request = active_request(
+        module_allowlist=["http.batch"],
+        budgets={
+            "max_steps": 4,
+            "max_requests": 4,
+            "max_rounds": 3,
+            "max_planner_tokens": 1000,
+            "max_cost_units": 8,
+        },
+    )
+    contract = compile_security_campaign(request, [step])
+    call = {"module_id": "http.batch", "params": {"requests": requests}}
+
+    allowed = evaluate_campaign_action(
+        contract,
+        {},
+        "execute_module",
+        call,
+    )
+    request_denied = evaluate_campaign_action(
+        contract,
+        {"requests_used": 1},
+        "execute_module",
+        call,
+    )
+    cost_denied = evaluate_campaign_action(
+        contract,
+        {"cost_units_used": 1},
+        "execute_module",
+        call,
+    )
+    recorded = record_campaign_result(
+        contract,
+        {},
+        "execute_module",
+        call,
+        {"ok": True, "status": "success"},
+    )
+
+    assert contract["gate_errors"] == []
+    assert allowed["request_units"] == 4
+    assert allowed["cost_units"] == 8
+    assert request_denied["reason_code"] == "request_budget_exhausted"
+    assert cost_denied["reason_code"] == "cost_budget_exhausted"
+    assert recorded["requests_used"] == 4
+    assert recorded["cost_units_used"] == 8
+    assert recorded["evidence_count"] == 4
+    assert len(recorded["evidence"]) == 1
+    assert recorded["evidence"][0]["request_units"] == 4
 
 
 def test_runtime_authorizer_forbids_metadata_even_if_contract_is_tampered():

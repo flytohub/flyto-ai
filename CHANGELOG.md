@@ -19,6 +19,9 @@
   security Blueprints against an explicitly approved non-staging hostname.
   The default remains staging-only and metadata/private-network SSRF checks
   cannot be bypassed by the signal.
+- Fixed security campaign budget accounting so `http.batch` consumes the
+  number of nested outbound requests at preflight, cost, and evidence
+  accounting boundaries instead of counting the whole batch as one request.
 - Added a provider-neutral structured Robotics planner with exact atomic
   capability and complete-route schemas, independent safety validation, one
   bounded repair, and tamper-evident request/schema/plan/provider attestation.

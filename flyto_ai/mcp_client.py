@@ -27,6 +27,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from flyto_ai import __version__
+from flyto_ai.mcp_server import (
+    CLIENT_CAPABILITIES_META_KEY,
+    CLIENT_INFO_META_KEY,
+    MODERN_PROTOCOL_VERSION,
+    PROTOCOL_VERSION_META_KEY,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +79,7 @@ class McpClientManager:
         self._tools: List[McpToolInfo] = []
         self._request_id: int = 0
         self._reconnect_count: int = 0
+        self._modern_protocol: bool = False
 
     @property
     def state(self) -> McpConnectionState:
@@ -102,19 +111,25 @@ class McpClientManager:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            # Send initialize request
-            init_result = await self._send_request("initialize", {
-                "protocolVersion": "2025-11-25",
-                "clientInfo": {"name": "flyto-ai", "version": "0.12.0"},
-                "capabilities": {},
-            })
-
-            if init_result is None:
-                self._state = McpConnectionState.DISCONNECTED
-                return False
-
-            # Send initialized notification
-            await self._send_notification("notifications/initialized")
+            # Prefer stateless MCP 2026-07-28 discovery. A legacy server returns
+            # Method not found, after which we fall back to its handshake.
+            discovery = await self._send_request(
+                "server/discover",
+                {},
+                modern=True,
+            )
+            if discovery is not None:
+                self._modern_protocol = True
+            else:
+                init_result = await self._send_request("initialize", {
+                    "protocolVersion": "2025-11-25",
+                    "clientInfo": {"name": "flyto-ai", "version": __version__},
+                    "capabilities": {},
+                }, modern=False)
+                if init_result is None:
+                    self._state = McpConnectionState.DISCONNECTED
+                    return False
+                await self._send_notification("notifications/initialized")
 
             # List available tools
             tools_result = await self._send_request("tools/list", {})
@@ -167,6 +182,7 @@ class McpClientManager:
             self._process = None
         self._state = McpConnectionState.DISCONNECTED
         self._tools = []
+        self._modern_protocol = False
 
     async def call_tool(self, name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
         """Call an MCP tool. Attempts reconnection on failure."""
@@ -195,7 +211,31 @@ class McpClientManager:
             self._state = McpConnectionState.DEGRADED
             return {"ok": False, "error": str(e)}
 
-    async def _send_request(self, method: str, params: Dict) -> Optional[Dict]:
+    def _request_params(
+        self,
+        params: Dict[str, Any],
+        *,
+        modern: bool,
+    ) -> Dict[str, Any]:
+        request_params = dict(params)
+        if modern:
+            request_params["_meta"] = {
+                PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION,
+                CLIENT_CAPABILITIES_META_KEY: {},
+                CLIENT_INFO_META_KEY: {
+                    "name": "flyto-ai",
+                    "version": __version__,
+                },
+            }
+        return request_params
+
+    async def _send_request(
+        self,
+        method: str,
+        params: Dict,
+        *,
+        modern: Optional[bool] = None,
+    ) -> Optional[Dict]:
         """Send a JSON-RPC request and wait for matching response.
 
         Skips notifications and non-matching responses (by request ID).
@@ -208,7 +248,10 @@ class McpClientManager:
             "jsonrpc": "2.0",
             "id": req_id,
             "method": method,
-            "params": params,
+            "params": self._request_params(
+                params,
+                modern=self._modern_protocol if modern is None else modern,
+            ),
         }
         line = json.dumps(request) + "\n"
 

@@ -27,7 +27,14 @@ from flyto_ai.closed_loop_v3 import (
     evaluate_distillation,
     stable_hash,
 )
-from flyto_ai.mcp_server import negotiate_protocol_version
+from flyto_ai.mcp_server import (
+    DISCOVERY_TTL_MS,
+    STATIC_LIST_TTL_MS,
+    SUPPORTED_PROTOCOL_VERSIONS,
+    build_modern_result,
+    negotiate_legacy_protocol_version,
+    request_protocol_era,
+)
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.tools.core_tools import dispatch_core_tool
 
@@ -194,6 +201,37 @@ def _make_result(req_id: Any, result: Any) -> Dict[str, Any]:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
+def _server_info() -> Dict[str, Any]:
+    return {
+        "name": "flyto-closed-loop",
+        "title": "Flyto2 Verified Closed Loop",
+        "version": __version__,
+        "description": (
+            "Plan, execute, repair, verify, and preserve compact evidence for "
+            "Flyto2 automation."
+        ),
+        "websiteUrl": "https://github.com/flytohub/flyto-ai",
+    }
+
+
+def _protocol_result(
+    req_id: Any,
+    result: Dict[str, Any],
+    *,
+    modern: bool,
+    ttl_ms: Optional[int] = None,
+    cache_scope: Optional[str] = None,
+) -> Dict[str, Any]:
+    if modern:
+        result = build_modern_result(
+            result,
+            server_info=_server_info(),
+            ttl_ms=ttl_ms,
+            cache_scope=cache_scope,
+        )
+    return _make_result(req_id, result)
+
+
 def _tool_result(
     data: Dict[str, Any],
     *,
@@ -332,28 +370,55 @@ class ClosedLoopMCPServer:
         method = request.get("method", "")
         req_id = request.get("id")
         params = request.get("params", {})
+        era, protocol_error = request_protocol_era(req_id, method, params)
+        if protocol_error is not None:
+            return protocol_error
+        modern = era == "modern"
 
-        if method == "initialize":
+        if method == "initialize" and not modern:
             client_version = (
                 params.get("protocolVersion")
                 if isinstance(params, dict)
                 else None
             )
-            return _make_result(req_id, {
-                "protocolVersion": negotiate_protocol_version(client_version),
+            return _protocol_result(req_id, {
+                "protocolVersion": negotiate_legacy_protocol_version(
+                    client_version,
+                ),
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {
-                    "name": "flyto-closed-loop",
-                    "version": __version__,
-                },
+                "serverInfo": _server_info(),
                 "instructions": _SERVER_INSTRUCTIONS,
-            })
-        if method == "notifications/initialized":
+            }, modern=False)
+        if method == "server/discover" and modern:
+            return _protocol_result(
+                req_id,
+                {
+                    "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "instructions": _SERVER_INSTRUCTIONS,
+                },
+                modern=True,
+                ttl_ms=DISCOVERY_TTL_MS,
+                cache_scope="private",
+            )
+        if modern and method in {"initialize", "ping", "logging/setLevel"}:
+            return _make_error(
+                req_id,
+                -32601,
+                "Method not found: {}".format(method),
+            )
+        if method.startswith("notifications/"):
             return None
         if method == "ping":
-            return _make_result(req_id, {})
+            return _protocol_result(req_id, {}, modern=False)
         if method == "tools/list":
-            return _make_result(req_id, {"tools": TOOLS})
+            return _protocol_result(
+                req_id,
+                {"tools": TOOLS},
+                modern=modern,
+                ttl_ms=STATIC_LIST_TTL_MS,
+                cache_scope="public",
+            )
         if method == "tools/call":
             if not isinstance(params, dict):
                 return _make_error(req_id, -32602, "params must be an object")
@@ -372,7 +437,7 @@ class ClosedLoopMCPServer:
                     message="Tool failed: {}".format(str(exc)[:200]),
                     is_error=True,
                 )
-            return _make_result(req_id, result)
+            return _protocol_result(req_id, result, modern=modern)
         return _make_error(req_id, -32601, "Method not found: {}".format(method))
 
     async def call_tool(

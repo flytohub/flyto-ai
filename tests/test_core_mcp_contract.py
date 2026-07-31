@@ -1,8 +1,17 @@
 # Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
 """Tests for the flyto-core MCP contract exposed by flyto-ai."""
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
 
+from flyto_ai.mcp_client import McpClientManager
+from flyto_ai.mcp_server import (
+    CLIENT_CAPABILITIES_META_KEY,
+    MODERN_PROTOCOL_VERSION,
+    PROTOCOL_VERSION_META_KEY,
+)
 from flyto_ai.tools import core_tools
 from flyto_ai.providers.base import dispatch_and_log_tool
 
@@ -137,3 +146,66 @@ async def test_provider_log_entry_carries_core_mcp_evidence():
     assert log_entry["mcp"]["contract_version"] == core_tools.CORE_MCP_CONTRACT_VERSION
     assert log_entry["mcp"]["module_id"] == "browser.extract"
     assert log_entry["mcp"]["ok"] is True
+
+
+def test_mcp_client_builds_modern_request_metadata():
+    manager = McpClientManager(["unused"])
+    params = manager._request_params(
+        {"name": "search"},
+        modern=True,
+    )
+
+    assert params["name"] == "search"
+    assert (
+        params["_meta"][PROTOCOL_VERSION_META_KEY]
+        == MODERN_PROTOCOL_VERSION
+    )
+    assert params["_meta"][CLIENT_CAPABILITIES_META_KEY] == {}
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_prefers_modern_discovery(monkeypatch):
+    manager = McpClientManager(["modern-server"])
+    send_request = AsyncMock(side_effect=[
+        {"supportedVersions": [MODERN_PROTOCOL_VERSION]},
+        {"tools": [{"name": "search"}]},
+    ])
+    notify = AsyncMock()
+
+    async def spawn(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(manager, "_send_request", send_request)
+    monkeypatch.setattr(manager, "_send_notification", notify)
+
+    assert await manager.connect() is True
+    assert manager._modern_protocol is True
+    assert send_request.await_args_list[0].args == ("server/discover", {})
+    assert send_request.await_args_list[0].kwargs == {"modern": True}
+    assert send_request.await_args_list[1].args == ("tools/list", {})
+    notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_falls_back_to_legacy_handshake(monkeypatch):
+    manager = McpClientManager(["legacy-server"])
+    send_request = AsyncMock(side_effect=[
+        None,
+        {"protocolVersion": "2025-11-25"},
+        {"tools": []},
+    ])
+    notify = AsyncMock()
+
+    async def spawn(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(manager, "_send_request", send_request)
+    monkeypatch.setattr(manager, "_send_notification", notify)
+
+    assert await manager.connect() is True
+    assert manager._modern_protocol is False
+    assert send_request.await_args_list[1].args[0] == "initialize"
+    assert send_request.await_args_list[1].kwargs == {"modern": False}
+    notify.assert_awaited_once_with("notifications/initialized")

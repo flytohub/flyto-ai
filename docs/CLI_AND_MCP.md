@@ -31,13 +31,22 @@ integration as implemented in `flyto_ai.cli`.
 
 ## MCP Protocol
 
-The server supports the protocol versions listed in `SUPPORTED_PROTOCOL_VERSIONS`
-and returns its package version from the same metadata source as the CLI. It
-advertises tool support, exposes registered tools plus `chat`, returns JSON-RPC
-errors for invalid methods/params, and processes newline-delimited STDIO without
-requiring an external MCP library.
+Both MCP servers support the stateless 2026-07-28 protocol and the older
+handshake-based revisions from 2024-11-05 through 2025-11-25. Modern hosts can
+discover capabilities without opening a sticky protocol session, so reconnects
+do not depend on hidden server state. Every modern response identifies the
+server, and discovery and tool lists include safe cache guidance.
+
+The general server exposes registered tools plus `chat`. The closed-loop server
+keeps large plans and evidence outside the model context while exposing four
+bounded tools: `plan`, `execute`, `verify`, and `get_evidence`. Invalid metadata,
+unsupported versions, methods, and parameters return structured JSON-RPC
+errors.
 
 Hosts should call `tools/list` rather than cache a hard-coded Core module count.
 `tools/call` executes through the same registry, validation, permission, retry,
 and evidence boundaries used by the agent.
 
+The built-in MCP client tries modern `server/discover` first and automatically
+falls back to the legacy initialize handshake when it connects to an older
+server.

@@ -18,36 +18,66 @@ from flyto_ai import __version__
 
 logger = logging.getLogger(__name__)
 
-# MCP protocol versions we support, newest first.
-# Server echoes the client's requested version when supported, otherwise
-# returns SUPPORTED_PROTOCOL_VERSIONS[0] and lets the client decide.
-# Reference: https://modelcontextprotocol.io/specification/versioning
-SUPPORTED_PROTOCOL_VERSIONS = (
+# MCP 2026-07-28 is stateless and selected through metadata on every request.
+# Older revisions retain their initialize handshake.
+MODERN_PROTOCOL_VERSION = "2026-07-28"
+LEGACY_PROTOCOL_VERSIONS = (
     "2025-11-25",
     "2025-06-18",
     "2025-03-26",
     "2024-11-05",
 )
+SUPPORTED_PROTOCOL_VERSIONS = (
+    MODERN_PROTOCOL_VERSION,
+    *LEGACY_PROTOCOL_VERSIONS,
+)
+PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
+CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
+CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
+SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
+DISCOVERY_TTL_MS = 60_000
+STATIC_LIST_TTL_MS = 60_000
+
+
+def _server_info() -> Dict[str, Any]:
+    return {
+        "name": "flyto-ai",
+        "title": "Flyto2 AI Automation Agent",
+        "version": __version__,
+        "description": (
+            "Turn natural-language requests into validated Flyto2 automation "
+            "tool calls."
+        ),
+        "websiteUrl": "https://github.com/flytohub/flyto-ai",
+    }
+
+
+def _server_capabilities() -> Dict[str, Any]:
+    return {"tools": {"listChanged": False}}
 
 SERVER_CAPABILITIES = {
-    "capabilities": {"tools": {"listChanged": False}},
-    "serverInfo": {
-        "name": "flyto-ai",
-        "version": __version__,
-    },
+    "capabilities": _server_capabilities(),
+    "serverInfo": _server_info(),
 }
 
 
 def negotiate_protocol_version(client_version: Optional[str]) -> str:
-    """Echo client's requested MCP protocol version when supported, else server preferred."""
+    """Select a supported version, preferring the latest revision."""
     if client_version and client_version in SUPPORTED_PROTOCOL_VERSIONS:
         return client_version
     return SUPPORTED_PROTOCOL_VERSIONS[0]
 
 
+def negotiate_legacy_protocol_version(client_version: Optional[str]) -> str:
+    """Select a handshake revision without crossing into stateless MCP."""
+    if client_version and client_version in LEGACY_PROTOCOL_VERSIONS:
+        return client_version
+    return LEGACY_PROTOCOL_VERSIONS[0]
+
+
 def build_initialize_response(client_version: Optional[str]) -> Dict:
     return {
-        "protocolVersion": negotiate_protocol_version(client_version),
+        "protocolVersion": negotiate_legacy_protocol_version(client_version),
         **SERVER_CAPABILITIES,
     }
 
@@ -81,11 +111,119 @@ CHAT_TOOL = {
 }
 
 
-def _make_error(req_id: Any, code: int, message: str) -> Dict:
-    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+def _make_error(
+    req_id: Any,
+    code: int,
+    message: str,
+    data: Optional[Dict[str, Any]] = None,
+) -> Dict:
+    error = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": req_id, "error": error}
 
 
-def _make_result(req_id: Any, result: Any) -> Dict:
+def build_modern_result(
+    result: Dict[str, Any],
+    *,
+    server_info: Dict[str, Any],
+    ttl_ms: Optional[int] = None,
+    cache_scope: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Add the fields required on successful MCP 2026-07-28 results."""
+    modern_result = dict(result)
+    modern_result.setdefault("resultType", "complete")
+    metadata = modern_result.get("_meta")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata.setdefault(SERVER_INFO_META_KEY, server_info)
+    modern_result["_meta"] = metadata
+    if ttl_ms is not None and cache_scope is not None:
+        modern_result["ttlMs"] = ttl_ms
+        modern_result["cacheScope"] = cache_scope
+    return modern_result
+
+
+def request_protocol_era(
+    req_id: Any,
+    method: str,
+    params: Any,
+) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Classify a request as modern or legacy and validate modern metadata."""
+    if not isinstance(params, dict):
+        if method == "server/discover":
+            return None, _make_error(req_id, -32602, "params must be an object")
+        return "legacy", None
+
+    metadata = params.get("_meta")
+    has_version = (
+        isinstance(metadata, dict)
+        and PROTOCOL_VERSION_META_KEY in metadata
+    )
+    if not has_version:
+        if method == "server/discover":
+            return None, _make_error(
+                req_id,
+                -32602,
+                "Missing required request metadata: {}".format(
+                    PROTOCOL_VERSION_META_KEY,
+                ),
+            )
+        return "legacy", None
+
+    requested = metadata.get(PROTOCOL_VERSION_META_KEY)
+    if not isinstance(requested, str):
+        return None, _make_error(
+            req_id,
+            -32602,
+            "{} must be a string".format(PROTOCOL_VERSION_META_KEY),
+        )
+    if requested != MODERN_PROTOCOL_VERSION:
+        return None, _make_error(
+            req_id,
+            -32022,
+            "Unsupported protocol version",
+            {
+                "requested": requested,
+                "supported": list(SUPPORTED_PROTOCOL_VERSIONS),
+            },
+        )
+    if not isinstance(metadata.get(CLIENT_CAPABILITIES_META_KEY), dict):
+        return None, _make_error(
+            req_id,
+            -32602,
+            "Missing or invalid request metadata: {}".format(
+                CLIENT_CAPABILITIES_META_KEY,
+            ),
+        )
+    client_info = metadata.get(CLIENT_INFO_META_KEY)
+    if client_info is not None and (
+        not isinstance(client_info, dict)
+        or not isinstance(client_info.get("name"), str)
+        or not isinstance(client_info.get("version"), str)
+    ):
+        return None, _make_error(
+            req_id,
+            -32602,
+            "Invalid request metadata: {}".format(CLIENT_INFO_META_KEY),
+        )
+    return "modern", None
+
+
+def _make_result(
+    req_id: Any,
+    result: Dict[str, Any],
+    *,
+    modern: bool = False,
+    ttl_ms: Optional[int] = None,
+    cache_scope: Optional[str] = None,
+) -> Dict:
+    if modern:
+        result = build_modern_result(
+            result,
+            server_info=_server_info(),
+            ttl_ms=ttl_ms,
+            cache_scope=cache_scope,
+        )
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
@@ -115,31 +253,79 @@ class MCPServer:
         method = request.get("method", "")
         req_id = request.get("id")
         params = request.get("params", {})
+        era, protocol_error = request_protocol_era(req_id, method, params)
+        if protocol_error is not None:
+            return protocol_error
+        modern = era == "modern"
 
-        if method == "initialize":
+        if method == "initialize" and not modern:
             client_version = params.get("protocolVersion") if isinstance(params, dict) else None
             return _make_result(req_id, build_initialize_response(client_version))
 
-        elif method == "notifications/initialized":
-            return None  # notification, no response
+        if method == "server/discover" and modern:
+            return _make_result(
+                req_id,
+                {
+                    "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
+                    "capabilities": _server_capabilities(),
+                    "instructions": (
+                        "Use chat for natural-language automation or call "
+                        "runtime-discovered Flyto2 tools directly."
+                    ),
+                },
+                modern=True,
+                ttl_ms=DISCOVERY_TTL_MS,
+                cache_scope="public",
+            )
 
-        elif method == "ping":
-            return _make_result(req_id, {})
-
-        elif method == "tools/list":
-            self._ensure_registry()
-            tools = list(self._registry.values()) + [CHAT_TOOL]
-            return _make_result(req_id, {"tools": tools})
-
-        elif method == "tools/call":
-            tool_name = params.get("name", "")
-            arguments = params.get("arguments", {})
-            return await self._handle_tool_call(req_id, tool_name, arguments)
-
-        else:
+        if modern and method in {"initialize", "ping", "logging/setLevel"}:
             return _make_error(req_id, -32601, "Method not found: {}".format(method))
 
-    async def _handle_tool_call(self, req_id: Any, name: str, arguments: Dict) -> Dict:
+        if method.startswith("notifications/"):
+            return None  # notification, no response
+
+        if method == "ping":
+            return _make_result(req_id, {})
+
+        if method == "tools/list":
+            self._ensure_registry()
+            tools = list(self._registry.values()) + [CHAT_TOOL]
+            return _make_result(
+                req_id,
+                {"tools": tools},
+                modern=modern,
+                ttl_ms=STATIC_LIST_TTL_MS,
+                cache_scope="public",
+            )
+
+        if method == "tools/call":
+            if not isinstance(params, dict):
+                return _make_error(req_id, -32602, "params must be an object")
+            tool_name = params.get("name", "")
+            arguments = params.get("arguments", {})
+            if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+                return _make_error(
+                    req_id,
+                    -32602,
+                    "Tool name must be a string and arguments must be an object",
+                )
+            return await self._handle_tool_call(
+                req_id,
+                tool_name,
+                arguments,
+                modern=modern,
+            )
+
+        return _make_error(req_id, -32601, "Method not found: {}".format(method))
+
+    async def _handle_tool_call(
+        self,
+        req_id: Any,
+        name: str,
+        arguments: Dict,
+        *,
+        modern: bool,
+    ) -> Dict:
         self._ensure_agent()
 
         # Meta-tool: chat
@@ -155,9 +341,11 @@ class MCPServer:
                 executed = [er.get("module_id", "") for er in result.execution_results]
                 content += "\n\nExecuted modules: {}".format(", ".join(executed))
 
-            return _make_result(req_id, {
-                "content": [{"type": "text", "text": content}],
-            })
+            return _make_result(
+                req_id,
+                {"content": [{"type": "text", "text": content}]},
+                modern=modern,
+            )
 
         # Regular tool dispatch
         self._ensure_registry()
@@ -165,18 +353,22 @@ class MCPServer:
         if name not in self._registry and dispatch:
             result = await dispatch(name, arguments)
             text = json.dumps(result, ensure_ascii=False, default=str)
-            return _make_result(req_id, {
-                "content": [{"type": "text", "text": text}],
-            })
+            return _make_result(
+                req_id,
+                {"content": [{"type": "text", "text": text}]},
+                modern=modern,
+            )
 
         if not dispatch:
             return _make_error(req_id, -32602, "No tools available")
 
         result = await dispatch(name, arguments)
         text = json.dumps(result, ensure_ascii=False, default=str)
-        return _make_result(req_id, {
-            "content": [{"type": "text", "text": text}],
-        })
+        return _make_result(
+            req_id,
+            {"content": [{"type": "text", "text": text}]},
+            modern=modern,
+        )
 
 
 async def async_main():

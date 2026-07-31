@@ -317,8 +317,8 @@ class TestMCPServer:
 
         assert resp["jsonrpc"] == "2.0"
         assert resp["id"] == 1
-        from flyto_ai.mcp_server import SUPPORTED_PROTOCOL_VERSIONS
-        assert resp["result"]["protocolVersion"] == SUPPORTED_PROTOCOL_VERSIONS[0]
+        from flyto_ai.mcp_server import LEGACY_PROTOCOL_VERSIONS
+        assert resp["result"]["protocolVersion"] == LEGACY_PROTOCOL_VERSIONS[0]
         assert resp["result"]["serverInfo"]["name"] == "flyto-ai"
         assert resp["result"]["capabilities"]["tools"]["listChanged"] is False
 

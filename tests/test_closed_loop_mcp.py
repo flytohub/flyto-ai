@@ -13,6 +13,25 @@ from flyto_ai.closed_loop_mcp import (
     MCP_CONTRACT_VERSION,
     ClosedLoopMCPServer,
 )
+from flyto_ai.mcp_server import (
+    CLIENT_CAPABILITIES_META_KEY,
+    CLIENT_INFO_META_KEY,
+    MODERN_PROTOCOL_VERSION,
+    PROTOCOL_VERSION_META_KEY,
+)
+
+
+def modern_params(params=None):
+    request_params = dict(params or {})
+    request_params["_meta"] = {
+        PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION,
+        CLIENT_CAPABILITIES_META_KEY: {},
+        CLIENT_INFO_META_KEY: {
+            "name": "closed-loop-test",
+            "version": "1.0",
+        },
+    }
+    return request_params
 
 
 class StdioMCPClient:
@@ -154,6 +173,53 @@ async def test_protocol_contract_is_compact_and_rejects_invalid_plan(tmp_path):
     })
     assert invalid["isError"] is True
     assert invalid["structuredContent"]["gate"]["pass"] is False
+
+
+@pytest.mark.asyncio
+async def test_modern_protocol_discovers_and_returns_complete_results(tmp_path):
+    server = ClosedLoopMCPServer(str(tmp_path))
+    discovered = await server.handle({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "server/discover",
+        "params": modern_params(),
+    })
+    discovery = discovered["result"]
+    assert discovery["supportedVersions"][0] == MODERN_PROTOCOL_VERSION
+    assert discovery["resultType"] == "complete"
+    assert discovery["ttlMs"] == 60_000
+    assert discovery["cacheScope"] == "private"
+    assert (
+        discovery["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]
+        == "flyto-closed-loop"
+    )
+
+    listed = await server.handle({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/list",
+        "params": modern_params(),
+    })
+    result = listed["result"]
+    assert len(result["tools"]) == 4
+    assert result["resultType"] == "complete"
+    assert result["cacheScope"] == "public"
+
+
+@pytest.mark.asyncio
+async def test_modern_closed_loop_rejects_handshake_methods(tmp_path):
+    server = ClosedLoopMCPServer(str(tmp_path))
+    for request_id, method in enumerate(
+        ["initialize", "ping", "logging/setLevel"],
+        start=20,
+    ):
+        response = await server.handle({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": modern_params(),
+        })
+        assert response["error"]["code"] == -32601
 
 
 @pytest.mark.asyncio

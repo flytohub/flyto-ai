@@ -1,5 +1,28 @@
 # Decisions
 
+## 2026-08-02: Full agent composition is tool-allowlisted and detachable
+
+- The provider-neutral `FlytoCodingAgent` remains the owner of the coding loop.
+  Indexer, Blueprint, page inspection, and Core attach as four versioned MCP
+  capability specs rather than sibling source imports or alternate agents.
+- `required_tools` proves compatibility; the new optional `allowed_tools`
+  field defines model authority. With an allowlist, every named tool must exist
+  and no other discovered server tool is exposed or dispatchable. Omitting it
+  preserves the existing full-catalog contract.
+- Blueprint and page inspection can use separately started views of the same
+  Flyto2 AI MCP implementation. The Blueprint view cannot call `chat`, Core, or
+  page inspection; the page view exposes only `inspect_page`.
+- `flyto.agent-stack.v1` preflight performs real initialize and `tools/list`
+  negotiation and hashes the observed component identities, protocols, and
+  exposed tools. It does not invoke a model, navigate a page, or read secrets.
+- Page inspection keeps Core as its only browser authority. `auto` tries
+  bundled Chromium and then installed Google Chrome and records the chosen
+  channel. A successful MCP envelope cannot override nested domain failure.
+
+Rollback is additive: omit any stack component, remove its `allowed_tools`
+field to restore the previous full-catalog behavior, or stop using the stack
+builder while retaining the underlying `flyto.coding.v1` contract.
+
 ## 2026-08-01: Coding service adapters are detachable and tenant-bound
 
 - The native `FlytoCodingAgent` remains the only coding-loop implementation;

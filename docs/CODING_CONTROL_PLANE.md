@@ -37,18 +37,36 @@ checks:
 capabilities:
   - name: flyto-indexer
     kind: mcp-stdio
-    argv: [flyto-index, mcp]
+    argv: [python, -m, flyto_indexer.mcp_server]
     contract_version: flyto-indexer.mcp.v1
     protocol_version: 2025-06-18
     required_tools: [search, impact, task]
+    allowed_tools: [search, impact, call_hierarchy, structure, task, verify]
+    required: true
+  - name: flyto-blueprint
+    kind: mcp-stdio
+    argv: [python, -m, flyto_ai.mcp_server]
+    contract_version: flyto-blueprint.mcp.v1
+    protocol_version: 2025-06-18
+    required_tools: [list_blueprints, use_blueprint, save_as_blueprint, report_blueprint_outcome]
+    allowed_tools: [list_blueprints, use_blueprint, save_as_blueprint, report_blueprint_outcome, export_blueprint, import_blueprint]
+    required: true
+  - name: flyto-page-inspector
+    kind: mcp-stdio
+    argv: [python, -m, flyto_ai.mcp_server]
+    contract_version: flyto-page-inspector.mcp.v1
+    protocol_version: 2025-06-18
+    required_tools: [inspect_page]
+    allowed_tools: [inspect_page]
     required: true
   - name: flyto-core
     kind: mcp-stdio
-    argv: [flyto, mcp]
+    argv: [python, -m, core.mcp_server]
     contract_version: flyto-core.mcp.v1
     protocol_version: 2025-06-18
     required_tools: [execute_module]
-    required: false
+    allowed_tools: [list_modules, search_modules, get_module_info, get_module_examples, validate_params, execute_module, list_recipes, run_recipe]
+    required: true
 ```
 
 Configuration is declarative and argv-only. There is no shell expansion,
@@ -56,7 +74,63 @@ environment interpolation, or implicit sibling-repository import. Required MCP
 servers are initialized and queried with `tools/list`; failure is closed before
 editing. The negotiated protocol version and actual tool names must satisfy the
 contract; the configured `contract_version` label is evidence metadata, not an
-availability claim. Optional adapters may be removed independently.
+availability claim. `allowed_tools` is also enforced after discovery: tools not
+listed there are not shown to the model and cannot be dispatched. When the field
+is omitted, the backward-compatible behavior exposes the complete discovered
+catalog. Required tools must be a subset of the allowlist. Optional adapters may
+be removed independently.
+
+## Full composable agent stack
+
+The Flyto2 full stack is one control plane with four detachable capability
+processes:
+
+```text
+FlytoCodingAgent (provider-neutral owner)
+  -> flyto-indexer: context, impact, dependency and task gates
+  -> flyto-blueprint: discover/reuse/learn portable workflows
+  -> flyto-page-inspector: inspect the real DOM before choosing selectors
+  -> flyto-core: validate and execute modules/recipes, screenshots and visual diff
+  -> source-controlled checks: accept or reject, then bounded repair
+  -> redacted evidence and trusted Blueprint feedback
+```
+
+`flyto-page-inspector` is the page-detection component. It is intentionally a
+one-tool view over `flyto_ai.mcp_server`; the same server process can provide the
+Blueprint view without exposing `chat`, Core execution, or page inspection to
+that capability. Core remains the runtime authority underneath page inspection
+and provides `browser.detect`, screenshots, and the detachable deterministic
+TypeScript visual-diff worker. `inspect_page` accepts a typed
+`browser_channel` (`auto`, `chromium`, `chrome`, or `msedge`). The default
+tries Core's bundled Chromium and then the installed Google Chrome, reports the
+selected channel in its evidence, and still fails closed if neither launches.
+
+Probe the exact installed composition without invoking a model, opening a page,
+or reading credentials:
+
+```bash
+python -m flyto_ai.coding.stack --workspace . --json
+```
+
+The command performs real MCP initialize and `tools/list` handshakes, verifies
+every required allowlisted tool, and emits `flyto.agent-stack.v1` evidence with
+a content-addressed composition fingerprint. `--components` can remove any
+lane; required missing lanes fail closed. The same capability tuple is available
+to Python hosts through the stable coding API and plugs directly into the native
+Agent request:
+
+```python
+from flyto_ai.coding import CodingTaskRequest, build_agent_stack_capabilities
+
+request = CodingTaskRequest(
+    message="Implement and verify the requested change",
+    working_dir="/workspace/project",
+    capabilities=build_agent_stack_capabilities(),
+)
+```
+
+Passing a component subset makes every selected lane required by default. Use
+`required_components` to make a selected lane optional.
 
 Authenticated Flyto2 product adapters opt into runtime variables by name:
 

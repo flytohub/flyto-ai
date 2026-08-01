@@ -1,6 +1,6 @@
 # State
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 Implemented:
 - The additive `flyto.coding.v1` control plane provides a provider-neutral
@@ -21,6 +21,21 @@ Implemented:
   and required names from `tools/list`. Evidence records the negotiated
   protocol, server name, catalog, and missing tools; configured labels alone do
   not make a capability available.
+- MCP capability specs now support a backward-compatible `allowed_tools`
+  boundary. The full `flyto.agent-stack.v1` composition isolates Indexer,
+  Blueprint, page inspection, and Core into independently detachable tool
+  surfaces, rejects missing allowlisted tools before editing, and emits a
+  content-addressed composition fingerprint from real MCP handshakes.
+- The page-detection lane is explicitly `flyto-page-inspector` and exposes only
+  `inspect_page`; Core remains the execution authority for browser detection,
+  screenshots, recipes, and deterministic visual comparison. The documented
+  Indexer/Core commands now use their real Python MCP modules rather than
+  nonexistent CLI subcommands.
+- Page inspection has a typed browser-channel policy. Its default attempts
+  bundled Chromium, falls back once to installed Google Chrome, records the
+  selected channel, and fails closed when no engine launches. MCP adapters also
+  propagate nested structured/JSON domain failures instead of trusting an
+  outer transport-success envelope.
 - MCP stdio adapters can now request explicit runtime `FLYTO_*` variables by
   name. Values are copied only into that child process and remain absent from
   configuration, status, evidence, job state, and public receipts; all other
@@ -128,11 +143,16 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1288 passed, 15 optional/live-integration skips;
+- full suite: 1302 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;
 - Flyto2 Indexer closed loop: 18 passed, 0 warnings, 0 failures (90/A).
+- isolated-wheel `flyto.agent-stack.v1` preflight: all four required lanes
+  negotiated, fingerprint
+  `648c821f1c2a6d462a8b9afce3e8a575366aa4c952b9887f8a3717637e56854f`;
+  installed Indexer search returned `FlytoCodingAgent`, and installed page
+  inspection extracted the real Example Domain DOM through Chrome.
 
 The coding-service slice is additionally covered by focused agent, CLI,
 coding-control, provider, and service tests. These include real filesystem
@@ -179,7 +199,10 @@ Known constraints:
   use Docker or `bwrap`, but untrusted repositories must still run the whole
   process inside a dedicated container or VM. MCP capability commands must be
   explicitly configured in `.flyto/coding.yaml` and are not inferred from
-  sibling source directories.
+  sibling source directories. The full-stack probe therefore requires the four
+  independently installed packages to be importable in the selected Python
+  environment; missing components fail closed and can be intentionally removed
+  with the probe's component selection.
 - The built-in coding HTTP facade is intentionally loopback-only. Production
   multi-customer exposure still requires Flyto2 Cloud identity, TLS, quota,
   organization policy, audit retention, and authorization mapping at the edge.

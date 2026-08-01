@@ -85,6 +85,7 @@ class CapabilitySpec:
     contract_version: str = ""
     protocol_version: str = "2025-06-18"
     required_tools: Tuple[str, ...] = ()
+    allowed_tools: Tuple[str, ...] = ()
     env_passthrough: Tuple[str, ...] = ()
     timeout_seconds: int = 10
 
@@ -103,6 +104,14 @@ class CapabilitySpec:
             raise ValueError("capability required_tools contains an invalid name")
         if len(set(self.required_tools)) != len(self.required_tools):
             raise ValueError("capability required_tools contains duplicates")
+        if len(self.allowed_tools) > 100:
+            raise ValueError("capability allowed_tools cannot exceed 100 items")
+        if any(not _NAME_RE.fullmatch(name) for name in self.allowed_tools):
+            raise ValueError("capability allowed_tools contains an invalid name")
+        if len(set(self.allowed_tools)) != len(self.allowed_tools):
+            raise ValueError("capability allowed_tools contains duplicates")
+        if self.allowed_tools and not set(self.required_tools).issubset(self.allowed_tools):
+            raise ValueError("capability required_tools must be included in allowed_tools")
         if len(self.env_passthrough) > 32:
             raise ValueError("capability env_passthrough cannot exceed 32 items")
         if any(not _PASSTHROUGH_ENV_RE.fullmatch(name) for name in self.env_passthrough):
@@ -118,9 +127,12 @@ class CapabilitySpec:
         if not isinstance(argv, Sequence) or isinstance(argv, (str, bytes)):
             raise ValueError("capability argv must be a JSON/YAML array")
         required_tools = value.get("required_tools", ())
+        allowed_tools = value.get("allowed_tools", ())
         env_passthrough = value.get("env_passthrough", ())
         if not isinstance(required_tools, Sequence) or isinstance(required_tools, (str, bytes)):
             raise ValueError("capability required_tools must be a JSON/YAML array")
+        if not isinstance(allowed_tools, Sequence) or isinstance(allowed_tools, (str, bytes)):
+            raise ValueError("capability allowed_tools must be a JSON/YAML array")
         if not isinstance(env_passthrough, Sequence) or isinstance(env_passthrough, (str, bytes)):
             raise ValueError("capability env_passthrough must be a JSON/YAML array")
         return cls(
@@ -131,6 +143,7 @@ class CapabilitySpec:
             contract_version=str(value.get("contract_version", "")),
             protocol_version=str(value.get("protocol_version", "2025-06-18")),
             required_tools=tuple(str(item) for item in required_tools),
+            allowed_tools=tuple(str(item) for item in allowed_tools),
             env_passthrough=tuple(str(item) for item in env_passthrough),
             timeout_seconds=int(value.get("timeout_seconds", 10)),
         )

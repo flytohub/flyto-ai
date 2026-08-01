@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added the versioned `flyto.agent-stack.v1` composition for independently
+  detachable Indexer, Blueprint, page-inspection, and Core MCP lanes, including
+  real handshake preflight and a content-addressed composition fingerprint.
+- Added backward-compatible per-capability `allowed_tools` enforcement so a
+  shared MCP server can expose isolated least-privilege Blueprint and
+  `inspect_page` views; unlisted tools are invisible and undispatchable, while
+  missing allowlisted tools fail before model-directed edits.
+- Corrected the documented Indexer and Core MCP startup commands to their real
+  Python modules and documented the complete understand → reuse/plan → inspect
+  → execute → verify → evidence/learning Agent line.
+- Made page inspection portable across bundled Chromium and installed Chrome,
+  with a typed channel selector and selected-channel evidence; nested MCP
+  domain failures now propagate instead of appearing as transport success.
 - Changed the Ollama agent transport to the native `/api/chat` tool loop so
   local thinking models honor an explicit bounded `think` setting (disabled by
   default), preserve tool-result ordering and token counters, and cannot spend

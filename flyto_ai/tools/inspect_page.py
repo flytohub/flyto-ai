@@ -27,10 +27,21 @@ INSPECT_PAGE_TOOL = {
                 "description": "Wait time in ms after page load for dynamic content (default 2000)",
                 "default": 2000,
             },
+            "browser_channel": {
+                "type": "string",
+                "enum": ["auto", "chromium", "chrome", "msedge"],
+                "description": (
+                    "Browser engine selection. 'auto' first tries Core's bundled "
+                    "Chromium and then the installed Google Chrome (default auto)."
+                ),
+                "default": "auto",
+            },
         },
         "required": ["url"],
     },
 }
+
+_BROWSER_CHANNELS = ("auto", "chromium", "chrome", "msedge")
 
 _INSPECT_JS = """
 (() => {
@@ -82,13 +93,62 @@ _INSPECT_JS = """
 """
 
 
-async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
+async def _launch_browser(
+    execute: Any,
+    sessions: Dict[str, Any],
+    browser_channel: str,
+) -> tuple[str | None, str | None]:
+    """Launch through Core and return the selected channel plus a bounded error."""
+    from flyto_ai.tools.core_tools import _is_ok
+
+    attempts = (
+        (("chromium", None), ("chrome", "chrome"))
+        if browser_channel == "auto"
+        else ((browser_channel, None if browser_channel == "chromium" else browser_channel),)
+    )
+    errors = []
+    for index, (label, channel) in enumerate(attempts):
+        params = {"headless": True}
+        if channel:
+            params["channel"] = channel
+        result = await execute(
+            module_id="browser.launch",
+            params=params,
+            browser_sessions=sessions,
+        )
+        if _is_ok(result):
+            return label, None
+        detail = result.get("error", "unknown") if isinstance(result, dict) else "unknown"
+        errors.append("{}: {}".format(label, detail))
+        if index + 1 < len(attempts):
+            try:
+                await execute(
+                    module_id="browser.close",
+                    params={},
+                    browser_sessions=sessions,
+                )
+            except Exception as exc:
+                logger.debug("inspect_page retry cleanup failed: %s", exc)
+            sessions.clear()
+    return None, "; ".join(errors)[:1000]
+
+
+async def inspect_page(
+    url: str,
+    wait_ms: int = 2000,
+    browser_channel: str = "auto",
+) -> Dict[str, Any]:
     """Launch browser, go to URL, extract interactive elements, close browser."""
     from flyto_ai.prompt.policies import is_safe_url
     from flyto_ai.tools.core_tools import _get_mcp_handler, _is_ok
 
     if not is_safe_url(url):
         return {"ok": False, "error": "URL blocked by SSRF policy: {}".format(url[:100])}
+    if browser_channel not in _BROWSER_CHANNELS:
+        return {
+            "ok": False,
+            "error": "browser_channel must be one of: {}".format(", ".join(_BROWSER_CHANNELS)),
+        }
 
     handler = _get_mcp_handler()
     if not handler:
@@ -97,15 +157,13 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
     sessions: Dict[str, Any] = {}
 
     try:
-        launch_result = await execute(
-            module_id="browser.launch",
-            params={"headless": True},
-            browser_sessions=sessions,
+        selected_channel, launch_error = await _launch_browser(
+            execute,
+            sessions,
+            browser_channel,
         )
-        if not _is_ok(launch_result):
-            return {"ok": False, "error": "Failed to launch browser: {}".format(
-                launch_result.get("error", "unknown")
-            )}
+        if not selected_channel:
+            return {"ok": False, "error": "Failed to launch browser: {}".format(launch_error)}
 
         goto_result = await execute(
             module_id="browser.goto",
@@ -139,7 +197,7 @@ async def inspect_page(url: str, wait_ms: int = 2000) -> Dict[str, Any]:
         if not page_data:
             page_data = eval_result.get("result", {})
 
-        return {"ok": True, "data": page_data}
+        return {"ok": True, "data": page_data, "browser_channel": selected_channel}
 
     except Exception as e:
         logger.warning("inspect_page failed: %s", e)
@@ -163,4 +221,5 @@ async def dispatch_inspect_page(name: str, arguments: Dict[str, Any]) -> Dict[st
     return await inspect_page(
         url=arguments.get("url", ""),
         wait_ms=arguments.get("wait_ms", 2000),
+        browser_channel=arguments.get("browser_channel", "auto"),
     )

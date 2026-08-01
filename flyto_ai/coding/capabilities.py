@@ -31,6 +31,35 @@ def _provider_tool_name(capability: str, tool_name: str) -> str:
     return "{}_{}".format(base[:53], digest)
 
 
+def _mcp_domain_status(result: Any) -> tuple[bool, Optional[str]]:
+    """Normalize transport and nested domain status without trusting text prose."""
+    if not isinstance(result, dict):
+        return False, "capability result must be an object"
+    if result.get("isError") is True:
+        return False, "capability returned an MCP error result"
+
+    candidates: List[Dict[str, Any]] = []
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        candidates.append(structured)
+    content = result.get("content")
+    if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict):
+        text = content[0].get("text")
+        if isinstance(text, str) and len(text) <= MAX_MCP_MESSAGE_BYTES:
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, dict):
+                candidates.append(decoded)
+
+    for candidate in candidates:
+        if candidate.get("ok") is False or candidate.get("status") in {"error", "failed"}:
+            error = candidate.get("error") or candidate.get("message") or "capability domain operation failed"
+            return False, str(error)[:1000]
+    return True, None
+
+
 class McpStdioSession:
     """Minimal bounded MCP client for capability discovery and tool calls."""
 
@@ -89,12 +118,27 @@ class McpStdioSession:
         if not isinstance(raw_tools, list) or len(raw_tools) > 2000:
             await self.close()
             raise RuntimeError("capability returned an invalid tool catalog")
-        definitions: List[Dict[str, Any]] = []
-        remote_tool_names: List[str] = []
+        catalog: Dict[str, Dict[str, Any]] = {}
         for item in raw_tools:
             if not isinstance(item, dict) or not isinstance(item.get("name"), str):
                 continue
-            provider_name = _provider_tool_name(self.spec.name, item["name"])
+            catalog.setdefault(item["name"], item)
+        catalog_names = set(catalog)
+        self.remote_tool_names = sorted(catalog_names)
+        missing = sorted(set(self.spec.required_tools) - catalog_names)
+        if missing:
+            await self.close()
+            raise RuntimeError("capability is missing required tools: {}".format(", ".join(missing)))
+        unavailable_allowed = sorted(set(self.spec.allowed_tools) - catalog_names)
+        if unavailable_allowed:
+            await self.close()
+            raise RuntimeError("capability is missing allowed tools: {}".format(", ".join(unavailable_allowed)))
+
+        selected_names = set(self.spec.allowed_tools) if self.spec.allowed_tools else catalog_names
+        definitions: List[Dict[str, Any]] = []
+        for remote_name in sorted(selected_names):
+            item = catalog[remote_name]
+            provider_name = _provider_tool_name(self.spec.name, remote_name)
             schema = item.get("inputSchema") if isinstance(item.get("inputSchema"), dict) else {
                 "type": "object", "properties": {},
             }
@@ -103,13 +147,8 @@ class McpStdioSession:
                 "description": "[{}] {}".format(self.spec.name, str(item.get("description", ""))[:2000]),
                 "inputSchema": schema,
             })
-            self._tool_map[provider_name] = item["name"]
-            remote_tool_names.append(item["name"])
-        missing = sorted(set(self.spec.required_tools) - set(remote_tool_names))
-        self.remote_tool_names = sorted(remote_tool_names)
-        if missing:
-            await self.close()
-            raise RuntimeError("capability is missing required tools: {}".format(", ".join(missing)))
+            self._tool_map[provider_name] = remote_name
+        self.remote_tool_names = sorted(selected_names)
         self.tools = definitions
 
     async def dispatch(self, provider_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -117,9 +156,16 @@ class McpStdioSession:
         if not remote_name:
             return {"ok": False, "error": "unknown capability tool"}
         result = await self._request("tools/call", {"name": remote_name, "arguments": arguments})
-        return {"ok": not bool(result.get("isError")) if isinstance(result, dict) else False,
-                "capability": self.spec.name, "tool": remote_name,
-                "result": redact_evidence(result)}
+        ok, error = _mcp_domain_status(result)
+        response = {
+            "ok": ok,
+            "capability": self.spec.name,
+            "tool": remote_name,
+            "result": redact_evidence(result),
+        }
+        if error:
+            response["error"] = error
+        return response
 
     async def close(self) -> None:
         process, self.process = self.process, None

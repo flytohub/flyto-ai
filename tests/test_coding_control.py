@@ -265,10 +265,14 @@ def test_source_controlled_config_and_real_check_runner(tmp_path):
         "  - name: optional-tool\n"
         "    kind: command\n"
         "    argv: [python]\n"
+        "    required_tools: [context]\n"
+        "    allowed_tools: [context, impact]\n"
     )
     checks, capabilities = load_project_config(str(tmp_path))
     assert checks[0].name == "python-smoke"
     assert capabilities[0].required is False
+    assert capabilities[0].required_tools == ("context",)
+    assert capabilities[0].allowed_tools == ("context", "impact")
     results = run(CheckRunner(WorkspaceTools(str(tmp_path))).run(checks))
     assert CheckRunner.passed(results) is True
     assert results[0].output_sha256
@@ -307,6 +311,121 @@ def test_real_mcp_stdio_discovery_and_call(tmp_path):
     assert statuses[0].tool_count == 1
     assert result["ok"] is True
     assert result["result"]["content"][0]["text"] == "real context"
+
+
+def test_mcp_allowed_tools_expose_only_the_selected_surface(tmp_path):
+    server = tmp_path / "mcp_fixture.py"
+    server.write_text(
+        "import json, sys\n"
+        "tools=[{'name':'context','description':'read','inputSchema':{'type':'object'}},"
+        "{'name':'mutate','description':'write','inputSchema':{'type':'object'}}]\n"
+        "for line in sys.stdin:\n"
+        "    msg=json.loads(line)\n"
+        "    if 'id' not in msg: continue\n"
+        "    method=msg.get('method')\n"
+        "    if method=='initialize': result={'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'fixture','version':'1'}}\n"
+        "    elif method=='tools/list': result={'tools':tools}\n"
+        "    elif method=='tools/call': result={'content':[{'type':'text','text':msg['params']['name']}]}\n"
+        "    else: result={}\n"
+        "    print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':result}), flush=True)\n"
+    )
+    manager = CapabilityManager(str(tmp_path))
+
+    async def scenario():
+        statuses = await manager.start([CapabilitySpec(
+            name="indexer-context",
+            argv=(sys.executable, str(server)),
+            required=True,
+            required_tools=("context",),
+            allowed_tools=("context",),
+        )])
+        definitions = manager.definitions
+        result = await manager.dispatch(definitions[0]["name"], {})
+        hidden = await manager.dispatch("cap_indexer-context_mutate", {})
+        await manager.close()
+        return statuses, definitions, result, hidden
+
+    statuses, definitions, result, hidden = run(scenario())
+    assert statuses[0].available is True
+    assert statuses[0].tools == ("context",)
+    assert statuses[0].tool_count == 1
+    assert [definition["name"] for definition in definitions] == [
+        "cap_indexer-context_context",
+    ]
+    assert result["ok"] is True
+    assert hidden == {"ok": False, "error": "unknown capability tool"}
+
+
+def test_mcp_allowed_tools_fail_closed_when_catalog_does_not_match(tmp_path):
+    server = tmp_path / "mcp_fixture.py"
+    _write_mcp_server(server)
+    manager = CapabilityManager(str(tmp_path))
+
+    async def scenario():
+        statuses = await manager.start([CapabilitySpec(
+            name="page-inspector",
+            argv=(sys.executable, str(server)),
+            required=True,
+            allowed_tools=("inspect_page",),
+        )])
+        await manager.close()
+        return statuses
+
+    statuses = run(scenario())
+    assert statuses[0].available is False
+    assert statuses[0].tools == ("context",)
+    assert "missing allowed tools: inspect_page" in str(statuses[0].error)
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_mcp_dispatch_propagates_nested_domain_failure(tmp_path, structured):
+    server = tmp_path / "mcp_fixture.py"
+    result_expr = (
+        "{'structuredContent':{'ok':False,'error':'browser failed'},'isError':False}"
+        if structured
+        else "{'content':[{'type':'text','text':json.dumps({'ok':False,'error':'browser failed'})}]}"
+    )
+    server.write_text(
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    msg=json.loads(line)\n"
+        "    if 'id' not in msg: continue\n"
+        "    method=msg.get('method')\n"
+        "    if method=='initialize': result={'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'fixture','version':'1'}}\n"
+        "    elif method=='tools/list': result={'tools':[{'name':'inspect_page','inputSchema':{'type':'object'}}]}\n"
+        "    elif method=='tools/call': result=" + result_expr + "\n"
+        "    else: result={}\n"
+        "    print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':result}), flush=True)\n"
+    )
+    manager = CapabilityManager(str(tmp_path))
+
+    async def scenario():
+        await manager.start([CapabilitySpec(
+            name="page-inspector",
+            argv=(sys.executable, str(server)),
+            required=True,
+            required_tools=("inspect_page",),
+            allowed_tools=("inspect_page",),
+        )])
+        result = await manager.dispatch(manager.definitions[0]["name"], {})
+        await manager.close()
+        return result
+
+    result = run(scenario())
+    assert result["ok"] is False
+    assert result["error"] == "browser failed"
+    assert result["capability"] == "page-inspector"
+    assert result["tool"] == "inspect_page"
+
+
+def test_required_tools_must_be_inside_the_allowlist():
+    with pytest.raises(ValueError, match="included in allowed_tools"):
+        CapabilitySpec(
+            name="bad-profile",
+            argv=("python",),
+            required_tools=("impact",),
+            allowed_tools=("context",),
+        )
 
 
 def test_required_missing_capability_fails_before_provider(tmp_path):

@@ -52,6 +52,26 @@ CLI / API
   -> CodingTaskResult + append-only JSONL evidence
 ```
 
+Full-stack capability composition remains additive and process-bound:
+
+```text
+FlytoCodingAgent
+  -> flyto-indexer (context / impact / task gates)
+  -> flyto-blueprint (workflow discovery / reuse / learning)
+  -> flyto-page-inspector (real DOM inspection only)
+  -> flyto-core (module / recipe execution and visual evidence)
+  -> source-controlled checks and bounded repair
+```
+
+`flyto_ai.coding.stack` builds and probes this `flyto.agent-stack.v1`
+composition. Each lane negotiates its real MCP catalog independently and
+exposes only `CapabilitySpec.allowed_tools`; the Blueprint and page-inspection
+lanes may use the same server implementation without sharing model-visible
+authority. Removing one spec detaches that lane without changing the provider,
+workspace tools, checks, or result contract. Page inspection continues to flow
+through `core_tools`; its portable launch policy tries bundled Chromium and
+then system Chrome, records the selected channel, and never bypasses Core.
+
 Optional service composition:
 
 ```text
@@ -75,7 +95,13 @@ provider, workspace tool, check, or result contracts.
 
 An MCP capability is available only when its initialize response negotiates the
 requested protocol and its real `tools/list` includes every required tool.
-Configured version labels alone never satisfy preflight.
+Configured version labels alone never satisfy preflight. When `allowed_tools`
+is configured, every listed tool must exist and only that subset enters the
+provider tool catalog; omitted allowlists preserve the prior full-catalog
+behavior.
+MCP transport success is not treated as domain success: structured content or
+a single JSON content block carrying `ok: false` or an error status fails the
+capability result before the Agent can trust the evidence.
 Authenticated product adapters receive only explicitly named `FLYTO_*` runtime
 variables. The source-controlled contract carries names rather than values;
 ambient cloud, source-control, SSH, and provider secrets do not cross the

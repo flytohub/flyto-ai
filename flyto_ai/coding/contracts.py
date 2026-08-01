@@ -15,6 +15,7 @@ CONFIG_VERSION = "flyto.coding-config.v1"
 SERVICE_CONTRACT_VERSION = "flyto.coding-service.v1"
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _PASSTHROUGH_ENV_RE = re.compile(r"^FLYTO_[A-Z0-9_]{1,120}$")
+TOOL_PERMISSION_LEVELS = frozenset({"read_only", "workspace_write", "danger_full"})
 
 
 class ApprovalPolicy(str, Enum):
@@ -86,6 +87,7 @@ class CapabilitySpec:
     protocol_version: str = "2025-06-18"
     required_tools: Tuple[str, ...] = ()
     allowed_tools: Tuple[str, ...] = ()
+    tool_permissions: Tuple[Tuple[str, str], ...] = ()
     env_passthrough: Tuple[str, ...] = ()
     timeout_seconds: int = 10
 
@@ -112,6 +114,27 @@ class CapabilitySpec:
             raise ValueError("capability allowed_tools contains duplicates")
         if self.allowed_tools and not set(self.required_tools).issubset(self.allowed_tools):
             raise ValueError("capability required_tools must be included in allowed_tools")
+        if len(self.tool_permissions) > 100:
+            raise ValueError("capability tool_permissions cannot exceed 100 items")
+        if any(
+            not isinstance(item, (list, tuple)) or len(item) != 2
+            for item in self.tool_permissions
+        ):
+            raise ValueError("capability tool_permissions entries must be name/level pairs")
+        permission_names = tuple(item[0] for item in self.tool_permissions)
+        if any(not isinstance(name, str) or not _NAME_RE.fullmatch(name) for name in permission_names):
+            raise ValueError("capability tool_permissions contains an invalid tool name")
+        if len(set(permission_names)) != len(permission_names):
+            raise ValueError("capability tool_permissions contains duplicate tool names")
+        if any(
+            not isinstance(item[1], str) or item[1] not in TOOL_PERMISSION_LEVELS
+            for item in self.tool_permissions
+        ):
+            raise ValueError("capability tool_permissions contains an invalid permission level")
+        if self.allowed_tools and not set(permission_names).issubset(self.allowed_tools):
+            raise ValueError("capability tool_permissions must refer only to allowed_tools")
+        if self.kind == "command" and self.tool_permissions:
+            raise ValueError("command capabilities cannot declare tool_permissions")
         if len(self.env_passthrough) > 32:
             raise ValueError("capability env_passthrough cannot exceed 32 items")
         if any(not _PASSTHROUGH_ENV_RE.fullmatch(name) for name in self.env_passthrough):
@@ -128,11 +151,19 @@ class CapabilitySpec:
             raise ValueError("capability argv must be a JSON/YAML array")
         required_tools = value.get("required_tools", ())
         allowed_tools = value.get("allowed_tools", ())
+        tool_permissions = value.get("tool_permissions", {})
         env_passthrough = value.get("env_passthrough", ())
         if not isinstance(required_tools, Sequence) or isinstance(required_tools, (str, bytes)):
             raise ValueError("capability required_tools must be a JSON/YAML array")
         if not isinstance(allowed_tools, Sequence) or isinstance(allowed_tools, (str, bytes)):
             raise ValueError("capability allowed_tools must be a JSON/YAML array")
+        if not isinstance(tool_permissions, Mapping):
+            raise ValueError("capability tool_permissions must be a JSON/YAML object")
+        if any(
+            not isinstance(name, str) or not isinstance(level, str)
+            for name, level in tool_permissions.items()
+        ):
+            raise ValueError("capability tool_permissions keys and values must be strings")
         if not isinstance(env_passthrough, Sequence) or isinstance(env_passthrough, (str, bytes)):
             raise ValueError("capability env_passthrough must be a JSON/YAML array")
         return cls(
@@ -144,6 +175,7 @@ class CapabilitySpec:
             protocol_version=str(value.get("protocol_version", "2025-06-18")),
             required_tools=tuple(str(item) for item in required_tools),
             allowed_tools=tuple(str(item) for item in allowed_tools),
+            tool_permissions=tuple(sorted(tool_permissions.items())),
             env_passthrough=tuple(str(item) for item in env_passthrough),
             timeout_seconds=int(value.get("timeout_seconds", 10)),
         )

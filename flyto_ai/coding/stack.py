@@ -21,6 +21,11 @@ from flyto_ai.coding.contracts import CapabilitySpec
 
 
 AGENT_STACK_CONTRACT_VERSION = "flyto.agent-stack.v1"
+AGENT_STACK_POLICY_VERSION = "flyto.agent-stack.v2"
+SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS = frozenset({
+    AGENT_STACK_CONTRACT_VERSION,
+    AGENT_STACK_POLICY_VERSION,
+})
 MAX_AGENT_STACK_MANIFEST_BYTES = 256 * 1024
 DEFAULT_COMPONENTS = (
     "flyto-indexer",
@@ -59,11 +64,12 @@ def compose_capability_stack(*groups: Sequence[CapabilitySpec]) -> Tuple[Capabil
 
 
 def _canonical_manifest_fingerprint(
+    contract_version: str,
     profile: str,
     capabilities: Sequence[CapabilitySpec],
 ) -> str:
     normalized = {
-        "version": AGENT_STACK_CONTRACT_VERSION,
+        "version": contract_version,
         "profile": profile,
         "capabilities": [dataclasses.asdict(spec) for spec in capabilities],
     }
@@ -95,6 +101,17 @@ def _validate_manifest_capability_mapping(index: int, item: Mapping) -> None:
             raise ValueError(
                 "capability {} field {} must be an array of strings".format(index, field),
             )
+    tool_permissions = item.get("tool_permissions")
+    if tool_permissions is not None and (
+        not isinstance(tool_permissions, Mapping)
+        or any(
+            not isinstance(name, str) or not isinstance(level, str)
+            for name, level in tool_permissions.items()
+        )
+    ):
+        raise ValueError(
+            "capability {} field tool_permissions must be an object of strings".format(index),
+        )
 
 
 def load_agent_stack_manifest(
@@ -126,7 +143,8 @@ def load_agent_stack_manifest(
     unknown = set(value) - _MANIFEST_KEYS
     if unknown:
         raise ValueError("unknown agent stack manifest fields: {}".format(", ".join(sorted(unknown))))
-    if value.get("version") != AGENT_STACK_CONTRACT_VERSION:
+    contract_version = value.get("version")
+    if contract_version not in SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS:
         raise ValueError("unsupported agent stack manifest version")
     profile = value.get("profile")
     if not isinstance(profile, str) or not _PROFILE_NAME.fullmatch(profile):
@@ -156,12 +174,31 @@ def load_agent_stack_manifest(
                     spec.name,
                 )
             )
+        if spec.kind == "mcp-stdio" and contract_version == AGENT_STACK_POLICY_VERSION:
+            classified = {name for name, _level in spec.tool_permissions}
+            allowed = set(spec.allowed_tools)
+            if classified != allowed:
+                missing = sorted(allowed - classified)
+                extra = sorted(classified - allowed)
+                details = []
+                if missing:
+                    details.append("missing {}".format(", ".join(missing)))
+                if extra:
+                    details.append("extra {}".format(", ".join(extra)))
+                raise ValueError(
+                    "v2 MCP capability {} must classify every allowed tool ({})".format(
+                        spec.name, "; ".join(details),
+                    )
+                )
         specs.append(spec)
     capabilities = compose_capability_stack(specs)
     return AgentStackManifest(
         profile=profile,
         capabilities=capabilities,
-        manifest_fingerprint=_canonical_manifest_fingerprint(profile, capabilities),
+        manifest_fingerprint=_canonical_manifest_fingerprint(
+            contract_version, profile, capabilities,
+        ),
+        contract_version=contract_version,
     )
 
 
@@ -193,6 +230,14 @@ def build_agent_stack_capabilities(
             contract_version="flyto-indexer.mcp.v1",
             required_tools=("search", "impact", "call_hierarchy", "structure", "task", "verify"),
             allowed_tools=("search", "impact", "call_hierarchy", "structure", "task", "verify"),
+            tool_permissions=(
+                ("call_hierarchy", "read_only"),
+                ("impact", "read_only"),
+                ("search", "read_only"),
+                ("structure", "read_only"),
+                ("task", "workspace_write"),
+                ("verify", "workspace_write"),
+            ),
             timeout_seconds=30,
         ),
         "flyto-blueprint": CapabilitySpec(
@@ -208,6 +253,14 @@ def build_agent_stack_capabilities(
                 "list_blueprints", "use_blueprint", "save_as_blueprint",
                 "report_blueprint_outcome", "export_blueprint", "import_blueprint",
             ),
+            tool_permissions=(
+                ("export_blueprint", "workspace_write"),
+                ("import_blueprint", "workspace_write"),
+                ("list_blueprints", "read_only"),
+                ("report_blueprint_outcome", "workspace_write"),
+                ("save_as_blueprint", "workspace_write"),
+                ("use_blueprint", "workspace_write"),
+            ),
             timeout_seconds=30,
         ),
         "flyto-page-inspector": CapabilitySpec(
@@ -217,6 +270,7 @@ def build_agent_stack_capabilities(
             contract_version="flyto-page-inspector.mcp.v1",
             required_tools=("inspect_page",),
             allowed_tools=("inspect_page",),
+            tool_permissions=(("inspect_page", "read_only"),),
             timeout_seconds=30,
         ),
         "flyto-core": CapabilitySpec(
@@ -234,6 +288,16 @@ def build_agent_stack_capabilities(
                 "get_module_examples", "validate_params", "execute_module",
                 "list_recipes", "run_recipe",
             ),
+            tool_permissions=(
+                ("execute_module", "workspace_write"),
+                ("get_module_examples", "read_only"),
+                ("get_module_info", "read_only"),
+                ("list_modules", "read_only"),
+                ("list_recipes", "read_only"),
+                ("run_recipe", "danger_full"),
+                ("search_modules", "read_only"),
+                ("validate_params", "read_only"),
+            ),
             timeout_seconds=30,
         ),
     }
@@ -249,10 +313,13 @@ async def probe_capability_stack(
     *,
     profile: str = "custom",
     manifest_fingerprint: str | None = None,
+    contract_version: str = AGENT_STACK_CONTRACT_VERSION,
 ) -> dict:
     """Negotiate an arbitrary profile and attest its actually exposed tools."""
     if not _PROFILE_NAME.fullmatch(profile):
         raise ValueError("agent stack profile must be a safe identifier")
+    if contract_version not in SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS:
+        raise ValueError("unsupported agent stack contract version")
     root = str(Path(workspace).expanduser().resolve(strict=True))
     specs = compose_capability_stack(capabilities)
     manager = CapabilityManager(root)
@@ -277,7 +344,7 @@ async def probe_capability_stack(
         json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(),
     ).hexdigest()
     return {
-        "contract_version": AGENT_STACK_CONTRACT_VERSION,
+        "contract_version": contract_version,
         "ok": all(item["available"] for item in projected if item["required"]),
         "workspace": root,
         "profile": profile,
@@ -325,6 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest.capabilities,
                 profile=manifest.profile,
                 manifest_fingerprint=manifest.manifest_fingerprint,
+                contract_version=manifest.contract_version,
             )
         )
     else:

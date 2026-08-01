@@ -1,5 +1,30 @@
 # Decisions
 
+## 2026-08-02: v2 profiles classify authority per tool and enforce it twice
+
+- Keep `flyto.agent-stack.v1` readable for compatibility, with its historical
+  workspace-write default for tools lacking policy metadata.
+- Make `flyto.agent-stack.v2` the recommended profile contract. Every MCP tool
+  in its `allowed_tools` catalog must be classified exactly once as
+  `read_only`, `workspace_write`, or `danger_full`; missing, extra, duplicate,
+  or unknown classifications fail before process start.
+- Treat source-controlled classification as a requirement, not a grant. The
+  runtime host independently chooses the `CapabilityManager` permission
+  ceiling, and a tool cannot raise that ceiling from YAML or MCP metadata.
+- Enforce the effective permission in both the generic `Agent` dispatcher and
+  `CapabilityManager.dispatch()`. Direct manager callers therefore cannot
+  bypass the Agent gate.
+- Preserve argument-sensitive Core checks after MCP provider-name isolation.
+  An `execute_module` call classified as workspace-write is escalated to
+  danger-full when its actual module category is shell, process, Docker,
+  Kubernetes, SSH, network, filesystem, environment, Git, or another existing
+  danger category.
+
+Rollback is additive: load an existing v1 manifest or omit `tool_permissions`
+from direct `CapabilitySpec` construction. The runtime ceiling and historical
+workspace-write default remain; reverting never turns a blocked call into an
+implicit danger-full grant.
+
 ## 2026-08-02: Agent composition is domain-neutral; authority remains domain-specific
 
 - Keep the shared closed loop independent of task names: normalize intent,

@@ -141,7 +141,7 @@ adding another component dictionary to `stack.py`. Commit a bounded profile as
 `.flyto/agent-stack.yaml`:
 
 ```yaml
-version: flyto.agent-stack.v1
+version: flyto.agent-stack.v2
 profile: field-operations
 capabilities:
   - name: mission-control
@@ -151,6 +151,12 @@ capabilities:
     protocol_version: 2025-06-18
     required_tools: [plan, verify]
     allowed_tools: [observe, plan, execute, verify, safe_stop]
+    tool_permissions:
+      observe: read_only
+      plan: workspace_write
+      execute: danger_full
+      verify: read_only
+      safe_stop: workspace_write
     required: true
 ```
 
@@ -166,9 +172,12 @@ python -m flyto_ai.coding.stack \
 The loader accepts arbitrary safe capability and profile names, up to 64
 capabilities. It rejects unknown fields, duplicate names, manifests outside the
 workspace, oversized input, and MCP capabilities without a non-empty explicit
-`allowed_tools` list. Its normalized manifest fingerprint and the real MCP
-composition fingerprint provide separate evidence for configured intent and
-observed runtime state.
+`allowed_tools` list. A v2 profile must also classify every allowed MCP tool
+exactly once as `read_only`, `workspace_write`, or `danger_full`; omissions,
+extra names, and unknown levels fail before process start. Existing v1 files
+remain readable and retain their historical workspace-write default. Its
+normalized manifest fingerprint and the real MCP composition fingerprint
+provide separate evidence for configured intent and observed runtime state.
 
 Python hosts can use `load_agent_stack_manifest()`,
 `compose_capability_stack()`, and `probe_capability_stack()` directly.
@@ -177,6 +186,15 @@ initialized manager can attach to the ordinary `flyto_ai.Agent`; it is not tied
 to `FlytoCodingAgent`. The latter remains the specialized adapter when a task
 needs workspace snapshots, resumable coding threads, real repository checks,
 and bounded repair.
+
+Tool classification is not authority. The host constructs `CapabilityManager`
+with an independent runtime ceiling (`read_only`, `workspace_write`, or
+`danger_full`). Both the Agent's safe dispatcher and the manager's own
+`dispatch()` enforce the effective requirement, so calling the manager
+directly cannot bypass the outer Agent gate. Core `execute_module` retains its
+argument-sensitive check after MCP name isolation: a shell, process, Docker,
+Kubernetes, SSH, network, filesystem, environment, or Git module escalates to
+danger-full even when the generic tool entry is workspace-write.
 
 “Domain-neutral” does not mean unguarded universal execution. A production
 domain still supplies its typed action contract, policy and authorization

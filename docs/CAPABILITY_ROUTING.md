@@ -56,11 +56,14 @@ or absent from the exact registry snapshot.
 
 ## Stack profiles and routing manifests are separate layers
 
-`flyto.agent-stack.v1` answers “which external capability processes and tools
-may this agent instance attach?” A source-controlled profile may use arbitrary
-domain names and MCP servers, but every MCP entry must carry a non-empty
-`allowed_tools` list. Preflight validates its declared contract against the
-server's real catalog before any model receives those tools.
+`flyto.agent-stack.v2` answers “which external capability processes and tools
+may this agent instance attach, and what minimum permission does each tool
+require?” A source-controlled profile may use arbitrary domain names and MCP
+servers, but every MCP entry must carry a non-empty `allowed_tools` list and an
+exhaustive `tool_permissions` map. Preflight validates its declared contract
+against the server's real catalog before any model receives those tools. v1
+profiles remain a compatibility input with workspace-write as the unclassified
+default.
 
 The capability manifests consumed by `route_capabilities()` answer the finer
 question “which installed action is compatible with this particular goal and
@@ -68,6 +71,8 @@ authority envelope?” They describe canonical intent, affordances, effects,
 resources, sensors, permissions, schemas, and safety metadata. Keeping process
 composition separate from per-goal routing lets one generic Agent host support
 many domains without turning a broad catalog into blanket execution authority.
+The profile's classification is only a lower-bound requirement; the runtime
+permission ceiling is host-owned and enforced again at dispatch.
 
 The shared domain-neutral loop is:
 

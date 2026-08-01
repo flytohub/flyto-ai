@@ -85,7 +85,7 @@ FlytoCodingAgent
 ```
 
 `flyto_ai.coding.stack` retains that built-in preset and also loads arbitrary
-source-controlled `flyto.agent-stack.v1` profiles. `compose_capability_stack()`
+source-controlled agent-stack profiles. `compose_capability_stack()`
 has no domain catalog; `CapabilityManager` satisfies the generic
 `ToolExecutor` protocol and can attach the resulting tools to `Agent`. Each
 lane negotiates its real MCP catalog independently and exposes only
@@ -96,6 +96,15 @@ spec detaches that lane without changing the provider, workspace tools, checks,
 or result contract. Page inspection continues to flow through `core_tools`;
 its portable launch policy tries bundled Chromium and then system Chrome,
 records the selected channel, and never bypasses Core.
+
+Policy-bearing `flyto.agent-stack.v2` profiles classify every exposed MCP tool
+as read-only, workspace-write, or danger-full. This declaration never grants
+authority: `CapabilityManager` receives its ceiling from the runtime host and
+checks it at every dispatch, while `Agent` independently applies the same
+provider-name overrides in its safe dispatcher. Core module execution also
+re-evaluates the concrete `module_id`, preserving danger-category escalation
+after MCP tool names have been isolated. Legacy v1 manifests remain accepted
+with their historical workspace-write default.
 
 Optional service composition:
 

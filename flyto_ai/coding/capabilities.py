@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from flyto_ai.coding.contracts import CapabilitySpec, CapabilityStatus
 from flyto_ai.coding.store import redact_evidence
+from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 
 
 MAX_MCP_MESSAGE_BYTES = 1024 * 1024
@@ -167,6 +168,10 @@ class McpStdioSession:
             response["error"] = error
         return response
 
+    def remote_tool_name(self, provider_name: str) -> Optional[str]:
+        """Resolve a provider-safe name back to the negotiated MCP tool name."""
+        return self._tool_map.get(provider_name)
+
     async def close(self) -> None:
         process, self.process = self.process, None
         if process and process.returncode is None:
@@ -245,11 +250,25 @@ class McpStdioSession:
 class CapabilityManager:
     """Start only configured adapters and fail closed for required failures."""
 
-    def __init__(self, workspace: str) -> None:
+    def __init__(
+        self,
+        workspace: str,
+        permission_level: PermissionLevel | str = PermissionLevel.WORKSPACE_WRITE,
+    ) -> None:
         self.workspace = workspace
+        try:
+            self.permission_level = (
+                permission_level
+                if isinstance(permission_level, PermissionLevel)
+                else PermissionLevel[str(permission_level).upper()]
+            )
+        except KeyError as exc:
+            raise ValueError("unknown capability permission level") from exc
         self.sessions: List[McpStdioSession] = []
         self.statuses: List[CapabilityStatus] = []
         self._dispatch: Dict[str, McpStdioSession] = {}
+        self._permission_overrides: Dict[str, PermissionLevel] = {}
+        self._remote_tools: Dict[str, str] = {}
 
     @property
     def definitions(self) -> List[Dict[str, Any]]:
@@ -259,6 +278,11 @@ class CapabilityManager:
     def tools(self) -> List[Dict[str, Any]]:
         """Expose attached definitions through the generic ToolExecutor contract."""
         return self.definitions
+
+    @property
+    def permission_overrides(self) -> Dict[str, PermissionLevel]:
+        """Return provider-name permission metadata for the outer Agent gate."""
+        return dict(self._permission_overrides)
 
     @property
     def required_available(self) -> bool:
@@ -291,8 +315,17 @@ class CapabilityManager:
                 ))
                 continue
             self.sessions.append(session)
+            declared_permissions = dict(spec.tool_permissions)
             for definition in session.tools:
-                self._dispatch[definition["name"]] = session
+                provider_name = definition["name"]
+                remote_name = session.remote_tool_name(provider_name)
+                if remote_name is None:
+                    await session.close()
+                    raise RuntimeError("capability tool mapping is incomplete")
+                declared = declared_permissions.get(remote_name, "workspace_write")
+                self._dispatch[provider_name] = session
+                self._remote_tools[provider_name] = remote_name
+                self._permission_overrides[provider_name] = PermissionLevel[declared.upper()]
             self.statuses.append(CapabilityStatus(
                 name=spec.name, available=True, required=spec.required,
                 kind=spec.kind, contract_version=spec.contract_version,
@@ -307,6 +340,26 @@ class CapabilityManager:
         session = self._dispatch.get(name)
         if not session:
             return {"ok": False, "error": "unknown capability tool"}
+        required_level = self._permission_overrides.get(
+            name, PermissionLevel.WORKSPACE_WRITE,
+        )
+        remote_name = self._remote_tools.get(name, "")
+        if remote_name == "execute_module":
+            dynamic_level = PermissionEnforcer().required_level(
+                "execute_module", arguments,
+            )
+            required_level = max(required_level, dynamic_level)
+        decision = PermissionEnforcer(
+            self.permission_level, overrides={name: required_level},
+        ).check(name, arguments)
+        if not decision.allowed:
+            return {
+                "ok": False,
+                "error": decision.reason,
+                "policy_outcome": decision.outcome.value,
+                "required_permission": required_level.name.lower(),
+                "runtime_permission": self.permission_level.name.lower(),
+            }
         try:
             return await session.dispatch(name, arguments)
         except Exception as exc:
@@ -316,3 +369,5 @@ class CapabilityManager:
         await asyncio.gather(*(session.close() for session in self.sessions), return_exceptions=True)
         self.sessions.clear()
         self._dispatch.clear()
+        self._permission_overrides.clear()
+        self._remote_tools.clear()

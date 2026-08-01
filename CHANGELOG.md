@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added backward-compatible `flyto.agent-stack.v2` profiles with exhaustive
+  per-tool read-only, workspace-write, or danger-full classification. The host
+  runtime ceiling is enforced inside `CapabilityManager` and again by `Agent`;
+  direct manager dispatch cannot bypass policy, and Core module arguments still
+  escalate shell/process/container/network/filesystem/Git work to danger-full.
 - Generalized `flyto.agent-stack.v1` from a coding-only preset into a bounded,
   source-controlled domain profile. Arbitrary `CapabilitySpec` groups can now
   be composed and preflighted with configuration and runtime fingerprints;

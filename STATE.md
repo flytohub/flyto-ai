@@ -3,6 +3,14 @@
 Last updated: 2026-08-02
 
 Implemented:
+- The recommended `flyto.agent-stack.v2` profile adds exhaustive per-tool
+  `read_only` / `workspace_write` / `danger_full` classification without
+  hardcoding domain names. Profile metadata is only a minimum requirement;
+  host-selected runtime authority remains the ceiling. Generic Agent dispatch
+  and direct `CapabilityManager.dispatch()` now enforce it independently, and
+  Core `execute_module` preserves argument-sensitive escalation for danger
+  module categories after MCP provider-name isolation. v1 manifests remain
+  readable with their historical workspace-write default.
 - `flyto.agent-stack.v1` is now a domain-neutral composition boundary rather
   than a closed four-name catalog. Workspace-local YAML profiles can declare up
   to 64 arbitrary `CapabilitySpec` adapters, receive a normalized manifest
@@ -157,7 +165,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1306 passed, 15 optional/live-integration skips;
+- full suite: 1309 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

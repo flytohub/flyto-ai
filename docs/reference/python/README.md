@@ -7,7 +7,7 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [agents](agents-package.md): 7 modules, 21 top-level symbols, 17 methods
 - [assistant](assistant.md): 7 modules, 27 top-level symbols, 29 methods
 - [channels](channels.md): 7 modules, 9 top-level symbols, 39 methods
-- [coding](coding.md): 11 modules, 46 top-level symbols, 99 methods
+- [coding](coding.md): 11 modules, 46 top-level symbols, 101 methods
 - [evolution](evolution.md): 6 modules, 57 top-level symbols, 15 methods
 - [extensions](extensions.md): 4 modules, 8 top-level symbols, 36 methods
 - [intelligence](intelligence.md): 2 modules, 17 top-level symbols, 22 methods

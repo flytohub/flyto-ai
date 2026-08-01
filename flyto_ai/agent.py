@@ -80,9 +80,19 @@ class Agent:
         self._policies = policies
 
         # When a ToolExecutor is provided, derive tools + dispatch from it
+        permission_overrides: Dict[str, PermissionLevel] = {}
         if tool_executor is not None:
             self._tools = tool_executor.tools
             self._dispatch_fn = tool_executor.dispatch
+            declared_overrides = getattr(tool_executor, "permission_overrides", {})
+            if not isinstance(declared_overrides, dict) or any(
+                not isinstance(name, str) or not isinstance(level, PermissionLevel)
+                for name, level in declared_overrides.items()
+            ):
+                raise ValueError(
+                    "tool_executor permission_overrides must map names to PermissionLevel",
+                )
+            permission_overrides = dict(declared_overrides)
         else:
             self._tools = tools or []
             self._dispatch_fn = dispatch_fn
@@ -90,6 +100,7 @@ class Agent:
         # Permission enforcer (three-tier: READ_ONLY / WORKSPACE_WRITE / DANGER_FULL)
         self._permission_enforcer = PermissionEnforcer(
             level=PermissionLevel[config.permission_level.upper()],
+            overrides=permission_overrides,
         )
         self._preferred_language: Optional[str] = None
         self._last_routing_decision: Optional[ToolIntentDecision] = None

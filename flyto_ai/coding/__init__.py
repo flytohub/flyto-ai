@@ -10,6 +10,7 @@ from flyto_ai.coding.checks import CheckRunner, load_project_config
 from flyto_ai.coding.contracts import (
     CONFIG_VERSION,
     CONTRACT_VERSION,
+    TOOL_PERMISSION_LEVELS,
     ApprovalPolicy,
     CapabilitySpec,
     CapabilityStatus,
@@ -24,8 +25,10 @@ from flyto_ai.coding.workspace import WorkspaceTools, WorkspaceViolation
 
 _STACK_EXPORTS = frozenset({
     "AGENT_STACK_CONTRACT_VERSION",
+    "AGENT_STACK_POLICY_VERSION",
     "AgentStackManifest",
     "DEFAULT_COMPONENTS",
+    "SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS",
     "build_agent_stack_capabilities",
     "compose_capability_stack",
     "load_agent_stack_manifest",
@@ -43,6 +46,7 @@ def __getattr__(name: str):
 __all__ = [
     "ApprovalPolicy",
     "AGENT_STACK_CONTRACT_VERSION",
+    "AGENT_STACK_POLICY_VERSION",
     "AgentStackManifest",
     "CapabilityManager",
     "CapabilitySpec",
@@ -58,7 +62,9 @@ __all__ = [
     "FlytoCodingAgent",
     "McpStdioSession",
     "SandboxMode",
+    "SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS",
     "ThreadStore",
+    "TOOL_PERMISSION_LEVELS",
     "WorkspaceTools",
     "WorkspaceViolation",
     "build_agent_stack_capabilities",

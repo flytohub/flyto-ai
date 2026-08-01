@@ -9,10 +9,12 @@ import sys
 
 import pytest
 
+from flyto_ai.agent import Agent
 from flyto_ai.coding.capabilities import CapabilityManager
 from flyto_ai.coding.contracts import CapabilitySpec
 from flyto_ai.coding.stack import (
     AGENT_STACK_CONTRACT_VERSION,
+    AGENT_STACK_POLICY_VERSION,
     DEFAULT_COMPONENTS,
     build_agent_stack_capabilities,
     compose_capability_stack,
@@ -21,6 +23,8 @@ from flyto_ai.coding.stack import (
     probe_agent_stack,
 )
 from flyto_ai.coding import build_agent_stack_capabilities as public_stack_builder
+from flyto_ai.config import AgentConfig
+from flyto_ai.permissions import PermissionLevel
 from flyto_ai.protocols import ToolExecutor
 
 
@@ -29,6 +33,10 @@ def test_full_stack_is_split_into_least_privilege_components():
     assert tuple(spec.name for spec in specs) == DEFAULT_COMPONENTS
     assert all(spec.required for spec in specs)
     assert all(spec.required_tools == spec.allowed_tools for spec in specs)
+    assert all(
+        {name for name, _level in spec.tool_permissions} == set(spec.allowed_tools)
+        for spec in specs
+    )
 
     by_name = {spec.name: spec for spec in specs}
     assert by_name["flyto-page-inspector"].allowed_tools == ("inspect_page",)
@@ -76,29 +84,33 @@ def test_capability_manager_satisfies_generic_agent_tool_executor(tmp_path):
     assert manager.tools == []
 
 
-def _write_manifest(path, capabilities, *, profile="robotics-lab", extra=""):
+def _write_manifest(
+    path, capabilities, *, profile="robotics-lab",
+    version=AGENT_STACK_CONTRACT_VERSION, extra="",
+):
     path.write_text(
-        "version: flyto.agent-stack.v1\n"
-        "profile: {}\n".format(profile)
+        "version: {}\n".format(version)
+        + "profile: {}\n".format(profile)
         + extra
         + "capabilities:\n"
         + "".join("  - {}\n".format(json.dumps(item)) for item in capabilities)
     )
 
 
-def _write_profile_mcp_server(path):
-    path.write_text(
+def _write_profile_mcp_server(path, tool_name="plan_motion"):
+    source = (
         "import json, sys\n"
         "for line in sys.stdin:\n"
         "    msg=json.loads(line)\n"
         "    if 'id' not in msg: continue\n"
         "    method=msg.get('method')\n"
         "    if method=='initialize': result={'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'domain-fixture','version':'1'}}\n"
-        "    elif method=='tools/list': result={'tools':[{'name':'plan_motion','inputSchema':{'type':'object'}}]}\n"
+        "    elif method=='tools/list': result={'tools':[{'name':'__TOOL__','inputSchema':{'type':'object'}}]}\n"
         "    elif method=='tools/call': result={'content':[{'type':'text','text':'planned'}]}\n"
         "    else: result={}\n"
         "    print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':result}), flush=True)\n"
     )
+    path.write_text(source.replace("__TOOL__", tool_name))
 
 
 def test_manifest_loads_and_attests_arbitrary_profile(tmp_path):
@@ -157,6 +169,135 @@ def test_manifest_fails_closed_on_scope_schema_and_path_escape(tmp_path):
     workspace.mkdir()
     with pytest.raises(ValueError, match="inside the workspace"):
         load_agent_stack_manifest(str(workspace), "../agent-stack.yaml")
+
+
+def test_v2_manifest_requires_exhaustive_tool_permission_classification(tmp_path):
+    manifest_path = tmp_path / "agent-stack.yaml"
+    capability = {
+        "name": "mission-control",
+        "argv": ["mission-control"],
+        "allowed_tools": ["observe", "move", "safe_stop"],
+        "tool_permissions": {
+            "observe": "read_only",
+            "move": "danger_full",
+            "safe_stop": "workspace_write",
+        },
+    }
+    _write_manifest(
+        manifest_path, [capability], version=AGENT_STACK_POLICY_VERSION,
+    )
+    manifest = load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+    assert manifest.contract_version == AGENT_STACK_POLICY_VERSION
+    assert dict(manifest.capabilities[0].tool_permissions) == {
+        "move": "danger_full",
+        "observe": "read_only",
+        "safe_stop": "workspace_write",
+    }
+
+    incomplete = dict(capability, tool_permissions={"observe": "read_only"})
+    _write_manifest(
+        manifest_path, [incomplete], version=AGENT_STACK_POLICY_VERSION,
+    )
+    with pytest.raises(ValueError, match="must classify every allowed tool"):
+        load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+
+    invalid = dict(capability, tool_permissions={
+        "observe": "read_only",
+        "move": "unrestricted",
+        "safe_stop": "workspace_write",
+    })
+    _write_manifest(
+        manifest_path, [invalid], version=AGENT_STACK_POLICY_VERSION,
+    )
+    with pytest.raises(ValueError, match="invalid permission level"):
+        load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+
+
+def test_runtime_permission_ceiling_is_enforced_inside_manager_and_agent(tmp_path):
+    import asyncio
+
+    server = tmp_path / "policy_server.py"
+    _write_profile_mcp_server(server)
+
+    async def read_only_scenario():
+        read_spec = CapabilitySpec(
+            name="observer",
+            argv=(sys.executable, str(server)),
+            required=True,
+            allowed_tools=("plan_motion",),
+            tool_permissions=(("plan_motion", "read_only"),),
+        )
+        manager = CapabilityManager(str(tmp_path), PermissionLevel.READ_ONLY)
+        await manager.start((read_spec,))
+        provider_name = manager.tools[0]["name"]
+        agent = Agent(
+            AgentConfig(
+                provider="ollama",
+                enable_memory=False,
+                enable_transcript=False,
+                enable_injection_detection=False,
+                enable_pro=False,
+                enable_deterministic=False,
+                enable_model_routing=False,
+                permission_level="read_only",
+            ),
+            api_client=object(),
+            tool_executor=manager,
+        )
+        outer_decision = agent._permission_enforcer.check(provider_name, {})
+        result = await manager.dispatch(provider_name, {})
+        await manager.close()
+        return outer_decision, result
+
+    outer_decision, result = asyncio.run(read_only_scenario())
+    assert outer_decision.allowed is True
+    assert result["ok"] is True
+
+    async def blocked_scenario():
+        danger_spec = CapabilitySpec(
+            name="actuator",
+            argv=(sys.executable, str(server)),
+            required=True,
+            allowed_tools=("plan_motion",),
+            tool_permissions=(("plan_motion", "danger_full"),),
+        )
+        manager = CapabilityManager(str(tmp_path), PermissionLevel.WORKSPACE_WRITE)
+        await manager.start((danger_spec,))
+        result = await manager.dispatch(manager.tools[0]["name"], {})
+        await manager.close()
+        return result
+
+    blocked = asyncio.run(blocked_scenario())
+    assert blocked["ok"] is False
+    assert blocked["policy_outcome"] == "require_confirmation"
+    assert blocked["required_permission"] == "danger_full"
+
+
+def test_core_execute_module_keeps_argument_sensitive_danger_gate(tmp_path):
+    import asyncio
+
+    server = tmp_path / "core_policy_server.py"
+    _write_profile_mcp_server(server, "execute_module")
+
+    async def scenario():
+        manager = CapabilityManager(str(tmp_path), PermissionLevel.WORKSPACE_WRITE)
+        await manager.start((CapabilitySpec(
+            name="core-runtime",
+            argv=(sys.executable, str(server)),
+            required=True,
+            allowed_tools=("execute_module",),
+            tool_permissions=(("execute_module", "workspace_write"),),
+        ),))
+        provider_name = manager.tools[0]["name"]
+        safe = await manager.dispatch(provider_name, {"module_id": "string.uppercase"})
+        danger = await manager.dispatch(provider_name, {"module_id": "shell.run"})
+        await manager.close()
+        return safe, danger
+
+    safe, danger = asyncio.run(scenario())
+    assert safe["ok"] is True
+    assert danger["ok"] is False
+    assert danger["required_permission"] == "danger_full"
 
 
 def test_stack_rejects_unknown_duplicate_and_unselected_required_components():

@@ -3,3 +3,7 @@ ab362a22a3fa235d6122dc5dc9a7ea7ea402dfa0:tests/test_vault.py:generic-api-key:81
 ab362a22a3fa235d6122dc5dc9a7ea7ea402dfa0:tests/test_vault.py:generic-api-key:152
 faf4a91c6fd5ca8fc0779b5761d5ef11450fa186:tests/test_sprint1_sprint2.py:generic-api-key:307
 ab362a22a3fa235d6122dc5dc9a7ea7ea402dfa0:tests/test_real_integration.py:generic-api-key:225
+# False-positive test bearer token introduced in the native coding-service
+# contract. Keep the exemption bound to the exact historical finding instead
+# of weakening the generic API-key rule.
+a2dfe949eaed83b33e1557880fb981296f4202b5:tests/test_coding_service.py:generic-api-key:172

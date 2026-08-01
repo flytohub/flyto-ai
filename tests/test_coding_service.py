@@ -12,7 +12,6 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
-
 from flyto_ai.coding import (
     CapabilityManager,
     CapabilitySpec,
@@ -30,6 +29,8 @@ from flyto_ai.coding.service import (
     request_from_mapping,
     receipt_to_mapping,
 )
+
+TEST_BEARER_TOKEN = "unit-test-bearer-token"
 
 
 class RealToolProvider:
@@ -169,7 +170,7 @@ def test_http_server_requires_auth_rejects_provider_fields_and_runs_job(tmp_path
     workspace.mkdir()
     service = _service(tmp_path, workspace)
     server = build_http_server(
-        service, tenant_id="tenant-http", auth_token="0123456789abcdef", port=0,
+        service, tenant_id="tenant-http", auth_token=TEST_BEARER_TOKEN, port=0,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -183,7 +184,7 @@ def test_http_server_requires_auth_rejects_provider_fields_and_runs_job(tmp_path
             urlopen(request)
         assert unauthorized.value.code == 401
 
-        request.add_header("Authorization", "Bearer 0123456789abcdef")
+        request.add_header("Authorization", f"Bearer {TEST_BEARER_TOKEN}")
         with pytest.raises(HTTPError) as invalid:
             urlopen(request)
         assert invalid.value.code == 400
@@ -195,7 +196,7 @@ def test_http_server_requires_auth_rejects_provider_fields_and_runs_job(tmp_path
         request = Request(url, data=body, method="POST", headers={
             "Content-Type": "application/json",
             "Idempotency-Key": "http-002",
-            "Authorization": "Bearer 0123456789abcdef",
+            "Authorization": f"Bearer {TEST_BEARER_TOKEN}",
         })
         response = json.loads(urlopen(request).read())
         completed = _wait(service, "tenant-http", response["job"]["job_id"])

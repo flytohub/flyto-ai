@@ -1,5 +1,50 @@
 # Decisions
 
+## 2026-08-01: Coding service adapters are detachable and tenant-bound
+
+- The native `FlytoCodingAgent` remains the only coding-loop implementation;
+  HTTP and MCP are optional facades over a versioned `flyto.coding-service.v1`
+  service contract, not alternate agents.
+- A service instance resolves its provider, credentials, tenant, workspace
+  allowlist, and state root at startup. Job payloads cannot select a tenant or
+  carry API keys, bearer tokens, cookies, or provider credentials.
+- HTTP jobs require authentication and an idempotency key. Tenant ownership is
+  derived from server-side authentication, and job lookups fail closed across
+  tenant boundaries. MCP stdio receives the tenant from process configuration.
+- Capability configuration declares the MCP protocol version and required tool
+  names. Availability is based on the negotiated initialize response and the
+  actual `tools/list` catalog; configuration text alone is never proof.
+- Authenticated MCP subprocesses may receive only explicitly named `FLYTO_*`
+  variables from the runtime environment. Configuration stores names, never
+  values; unrelated cloud, source-control, SSH, and provider credentials remain
+  absent from the child environment.
+- Concurrency is bounded per service and per workspace. Duplicate submissions
+  reuse the original durable job; conflicting reuse of an idempotency key is
+  rejected.
+
+Rollback is additive: stop or remove the optional HTTP/MCP process and continue
+using `flyto-ai code`. No Cloud, Core, Indexer, Blueprint, Engine, or Robotics
+repository imports this implementation.
+
+## 2026-08-01: Flyto2 owns the coding loop; vendor agents are adapters
+
+- `flyto.coding.v1` is the stable request/result/evidence contract. The native
+  backend uses the selected Flyto2 provider and does not depend on Codex or a
+  vendor agent SDK.
+- Claude SDK remains a separately selected compatibility adapter and may be
+  removed without changing providers, checks, threads, or capability contracts.
+- Indexer, Core, and future visual/runtime services attach through explicit
+  versioned MCP-stdio entries. Required adapters fail closed; absence never
+  grants fallback authority or triggers a sibling source import.
+- Model prose is not proof. A run succeeds only after source-controlled real
+  commands pass and, for mutating work, snapshot evidence attributes a change
+  to the run.
+- Native file authority stops at one workspace root and provides no danger-full
+  mode. Hostile-code isolation belongs to an outer container or VM.
+
+Rollback is additive: select the compatibility backend or remove the `coding`
+package. Existing provider, Blueprint, Core, and Cloud contracts remain intact.
+
 ## 2026-07-31: The LLM plans security work; Core remains execution authority
 
 - Footprint, penetration-test, and red-team planning use one versioned
@@ -24,7 +69,7 @@ scope, cost, evidence, and the final verdict independently enforceable.
 - Robotics supplies a bounded shortlist, trusted semantic location IDs, and
   complete route candidates after deterministic compatibility, permission,
   resource-health, and dependency filtering.
-- Flyto AI converts every surviving route into an exact JSON Schema step
+- Flyto2 AI converts every surviving route into an exact JSON Schema step
   template. The model chooses one candidate and fills bounded arguments; it
   cannot omit an intermediate location or combine parts of different routes.
 - Every motion plan must end in `safe_stop`. Human approval and resume IDs must

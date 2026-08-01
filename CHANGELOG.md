@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- Changed the Ollama agent transport to the native `/api/chat` tool loop so
+  local thinking models honor an explicit bounded `think` setting (disabled by
+  default), preserve tool-result ordering and token counters, and cannot spend
+  their completion budget on reasoning hidden by the OpenAI-compatible route.
+- Clarified and hardened `coding_search` as a literal fixed-string contract;
+  results now identify the query mode and direct agents to read the current
+  file after an empty search instead of repeating regex-like guesses.
+- Verified the production native coding loop with 101 distinct no-mock local
+  Ollama workspaces: 99/101 overall, 34/34 standard, 32/34 intermediate, and
+  33/33 advanced, with real subprocess checks and zero hidden retries. Both
+  failures remain in the content-addressed evidence report.
+- Added the provider-neutral `flyto.coding.v1` native coding control plane with
+  versioned contracts, workspace-confined argv-only tools, persistent resumable
+  threads, append-only redacted evidence, mandatory source-controlled real
+  checks, bounded repair, attributable-change detection, and detachable
+  MCP-stdio capability discovery/tool dispatch.
+- Added the detachable `flyto.coding-service.v1` job boundary with tenant-hashed
+  durable state, idempotent submission, a bounded queue, per-workspace
+  serialization, restart reconciliation, authenticated loopback HTTP, and a
+  configured-tenant MCP stdio facade. Provider credentials and tenant selection
+  are startup-only and cannot be supplied in job payloads.
+- Changed MCP capability preflight to require the negotiated protocol version
+  and configured tool names from the real `tools/list` result instead of
+  treating a configuration version label as proof of compatibility.
+- Added explicit name-only `FLYTO_*` runtime environment passthrough for
+  authenticated MCP stdio adapters. This enables detachable Cloud, Engine, and
+  Robotics processes without persisting secret values or inheriting unrelated
+  host credentials.
+- Changed the Claude SDK coding agent into an optional compatibility backend
+  and removed its implicit `bypassPermissions` and dangerous permission-skip
+  settings. Native coding uses the normal Flyto2 provider stack.
+- Added real subprocess, filesystem, symlink-escape, secret-redaction,
+  fail-closed preflight, MCP-stdio, verification, repair, and no-change
+  regression tests for the new control plane.
+- Hardened model-issued coding commands with fail-closed OS sandbox discovery,
+  read-only workspace/host access, no network, an ephemeral writable home,
+  destructive-command denial, and credential/VCS path protection. Trusted
+  source-controlled checks remain a separate verification lane.
 - Added the versioned adaptive security campaign loop for footprint,
   penetration-test, and red-team planning. It binds every LLM proposal to
   target scope, expiring authorization, approved action classes, a Core module

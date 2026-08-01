@@ -14,16 +14,16 @@ Inventory: **21 declared symbols** and **17 class methods**.
 
 Source: [`flyto_ai/agents/claude_code.py:34`](../../../flyto_ai/agents/claude_code.py#L34)
 
-High-level orchestrator: indexer → Claude Code → verify → feedback loop.
+Detachable compatibility backend: indexer → Claude → verify → feedback.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
 | `__init__(config: Any = None)` | internal | Args: config: AgentConfig instance (optional). | [`flyto_ai/agents/claude_code.py:37`](../../../flyto_ai/agents/claude_code.py#L37) |
 | `async run(request: CodeTaskRequest, on_stream: StreamCallback = None) -> CodeTaskResponse` | public | Execute the full code → verify → fix loop. | [`flyto_ai/agents/claude_code.py:50`](../../../flyto_ai/agents/claude_code.py#L50) |
 | `async _run_claude_code(request: CodeTaskRequest, indexer_context: str, feedback: str, session_id: Optional[str], max_budget: float, max_turns: int, evidence: EvidenceCollector, on_stream: StreamCallback) -> Dict[str, Any]` | internal | Spawn or resume a Claude Code session via Agent SDK. | [`flyto_ai/agents/claude_code.py:207`](../../../flyto_ai/agents/claude_code.py#L207) |
-| `_find_indexer_command() -> Optional[List[str]]` | internal | Find the flyto-indexer MCP server command. | [`flyto_ai/agents/claude_code.py:353`](../../../flyto_ai/agents/claude_code.py#L353) |
-| `_build_feedback(vr: VerificationResult) -> str` | internal | Construct feedback message from a failed verification. | [`flyto_ai/agents/claude_code.py:365`](../../../flyto_ai/agents/claude_code.py#L365) |
-| `_emit(on_stream: StreamCallback, event_type: str, data: Dict[str, Any]) -> None` | internal | Fire a stream event if callback is set. | [`flyto_ai/agents/claude_code.py:381`](../../../flyto_ai/agents/claude_code.py#L381) |
+| `_find_indexer_command() -> Optional[List[str]]` | internal | Find the flyto-indexer MCP server command. | [`flyto_ai/agents/claude_code.py:355`](../../../flyto_ai/agents/claude_code.py#L355) |
+| `_build_feedback(vr: VerificationResult) -> str` | internal | Construct feedback message from a failed verification. | [`flyto_ai/agents/claude_code.py:367`](../../../flyto_ai/agents/claude_code.py#L367) |
+| `_emit(on_stream: StreamCallback, event_type: str, data: Dict[str, Any]) -> None` | internal | Fire a stream event if callback is set. | [`flyto_ai/agents/claude_code.py:383`](../../../flyto_ai/agents/claude_code.py#L383) |
 
 ## `flyto_ai.agents.evidence`
 
@@ -125,15 +125,15 @@ Call an indexer tool, returning None on failure.
 
 `class CodeTaskRequest`
 
-Source: [`flyto_ai/agents/models.py:9`](../../../flyto_ai/agents/models.py#L9)
+Source: [`flyto_ai/agents/models.py:14`](../../../flyto_ai/agents/models.py#L14)
 
-User request for the Claude Code Agent.
+User request for the optional Claude SDK backend.
 
 ### `VerificationResult` (public)
 
 `class VerificationResult`
 
-Source: [`flyto_ai/agents/models.py:22`](../../../flyto_ai/agents/models.py#L22)
+Source: [`flyto_ai/agents/models.py:27`](../../../flyto_ai/agents/models.py#L27)
 
 Outcome of a single verification run.
 
@@ -141,7 +141,7 @@ Outcome of a single verification run.
 
 `class EvidenceRecord`
 
-Source: [`flyto_ai/agents/models.py:34`](../../../flyto_ai/agents/models.py#L34)
+Source: [`flyto_ai/agents/models.py:39`](../../../flyto_ai/agents/models.py#L39)
 
 Single audit entry for the evidence trail.
 
@@ -149,7 +149,7 @@ Single audit entry for the evidence trail.
 
 `class CodeTaskResponse`
 
-Source: [`flyto_ai/agents/models.py:43`](../../../flyto_ai/agents/models.py#L43)
+Source: [`flyto_ai/agents/models.py:48`](../../../flyto_ai/agents/models.py#L48)
 
 Final result returned by ClaudeCodeAgent.run().
 

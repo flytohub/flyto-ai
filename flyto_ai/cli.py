@@ -73,16 +73,99 @@ def main():
     lab_sub.add_parser("report", help="Show latest evolution report")
 
     # flyto-ai code "fix login page"
-    code_p = sub.add_parser("code", help="AI-driven coding with Claude Code Agent + verification")
+    code_p = sub.add_parser("code", help="Provider-neutral Flyto2 coding agent with real verification")
     code_p.add_argument("message", nargs="+", help="What you want to build/fix")
     code_p.add_argument("--dir", "-d", default=".", help="Project working directory (default: .)")
-    code_p.add_argument("--verify", help="Verification recipe name (e.g. 'screenshot')")
-    code_p.add_argument("--verify-args", help="Recipe args as JSON string")
-    code_p.add_argument("--reference", help="Reference image path for visual comparison")
+    code_p.add_argument(
+        "--backend", choices=("native", "claude-sdk"), default="native",
+        help="Coding backend (default: native; Claude SDK is optional)",
+    )
+    code_p.add_argument("--provider", "-p", help="Flyto2 provider for native mode")
+    code_p.add_argument("--model", "-m", help="Model for native mode")
+    code_p.add_argument("--api-key", "-k", help="Provider key (prefer environment variables)")
+    code_p.add_argument("--base-url", help="OpenAI-compatible or Ollama base URL")
+    code_p.add_argument("--config", default=".flyto/coding.yaml", help="Source-controlled coding config")
+    code_p.add_argument("--thread-id", help="Stable coding thread ID")
+    code_p.add_argument("--resume", action="store_true", help="Resume --thread-id in the same workspace")
+    code_p.add_argument("--state-dir", help="Thread/evidence directory (default: ~/.flyto/coding)")
+    code_p.add_argument(
+        "--approval", choices=("never", "on-request", "on-failure", "always"),
+        default="never", help="Host approval policy for native operations",
+    )
+    code_p.add_argument(
+        "--sandbox", choices=("read-only", "workspace-write"), default="workspace-write",
+        help="Native workspace authority (no unrestricted mode)",
+    )
+    code_p.add_argument(
+        "--sandbox-image", default="python:3.12-slim",
+        help="Pinned local Docker image for model-issued commands",
+    )
+    code_p.add_argument(
+        "--check-json", action="append", default=[], metavar="JSON",
+        help='Repeatable real check, e.g. {"name":"unit","argv":["pytest","-q"]}',
+    )
+    code_p.add_argument(
+        "--capability-json", action="append", default=[], metavar="JSON",
+        help="Repeatable detachable command/MCP capability contract",
+    )
+    code_p.add_argument(
+        "--allow-no-changes", action="store_true",
+        help="Allow a verified read-only task to succeed without file changes",
+    )
     code_p.add_argument("--max-attempts", type=int, default=3, help="Max fix attempts (default: 3)")
+    code_p.add_argument("--max-rounds", type=int, default=30, help="Max native tool rounds (default: 30)")
+    # Compatibility-only Claude SDK flags.
+    code_p.add_argument("--verify", help="Claude SDK verification recipe")
+    code_p.add_argument("--verify-args", help="Claude SDK recipe args as JSON")
+    code_p.add_argument("--reference", help="Claude SDK visual reference image")
     code_p.add_argument("--budget", type=float, default=5.0, help="Max budget in USD (default: 5.0)")
-    code_p.add_argument("--max-turns", type=int, default=30, help="Max Claude Code turns (default: 30)")
+    code_p.add_argument("--max-turns", type=int, default=30, help="Max Claude SDK turns (default: 30)")
     code_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    def _add_coding_service_args(service_parser):
+        service_parser.add_argument("--tenant", required=True, help="Startup-bound tenant identifier")
+        service_parser.add_argument(
+            "--workspace-root", action="append", required=True,
+            help="Allowed workspace root (repeatable)",
+        )
+        service_parser.add_argument(
+            "--state-dir", default="~/.flyto/coding-service",
+            help="Durable service state root",
+        )
+        service_parser.add_argument("--provider", "-p", help="Flyto2 provider (credentials come from env)")
+        service_parser.add_argument("--model", "-m", help="Model name")
+        service_parser.add_argument("--base-url", help="OpenAI-compatible or Ollama base URL")
+        service_parser.add_argument("--config", default=".flyto/coding.yaml", help="Repo-owned coding config")
+        service_parser.add_argument(
+            "--approval", choices=("never", "on-request", "on-failure", "always"),
+            default="never", help="Service-wide approval policy",
+        )
+        service_parser.add_argument(
+            "--sandbox", choices=("read-only", "workspace-write"), default="workspace-write",
+            help="Service-wide workspace authority",
+        )
+        service_parser.add_argument(
+            "--sandbox-image", default="python:3.12-slim",
+            help="Pinned local Docker image for model-issued commands",
+        )
+        service_parser.add_argument("--max-workers", type=int, default=2, help="Concurrent job workers")
+        service_parser.add_argument("--max-queued", type=int, default=100, help="Maximum queued/running jobs")
+
+    code_serve_p = sub.add_parser(
+        "code-serve", help="Start the detachable authenticated coding HTTP service",
+    )
+    _add_coding_service_args(code_serve_p)
+    code_serve_p.add_argument("--host", default="127.0.0.1", help="Loopback bind host")
+    code_serve_p.add_argument("--port", type=int, default=7421, help="Loopback bind port")
+    code_serve_p.add_argument(
+        "--auth-token-env", default="FLYTO_AI_CODING_SERVER_TOKEN",
+        help="Environment variable containing the HTTP bearer token",
+    )
+
+    code_mcp_p = sub.add_parser(
+        "code-mcp", help="Start the detachable tenant-bound coding MCP stdio service",
+    )
+    _add_coding_service_args(code_mcp_p)
 
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
@@ -101,6 +184,10 @@ def main():
         _cmd_prompt_lab(args)
     elif args.command == "code":
         _cmd_code(args)
+    elif args.command == "code-serve":
+        _cmd_code_serve(args)
+    elif args.command == "code-mcp":
+        _cmd_code_mcp(args)
     elif args.command == "chat":
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
@@ -128,15 +215,228 @@ def main():
 
 
 def _cmd_code(args):
-    """Run Claude Code Agent with optional verification loop."""
+    """Run the native Flyto2 coding loop or an explicit compatibility backend."""
+    if args.backend == "claude-sdk":
+        _cmd_code_claude_sdk(args)
+        return
+    _cmd_code_native(args)
+
+
+def _cmd_code_native(args):
+    """Run the provider-neutral native coding control plane."""
     import os
 
-    # Early check: claude-agent-sdk installed?
+    if args.verify or args.verify_args or args.reference:
+        print(
+            "\033[31mError:\033[0m --verify/--verify-args/--reference belong to "
+            "--backend claude-sdk. Native checks come from .flyto/coding.yaml "
+            "or --check-json.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    message = " ".join(args.message)
+    working_dir = os.path.abspath(args.dir)
+
+    try:
+        from flyto_ai.coding import (
+            ApprovalPolicy,
+            CapabilitySpec,
+            CheckSpec,
+            CodingTaskRequest,
+            FlytoCodingAgent,
+            SandboxMode,
+            ThreadStore,
+        )
+
+        check_specs = tuple(
+            CheckSpec.from_mapping(json.loads(raw)) for raw in args.check_json
+        )
+        capability_specs = tuple(
+            CapabilitySpec.from_mapping(json.loads(raw)) for raw in args.capability_json
+        )
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        print("\033[31mError:\033[0m invalid coding contract: {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        provider = _create_native_coding_provider(args)
+    except ValueError as exc:
+        print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
+        sys.exit(1)
+    store = ThreadStore(args.state_dir) if args.state_dir else ThreadStore()
+    agent = FlytoCodingAgent(provider, store=store)
+    try:
+        request = CodingTaskRequest(
+            message=message,
+            working_dir=working_dir,
+            thread_id=args.thread_id,
+            resume=args.resume,
+            approval_policy=ApprovalPolicy(args.approval),
+            sandbox_mode=SandboxMode(args.sandbox),
+            checks=check_specs,
+            capabilities=capability_specs,
+            max_attempts=args.max_attempts,
+            max_rounds=args.max_rounds,
+            require_changes=not args.allow_no_changes,
+            config_path=args.config,
+            command_sandbox_image=args.sandbox_image,
+        )
+    except ValueError as exc:
+        print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+
+    def _on_stream(event):
+        if args.json:
+            return
+        event_type = getattr(event, "type", "")
+        event_value = getattr(event_type, "value", event_type)
+        if event_value == "token":
+            sys.stdout.write(getattr(event, "content", ""))
+            sys.stdout.flush()
+        elif event_value == "tool_start":
+            sys.stdout.write("\n\033[36m▶ {}\033[0m\n".format(getattr(event, "tool_name", "tool")))
+            sys.stdout.flush()
+
+    result = asyncio.run(agent.run(request, on_stream=_on_stream))
+    if args.json:
+        import dataclasses
+        print(json.dumps(dataclasses.asdict(result), ensure_ascii=False, indent=2, default=str))
+    else:
+        icon = "\033[32m✓\033[0m" if result.ok else "\033[31m✗\033[0m"
+        print("\n{} {}".format(icon, result.message))
+        print("  thread={} attempts={} rounds={}".format(
+            result.thread_id, result.attempts, result.rounds_used,
+        ))
+        if result.files_changed:
+            print("  files={}".format(", ".join(result.files_changed)))
+        for check in result.checks:
+            check_icon = "✓" if check.passed else "✗"
+            print("  {} check={} duration={}ms".format(check_icon, check.name, check.duration_ms))
+        print("  evidence={}".format(result.evidence_path))
+        if result.failure_code:
+            print("  failure={}".format(result.failure_code))
+    sys.exit(0 if result.ok else 1)
+
+
+def _create_native_coding_provider(args):
+    """Build one normal Flyto2 provider; service secrets come from env only."""
+    from flyto_ai.config import AgentConfig
+    from flyto_ai.providers import create_provider, detect_provider
+
+    config = AgentConfig.from_env()
+    if getattr(args, "provider", None):
+        config.provider = args.provider
+    if getattr(args, "model", None):
+        config.model = args.model
+    if getattr(args, "api_key", None):
+        config.api_key = args.api_key
+    if getattr(args, "base_url", None):
+        config.base_url = args.base_url
+    provider_name = config.provider or detect_provider(config.model, config.api_key)
+    if provider_name != "ollama" and not config.api_key:
+        raise ValueError(
+            "no API key for provider '{}'; configure its environment variable "
+            "or select --provider ollama".format(provider_name)
+        )
+    provider_kwargs = {
+        "model": config.resolved_model,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+    }
+    if provider_name == "ollama":
+        provider_kwargs["base_url"] = config.base_url or "http://localhost:11434/v1"
+    else:
+        provider_kwargs["api_key"] = config.api_key
+        if config.base_url:
+            provider_kwargs["base_url"] = config.base_url
+    return create_provider(provider_name, **provider_kwargs)
+
+
+def _build_coding_service(args):
+    """Create the optional service with all authority fixed at startup."""
+    from flyto_ai.coding import ApprovalPolicy, FlytoCodingAgent, SandboxMode
+    from flyto_ai.coding.service import CodingService
+
+    # Fail startup early, then create an isolated provider client per worker job.
+    _create_native_coding_provider(args)
+    roots = tuple(_os.path.abspath(_os.path.expanduser(path)) for path in args.workspace_root)
+    return CodingService(
+        lambda store: FlytoCodingAgent(_create_native_coding_provider(args), store=store),
+        state_root=_os.path.abspath(_os.path.expanduser(args.state_dir)),
+        workspace_roots=roots,
+        max_workers=args.max_workers,
+        max_queued=args.max_queued,
+        approval_policy=ApprovalPolicy(args.approval),
+        sandbox_mode=SandboxMode(args.sandbox),
+        config_path=args.config,
+        sandbox_image=args.sandbox_image,
+    )
+
+
+def _cmd_code_serve(args):
+    """Run the authenticated loopback HTTP coding facade."""
+    if not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", args.auth_token_env):
+        print("\033[31mError:\033[0m invalid --auth-token-env", file=sys.stderr)
+        sys.exit(2)
+    auth_token = _os.environ.get(args.auth_token_env, "")
+    if len(auth_token) < 16:
+        print(
+            "\033[31mError:\033[0m {} must contain at least 16 characters".format(
+                args.auth_token_env,
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        from flyto_ai.coding.http_server import build_http_server
+
+        service = _build_coding_service(args)
+        server = build_http_server(
+            service,
+            tenant_id=args.tenant,
+            auth_token=auth_token,
+            host=args.host,
+            port=args.port,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+    host, port = server.server_address[:2]
+    print("flyto coding HTTP service listening on http://{}:{}".format(host, port), file=sys.stderr)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        service.close()
+
+
+def _cmd_code_mcp(args):
+    """Run the tenant-bound coding MCP stdio facade."""
+    try:
+        from flyto_ai.coding.mcp_server import CodingMCPServer, serve_stdio
+
+        service = _build_coding_service(args)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+    try:
+        serve_stdio(CodingMCPServer(service, args.tenant))
+    finally:
+        service.close()
+
+
+def _cmd_code_claude_sdk(args):
+    """Run the explicitly selected legacy Claude SDK compatibility backend."""
+    import os
+
     try:
         import claude_agent_sdk  # noqa: F401
     except ImportError:
-        print("\033[31mError:\033[0m claude-agent-sdk is required for the 'code' command.")
-        print("Install with: \033[1mpip install flyto-ai[agent]\033[0m")
+        print("\033[31mError:\033[0m claude-agent-sdk is required for --backend claude-sdk.")
+        print("Install with: \033[1mpip install flyto-ai[claude-sdk]\033[0m")
         sys.exit(1)
 
     message = " ".join(args.message)

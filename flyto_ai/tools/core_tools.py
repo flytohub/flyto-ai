@@ -6,6 +6,7 @@ import importlib.metadata
 import logging
 import re
 import threading
+from contextlib import nullcontext
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
@@ -343,13 +344,26 @@ async def _relaunch_browser() -> Dict[str, Any]:
         return {"ok": False, "error": "Relaunch failed: {}".format(e)}
 
 
-async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+async def dispatch_core_tool(
+    name: str,
+    arguments: Dict[str, Any],
+    *,
+    trusted_outbound_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Dispatch a tool call to the flyto-core MCP handler.
 
     For browser.* modules, transient errors trigger one automatic retry.
     If the session is dead, a fresh browser.launch is attempted before retrying.
+
+    ``trusted_outbound_scope`` is an internal Runner-to-Core integration hook.
+    It is deliberately absent from the public MCP tool schema and is applied
+    only around the current async Core call.
     """
-    result = await _dispatch_core_tool_inner(name, arguments)
+    result = await _dispatch_core_tool_inner(
+        name,
+        arguments,
+        trusted_outbound_scope=trusted_outbound_scope,
+    )
 
     # Smart retry — only for browser module execute_module calls
     if (
@@ -377,7 +391,11 @@ async def dispatch_core_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, 
                     }
 
             # Retry once
-            result = await _dispatch_core_tool_inner(name, arguments)
+            result = await _dispatch_core_tool_inner(
+                name,
+                arguments,
+                trusted_outbound_scope=trusted_outbound_scope,
+            )
 
     return result
 
@@ -429,7 +447,25 @@ def set_sandbox_manager(mgr) -> None:
     _sandbox_mgr = mgr
 
 
-async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+def _trusted_outbound_context(scope: Optional[Dict[str, Any]]):
+    """Resolve Core's task-local scope lazily and fail closed when unavailable."""
+    if scope is None:
+        return nullcontext()
+    from core.utils import trusted_outbound_network_scope
+
+    return trusted_outbound_network_scope(
+        allowed_hosts=scope.get("allowed_hosts", []),
+        allowed_ports=scope.get("allowed_ports", []),
+        allow_private_targets=(scope.get("allow_private_targets") is True),
+    )
+
+
+async def _dispatch_core_tool_inner(
+    name: str,
+    arguments: Dict[str, Any],
+    *,
+    trusted_outbound_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Core dispatch logic (no retry)."""
     handler = _get_mcp_handler()
     if handler is None:
@@ -521,15 +557,36 @@ async def _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any]) -> Dic
 
         # Sandbox: route dangerous categories to Docker container
         if _sandbox_mgr and _sandbox_mgr.needs_sandbox(module_id):
+            if trusted_outbound_scope is not None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "Trusted outbound scope cannot be enforced inside "
+                        "the configured sandbox"
+                    ),
+                }
             return await _sandbox_mgr.execute(
                 module_id, arguments.get("params", {}), arguments.get("context"),
             )
-        result = await handler["execute_module"](
-            module_id=module_id,
-            params=arguments.get("params", {}),
-            context=arguments.get("context"),
-            browser_sessions=_browser_sessions,
-        )
+        try:
+            scope_context = _trusted_outbound_context(
+                trusted_outbound_scope,
+            )
+        except (ImportError, AttributeError, TypeError, ValueError) as exc:
+            return {
+                "ok": False,
+                "error": (
+                    "Installed flyto-core cannot enforce trusted outbound "
+                    "scope: {}"
+                ).format(exc),
+            }
+        with scope_context:
+            result = await handler["execute_module"](
+                module_id=module_id,
+                params=arguments.get("params", {}),
+                context=arguments.get("context"),
+                browser_sessions=_browser_sessions,
+            )
 
         # Track browser.launch failure for cascade breaker
         if module_id == "browser.launch" and isinstance(result, dict) and not _is_ok(result):

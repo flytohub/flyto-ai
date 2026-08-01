@@ -24,6 +24,7 @@ Regenerate with `python3 scripts/generate_reference.py`; CI rejects stale output
 
 ## Design And Integration
 
+- [Provider-neutral coding control plane](CODING_CONTROL_PLANE.md)
 - [AI/MCP closed loop](AI_MCP_CLOSED_LOOP.md)
 - [Adaptive security campaigns](API.md#adaptive-security-campaigns)
 - [Deterministic capability routing](CAPABILITY_ROUTING.md)

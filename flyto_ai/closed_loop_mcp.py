@@ -349,7 +349,20 @@ def _candidate_list(raw: Any) -> List[ModelCandidate]:
 class ClosedLoopMCPServer:
     """Stateful, local-only closed-loop MCP server."""
 
-    def __init__(self, state_dir: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        state_dir: Optional[str] = None,
+        *,
+        trusted_campaign_scope: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Create a closed-loop server.
+
+        ``trusted_campaign_scope`` is an in-process Runner integration hook,
+        not part of the MCP tool schema.  It can narrow one attested security
+        campaign to exact outbound hosts and ports without changing process
+        environment variables.  The scope is ignored by ordinary plans and
+        is fail-closed unless its contract hash matches the compiled campaign.
+        """
         configured_dir = state_dir or os.getenv(
             "FLYTO_CLOSED_LOOP_STATE_DIR",
             "~/.flyto/closed-loop-mcp",
@@ -379,6 +392,63 @@ class ClosedLoopMCPServer:
             "FLYTO_CLOSED_LOOP_MCP_FAIL_ONCE_MODULE",
             "",
         )
+        self._trusted_campaign_scope = self._normalize_trusted_campaign_scope(
+            trusted_campaign_scope,
+        )
+
+    @staticmethod
+    def _normalize_trusted_campaign_scope(
+        value: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("trusted_campaign_scope must be an object")
+        contract_hash = str(value.get("contract_hash") or "").strip()
+        if not (
+            contract_hash.startswith("sha256:")
+            and len(contract_hash) == 71
+        ):
+            raise ValueError(
+                "trusted_campaign_scope requires a sha256 contract_hash",
+            )
+        raw_hosts = value.get("allowed_hosts")
+        raw_ports = value.get("allowed_ports")
+        if not isinstance(raw_hosts, list) or not raw_hosts:
+            raise ValueError(
+                "trusted_campaign_scope.allowed_hosts must be non-empty",
+            )
+        if not isinstance(raw_ports, list) or not raw_ports:
+            raise ValueError(
+                "trusted_campaign_scope.allowed_ports must be non-empty",
+            )
+        hosts = []
+        for raw_host in raw_hosts:
+            host = str(raw_host or "").strip().lower().rstrip(".")
+            if not host or "*" in host or any(char.isspace() for char in host):
+                raise ValueError(
+                    "trusted_campaign_scope hosts must be exact hostnames",
+                )
+            hosts.append(host)
+        ports = []
+        for raw_port in raw_ports:
+            if (
+                not isinstance(raw_port, int)
+                or isinstance(raw_port, bool)
+                or not 1 <= raw_port <= 65535
+            ):
+                raise ValueError(
+                    "trusted_campaign_scope ports must be integers",
+                )
+            ports.append(raw_port)
+        return {
+            "contract_hash": contract_hash,
+            "allowed_hosts": sorted(set(hosts)),
+            "allowed_ports": sorted(set(ports)),
+            "allow_private_targets": (
+                value.get("allow_private_targets") is True
+            ),
+        }
 
     def _record_key(self, kind: str, record_id: str) -> str:
         return "{}:{}".format(kind, record_id)
@@ -616,6 +686,33 @@ class ClosedLoopMCPServer:
         counts = dict(plan.get("module_call_counts") or {})
         campaign = plan.get("security_campaign")
         campaign_usage = dict(plan.get("campaign_usage") or {})
+        trusted_scope = self._trusted_campaign_scope
+        if trusted_scope is not None:
+            campaign_authorization = (
+                campaign.get("authorization")
+                if isinstance(campaign, dict)
+                else {}
+            )
+            scope_matches = bool(
+                isinstance(campaign, dict)
+                and not campaign.get("gate_errors")
+                and trusted_scope.get("contract_hash")
+                == campaign.get("contract_hash")
+                and trusted_scope.get("allow_private_targets")
+                is (campaign_authorization or {}).get(
+                    "allow_private_targets",
+                    False,
+                )
+            )
+            if not scope_matches:
+                return _tool_result(
+                    {
+                        "ok": False,
+                        "error": "Trusted campaign scope does not match plan",
+                    },
+                    message="Execution rejected: campaign scope mismatch",
+                    is_error=True,
+                )
 
         async def preflight(func_args: Dict[str, Any]) -> Dict[str, Any]:
             decision = self._enforcer.check("execute_module", func_args)
@@ -685,7 +782,14 @@ class ClosedLoopMCPServer:
                         "ok": False,
                         "error": "intentional MCP checkpoint test interruption",
                     }
-            core_result = await dispatch_core_tool(name, tool_args)
+            if name == "execute_module" and trusted_scope is not None:
+                core_result = await dispatch_core_tool(
+                    name,
+                    tool_args,
+                    trusted_outbound_scope=trusted_scope,
+                )
+            else:
+                core_result = await dispatch_core_tool(name, tool_args)
             if campaign is not None:
                 from flyto_ai.security.campaign import record_campaign_result
 

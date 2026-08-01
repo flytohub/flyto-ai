@@ -15,3 +15,4 @@ env/
 .flyto/
 .flyto-index/
 eval/results/
+out/

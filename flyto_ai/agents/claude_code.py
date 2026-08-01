@@ -1,6 +1,6 @@
 # Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
-"""Claude Code Agent — orchestrates Claude Code via Agent SDK with
+"""Optional Claude SDK backend — orchestrates Claude Code with
 indexer context gathering, guardian hooks, and YAML recipe verification.
 
 Flow:
@@ -32,7 +32,7 @@ StreamCallback = Optional[Callable[[Dict[str, Any]], None]]
 
 
 class ClaudeCodeAgent:
-    """High-level orchestrator: indexer → Claude Code → verify → feedback loop."""
+    """Detachable compatibility backend: indexer → Claude → verify → feedback."""
 
     def __init__(self, config: Any = None):
         """
@@ -293,8 +293,10 @@ class ClaudeCodeAgent:
             "max_budget_usd": max_budget,
             "cwd": request.working_dir,
             "allowed_tools": self._cc.allowed_tools,
-            "permission_mode": "bypassPermissions",
-            "allow_dangerously_skip_permissions": True,
+            # Never disable the SDK permission system implicitly.  The
+            # guardian hook is an additional policy boundary, not a reason to
+            # bypass the SDK's own approval prompts.
+            "permission_mode": "default",
             "env": {"CLAUDECODE": ""},
             "hooks": {
                 "PreToolUse": [HookMatcher(hooks=[_pre_hook])],

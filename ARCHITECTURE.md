@@ -27,12 +27,65 @@ Key boundaries:
 - MCP metadata is additive: existing tool names, schemas, and result shapes stay compatible.
 
 Runtime packages:
+- `coding` is the provider-neutral software-development control plane. It owns
+  versioned requests/results, workspace-confined argv-only tools, persistent
+  resumable threads, append-only redacted trajectories, source-controlled real
+  checks, negotiated MCP-stdio capability adapters, and optional tenant-scoped
+  HTTP/MCP job facades. It does not import sibling Indexer/Core source trees.
 - `assistant` and `intelligence` perform deterministic pre-routing, recovery, selector resolution, and interaction control before provider fallback.
 - `providers` normalize model chat, streaming, tool calls, usage, failover, and cost records.
 - `tools` owns definitions and handlers; Core registry definitions are discovered lazily instead of copied.
 - `memory`, `evolution`, `cache`, `session`, and `transcript` retain bounded learning and evidence state.
 - `permissions`, `prompt`, `redaction`, `vault`, `sandbox`, and `agents` enforce execution and data boundaries.
 - `channels`, `telegram`, `scheduler`, and `extensions` adapt external events without bypassing the agent/tool contract.
+
+Coding control flow:
+
+```text
+CLI / API
+  -> flyto_ai.coding.CodingTaskRequest (flyto.coding.v1)
+  -> source-controlled checks + required-capability preflight
+  -> selected Flyto2 LLMProvider
+  -> workspace-confined coding tools + configured MCP-stdio adapters
+  -> real check runner
+  -> bounded repair loop
+  -> CodingTaskResult + append-only JSONL evidence
+```
+
+Optional service composition:
+
+```text
+loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
+  -> flyto.coding-service.v1
+  -> tenant namespace + workspace allowlist + bounded queue
+  -> per-workspace serialization
+  -> the same FlytoCodingAgent control flow above
+  -> durable CodingJobReceipt
+```
+
+Provider selection, credentials, tenant identity, workspace roots, and the
+state root are startup dependencies. They are not accepted from a job payload.
+This makes Cloud, Engine, Robotics, Core, and Indexer consumers replaceable at
+the process contract instead of coupling their source trees to `flyto-ai`.
+
+The native backend is the default architecture. `ClaudeCodeAgent` remains a
+separate optional adapter and never receives implicit permission bypass. A
+capability can be removed from `.flyto/coding.yaml` without changing the
+provider, workspace tool, check, or result contracts.
+
+An MCP capability is available only when its initialize response negotiates the
+requested protocol and its real `tools/list` includes every required tool.
+Configured version labels alone never satisfy preflight.
+Authenticated product adapters receive only explicitly named `FLYTO_*` runtime
+variables. The source-controlled contract carries names rather than values;
+ambient cloud, source-control, SSH, and provider secrets do not cross the
+subprocess boundary.
+
+Model-issued commands are a separate trust lane from source-controlled checks.
+The former require a detected OS sandbox, deny network and workspace/host
+writes, and receive only an ephemeral writable home; the latter are trusted
+project verification and may execute repository code. Native file tools reject
+VCS internals, credential paths, path traversal, and symlink escape.
 
 Interface surfaces:
 - Python consumers import the package facade documented in `docs/API.md`.
@@ -78,24 +131,24 @@ LLM planner
 ## Robotics planning boundary
 
 ```text
-Flyto Robotics routed request
+Flyto2 Robotics routed request
   -> validate request size, shortlist, capabilities, locations, routes
   -> compile provider-native JSON Schema
   -> structured model completion
   -> independent plan/safety/route validation
   -> optional single bounded repair
   -> plan + tamper-evident planning attestation
-  -> Flyto Robotics final validation and execution
+  -> Flyto2 Robotics final validation and execution
 ```
 
 - `robotics_planning.py` owns the provider-neutral request, response, and
-  attestation boundary. It does not import Flyto Robotics source.
+  attestation boundary. It does not import Flyto2 Robotics source.
 - The routed capability shortlist is the authority ceiling. Model output cannot
   introduce a capability or argument field outside that contract.
 - Complete route candidates become exact JSON Schema `prefixItems` variants.
   Model choice remains real, while waypoint omission and cross-route splicing
   become structurally invalid.
-- Provider validation is not execution authorization. Flyto Robotics verifies
+- Provider validation is not execution authorization. Flyto2 Robotics verifies
   the hashes, route, policy, and executable plan again before movement.
 - `robotics_planner_server.py` is a loopback development adapter, not a public
   authenticated service. It suppresses prompt-bearing access logs and bounds

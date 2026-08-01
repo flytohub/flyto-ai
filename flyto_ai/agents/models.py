@@ -1,13 +1,18 @@
 # Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
-"""Data models for Claude Code Agent orchestration."""
+"""Compatibility models for the optional Claude SDK coding backend.
+
+The provider-neutral public contracts live in :mod:`flyto_ai.coding`.  These
+models intentionally remain small so existing integrations can keep selecting
+the Claude SDK backend without making it the default Flyto coding runtime.
+"""
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class CodeTaskRequest:
-    """User request for the Claude Code Agent."""
+    """User request for the optional Claude SDK backend."""
     message: str
     working_dir: str
     verification_recipe: Optional[str] = None

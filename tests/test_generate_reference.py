@@ -27,3 +27,17 @@ def test_generated_markdown_has_no_trailing_whitespace():
             path,
             bad_lines,
         )
+
+
+def test_generated_paths_never_collide_with_agent_instruction_files():
+    generator = _load_generator()
+
+    assert generator.group_filename("agents") == "agents-package.md"
+    assert generator.group_filename("providers") == "providers.md"
+    reserved = generator.RESERVED_INSTRUCTION_FILENAMES
+    generated_names = {
+        path.name.casefold()
+        for path in generator.outputs()
+        if path.parent == generator.PYTHON_REFERENCE
+    }
+    assert generated_names.isdisjoint(reserved)

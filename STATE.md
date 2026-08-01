@@ -1,8 +1,37 @@
 # State
 
-Last updated: 2026-07-31
+Last updated: 2026-08-01
 
 Implemented:
+- The additive `flyto.coding.v1` control plane provides a provider-neutral
+  native coding loop with workspace-confined tools, crash-safe resumable
+  threads, append-only redacted events, required source-controlled subprocess
+  checks, bounded repair, attributable-change snapshots, and detachable
+  MCP-stdio capability adapters. Missing checks or required capabilities fail
+  before model-directed edits.
+- The additive `flyto.coding-service.v1` boundary now runs that same agent as
+  tenant-scoped asynchronous jobs behind optional loopback HTTP and MCP stdio
+  facades. It provides atomic durable receipts, idempotent submission, bounded
+  concurrency, per-workspace serialization, restart reconciliation, and a
+  single-process state lease. Tenant, provider, credentials, allowed workspace
+  roots, config path, sandbox image, and authority policy are fixed at startup.
+  Remote job payloads cannot provide checks, capabilities, credentials, tenant
+  identity, or sandbox configuration.
+- MCP capability preflight now checks the actual initialize protocol response
+  and required names from `tools/list`. Evidence records the negotiated
+  protocol, server name, catalog, and missing tools; configured labels alone do
+  not make a capability available.
+- MCP stdio adapters can now request explicit runtime `FLYTO_*` variables by
+  name. Values are copied only into that child process and remain absent from
+  configuration, status, evidence, job state, and public receipts; all other
+  ambient credentials stay scrubbed.
+- The legacy Claude SDK coding agent is now an optional compatibility backend;
+  it no longer enables `bypassPermissions` or dangerous permission skipping by
+  default. The native control plane does not require that SDK.
+- Model-issued `coding_run` commands now require a detected OS sandbox, deny
+  network and workspace/host writes, hide protected credential/VCS paths, and
+  write only to an ephemeral runtime home. Source-controlled checks remain the
+  explicit trusted command lane and are recorded separately.
 - Adaptive footprint, penetration-test, and red-team campaigns now use
   `flyto.security-campaign.v1`. The contract freezes scope, authorization
   level/reference/expiry, approved action classes, Core module allowlist,
@@ -25,8 +54,12 @@ Implemented:
   capability and route constraints into JSON Schema, accepts only structured
   provider output, independently validates plan safety and route integrity,
   permits one repair, and emits a hashed live-model attestation.
-- Ollama supports native `/api/chat` JSON Schema completions with bounded
-  messages, timeouts, response bytes, and provider error details.
+- Ollama supports native `/api/chat` JSON Schema completions and multi-round
+  tool calls with bounded messages, timeouts, response bytes, provider error
+  details, and an explicit `think` setting that defaults to false.
+- `coding_search` is explicitly a literal fixed-string search. Its result
+  identifies `query_mode: literal`, and an empty result tells the agent to read
+  the current file instead of guessing runtime or regex-like source text.
 - A loopback-only `/v1/robotics/plan` development server exposes the planner
   without logging mission prompts. The boundary is not an authenticated public
   deployment.
@@ -95,11 +128,29 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1182 passed, 15 optional/live-integration skips;
+- full suite: 1288 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;
-- Flyto2 Indexer closed loop: 17 passed, 0 warnings, 0 failures.
+- Flyto2 Indexer closed loop: 18 passed, 0 warnings, 0 failures (90/A).
+
+The coding-service slice is additionally covered by focused agent, CLI,
+coding-control, provider, and service tests. These include real filesystem
+writes, source-controlled subprocess checks, HTTP sockets, a real stdio MCP
+process, MCP initialize/tool-catalog negotiation, idempotency conflict,
+cross-tenant denial, durable restart reads, and concurrent same-workspace
+serialization.
+
+The 2026-08-01 native ordinary-development benchmark ran 101 distinct,
+no-mock workspaces through the production `flyto.coding.v1` loop and local
+Ollama `qwen3:8b` over native `/api/chat` with `think=false`. It passed 99/101
+(98.02%) overall: standard 34/34, intermediate 32/34 (94.12%), and advanced
+33/33. Every tier passed the 90% gate, every case ran a real
+`python -m unittest -q` check, and hidden retries were zero. The two failures
+remain recorded: one provider failure caused by an intentional process pause
+during independent Engine isolation, and one bounded three-attempt
+verification failure. The content-addressed report is
+`out/benchmarks/native-coding/native-coding-benchmark-4495b61ad2d979b5a9a19a04dfdef2052ea7fb833285f4ae32d2f693fb9eecc1.json`.
 
 The 2026-07-27 routing and evidence hardening was additionally verified with
 700 multilingual/presentation-mutated route cases, 5,000 seeded Unicode/noise
@@ -123,6 +174,15 @@ suite, generated-reference check, sdist/wheel build, and strict Indexer
 full-scan. Twine metadata validation was not rerun for this source-only change.
 
 Known constraints:
+- Native workspace confinement is an application boundary, not hostile-code OS
+  isolation for source-controlled verification commands. Model-issued commands
+  use Docker or `bwrap`, but untrusted repositories must still run the whole
+  process inside a dedicated container or VM. MCP capability commands must be
+  explicitly configured in `.flyto/coding.yaml` and are not inferred from
+  sibling source directories.
+- The built-in coding HTTP facade is intentionally loopback-only. Production
+  multi-customer exposure still requires Flyto2 Cloud identity, TLS, quota,
+  organization policy, audit retention, and authorization mapping at the edge.
 - Campaign authorization proves enforcement of the supplied contract; a
   production control plane must still authenticate the approving principal and
   issue the authorization reference. Live offensive effectiveness must be
@@ -136,6 +196,9 @@ Known constraints:
 - Authenticated Cloud browser smoke requires runtime credentials and must not write them to files.
 - Cross-repo package tests need sibling repos on `PYTHONPATH` when run outside an installed workspace.
 - Provider, embedding, and live-channel tests that require external credentials remain opt-in and are skipped in credential-free verification.
+- The 101-case native coding result proves the recorded local `qwen3:8b`
+  configuration and bounded fixtures; it does not imply identical quality for
+  every model, provider, language, repository, or hostile-code environment.
 - The v3 browser/API workloads use real requests to a controlled loopback HTTP
   fixture; they do not prove behavior against arbitrary public sites, proxies,
   or authenticated third-party APIs.

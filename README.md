@@ -376,19 +376,50 @@ flyto-ai blueprints                             # View learned blueprints
 flyto-ai blueprints --export > blueprints.yaml  # Export for sharing
 ```
 
-## Claude Code Agent
+## Native Flyto2 coding agent
 
-Use Claude Code as a coding worker with automatic verification loops:
+`flyto-ai code` defaults to the provider-neutral native control plane. It
+confines writes to the selected workspace, keeps external MCP capabilities
+detachable, and accepts success only after source-controlled host checks pass.
+OpenAI, Anthropic, compatible endpoints, and local Ollama models use the same
+versioned request and evidence contracts.
+
+Run the no-mock ordinary-development benchmark with a real installed Ollama
+model, 101 distinct workspaces, three difficulty tiers, and an evidence-backed
+check/repair loop:
+
+```bash
+python scripts/benchmark_native_coding.py \
+  --cases 101 --model qwen3:8b --minimum-rate 0.90 \
+  --case-timeout 900 --max-tokens 4096 --max-agent-attempts 3
+```
+
+The harness rejects test edits and out-of-scope paths, writes resumable
+checkpoints after every case, and emits a content-addressed JSON report under
+`out/benchmarks/native-coding/`.
+
+The 2026-08-01 native `/api/chat` run with `think=false` passed 99/101
+(98.02%): standard 34/34, intermediate 32/34, and advanced 33/33. All three
+tiers passed the 90% gate, all case IDs were distinct, every acceptance check
+was a real `python -m unittest -q` subprocess, and hidden retries were zero.
+The two failures remain in the evidence. See
+`out/benchmarks/native-coding/native-coding-benchmark-4495b61ad2d979b5a9a19a04dfdef2052ea7fb833285f4ae32d2f693fb9eecc1.json`.
+
+## Optional Claude SDK compatibility backend
+
+Use Claude Code only when the explicitly detachable compatibility backend is
+desired:
 
 ```bash
 pip install flyto-ai[agent]   # Installs claude-agent-sdk
 
 # Basic — Claude Code writes code, no verification
-flyto-ai code "fix the login form validation" --dir ./my-project
+flyto-ai code "fix the login form validation" --dir ./my-project --backend claude-sdk
 
 # With verification — screenshot + visual comparison after each fix attempt
 flyto-ai code "match the Figma design for the login page" \
   --dir ./my-project \
+  --backend claude-sdk \
   --verify screenshot \
   --verify-args '{"url": "http://localhost:3000/login"}' \
   --reference ./figma-login.png \

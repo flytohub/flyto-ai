@@ -44,14 +44,32 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `evolve` | `--api-key, -k` | API key | [`flyto_ai/cli.py:71`](../../flyto_ai/cli.py#L71) |
 | `cases` | `command` | List all eval cases | [`flyto_ai/cli.py:72`](../../flyto_ai/cli.py#L72) |
 | `report` | `command` | Show latest evolution report | [`flyto_ai/cli.py:73`](../../flyto_ai/cli.py#L73) |
-| `code` | `command` | AI-driven coding with Claude Code Agent + verification | [`flyto_ai/cli.py:76`](../../flyto_ai/cli.py#L76) |
+| `code` | `command` | Provider-neutral Flyto2 coding agent with real verification | [`flyto_ai/cli.py:76`](../../flyto_ai/cli.py#L76) |
 | `code` | `message, +` | What you want to build/fix | [`flyto_ai/cli.py:77`](../../flyto_ai/cli.py#L77) |
 | `code` | `--dir, -d` | Project working directory (default: .) | [`flyto_ai/cli.py:78`](../../flyto_ai/cli.py#L78) |
-| `code` | `--verify, Verification recipe name (e.g. ` | Verification recipe name (e.g.  | [`flyto_ai/cli.py:79`](../../flyto_ai/cli.py#L79) |
-| `code` | `--verify-args, Recipe args as JSON string` | Recipe args as JSON string | [`flyto_ai/cli.py:80`](../../flyto_ai/cli.py#L80) |
-| `code` | `--reference, Reference image path for visual comparison` | Reference image path for visual comparison | [`flyto_ai/cli.py:81`](../../flyto_ai/cli.py#L81) |
-| `code` | `--max-attempts, Max fix attempts (default: 3)` | Max fix attempts (default: 3) | [`flyto_ai/cli.py:82`](../../flyto_ai/cli.py#L82) |
-| `code` | `--budget, Max budget in USD (default: 5.0)` | Max budget in USD (default: 5.0) | [`flyto_ai/cli.py:83`](../../flyto_ai/cli.py#L83) |
-| `code` | `--max-turns, Max Claude Code turns (default: 30)` | Max Claude Code turns (default: 30) | [`flyto_ai/cli.py:84`](../../flyto_ai/cli.py#L84) |
-| `code` | `--json, store_true` | Output raw JSON | [`flyto_ai/cli.py:85`](../../flyto_ai/cli.py#L85) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:88`](../../flyto_ai/cli.py#L88) |
+| `code` | `--provider, -p` | Flyto2 provider for native mode | [`flyto_ai/cli.py:83`](../../flyto_ai/cli.py#L83) |
+| `code` | `--model, -m` | Model for native mode | [`flyto_ai/cli.py:84`](../../flyto_ai/cli.py#L84) |
+| `code` | `--api-key, -k` | Provider key (prefer environment variables) | [`flyto_ai/cli.py:85`](../../flyto_ai/cli.py#L85) |
+| `code` | `--base-url, OpenAI-compatible or Ollama base URL` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:86`](../../flyto_ai/cli.py#L86) |
+| `code` | `--config, .flyto/coding.yaml` | Source-controlled coding config | [`flyto_ai/cli.py:87`](../../flyto_ai/cli.py#L87) |
+| `code` | `--thread-id, Stable coding thread ID` | Stable coding thread ID | [`flyto_ai/cli.py:88`](../../flyto_ai/cli.py#L88) |
+| `code` | `--resume, store_true` | Resume --thread-id in the same workspace | [`flyto_ai/cli.py:89`](../../flyto_ai/cli.py#L89) |
+| `code` | `--state-dir, Thread/evidence directory (default: ~/.flyto/coding)` | Thread/evidence directory (default: ~/.flyto/coding) | [`flyto_ai/cli.py:90`](../../flyto_ai/cli.py#L90) |
+| `code` | `--max-attempts, Max fix attempts (default: 3)` | Max fix attempts (default: 3) | [`flyto_ai/cli.py:115`](../../flyto_ai/cli.py#L115) |
+| `code` | `--max-rounds, Max native tool rounds (default: 30)` | Max native tool rounds (default: 30) | [`flyto_ai/cli.py:116`](../../flyto_ai/cli.py#L116) |
+| `code` | `--verify, Claude SDK verification recipe` | Claude SDK verification recipe | [`flyto_ai/cli.py:118`](../../flyto_ai/cli.py#L118) |
+| `code` | `--verify-args, Claude SDK recipe args as JSON` | Claude SDK recipe args as JSON | [`flyto_ai/cli.py:119`](../../flyto_ai/cli.py#L119) |
+| `code` | `--reference, Claude SDK visual reference image` | Claude SDK visual reference image | [`flyto_ai/cli.py:120`](../../flyto_ai/cli.py#L120) |
+| `code` | `--budget, Max budget in USD (default: 5.0)` | Max budget in USD (default: 5.0) | [`flyto_ai/cli.py:121`](../../flyto_ai/cli.py#L121) |
+| `code` | `--max-turns, Max Claude SDK turns (default: 30)` | Max Claude SDK turns (default: 30) | [`flyto_ai/cli.py:122`](../../flyto_ai/cli.py#L122) |
+| `code` | `--json, store_true` | Output raw JSON | [`flyto_ai/cli.py:123`](../../flyto_ai/cli.py#L123) |
+| `service_parser` | `--tenant, Startup-bound tenant identifier` | Startup-bound tenant identifier | [`flyto_ai/cli.py:126`](../../flyto_ai/cli.py#L126) |
+| `service_parser` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:135`](../../flyto_ai/cli.py#L135) |
+| `service_parser` | `--model, -m` | Model name | [`flyto_ai/cli.py:136`](../../flyto_ai/cli.py#L136) |
+| `service_parser` | `--base-url, OpenAI-compatible or Ollama base URL` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
+| `service_parser` | `--config, .flyto/coding.yaml` | Repo-owned coding config | [`flyto_ai/cli.py:138`](../../flyto_ai/cli.py#L138) |
+| `service_parser` | `--max-workers, Concurrent job workers` | Concurrent job workers | [`flyto_ai/cli.py:151`](../../flyto_ai/cli.py#L151) |
+| `service_parser` | `--max-queued, Maximum queued/running jobs` | Maximum queued/running jobs | [`flyto_ai/cli.py:152`](../../flyto_ai/cli.py#L152) |
+| `code_serve_p` | `--host, 127.0.0.1` | Loopback bind host | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
+| `code_serve_p` | `--port, Loopback bind port` | Loopback bind port | [`flyto_ai/cli.py:159`](../../flyto_ai/cli.py#L159) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |

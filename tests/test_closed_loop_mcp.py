@@ -255,6 +255,154 @@ async def test_verify_distinguishes_missing_unknown_and_unexecuted_plan(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_trusted_campaign_scope_is_hash_bound_and_internal(
+    monkeypatch,
+    tmp_path,
+):
+    from flyto_ai import closed_loop_mcp
+    from flyto_ai.security.campaign import compile_security_campaign
+
+    steps = [{
+        "id": "request",
+        "module": "http.request",
+        "params": {"url": "http://127.0.0.1:18081/health"},
+        "assertions": {
+            "path": "status",
+            "op": "equals",
+            "value": "success",
+        },
+    }]
+    campaign = {
+        "campaign_id": "campaign-scope-test",
+        "mode": "footprint",
+        "objective": "Read the explicitly approved local health endpoint.",
+        "target_scope": ["127.0.0.1"],
+        "authorization": {
+            "level": "active",
+            "reference": "scope-test-authorization",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "approved_actions": ["active_probe"],
+            "allow_private_targets": True,
+        },
+        "module_allowlist": ["http.request"],
+        "budgets": {
+            "max_steps": 1,
+            "max_requests": 1,
+            "max_rounds": 1,
+            "max_planner_tokens": 100,
+            "max_cost_units": 10,
+        },
+    }
+    compiled = compile_security_campaign(campaign, steps)
+    assert compiled["gate_errors"] == []
+    scope = {
+        "contract_hash": compiled["contract_hash"],
+        "allowed_hosts": ["127.0.0.1"],
+        "allowed_ports": [18081],
+        "allow_private_targets": True,
+    }
+    calls = []
+
+    async def fake_core(name, arguments, *, trusted_outbound_scope=None):
+        calls.append((name, trusted_outbound_scope))
+        if name == "validate_params":
+            return {"ok": True, "valid": True}
+        return {"ok": True, "status": "success", "status_code": 200}
+
+    monkeypatch.setattr(closed_loop_mcp, "dispatch_core_tool", fake_core)
+    server = ClosedLoopMCPServer(
+        str(tmp_path / "matching"),
+        trusted_campaign_scope=scope,
+    )
+    planned = await server.call_tool("plan", {
+        "steps": steps,
+        "security_campaign": campaign,
+    })
+    executed = await server.call_tool("execute", {
+        "plan_id": planned["structuredContent"]["plan_id"],
+        "max_repairs": 0,
+    })
+
+    assert executed["isError"] is False
+    execute_scopes = [
+        seen_scope for name, seen_scope in calls
+        if name == "execute_module"
+    ]
+    assert execute_scopes == [scope]
+    assert all(
+        seen_scope is None for name, seen_scope in calls
+        if name == "validate_params"
+    )
+
+    mismatched = ClosedLoopMCPServer(
+        str(tmp_path / "mismatched"),
+        trusted_campaign_scope={
+            **scope,
+            "contract_hash": "sha256:" + ("0" * 64),
+        },
+    )
+    mismatch_plan = await mismatched.call_tool("plan", {
+        "steps": steps,
+        "security_campaign": campaign,
+    })
+    mismatch_result = await mismatched.call_tool("execute", {
+        "plan_id": mismatch_plan["structuredContent"]["plan_id"],
+        "max_repairs": 0,
+    })
+    assert mismatch_result["isError"] is True
+    assert "scope mismatch" in mismatch_result["content"][0]["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_core_dispatch_applies_scope_only_during_current_task(
+    monkeypatch,
+):
+    from flyto_ai.tools import core_tools
+
+    observed = {"entered": False, "exited": False, "calls": 0}
+
+    class ScopeContext:
+        def __enter__(self):
+            observed["entered"] = True
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            observed["exited"] = True
+
+    async def execute_module(**_kwargs):
+        await asyncio.sleep(0)
+        assert observed["entered"] is True
+        assert observed["exited"] is False
+        observed["calls"] += 1
+        return {"ok": True, "status": "success"}
+
+    monkeypatch.setattr(core_tools, "_sandbox_mgr", None)
+    monkeypatch.setattr(core_tools, "_get_mcp_handler", lambda: {
+        "execute_module": execute_module,
+        "validate_params": lambda **_kwargs: {"valid": True},
+    })
+    monkeypatch.setattr(
+        core_tools,
+        "_trusted_outbound_context",
+        lambda _scope: ScopeContext(),
+    )
+    result = await core_tools.dispatch_core_tool(
+        "execute_module",
+        {
+            "module_id": "http.request",
+            "params": {"url": "http://127.0.0.1:18081/health"},
+        },
+        trusted_outbound_scope={
+            "allowed_hosts": ["127.0.0.1"],
+            "allowed_ports": [18081],
+            "allow_private_targets": True,
+        },
+    )
+
+    assert result["ok"] is True
+    assert observed == {"entered": True, "exited": True, "calls": 1}
+
+
+@pytest.mark.asyncio
 async def test_real_stdio_mcp_executes_verifies_and_saves_tokens(tmp_path):
     client = await StdioMCPClient.start(
         tmp_path,

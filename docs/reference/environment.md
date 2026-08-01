@@ -10,6 +10,7 @@ Every statically named environment read in package and Python scripts. Credentia
 | `DEEPSEEK_API_KEY` | `required/None` | `flyto_ai/providers/__init__.py` |
 | `DISCORD_BOT_TOKEN` | `''` | `flyto_ai/channels/discord.py` |
 | `DISCORD_WEBHOOK_URL` | `''` | `flyto_ai/channels/discord.py` |
+| `DOCKER_HOST` | `''` | `flyto_ai/coding/workspace.py` |
 | `FLYTO_AI_ALLOW_PROD_TARGETS` | `required/None` | `flyto_ai/security/generator.py` |
 | `FLYTO_AI_API_KEY` | `''` | `flyto_ai/config.py` |
 | `FLYTO_AI_BASE_URL` | `required/None` | `flyto_ai/config.py` |
@@ -17,6 +18,7 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_AI_CC_MAX_FIX_ATTEMPTS` | `'3'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CC_MAX_TURNS` | `'30'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CHECKPOINT_DIR` | `'~/.flyto/checkpoints'` | `flyto_ai/config.py` |
+| `FLYTO_AI_CODING_STATE_DIR` | `'~/.flyto/coding'` | `flyto_ai/coding/store.py` |
 | `FLYTO_AI_CORS_ORIGINS` | `''` | `flyto_ai/cli.py` |
 | `FLYTO_AI_DISTILLATION_MIN_STEPS` | `'3'` | `flyto_ai/config.py` |
 | `FLYTO_AI_EMBEDDING_MODEL` | `'text-embedding-3-small'` | `flyto_ai/config.py` |

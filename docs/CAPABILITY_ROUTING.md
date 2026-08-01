@@ -53,3 +53,38 @@ Missing semantic coverage or a low-confidence legacy route sets
 `needs_clarification=true`. Robot-side policy must then require a human gate or
 reject the plan. A provider cannot select a capability that was filtered out
 or absent from the exact registry snapshot.
+
+## Stack profiles and routing manifests are separate layers
+
+`flyto.agent-stack.v1` answers “which external capability processes and tools
+may this agent instance attach?” A source-controlled profile may use arbitrary
+domain names and MCP servers, but every MCP entry must carry a non-empty
+`allowed_tools` list. Preflight validates its declared contract against the
+server's real catalog before any model receives those tools.
+
+The capability manifests consumed by `route_capabilities()` answer the finer
+question “which installed action is compatible with this particular goal and
+authority envelope?” They describe canonical intent, affordances, effects,
+resources, sensors, permissions, schemas, and safety metadata. Keeping process
+composition separate from per-goal routing lets one generic Agent host support
+many domains without turning a broad catalog into blanket execution authority.
+
+The shared domain-neutral loop is:
+
+```text
+goal/event
+  → normalized Goal Frame
+  → installed-profile and capability hard filters
+  → policy / scope / authorization gate
+  → domain planner
+  → Core or domain executor
+  → domain verifier and bounded repair/re-plan
+  → redacted evidence, trace, and trusted Blueprint outcome
+```
+
+General workflows use `Agent`; software changes add the `FlytoCodingAgent`
+workspace/check contract; robotics adds `RoboticsPlanningService` plus robot
+safety and human gates; authorized security campaigns add
+`run_security_campaign` scope, expiry, action-class, module, and budget gates.
+New domains extend these adapters and manifests instead of adding task names to
+the router or weakening the common authority boundary.

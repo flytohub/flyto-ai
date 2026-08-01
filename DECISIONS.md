@@ -1,5 +1,30 @@
 # Decisions
 
+## 2026-08-02: Agent composition is domain-neutral; authority remains domain-specific
+
+- Keep the shared closed loop independent of task names: normalize intent,
+  route installed capabilities, apply policy/authorization, plan, execute,
+  verify, and record bounded evidence/Blueprint feedback.
+- Keep Indexer, Blueprint, page inspection, and Core as the default coding
+  preset, not a hardcoded universal stack. Hosts may load arbitrary
+  source-controlled `flyto.agent-stack.v1` profiles or compose
+  `CapabilitySpec` groups in Python.
+- Make `CapabilityManager` a generic `ToolExecutor` so the same process and
+  allowlist boundary can serve `Agent` as well as the coding adapter.
+- Require every manifest-loaded MCP capability to declare a non-empty
+  `allowed_tools` list. Extensibility does not grant a model the server's full
+  discovered catalog.
+- Preserve specialized adapters where proof or harm models differ: coding owns
+  workspace/check evidence, robotics owns safety and human gates, and security
+  campaigns own explicit scope, authorization, expiry, actions, modules, and
+  budgets. New domains add a typed contract, guardrail, executor, verifier,
+  evidence projection, tests, and rollback notes instead of weakening the
+  common boundary.
+
+Rollback is additive: use the built-in coding preset, detach a profile entry,
+or stop loading the manifest. Existing domain adapters and public contracts do
+not depend on a custom profile.
+
 ## 2026-08-02: Full agent composition is tool-allowlisted and detachable
 
 - The provider-neutral `FlytoCodingAgent` remains the owner of the coding loop.

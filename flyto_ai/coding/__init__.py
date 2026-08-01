@@ -24,8 +24,12 @@ from flyto_ai.coding.workspace import WorkspaceTools, WorkspaceViolation
 
 _STACK_EXPORTS = frozenset({
     "AGENT_STACK_CONTRACT_VERSION",
+    "AgentStackManifest",
     "DEFAULT_COMPONENTS",
     "build_agent_stack_capabilities",
+    "compose_capability_stack",
+    "load_agent_stack_manifest",
+    "probe_capability_stack",
     "probe_agent_stack",
 })
 
@@ -39,6 +43,7 @@ def __getattr__(name: str):
 __all__ = [
     "ApprovalPolicy",
     "AGENT_STACK_CONTRACT_VERSION",
+    "AgentStackManifest",
     "CapabilityManager",
     "CapabilitySpec",
     "CapabilityStatus",
@@ -57,6 +62,9 @@ __all__ = [
     "WorkspaceTools",
     "WorkspaceViolation",
     "build_agent_stack_capabilities",
+    "compose_capability_stack",
     "load_project_config",
+    "load_agent_stack_manifest",
+    "probe_capability_stack",
     "probe_agent_stack",
 ]

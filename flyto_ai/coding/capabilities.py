@@ -256,6 +256,11 @@ class CapabilityManager:
         return [definition for session in self.sessions for definition in session.tools]
 
     @property
+    def tools(self) -> List[Dict[str, Any]]:
+        """Expose attached definitions through the generic ToolExecutor contract."""
+        return self.definitions
+
+    @property
     def required_available(self) -> bool:
         return all(status.available for status in self.statuses if status.required)
 

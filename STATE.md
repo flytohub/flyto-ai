@@ -3,6 +3,20 @@
 Last updated: 2026-08-02
 
 Implemented:
+- `flyto.agent-stack.v1` is now a domain-neutral composition boundary rather
+  than a closed four-name catalog. Workspace-local YAML profiles can declare up
+  to 64 arbitrary `CapabilitySpec` adapters, receive a normalized manifest
+  fingerprint, and undergo real MCP preflight. Unknown schema, duplicate names,
+  workspace path escape, oversized input, and MCP entries without a non-empty
+  explicit tool allowlist fail closed. The four-lane coding stack remains a
+  backwards-compatible built-in preset.
+- `CapabilityManager` now implements the generic `ToolExecutor` protocol and
+  can attach a validated profile directly to the ordinary `Agent`. General
+  workflows, coding, robotics planning, and explicitly authorized security
+  campaigns share route → policy/authorization → plan → execute → verify →
+  evidence/Blueprint invariants while retaining their domain-specific safety
+  contracts. This is extensible task support, not a claim of unrestricted or
+  universally successful execution.
 - The additive `flyto.coding.v1` control plane provides a provider-neutral
   native coding loop with workspace-confined tools, crash-safe resumable
   threads, append-only redacted events, required source-controlled subprocess
@@ -143,7 +157,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1302 passed, 15 optional/live-integration skips;
+- full suite: 1306 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

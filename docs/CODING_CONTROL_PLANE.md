@@ -80,10 +80,11 @@ is omitted, the backward-compatible behavior exposes the complete discovered
 catalog. Required tools must be a subset of the allowlist. Optional adapters may
 be removed independently.
 
-## Full composable agent stack
+## Built-in coding preset
 
-The Flyto2 full stack is one control plane with four detachable capability
-processes:
+The built-in Flyto2 coding preset is one control plane with four detachable
+capability processes. It is a useful default, not the universe of supported
+tasks:
 
 ```text
 FlytoCodingAgent (provider-neutral owner)
@@ -131,6 +132,59 @@ request = CodingTaskRequest(
 
 Passing a component subset makes every selected lane required by default. Use
 `required_components` to make a selected lane optional.
+
+## Domain-neutral agent profiles
+
+The same stack contract can compose capabilities for general operations,
+robotics, authorized security work, data workflows, or a future domain without
+adding another component dictionary to `stack.py`. Commit a bounded profile as
+`.flyto/agent-stack.yaml`:
+
+```yaml
+version: flyto.agent-stack.v1
+profile: field-operations
+capabilities:
+  - name: mission-control
+    kind: mcp-stdio
+    argv: [python, -m, example_mission_mcp]
+    contract_version: example.mission.v1
+    protocol_version: 2025-06-18
+    required_tools: [plan, verify]
+    allowed_tools: [observe, plan, execute, verify, safe_stop]
+    required: true
+```
+
+Then preflight the exact source-controlled profile:
+
+```bash
+python -m flyto_ai.coding.stack \
+  --workspace . \
+  --manifest .flyto/agent-stack.yaml \
+  --json
+```
+
+The loader accepts arbitrary safe capability and profile names, up to 64
+capabilities. It rejects unknown fields, duplicate names, manifests outside the
+workspace, oversized input, and MCP capabilities without a non-empty explicit
+`allowed_tools` list. Its normalized manifest fingerprint and the real MCP
+composition fingerprint provide separate evidence for configured intent and
+observed runtime state.
+
+Python hosts can use `load_agent_stack_manifest()`,
+`compose_capability_stack()`, and `probe_capability_stack()` directly.
+`CapabilityManager` implements the generic `ToolExecutor` protocol, so an
+initialized manager can attach to the ordinary `flyto_ai.Agent`; it is not tied
+to `FlytoCodingAgent`. The latter remains the specialized adapter when a task
+needs workspace snapshots, resumable coding threads, real repository checks,
+and bounded repair.
+
+“Domain-neutral” does not mean unguarded universal execution. A production
+domain still supplies its typed action contract, policy and authorization
+checks, executor boundary, verifier, and evidence projection. Flyto2 already
+has specialized adapters for general Agent workflows, coding, robotics
+planning, and explicitly authorized footprint/pentest/red-team campaigns.
+Physical actuation and security actions remain behind their respective safety,
+scope, and human-authorization gates.
 
 Authenticated Flyto2 product adapters opt into runtime variables by name:
 

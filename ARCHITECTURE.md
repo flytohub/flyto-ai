@@ -13,6 +13,27 @@ user/cloud/CLI
   -> blueprint/eval/trace feedback
 ```
 
+The reusable control loop is domain-neutral even though each high-risk domain
+adds its own contract:
+
+```text
+goal / event / sensor input
+  -> flyto.goal-frame.v1 normalization
+  -> manifest and compatibility routing
+  -> policy / scope / authorization gate
+  -> domain planner or Agent tool loop
+  -> flyto-core or explicit domain executor
+  -> domain verification + bounded repair/re-plan
+  -> redacted evidence / trace / trusted Blueprint feedback
+```
+
+`Agent` owns general workflows; `FlytoCodingAgent` adds workspace, thread,
+check, and attributable-change semantics; `RoboticsPlanningService` adds route
+integrity and robot safety planning; `run_security_campaign` adds explicit
+authorization, scope, action, module, and budget ceilings. New domains attach a
+typed adapter at these boundaries instead of adding task-name branches to the
+shared loop.
+
 Key boundaries:
 - Providers never call `flyto-core` directly.
 - Cloud imports `flyto-ai` contracts and dispatchers, not `flyto-core` internals.
@@ -63,14 +84,18 @@ FlytoCodingAgent
   -> source-controlled checks and bounded repair
 ```
 
-`flyto_ai.coding.stack` builds and probes this `flyto.agent-stack.v1`
-composition. Each lane negotiates its real MCP catalog independently and
-exposes only `CapabilitySpec.allowed_tools`; the Blueprint and page-inspection
-lanes may use the same server implementation without sharing model-visible
-authority. Removing one spec detaches that lane without changing the provider,
-workspace tools, checks, or result contract. Page inspection continues to flow
-through `core_tools`; its portable launch policy tries bundled Chromium and
-then system Chrome, records the selected channel, and never bypasses Core.
+`flyto_ai.coding.stack` retains that built-in preset and also loads arbitrary
+source-controlled `flyto.agent-stack.v1` profiles. `compose_capability_stack()`
+has no domain catalog; `CapabilityManager` satisfies the generic
+`ToolExecutor` protocol and can attach the resulting tools to `Agent`. Each
+lane negotiates its real MCP catalog independently and exposes only
+`CapabilitySpec.allowed_tools`; manifest-loaded MCP lanes require an explicit,
+non-empty allowlist. The Blueprint and page-inspection lanes may use the same
+server implementation without sharing model-visible authority. Removing one
+spec detaches that lane without changing the provider, workspace tools, checks,
+or result contract. Page inspection continues to flow through `core_tools`;
+its portable launch policy tries bundled Chromium and then system Chrome,
+records the selected channel, and never bypasses Core.
 
 Optional service composition:
 

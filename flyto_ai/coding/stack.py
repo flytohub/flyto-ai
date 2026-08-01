@@ -293,7 +293,7 @@ async def probe_agent_stack(
     *,
     required_components: Iterable[str] | None = None,
 ) -> dict:
-    """Probe the built-in Flyto preset; callers may detach any preset lane."""
+    """Probe the built-in Flyto2 preset; callers may detach any preset lane."""
     specs = build_agent_stack_capabilities(
         components,
         required_components=required_components,

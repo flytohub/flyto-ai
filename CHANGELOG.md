@@ -6,7 +6,7 @@
   source-controlled domain profile. Arbitrary `CapabilitySpec` groups can now
   be composed and preflighted with configuration and runtime fingerprints;
   invalid schema, duplicate names, workspace escape, and unscoped MCP catalogs
-  fail closed. The existing four Flyto lanes remain the default preset.
+  fail closed. The existing four Flyto2 lanes remain the default preset.
 - Made `CapabilityManager` implement the generic Agent `ToolExecutor` contract
   and documented the shared route → authority → plan → execute → verify →
   evidence loop across general workflows, coding, robotics, and explicitly

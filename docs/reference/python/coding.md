@@ -415,7 +415,7 @@ Negotiate an arbitrary profile and attest its actually exposed tools.
 `async probe_agent_stack(workspace: str, components: Sequence[str] = DEFAULT_COMPONENTS, *, required_components: Iterable[str] | None = None) -> dict`
 Source: [`flyto_ai/coding/stack.py:290`](../../../flyto_ai/coding/stack.py#L290)
 
-Probe the built-in Flyto preset; callers may detach any preset lane.
+Probe the built-in Flyto2 preset; callers may detach any preset lane.
 
 ### `main` (public)
 

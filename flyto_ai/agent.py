@@ -103,6 +103,7 @@ class Agent:
                 logger.warning("Checkpoint store init failed: %s", exc)
         self._system_prompt = system_prompt
         self._policies = policies
+        self._tool_executor = tool_executor
 
         # When a ToolExecutor is provided, derive tools + dispatch from it.
         self._tools, self._dispatch_fn, permission_overrides = _bind_tool_executor(
@@ -178,6 +179,11 @@ class Agent:
     @property
     def dispatch_fn(self):
         return self._dispatch_fn
+
+    @property
+    def tool_executor(self) -> Optional[ToolExecutor]:
+        """Return the injected executor so hosts can inspect its evidence APIs."""
+        return self._tool_executor
 
     @property
     def memory_store(self):
@@ -790,30 +796,64 @@ class Agent:
         else:
             assisted_dispatch = base_dispatch
 
+        async def record_block(
+            func_name: str,
+            func_args: dict,
+            result: dict,
+            policy_code: str,
+        ) -> dict:
+            """Forward outer policy denials to an evidence-aware executor."""
+            recorder = getattr(
+                getattr(self, "_tool_executor", None),
+                "record_policy_denial",
+                None,
+            )
+            if not callable(recorder):
+                return result
+            try:
+                recorded = await recorder(
+                    func_name,
+                    func_args,
+                    result,
+                    policy_code=policy_code,
+                )
+            except Exception:
+                recorded = None
+            if isinstance(recorded, dict):
+                return recorded
+            failed = dict(result)
+            failed["trace_error"] = "outer policy evidence could not be recorded"
+            return failed
+
         async def preflight_blueprint_step(func_args: dict) -> dict:
             """Check static module access before a blueprint starts side effects."""
             decision = enforcer.check_route(
                 "execute_module", func_args, route_mode,
             )
             if not decision.allowed:
-                return {
+                return await record_block("execute_module", func_args, {
                     "ok": False,
                     "error": decision.reason,
                     "policy_outcome": decision.outcome.value,
                     "routing_mode": route_mode,
-                }
+                }, "blueprint_preflight_permission")
             if policies and not is_tool_allowed("execute_module", policies):
-                return {"ok": False, "error": "Tool not allowed: execute_module"}
+                return await record_block(
+                    "execute_module",
+                    func_args,
+                    {"ok": False, "error": "Tool not allowed: execute_module"},
+                    "blueprint_preflight_tool_policy",
+                )
             if policies:
                 module_id = func_args.get("module_id", "")
                 if not is_module_allowed(module_id, policies):
                     category = (
                         module_id.split(".")[0] if "." in module_id else module_id
                     )
-                    return {
+                    return await record_block("execute_module", func_args, {
                         "ok": False,
                         "error": "Module category '{}' is not allowed.".format(category),
-                    }
+                    }, "blueprint_preflight_module_policy")
             return {
                 "ok": True,
                 # Extension hooks remain runtime checks because their decisions
@@ -829,12 +869,12 @@ class Agent:
             decision = enforcer.check_route(func_name, func_args, route_mode)
             if not decision.allowed:
                 self._routing_metrics["tool_calls_blocked"] += 1
-                return {
+                return await record_block(func_name, func_args, {
                     "ok": False,
                     "error": decision.reason,
                     "policy_outcome": decision.outcome.value,
                     "routing_mode": route_mode,
-                }
+                }, "agent_permission")
 
             if func_name == "use_blueprint":
                 blueprint_id = str(func_args.get("blueprint_id", ""))
@@ -848,7 +888,7 @@ class Agent:
                     trusted = resolver(blueprint_id)
                 if not trusted:
                     self._routing_metrics["tool_calls_blocked"] += 1
-                    return {
+                    return await record_block(func_name, func_args, {
                         "ok": False,
                         "error": (
                             "Blueprint blocked: automatic execution requires "
@@ -856,25 +896,40 @@ class Agent:
                         ),
                         "policy_outcome": "block",
                         "routing_mode": route_mode,
-                    }
+                    }, "blueprint_trust")
 
             # Legacy policy enforcement (allowlists)
             if policies and not is_tool_allowed(func_name, policies):
                 self._routing_metrics["tool_calls_blocked"] += 1
-                return {"ok": False, "error": "Tool not allowed: {}".format(func_name)}
+                return await record_block(
+                    func_name,
+                    func_args,
+                    {"ok": False, "error": "Tool not allowed: {}".format(func_name)},
+                    "agent_tool_policy",
+                )
             if policies and func_name == "execute_module":
                 module_id = func_args.get("module_id", "")
                 if not is_module_allowed(module_id, policies):
                     category = module_id.split(".")[0] if "." in module_id else module_id
                     self._routing_metrics["tool_calls_blocked"] += 1
-                    return {"ok": False, "error": "Module category '{}' is not allowed.".format(category)}
+                    return await record_block(
+                        func_name,
+                        func_args,
+                        {"ok": False, "error": "Module category '{}' is not allowed.".format(category)},
+                        "agent_module_policy",
+                    )
 
             # Extension hooks: before_tool_call (deny = short-circuit)
             if hooks:
                 hook_result = await hooks.invoke_before_tool_call(func_name, func_args)
                 if not hook_result.allowed:
                     self._routing_metrics["tool_calls_blocked"] += 1
-                    return {"ok": False, "error": hook_result.reason}
+                    return await record_block(
+                        func_name,
+                        func_args,
+                        {"ok": False, "error": hook_result.reason},
+                        "extension_hook",
+                    )
                 if hook_result.modified_arguments is not None:
                     func_args = hook_result.modified_arguments
 

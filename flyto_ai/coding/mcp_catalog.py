@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -14,6 +15,8 @@ from flyto_ai.coding.mcp_transport import MAX_MCP_MESSAGE_BYTES
 
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
+_REMOTE_TOOL_NAME = re.compile(r"^[^\s\x00-\x1f\x7f]{1,256}$")
+_FAILURE_STATUSES = frozenset({"denied", "error", "failed", "failure", "not_proved"})
 
 
 def provider_tool_name(capability: str, tool_name: str) -> str:
@@ -31,6 +34,8 @@ def mcp_domain_status(result: Any) -> tuple[bool, Optional[str]]:
     """Normalize transport and nested domain status without trusting text prose."""
     if not isinstance(result, dict):
         return False, "capability result must be an object"
+    if "isError" in result and not isinstance(result["isError"], bool):
+        return False, "capability returned an invalid MCP error status"
     if result.get("isError") is True:
         return False, "capability returned an MCP error result"
 
@@ -39,9 +44,16 @@ def mcp_domain_status(result: Any) -> tuple[bool, Optional[str]]:
     if isinstance(structured, dict):
         candidates.append(structured)
     content = result.get("content")
-    if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict):
-        text = content[0].get("text")
-        if isinstance(text, str) and len(text) <= MAX_MCP_MESSAGE_BYTES:
+    if isinstance(content, list) and len(content) <= 64:
+        remaining = MAX_MCP_MESSAGE_BYTES
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and len(text.encode("utf-8")) <= remaining:
+                remaining -= len(text.encode("utf-8"))
+            else:
+                continue
             try:
                 decoded = json.loads(text)
             except json.JSONDecodeError:
@@ -50,7 +62,14 @@ def mcp_domain_status(result: Any) -> tuple[bool, Optional[str]]:
                 candidates.append(decoded)
 
     for candidate in candidates:
-        if candidate.get("ok") is False or candidate.get("status") in {"error", "failed"}:
+        status = candidate.get("status")
+        failed = (
+            candidate.get("ok") is False
+            or candidate.get("success") is False
+            or candidate.get("passed") is False
+            or (isinstance(status, str) and status.lower() in _FAILURE_STATUSES)
+        )
+        if failed:
             error = (
                 candidate.get("error")
                 or candidate.get("message")
@@ -64,10 +83,26 @@ def _raw_catalog(raw_tools: object) -> Dict[str, Dict[str, Any]]:
     if not isinstance(raw_tools, list) or len(raw_tools) > 2000:
         raise RuntimeError("capability returned an invalid tool catalog")
     catalog: Dict[str, Dict[str, Any]] = {}
-    for item in raw_tools:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-            continue
-        catalog.setdefault(item["name"], item)
+    for index, item in enumerate(raw_tools):
+        if not isinstance(item, dict):
+            raise RuntimeError(
+                "capability tool catalog entry {} must be an object".format(index),
+            )
+        name = item.get("name")
+        if not isinstance(name, str) or not _REMOTE_TOOL_NAME.fullmatch(name):
+            raise RuntimeError(
+                "capability tool catalog entry {} has an invalid name".format(index),
+            )
+        if name in catalog:
+            raise RuntimeError("capability tool catalog contains duplicate names")
+        if "description" in item and not isinstance(item["description"], str):
+            raise RuntimeError("capability tool description must be a string")
+        schema = item.get("inputSchema")
+        if not isinstance(schema, dict):
+            raise RuntimeError("capability tool inputSchema must be an object")
+        if "type" in schema and schema["type"] != "object":
+            raise RuntimeError("capability tool inputSchema type must be object")
+        catalog[name] = item
     return catalog
 
 
@@ -99,16 +134,14 @@ def build_mcp_tool_catalog(spec: CapabilitySpec, raw_tools: object) -> McpToolCa
         )
 
     selected_names = set(spec.allowed_tools) if spec.allowed_tools else catalog_names
+    if len(selected_names) > 100:
+        raise RuntimeError("capability scoped tool catalog cannot exceed 100 tools")
     definitions = []
     tool_map = {}
     for remote_name in sorted(selected_names):
         item = catalog[remote_name]
         provider_name = provider_tool_name(spec.name, remote_name)
-        schema = (
-            item.get("inputSchema")
-            if isinstance(item.get("inputSchema"), dict)
-            else {"type": "object", "properties": {}}
-        )
+        schema = deepcopy(item["inputSchema"])
         definitions.append({
             "name": provider_name,
             "description": "[{}] {}".format(

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
+import random
 import sys
 
 import pytest
@@ -113,23 +115,44 @@ def test_catalog_fails_closed_on_shape_required_and_allowed_drift():
     with pytest.raises(RuntimeError, match="invalid tool catalog"):
         build_mcp_tool_catalog(_catalog_spec(), [{}] * 2001)
     with pytest.raises(RuntimeError, match="missing required tools"):
-        build_mcp_tool_catalog(_catalog_spec(), [{"name": "move"}])
+        build_mcp_tool_catalog(
+            _catalog_spec(), [{"name": "move", "inputSchema": {"type": "object"}}],
+        )
     spec = _catalog_spec(required=(), allowed=("observe", "move"))
     with pytest.raises(RuntimeError, match="missing allowed tools"):
-        build_mcp_tool_catalog(spec, [{"name": "observe"}])
+        build_mcp_tool_catalog(
+            spec, [{"name": "observe", "inputSchema": {"type": "object"}}],
+        )
 
 
-def test_catalog_defaults_invalid_schema_and_keeps_first_duplicate_definition():
+def test_catalog_rejects_invalid_schema_duplicate_and_malformed_entries():
     raw = [
         {"name": "observe", "description": "first", "inputSchema": []},
         {"name": "observe", "description": "second", "inputSchema": {"type": "string"}},
         {"invalid": True},
     ]
+    with pytest.raises(RuntimeError, match="inputSchema must be an object"):
+        build_mcp_tool_catalog(_catalog_spec(), raw)
+    duplicate = [
+        {"name": "observe", "inputSchema": {"type": "object"}},
+        {"name": "observe", "inputSchema": {"type": "object"}},
+    ]
+    with pytest.raises(RuntimeError, match="duplicate names"):
+        build_mcp_tool_catalog(_catalog_spec(), duplicate)
+    with pytest.raises(RuntimeError, match="entry 0 has an invalid name"):
+        build_mcp_tool_catalog(_catalog_spec(), [{"name": "bad name", "inputSchema": {}}])
+    with pytest.raises(RuntimeError, match="inputSchema type must be object"):
+        build_mcp_tool_catalog(
+            _catalog_spec(), [{"name": "observe", "inputSchema": {"type": "string"}}],
+        )
+
+
+def test_catalog_definitions_are_detached_from_remote_schema():
+    schema = {"type": "object", "properties": {"value": {"type": "integer"}}}
+    raw = [{"name": "observe", "inputSchema": schema}]
     catalog = build_mcp_tool_catalog(_catalog_spec(), raw)
-    assert catalog.definitions[0]["description"] == "[robot] first"
-    assert catalog.definitions[0]["inputSchema"] == {
-        "type": "object", "properties": {},
-    }
+    schema["properties"]["value"]["type"] = "string"
+    assert catalog.definitions[0]["inputSchema"]["properties"]["value"]["type"] == "integer"
 
 
 def _write_correlated_mcp_server(path):
@@ -172,6 +195,9 @@ async def test_real_session_correlates_responses_and_closes_transport(tmp_path):
     await session.close()
     await session.close()
     assert session.process is None
+    assert session.tools == []
+    assert session.remote_tool_names == []
+    assert session.observed_tool_names == ("observe",)
     with pytest.raises(RuntimeError, match="started once"):
         await session.start()
 
@@ -192,6 +218,8 @@ async def test_session_closes_process_when_catalog_contract_fails(tmp_path):
     with pytest.raises(RuntimeError, match="missing required tools"):
         await session.start()
     assert session.process is None
+    assert session.remote_tool_names == []
+    assert session.observed_tool_names == ("observe",)
 
 
 @pytest.mark.asyncio
@@ -214,3 +242,249 @@ async def test_repeated_real_session_lifecycle_releases_every_subprocess_transpo
     del session
     gc.collect()
     await asyncio.sleep(0)
+
+
+def _write_resilience_mcp_server(path):
+    source = (
+        "import json, sys\n"
+        "pending=[]\n"
+        "for line in sys.stdin:\n"
+        " msg=json.loads(line)\n"
+        " if 'id' not in msg: continue\n"
+        " method=msg.get('method')\n"
+        " if method=='initialize': result={'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'resilience','version':'1'}}\n"
+        " elif method=='tools/list': result={'tools':[{'name':'observe','inputSchema':{'type':'object'}}]}\n"
+        " elif method=='tools/call':\n"
+        "  args=msg['params'].get('arguments',{})\n"
+        "  if args.get('hold'): continue\n"
+        "  if args.get('reverse'):\n"
+        "   pending.append(msg)\n"
+        "   if len(pending)<2: continue\n"
+        "   for item in reversed(pending): print(json.dumps({'jsonrpc':'2.0','id':item['id'],'result':{'structuredContent':{'ok':True,'value':item['params']['arguments']['value']}}}),flush=True)\n"
+        "   pending=[]\n"
+        "   continue\n"
+        "  result={'structuredContent':{'ok':True,'value':args.get('value')}}\n"
+        " else: result={}\n"
+        " print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':result}),flush=True)\n"
+    )
+    path.write_text(source)
+
+
+@pytest.mark.asyncio
+async def test_transport_correlates_out_of_order_concurrent_responses(tmp_path):
+    server = tmp_path / "resilience_server.py"
+    _write_resilience_mcp_server(server)
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic",
+            argv=(sys.executable, str(server)),
+            required_tools=("observe",),
+            allowed_tools=("observe",),
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    first, second = await asyncio.gather(
+        session.dispatch("cap_atomic_observe", {"reverse": True, "value": 1}),
+        session.dispatch("cap_atomic_observe", {"reverse": True, "value": 2}),
+    )
+    assert first["result"]["structuredContent"]["value"] == 1
+    assert second["result"]["structuredContent"]["value"] == 2
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_does_not_poison_later_dispatch(tmp_path):
+    server = tmp_path / "resilience_server.py"
+    _write_resilience_mcp_server(server)
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic",
+            argv=(sys.executable, str(server)),
+            required_tools=("observe",),
+            allowed_tools=("observe",),
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    held = asyncio.create_task(
+        session.dispatch("cap_atomic_observe", {"hold": True}),
+    )
+    await asyncio.sleep(0.02)
+    held.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await held
+    result = await session.dispatch("cap_atomic_observe", {"value": 9})
+    assert result["result"]["structuredContent"]["value"] == 9
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_request_does_not_poison_later_dispatch(tmp_path):
+    server = tmp_path / "resilience_server.py"
+    _write_resilience_mcp_server(server)
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic",
+            argv=(sys.executable, str(server)),
+            required_tools=("observe",),
+            allowed_tools=("observe",),
+            timeout_seconds=1,
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    with pytest.raises(RuntimeError, match="request timed out"):
+        await session.dispatch("cap_atomic_observe", {"hold": True})
+    result = await session.dispatch("cap_atomic_observe", {"value": 11})
+    assert result["result"]["structuredContent"]["value"] == 11
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_concurrent_dispatch_soak_preserves_every_result(tmp_path):
+    server = tmp_path / "resilience_server.py"
+    _write_resilience_mcp_server(server)
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic",
+            argv=(sys.executable, str(server)),
+            required_tools=("observe",),
+            allowed_tools=("observe",),
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    results = await asyncio.gather(*(
+        session.dispatch("cap_atomic_observe", {"value": index})
+        for index in range(256)
+    ))
+    assert [item["result"]["structuredContent"]["value"] for item in results] == list(
+        range(256),
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_transport_fails_all_pending_calls_when_child_crashes(tmp_path):
+    server = tmp_path / "crash_server.py"
+    server.write_text(
+        "import json, os, sys\n"
+        "for line in sys.stdin:\n"
+        " msg=json.loads(line)\n"
+        " if 'id' not in msg: continue\n"
+        " if msg.get('method')=='initialize': result={'protocolVersion':'2025-06-18','serverInfo':{}}\n"
+        " elif msg.get('method')=='tools/list': result={'tools':[{'name':'observe','inputSchema':{'type':'object'}}]}\n"
+        " else: os._exit(7)\n"
+        " print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':result}),flush=True)\n"
+    )
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic", argv=(sys.executable, str(server)),
+            required_tools=("observe",), allowed_tools=("observe",),
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    calls = [
+        asyncio.create_task(session.dispatch("cap_atomic_observe", {"value": index}))
+        for index in range(8)
+    ]
+    results = await asyncio.gather(*calls, return_exceptions=True)
+    assert all(isinstance(result, RuntimeError) for result in results)
+    assert all("closed" in str(result) for result in results)
+    await session.close()
+
+
+def _write_invalid_wire_server(path, call_source):
+    path.write_text(
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        " msg=json.loads(line)\n"
+        " if 'id' not in msg: continue\n"
+        " if msg.get('method')=='initialize': result={'protocolVersion':'2025-06-18','serverInfo':{}}\n"
+        " elif msg.get('method')=='tools/list': result={'tools':[{'name':'observe','inputSchema':{'type':'object'}}]}\n"
+        f" else: {call_source}\n"
+        " if msg.get('method')!='tools/call': print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':result}),flush=True)\n"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_source", "message"),
+    [
+        ("print('{broken',flush=True)", "invalid JSON"),
+        (
+            "print(json.dumps({'jsonrpc':'1.0','id':msg['id'],'result':{}}),flush=True)",
+            "invalid JSON-RPC version",
+        ),
+        (
+            "print(json.dumps({'jsonrpc':'2.0','id':'wrong','result':{}}),flush=True)",
+            "invalid response id",
+        ),
+        (
+            "print('x'*(1024*1024+1),flush=True)",
+            "response exceeds the message limit",
+        ),
+    ],
+)
+async def test_real_transport_rejects_malformed_wire_responses(
+    tmp_path, call_source, message,
+):
+    server = tmp_path / "invalid_wire_server.py"
+    _write_invalid_wire_server(server, call_source)
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic",
+            argv=(sys.executable, str(server)),
+            required_tools=("observe",),
+            allowed_tools=("observe",),
+            timeout_seconds=2,
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    with pytest.raises(RuntimeError, match=message):
+        await session.dispatch("cap_atomic_observe", {})
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_stderr_drain_remains_live_beyond_message_limit(tmp_path):
+    server = tmp_path / "stderr_server.py"
+    _write_invalid_wire_server(
+        server,
+        "sys.stderr.write('x'*(1024*1024+8192)); sys.stderr.flush(); "
+        "print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{'structuredContent':{'ok':True}}}),flush=True)",
+    )
+    session = McpStdioSession(
+        CapabilitySpec(
+            name="atomic",
+            argv=(sys.executable, str(server)),
+            required_tools=("observe",),
+            allowed_tools=("observe",),
+            timeout_seconds=5,
+        ),
+        str(tmp_path),
+    )
+    await session.start()
+    assert (await session.dispatch("cap_atomic_observe", {}))["ok"] is True
+    assert (await session.dispatch("cap_atomic_observe", {}))["ok"] is True
+    await session.close()
+
+
+def test_wire_codec_bounded_property_matrix_is_deterministic():
+    rng = random.Random(20260802)
+    for request_id in range(256):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "params": {
+                "integer": rng.randint(-(2**31), 2**31 - 1),
+                "flag": bool(rng.getrandbits(1)),
+                "text": "".join(chr(32 + rng.randrange(95)) for _ in range(rng.randrange(128))),
+                "items": [rng.randrange(1000) for _ in range(rng.randrange(12))],
+            },
+        }
+        assert decode_mcp_message(encode_mcp_message(payload)) == payload
+        assert json.loads(encode_mcp_message(payload)) == payload

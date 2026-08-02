@@ -7,6 +7,11 @@ from importlib import import_module
 from flyto_ai.coding.agent import FlytoCodingAgent
 from flyto_ai.coding.capabilities import CapabilityManager, McpStdioSession
 from flyto_ai.coding.checks import CheckRunner, load_project_config
+from flyto_ai.coding.conformance import (
+    AdapterConformanceCase,
+    AdapterConformanceReport,
+    run_adapter_conformance,
+)
 from flyto_ai.coding.contracts import (
     CONFIG_VERSION,
     CONTRACT_VERSION,
@@ -21,6 +26,23 @@ from flyto_ai.coding.contracts import (
     SandboxMode,
 )
 from flyto_ai.coding.store import ThreadStore
+from flyto_ai.coding.execution_policy import (
+    ApprovalDecision,
+    ApprovalRequest,
+    ExecutionLimits,
+    ExecutionPolicy,
+    ExecutionPolicyController,
+)
+from flyto_ai.coding.execution_trace import (
+    ExecutionReplayReport,
+    ExecutionTraceLedger,
+    OutcomeFeedbackReceipt,
+)
+from flyto_ai.coding.scenario_matrix import (
+    AdapterScenario,
+    ScenarioMatrixReport,
+    run_scenario_matrix,
+)
 from flyto_ai.coding.workspace import WorkspaceTools, WorkspaceViolation
 
 _STACK_EXPORTS = frozenset({
@@ -44,7 +66,12 @@ def __getattr__(name: str):
     raise AttributeError("module {!r} has no attribute {!r}".format(__name__, name))
 
 __all__ = [
+    "AdapterConformanceCase",
+    "AdapterConformanceReport",
+    "AdapterScenario",
     "ApprovalPolicy",
+    "ApprovalDecision",
+    "ApprovalRequest",
     "AGENT_STACK_CONTRACT_VERSION",
     "AGENT_STACK_POLICY_VERSION",
     "AgentStackManifest",
@@ -59,9 +86,16 @@ __all__ = [
     "CONFIG_VERSION",
     "CONTRACT_VERSION",
     "DEFAULT_COMPONENTS",
+    "ExecutionLimits",
+    "ExecutionPolicy",
+    "ExecutionPolicyController",
+    "ExecutionReplayReport",
+    "ExecutionTraceLedger",
     "FlytoCodingAgent",
     "McpStdioSession",
+    "OutcomeFeedbackReceipt",
     "SandboxMode",
+    "ScenarioMatrixReport",
     "SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS",
     "ThreadStore",
     "TOOL_PERMISSION_LEVELS",
@@ -73,4 +107,6 @@ __all__ = [
     "load_agent_stack_manifest",
     "probe_capability_stack",
     "probe_agent_stack",
+    "run_adapter_conformance",
+    "run_scenario_matrix",
 ]

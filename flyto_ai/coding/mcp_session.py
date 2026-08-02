@@ -3,7 +3,7 @@
 """MCP negotiation and tool-call orchestration over atomic transport/catalog."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flyto_ai.coding.contracts import CapabilitySpec
 from flyto_ai.coding.mcp_catalog import (
@@ -24,9 +24,12 @@ class McpStdioSession:
         self.transport = McpJsonRpcTransport(spec, workspace)
         self.tools: List[Dict[str, Any]] = []
         self.remote_tool_names: List[str] = []
+        self.observed_tool_names: Tuple[str, ...] = ()
         self.negotiated_protocol_version = ""
         self.server_name = ""
         self._tool_map: Dict[str, str] = {}
+        self._started = False
+        self._closed = False
 
     @property
     def process(self):
@@ -34,6 +37,9 @@ class McpStdioSession:
         return self.transport.process
 
     async def start(self) -> None:
+        if self._started or self._closed:
+            raise RuntimeError("capability session can only be started once")
+        self._started = True
         await self.transport.start()
         try:
             initialized = await self.transport.request("initialize", {
@@ -50,12 +56,17 @@ class McpStdioSession:
                 )
             self.negotiated_protocol_version = str(negotiated)
             server_info = initialized.get("serverInfo", {})
-            if isinstance(server_info, dict) and isinstance(server_info.get("name"), str):
-                self.server_name = server_info["name"][:128]
+            if not isinstance(server_info, dict):
+                raise RuntimeError("capability returned invalid serverInfo")
+            server_name = server_info.get("name", "")
+            if not isinstance(server_name, str):
+                raise RuntimeError("capability returned invalid server name")
+            self.server_name = server_name[:128]
             await self.transport.notify("notifications/initialized", {})
             listed = await self.transport.request("tools/list", {})
             raw_tools = listed.get("tools", []) if isinstance(listed, dict) else []
             self.remote_tool_names = list(catalog_tool_names(raw_tools))
+            self.observed_tool_names = tuple(self.remote_tool_names)
             catalog = build_mcp_tool_catalog(self.spec, raw_tools)
         except Exception:
             await self.close()
@@ -63,8 +74,13 @@ class McpStdioSession:
         self.tools = [dict(definition) for definition in catalog.definitions]
         self._tool_map = dict(catalog.tool_map)
         self.remote_tool_names = list(catalog.remote_names)
+        self.observed_tool_names = tuple(catalog.remote_names)
 
     async def dispatch(self, provider_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._started or self._closed:
+            return {"ok": False, "error": "capability session is not running"}
+        if not isinstance(arguments, dict):
+            return {"ok": False, "error": "capability arguments must be an object"}
         remote_name = self._tool_map.get(provider_name)
         if not remote_name:
             return {"ok": False, "error": "unknown capability tool"}
@@ -87,4 +103,10 @@ class McpStdioSession:
         return self._tool_map.get(provider_name)
 
     async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         await self.transport.close()
+        self.tools = []
+        self.remote_tool_names = []
+        self._tool_map.clear()

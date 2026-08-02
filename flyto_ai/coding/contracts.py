@@ -18,6 +18,36 @@ _PASSTHROUGH_ENV_RE = re.compile(r"^FLYTO_[A-Z0-9_]{1,120}$")
 TOOL_PERMISSION_LEVELS = frozenset({"read_only", "workspace_write", "danger_full"})
 
 
+def _mapping_string(
+    value: Mapping[str, Any], field_name: str, default: str,
+) -> str:
+    """Read one string field without converting numbers, booleans, or nulls."""
+    result = value.get(field_name, default)
+    if not isinstance(result, str):
+        raise ValueError("{} must be a string".format(field_name))
+    return result
+
+
+def _mapping_bool(
+    value: Mapping[str, Any], field_name: str, default: bool,
+) -> bool:
+    """Read one boolean field without Python truthiness coercion."""
+    result = value.get(field_name, default)
+    if not isinstance(result, bool):
+        raise ValueError("{} must be a boolean".format(field_name))
+    return result
+
+
+def _mapping_int(
+    value: Mapping[str, Any], field_name: str, default: int,
+) -> int:
+    """Read one integer field while rejecting booleans and string numerals."""
+    result = value.get(field_name, default)
+    if isinstance(result, bool) or not isinstance(result, int):
+        raise ValueError("{} must be an integer".format(field_name))
+    return result
+
+
 def _require_string_array(value: Any, field_name: str) -> Tuple[str, ...]:
     """Normalize one JSON/YAML string array without coercing unsafe values."""
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
@@ -118,20 +148,28 @@ class CheckSpec:
     required: bool = True
 
     def __post_init__(self) -> None:
-        if not _NAME_RE.fullmatch(self.name):
+        if not isinstance(self.name, str) or not _NAME_RE.fullmatch(self.name):
             raise ValueError("check name must be a safe identifier")
         _validate_argv(self.argv, "check argv")
+        if isinstance(self.timeout_seconds, bool) or not isinstance(
+            self.timeout_seconds, int,
+        ):
+            raise ValueError("check timeout_seconds must be an integer")
         if not 1 <= self.timeout_seconds <= 900:
             raise ValueError("check timeout_seconds must be between 1 and 900")
+        if not isinstance(self.required, bool):
+            raise ValueError("check required must be a boolean")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "CheckSpec":
+        if not isinstance(value, Mapping):
+            raise ValueError("check must be a JSON/YAML object")
         argv = _require_string_array(value.get("argv"), "check argv")
         return cls(
-            name=str(value.get("name", "")),
+            name=_mapping_string(value, "name", ""),
             argv=argv,
-            timeout_seconds=int(value.get("timeout_seconds", 120)),
-            required=bool(value.get("required", True)),
+            timeout_seconds=_mapping_int(value, "timeout_seconds", 120),
+            required=_mapping_bool(value, "required", True),
         )
 
 
@@ -152,11 +190,11 @@ class CapabilitySpec:
     timeout_seconds: int = 10
 
     def __post_init__(self) -> None:
-        if not _NAME_RE.fullmatch(self.name):
+        if not isinstance(self.name, str) or not _NAME_RE.fullmatch(self.name):
             raise ValueError("capability name must be a safe identifier")
         if not isinstance(self.required, bool):
             raise ValueError("capability required must be a boolean")
-        if self.kind not in {"mcp-stdio", "command"}:
+        if not isinstance(self.kind, str) or self.kind not in {"mcp-stdio", "command"}:
             raise ValueError("capability kind must be mcp-stdio or command")
         _validate_argv(self.argv, "capability argv")
         if not isinstance(self.contract_version, str):
@@ -185,6 +223,8 @@ class CapabilitySpec:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "CapabilitySpec":
+        if not isinstance(value, Mapping):
+            raise ValueError("capability must be a JSON/YAML object")
         argv = _require_string_array(value.get("argv"), "capability argv")
         required_tools = _require_string_array(
             value.get("required_tools", ()), "capability required_tools",
@@ -197,17 +237,19 @@ class CapabilitySpec:
             value.get("env_passthrough", ()), "capability env_passthrough",
         )
         return cls(
-            name=str(value.get("name", "")),
+            name=_mapping_string(value, "name", ""),
             argv=argv,
-            required=bool(value.get("required", False)),
-            kind=str(value.get("kind", "mcp-stdio")),
-            contract_version=str(value.get("contract_version", "")),
-            protocol_version=str(value.get("protocol_version", "2025-06-18")),
+            required=_mapping_bool(value, "required", False),
+            kind=_mapping_string(value, "kind", "mcp-stdio"),
+            contract_version=_mapping_string(value, "contract_version", ""),
+            protocol_version=_mapping_string(
+                value, "protocol_version", "2025-06-18",
+            ),
             required_tools=required_tools,
             allowed_tools=allowed_tools,
             tool_permissions=tool_permissions,
             env_passthrough=env_passthrough,
-            timeout_seconds=int(value.get("timeout_seconds", 10)),
+            timeout_seconds=_mapping_int(value, "timeout_seconds", 10),
         )
 
 

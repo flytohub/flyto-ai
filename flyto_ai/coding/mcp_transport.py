@@ -15,6 +15,7 @@ from flyto_ai.coding.contracts import CapabilitySpec
 
 
 MAX_MCP_MESSAGE_BYTES = 1024 * 1024
+MAX_MCP_INFLIGHT_REQUESTS = 32
 
 
 def encode_mcp_message(payload: Dict[str, Any]) -> bytes:
@@ -97,16 +98,21 @@ async def _wait_for_process_exit(process: asyncio.subprocess.Process) -> None:
 
 
 class McpJsonRpcTransport:
-    """One-shot isolated MCP process with correlated request/response framing."""
+    """One-shot MCP process with bounded concurrent request correlation."""
 
     def __init__(self, spec: CapabilitySpec, workspace: str) -> None:
         self.spec = spec
         self.workspace = str(Path(workspace).resolve())
         self.process: Optional[asyncio.subprocess.Process] = None
         self._request_id = 0
+        self._pending: Dict[int, asyncio.Future[Dict[str, Any]]] = {}
+        self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
         self._runtime_home: Optional[tempfile.TemporaryDirectory] = None
+        self._write_lock: Optional[asyncio.Lock] = None
+        self._inflight: Optional[asyncio.Semaphore] = None
         self._started = False
+        self._closing = False
 
     async def start(self) -> None:
         if self._started:
@@ -126,45 +132,65 @@ class McpJsonRpcTransport:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=MAX_MCP_MESSAGE_BYTES + 1,
             )
         except Exception:
             self._runtime_home.cleanup()
             self._runtime_home = None
             raise
+        self._write_lock = asyncio.Lock()
+        self._inflight = asyncio.Semaphore(MAX_MCP_INFLIGHT_REQUESTS)
+        self._reader_task = asyncio.create_task(self._read_responses())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
 
     async def request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Send one request and ignore unrelated notifications/responses."""
-        self._request_id += 1
-        request_id = self._request_id
-        await self._send({
-            "jsonrpc": "2.0", "id": request_id, "method": method, "params": params,
-        })
-        deadline = asyncio.get_running_loop().time() + self.spec.timeout_seconds
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise RuntimeError("capability request timed out")
-            message = await asyncio.wait_for(self._read(), timeout=remaining)
-            if message.get("id") != request_id:
-                continue
-            if "error" in message:
-                raise RuntimeError(
-                    "capability request failed: {}".format(str(message["error"])[:1000]),
-                )
-            result = message.get("result", {})
-            if not isinstance(result, dict):
-                raise RuntimeError("capability result must be an object")
-            return result
+        """Send one bounded request and await only its correlated response."""
+        self._validate_call(method, params)
+        if not self.process or not self._inflight or not self._reader_task:
+            raise RuntimeError("capability is not running")
+        async with self._inflight:
+            self._request_id += 1
+            request_id = self._request_id
+            future = asyncio.get_running_loop().create_future()
+            self._pending[request_id] = future
+            try:
+                await self._send({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": method,
+                    "params": params,
+                })
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(future), timeout=self.spec.timeout_seconds,
+                    )
+                except asyncio.TimeoutError as exc:
+                    await self._notify_cancelled(request_id, "request timed out")
+                    raise RuntimeError("capability request timed out") from exc
+                except asyncio.CancelledError:
+                    await self._notify_cancelled(request_id, "caller cancelled")
+                    raise
+            finally:
+                self._pending.pop(request_id, None)
+                if not future.done():
+                    future.cancel()
 
     async def notify(self, method: str, params: Dict[str, Any]) -> None:
+        self._validate_call(method, params)
         await self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     async def close(self) -> None:
+        self._closing = True
+        self._fail_pending(RuntimeError("capability transport closed"))
         process, self.process = self.process, None
         if process:
             await _close_process_stdin(process)
             await _wait_for_process_exit(process)
+        if self._reader_task:
+            if not self._reader_task.done():
+                self._reader_task.cancel()
+            await asyncio.gather(self._reader_task, return_exceptions=True)
+            self._reader_task = None
         if self._stderr_task:
             self._stderr_task.cancel()
             await asyncio.gather(self._stderr_task, return_exceptions=True)
@@ -173,26 +199,91 @@ class McpJsonRpcTransport:
             self._runtime_home.cleanup()
             self._runtime_home = None
 
+    @staticmethod
+    def _validate_call(method: str, params: Dict[str, Any]) -> None:
+        if not isinstance(method, str) or not method or len(method) > 256:
+            raise ValueError("capability method must be a bounded string")
+        if not isinstance(params, dict):
+            raise ValueError("capability params must be an object")
+
     async def _send(self, payload: Dict[str, Any]) -> None:
-        if not self.process or not self.process.stdin:
+        if self._closing or not self.process or not self.process.stdin:
             raise RuntimeError("capability is not running")
-        self.process.stdin.write(encode_mcp_message(payload))
-        await self.process.stdin.drain()
+        if not self._write_lock:
+            raise RuntimeError("capability transport is not initialized")
+        try:
+            async with self._write_lock:
+                self.process.stdin.write(encode_mcp_message(payload))
+                await self.process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            raise RuntimeError("capability closed stdin") from exc
 
     async def _read(self) -> Dict[str, Any]:
         if not self.process or not self.process.stdout:
             raise RuntimeError("capability is not running")
-        raw = await self.process.stdout.readline()
+        try:
+            raw = await self.process.stdout.readline()
+        except ValueError as exc:
+            raise RuntimeError("capability response exceeds the message limit") from exc
         if not raw:
             raise RuntimeError("capability closed stdout")
         return decode_mcp_message(raw)
 
+    async def _read_responses(self) -> None:
+        """Own stdout exclusively and route each response to one pending call."""
+        try:
+            while True:
+                message = await self._read()
+                if message.get("jsonrpc") != "2.0":
+                    raise RuntimeError("capability returned an invalid JSON-RPC version")
+                if "id" not in message:
+                    continue
+                response_id = message["id"]
+                if isinstance(response_id, bool) or not isinstance(response_id, int):
+                    raise RuntimeError("capability returned an invalid response id")
+                future = self._pending.get(response_id)
+                if future is None or future.done():
+                    continue
+                if "error" in message:
+                    future.set_exception(RuntimeError(
+                        "capability request failed: {}".format(
+                            str(message["error"])[:1000],
+                        ),
+                    ))
+                    continue
+                result = message.get("result", {})
+                if not isinstance(result, dict):
+                    future.set_exception(
+                        RuntimeError("capability result must be an object"),
+                    )
+                    continue
+                future.set_result(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if not self._closing:
+                self._fail_pending(exc)
+
+    async def _notify_cancelled(self, request_id: int, reason: str) -> None:
+        """Best-effort MCP cancellation; local pending state remains authoritative."""
+        try:
+            await self.notify(
+                "notifications/cancelled",
+                {"requestId": request_id, "reason": reason},
+            )
+        except (RuntimeError, ValueError):
+            pass
+
+    def _fail_pending(self, error: Exception) -> None:
+        """Fail every active request exactly once after transport loss/closure."""
+        for future in tuple(self._pending.values()):
+            if not future.done():
+                future.set_exception(error)
+
     async def _drain_stderr(self) -> None:
         if not self.process or not self.process.stderr:
             return
-        total = 0
-        while total < MAX_MCP_MESSAGE_BYTES:
+        while True:
             chunk = await self.process.stderr.read(4096)
             if not chunk:
                 return
-            total += len(chunk)

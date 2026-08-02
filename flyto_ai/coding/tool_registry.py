@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Protocol
 
 from flyto_ai.coding.contracts import CapabilitySpec
@@ -21,6 +22,24 @@ class CapabilityToolSession(Protocol):
     async def dispatch(
         self, provider_name: str, arguments: Dict[str, Any],
     ) -> Dict[str, Any]: ...
+
+
+def _freeze_definition(value: Any) -> Any:
+    """Recursively freeze negotiated JSON metadata stored by the registry."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_definition(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_definition(item) for item in value)
+    return deepcopy(value)
+
+
+def _thaw_definition(value: Any) -> Any:
+    """Return a detached JSON-shaped copy for provider-facing definitions."""
+    if isinstance(value, Mapping):
+        return {key: _thaw_definition(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_definition(item) for item in value]
+    return deepcopy(value)
 
 
 @dataclass(frozen=True)
@@ -42,7 +61,7 @@ class CapabilityToolRegistry:
 
     @property
     def definitions(self) -> List[Dict[str, Any]]:
-        return [deepcopy(dict(entry.definition)) for entry in self._entries.values()]
+        return [_thaw_definition(entry.definition) for entry in self._entries.values()]
 
     @property
     def permission_overrides(self) -> Dict[str, PermissionLevel]:
@@ -68,6 +87,8 @@ class CapabilityToolRegistry:
             remote_name = session.remote_tool_name(provider_name)
             if remote_name is None:
                 raise RuntimeError("capability tool mapping is incomplete")
+            if not isinstance(definition.get("inputSchema"), Mapping):
+                raise RuntimeError("capability tool definition has no input schema")
             if provider_name in self._entries or provider_name in pending:
                 raise RuntimeError(
                     "capability provider tool name collision: {}".format(provider_name),
@@ -81,7 +102,7 @@ class CapabilityToolRegistry:
                 provider_name=provider_name,
                 remote_name=remote_name,
                 required_level=required_level,
-                definition=deepcopy(dict(definition)),
+                definition=_freeze_definition(definition),
                 session=session,
             )
         self._entries.update(pending)

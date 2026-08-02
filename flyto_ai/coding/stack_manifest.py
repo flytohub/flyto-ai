@@ -23,6 +23,8 @@ SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS = frozenset({
     AGENT_STACK_POLICY_VERSION,
 })
 MAX_AGENT_STACK_MANIFEST_BYTES = 256 * 1024
+MAX_AGENT_STACK_MANIFEST_DEPTH = 16
+MAX_AGENT_STACK_MANIFEST_NODES = 10_000
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _MANIFEST_KEYS = frozenset({"version", "profile", "capabilities"})
 _CAPABILITY_KEYS = frozenset({field.name for field in dataclasses.fields(CapabilitySpec)})
@@ -143,8 +145,9 @@ def _decode_manifest_file(path: Path) -> Mapping:
         raise ValueError("agent stack manifest exceeds the 256 KiB limit")
     try:
         value = yaml.safe_load(raw.decode("utf-8"))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+    except (RecursionError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise ValueError("agent stack manifest is not valid UTF-8 YAML") from exc
+    _validate_manifest_shape(value)
     if not isinstance(value, Mapping):
         raise ValueError("agent stack manifest must be a YAML object")
     unknown = set(value) - _MANIFEST_KEYS
@@ -153,6 +156,38 @@ def _decode_manifest_file(path: Path) -> Mapping:
             ", ".join(sorted(unknown)),
         ))
     return value
+
+
+def _validate_manifest_shape(value: object) -> None:
+    """Reject cyclic aliases and bound decoded YAML depth/node amplification."""
+    nodes = 0
+    active: set[int] = set()
+
+    def walk(node: object, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > MAX_AGENT_STACK_MANIFEST_NODES:
+            raise ValueError("agent stack manifest exceeds the decoded node limit")
+        if depth > MAX_AGENT_STACK_MANIFEST_DEPTH:
+            raise ValueError("agent stack manifest exceeds the nesting depth limit")
+        if not isinstance(node, (Mapping, list, tuple)):
+            return
+        identity = id(node)
+        if identity in active:
+            raise ValueError("agent stack manifest contains a cyclic YAML alias")
+        active.add(identity)
+        try:
+            if isinstance(node, Mapping):
+                for key, item in node.items():
+                    walk(key, depth + 1)
+                    walk(item, depth + 1)
+            else:
+                for item in node:
+                    walk(item, depth + 1)
+        finally:
+            active.remove(identity)
+
+    walk(value, 0)
 
 
 def _manifest_header(value: Mapping) -> Tuple[str, str]:

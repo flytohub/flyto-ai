@@ -10,6 +10,7 @@ from flyto_ai.coding import stack as facade
 from flyto_ai.coding.stack_manifest import (
     AGENT_STACK_CONTRACT_VERSION,
     AGENT_STACK_POLICY_VERSION,
+    MAX_AGENT_STACK_MANIFEST_DEPTH,
     AgentStackManifest,
     canonical_manifest_fingerprint,
     compose_capability_stack,
@@ -89,6 +90,48 @@ def test_manifest_fingerprint_is_format_independent_for_same_normalized_contract
     )
     assert first == second
     assert len(first) == 64
+
+
+def test_manifest_decoder_rejects_deep_and_cyclic_yaml_shapes(tmp_path):
+    deep = tmp_path / "deep.yaml"
+    deep.write_text(
+        "version: flyto.agent-stack.v1\nprofile: deep\ncapabilities: "
+        + "[" * (MAX_AGENT_STACK_MANIFEST_DEPTH + 2)
+        + "{}"
+        + "]" * (MAX_AGENT_STACK_MANIFEST_DEPTH + 2)
+        + "\n",
+    )
+    with pytest.raises(ValueError, match="nesting depth"):
+        load_agent_stack_manifest(str(tmp_path), deep.name)
+
+    cyclic = tmp_path / "cyclic.yaml"
+    cyclic.write_text(
+        "version: flyto.agent-stack.v1\n"
+        "profile: cyclic\n"
+        "capabilities: &capabilities\n"
+        "  - *capabilities\n",
+    )
+    with pytest.raises(ValueError, match="cyclic YAML alias"):
+        load_agent_stack_manifest(str(tmp_path), cyclic.name)
+
+
+def test_manifest_decoder_bounds_alias_node_amplification(tmp_path):
+    tools = ", ".join("tool{}".format(index) for index in range(200))
+    aliases = "\n".join("  - *capability" for _index in range(63))
+    manifest = tmp_path / "aliases.yaml"
+    manifest.write_text(
+        "version: flyto.agent-stack.v1\n"
+        "profile: aliases\n"
+        "capabilities:\n"
+        "  - &capability\n"
+        "    name: adapter\n"
+        "    argv: [adapter]\n"
+        "    allowed_tools: [{}]\n".format(tools)
+        + aliases
+        + "\n",
+    )
+    with pytest.raises(ValueError, match="decoded node limit"):
+        load_agent_stack_manifest(str(tmp_path), manifest.name)
 
 
 def test_preset_atom_keeps_each_lane_detachable_and_exhaustively_classified():

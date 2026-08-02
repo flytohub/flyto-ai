@@ -11,7 +11,7 @@ import pytest
 
 from flyto_ai.agent import Agent
 from flyto_ai.coding.capabilities import CapabilityManager
-from flyto_ai.coding.contracts import CapabilitySpec
+from flyto_ai.coding.contracts import CapabilitySpec, CheckSpec
 from flyto_ai.coding.stack import (
     AGENT_STACK_CONTRACT_VERSION,
     AGENT_STACK_POLICY_VERSION,
@@ -111,6 +111,41 @@ def test_capability_mapping_rejects_non_string_boundary_values(override, message
     value.update(override)
     with pytest.raises(ValueError, match=message):
         CapabilitySpec.from_mapping(value)
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"name": 7}, "name must be a string"),
+        ({"required": 1}, "required must be a boolean"),
+        ({"kind": True}, "kind must be a string"),
+        ({"contract_version": 1}, "contract_version must be a string"),
+        ({"protocol_version": None}, "protocol_version must be a string"),
+        ({"timeout_seconds": "10"}, "timeout_seconds must be an integer"),
+        ({"timeout_seconds": True}, "timeout_seconds must be an integer"),
+    ],
+)
+def test_capability_mapping_rejects_scalar_coercion(override, message):
+    value = {"name": "boundary", "argv": ["runner"]}
+    value.update(override)
+    with pytest.raises(ValueError, match=message):
+        CapabilitySpec.from_mapping(value)
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"name": 7}, "name must be a string"),
+        ({"required": 1}, "required must be a boolean"),
+        ({"timeout_seconds": "120"}, "timeout_seconds must be an integer"),
+        ({"timeout_seconds": False}, "timeout_seconds must be an integer"),
+    ],
+)
+def test_check_mapping_rejects_scalar_coercion(override, message):
+    value = {"name": "lint", "argv": ["ruff", "check", "."]}
+    value.update(override)
+    with pytest.raises(ValueError, match=message):
+        CheckSpec.from_mapping(value)
 
 
 @pytest.mark.parametrize(

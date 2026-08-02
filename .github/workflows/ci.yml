@@ -39,6 +39,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Provision deterministic command runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
+          sandbox_image="python@sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464"
+          docker pull "$sandbox_image"
+          docker tag "$sandbox_image" python:3.12-slim
       - name: Install package
         run: |
           python -m pip install --upgrade pip build

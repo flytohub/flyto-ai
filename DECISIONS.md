@@ -38,6 +38,11 @@
   dependency commit beside `flyto-ai` and installs it explicitly. Local sibling
   availability must not hide a missing CI dependency, and an unpinned moving
   Blueprint branch must not change the proof after a `flyto-ai` commit lands.
+- Clean-runner command tests provision ripgrep explicitly and load the Python
+  sandbox image from an immutable linux/amd64 digest before assigning the
+  runtime-compatible `python:3.12-slim` tag. CI must exercise the real
+  fail-closed OS sandbox instead of silently skipping it or depending on a
+  mutable preloaded runner image.
 
 Rollback is layered: detach the policy controller, trace sink, or conformance
 runner independently while preserving the existing facade and profile

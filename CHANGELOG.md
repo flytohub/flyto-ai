@@ -12,6 +12,8 @@
   failure projection.
   Clean-runner CI now installs a pinned sibling Blueprint benchmark fixture
   before the full Python 3.10/3.12 suite.
+  It also provisions ripgrep and a digest-pinned Python command sandbox so
+  portable search and isolation checks run against real dependencies.
   Hardened real MCP transport for
   concurrent out-of-order responses, cancellation, timeouts, child crashes,
   malformed/oversized JSON-RPC, sustained stderr, and strict catalog schemas;

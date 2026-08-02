@@ -19,6 +19,9 @@ Implemented:
 - Clean-runner CI checks out the exact `flyto-blueprint` benchmark dependency
   commit beside `flyto-ai` before running the complete suite on Python 3.10 and
   3.12; local sibling imports no longer hide missing remote test setup.
+- The same matrix provisions ripgrep and a digest-pinned Python Docker sandbox,
+  so literal search and real read-only/network-isolated command tests execute on
+  fresh runners instead of relying on local host tooling.
 - The agent-stack runtime is now split behind stable compatibility facades into
   atomic manifest, preset, probe, MCP transport, catalog, session,
   transactional registry, and monotonic permission-policy modules. Provider

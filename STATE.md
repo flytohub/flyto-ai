@@ -25,6 +25,12 @@ Implemented:
 - Protected files inside Docker command sandboxes are over-mounted with a
   zero-permission inode. Linux and macOS runners now agree that attempts to read
   `.env`-style files fail, rather than returning a successful empty read.
+- `Agent` now supports `async with` and idempotent `await close()`, releasing its
+  memory database and transcript deterministically and failing on post-close
+  chat calls.
+- Python 3.10/3.12 CI treats deprecation and unhandled background-thread
+  warnings as test failures; functional sandbox availability is detected from
+  the initialized backend rather than the mere presence of a CLI executable.
 - The agent-stack runtime is now split behind stable compatibility facades into
   atomic manifest, preset, probe, MCP transport, catalog, session,
   transactional registry, and monotonic permission-policy modules. Provider

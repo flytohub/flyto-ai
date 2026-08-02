@@ -47,6 +47,13 @@
   `/dev/null`. The latter hides bytes but still lets a Linux container report a
   successful read; the unreadable bind keeps the cross-platform contract
   fail-closed while protected directories remain zero-permission tmpfs mounts.
+- `Agent` owns its lazily opened memory database and transcript writer. It now
+  exposes an idempotent async lifecycle and rejects use after close; callers
+  should prefer `async with` so SQLite worker threads and evidence files are
+  closed before their event loop terminates.
+- CI promotes deprecation and unhandled-thread warnings to failures. A green
+  run therefore proves lifecycle cleanup instead of merely attaching a warning
+  annotation to an otherwise successful test job.
 
 Rollback is layered: detach the policy controller, trace sink, or conformance
 runner independently while preserving the existing facade and profile

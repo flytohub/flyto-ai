@@ -543,16 +543,15 @@ curl -X POST http://localhost:8080/chat \
 ```python
 from flyto_ai import Agent, AgentConfig
 
-agent = Agent(config=AgentConfig.from_env())
+async with Agent(config=AgentConfig.from_env()) as agent:
+    # Execute mode (default) — runs modules and returns results
+    result = await agent.chat("extract all links from https://example.com")
+    print(result.message)            # Result + YAML workflow
+    print(result.execution_results)  # Module execution results
 
-# Execute mode (default) — runs modules and returns results
-result = await agent.chat("extract all links from https://example.com")
-print(result.message)            # Result + YAML workflow
-print(result.execution_results)  # Module execution results
-
-# Plan-only mode — generates YAML without executing
-result = await agent.chat("extract all links from example.com", mode="yaml")
-print(result.message)            # YAML workflow only
+    # Plan-only mode — generates YAML without executing
+    result = await agent.chat("extract all links from example.com", mode="yaml")
+    print(result.message)            # YAML workflow only
 ```
 
 ## Multi-Provider

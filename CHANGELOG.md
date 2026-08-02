@@ -16,6 +16,10 @@
   portable search and isolation checks run against real dependencies.
   Protected-file Docker mounts now fail reads consistently across Linux and
   macOS instead of exposing platform-specific `/dev/null` success semantics.
+  Added deterministic `Agent` async lifecycle cleanup for SQLite memory and
+  transcripts, plus Python 3.12-safe legacy event-loop test isolation.
+  CI now fails on deprecation or unhandled-thread warnings and tests actual
+  sandbox readiness rather than executable presence.
   Hardened real MCP transport for
   concurrent out-of-order responses, cancellation, timeouts, child crashes,
   malformed/oversized JSON-RPC, sustained stderr, and strict catalog schemas;

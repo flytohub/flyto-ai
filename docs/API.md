@@ -5,8 +5,8 @@ Install `flyto-ai` and import the package facade:
 ```python
 from flyto_ai import Agent, AgentConfig, create_agent
 
-agent = create_agent(provider="openai", model="gpt-4o-mini")
-response = await agent.chat("Open example.com and extract the title")
+async with create_agent(provider="openai", model="gpt-4o-mini") as agent:
+    response = await agent.chat("Open example.com and extract the title")
 ```
 
 The package exports agent/configuration, chat/stream/usage models, permission
@@ -19,7 +19,8 @@ for every public and internal symbol are in the
 - `AgentConfig`: provider/model, limits, memory, sandbox, coding-agent, failover,
   budget, transcript, vault, injection, permission, browser, and Pro flags.
 - `Agent`: synchronous/streaming chat orchestration, deterministic plan, provider
-  loop, tool validation/execution, recovery, and learning feedback.
+  loop, tool validation/execution, recovery, learning feedback, and an idempotent
+  async lifecycle (`async with` or `await agent.close()`).
 - `ChatRequest`/`ChatResponse`: normalized message, mode, result, tool calls,
   workflow, and usage data.
 - `StreamEvent`: stable progress/tool/result/error events for CLI, HTTP, Cloud,

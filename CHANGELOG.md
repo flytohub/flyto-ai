@@ -14,6 +14,8 @@
   before the full Python 3.10/3.12 suite.
   It also provisions ripgrep and a digest-pinned Python command sandbox so
   portable search and isolation checks run against real dependencies.
+  Protected-file Docker mounts now fail reads consistently across Linux and
+  macOS instead of exposing platform-specific `/dev/null` success semantics.
   Hardened real MCP transport for
   concurrent out-of-order responses, cancellation, timeouts, child crashes,
   malformed/oversized JSON-RPC, sustained stderr, and strict catalog schemas;

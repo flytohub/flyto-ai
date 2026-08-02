@@ -43,6 +43,10 @@
   runtime-compatible `python:3.12-slim` tag. CI must exercise the real
   fail-closed OS sandbox instead of silently skipping it or depending on a
   mutable preloaded runner image.
+- Docker protected-file masking uses an unreadable host inode rather than
+  `/dev/null`. The latter hides bytes but still lets a Linux container report a
+  successful read; the unreadable bind keeps the cross-platform contract
+  fail-closed while protected directories remain zero-permission tmpfs mounts.
 
 Rollback is layered: detach the policy controller, trace sink, or conformance
 runner independently while preserving the existing facade and profile

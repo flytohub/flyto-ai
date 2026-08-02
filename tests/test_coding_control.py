@@ -198,6 +198,28 @@ def test_workspace_runs_real_argv_without_shell_and_redacts_output(tmp_path):
         run(tools.run(["sh", "-c", "echo unsafe"], 10))
 
 
+def test_docker_sandbox_masks_protected_files_with_an_unreadable_inode(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text("API_KEY=must-not-be-mounted")
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    tools = WorkspaceTools(str(workspace))
+    tools.command_sandbox_backend = "docker"
+    monkeypatch.setattr(tools, "_docker_workspace", lambda _runtime_home: (workspace, False))
+
+    command = tools._sandbox_command([sys.executable, "-c", "print('ok')"], str(runtime_home))
+
+    denied_file = runtime_home / "blocked-file"
+    assert denied_file.exists()
+    assert denied_file.stat().st_mode & 0o777 == 0
+    assert "src=/dev/null" not in command
+    assert any(
+        "src={},dst=/workspace/.env,readonly".format(denied_file) in item
+        for item in command
+    )
+
+
 @pytest.mark.skipif(
     not (shutil.which("docker") or shutil.which("bwrap")),
     reason="OS command sandbox backend is unavailable",

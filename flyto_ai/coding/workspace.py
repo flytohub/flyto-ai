@@ -431,14 +431,23 @@ class WorkspaceTools:
                 "--workdir", "/workspace", "--env", "HOME=/tmp/home",
                 "--env", "TMPDIR=/tmp", "--env", "PYTHONDONTWRITEBYTECODE=1",
             ]
-            for path in (() if staged else self._protected_existing_paths()):
+            protected_paths = [] if staged else self._protected_existing_paths()
+            denied_file: Path | None = None
+            if any(not path.is_dir() for path in protected_paths):
+                denied_file = Path(runtime_home) / "blocked-file"
+                denied_file.touch(mode=0o000)
+                denied_file.chmod(0o000)
+            for path in protected_paths:
                 relative = path.relative_to(self.root).as_posix()
                 target = "/workspace/{}".format(relative)
                 if path.is_dir():
                     wrapped.extend(["--mount", "type=tmpfs,dst={},tmpfs-mode=000".format(target)])
                 else:
+                    assert denied_file is not None
                     wrapped.extend([
-                        "--mount", "type=bind,src=/dev/null,dst={},readonly".format(target),
+                        "--mount", "type=bind,src={},dst={},readonly".format(
+                            denied_file, target,
+                        ),
                     ])
             return [*wrapped, self.sandbox_image, *container_command]
         if self.command_sandbox_backend == "bwrap":

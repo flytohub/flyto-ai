@@ -22,6 +22,9 @@ Implemented:
 - The same matrix provisions ripgrep and a digest-pinned Python Docker sandbox,
   so literal search and real read-only/network-isolated command tests execute on
   fresh runners instead of relying on local host tooling.
+- Protected files inside Docker command sandboxes are over-mounted with a
+  zero-permission inode. Linux and macOS runners now agree that attempts to read
+  `.env`-style files fail, rather than returning a successful empty read.
 - The agent-stack runtime is now split behind stable compatibility facades into
   atomic manifest, preset, probe, MCP transport, catalog, session,
   transactional registry, and monotonic permission-policy modules. Provider

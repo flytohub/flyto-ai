@@ -16,6 +16,7 @@ from flyto_ai.coding.stack import (
     AGENT_STACK_CONTRACT_VERSION,
     AGENT_STACK_POLICY_VERSION,
     DEFAULT_COMPONENTS,
+    MAX_AGENT_STACK_MANIFEST_BYTES,
     build_agent_stack_capabilities,
     compose_capability_stack,
     load_agent_stack_manifest,
@@ -23,6 +24,16 @@ from flyto_ai.coding.stack import (
     probe_agent_stack,
 )
 from flyto_ai.coding import build_agent_stack_capabilities as public_stack_builder
+from flyto_ai.coding.stack_manifest import (
+    compose_capability_stack as manifest_compose_capability_stack,
+    load_agent_stack_manifest as manifest_load_agent_stack_manifest,
+)
+from flyto_ai.coding.stack_presets import (
+    build_agent_stack_capabilities as preset_build_agent_stack_capabilities,
+)
+from flyto_ai.coding.stack_probe import (
+    probe_capability_stack as runtime_probe_capability_stack,
+)
 from flyto_ai.config import AgentConfig
 from flyto_ai.permissions import PermissionLevel
 from flyto_ai.protocols import ToolExecutor
@@ -70,12 +81,53 @@ def test_stack_builder_is_available_from_the_public_coding_api():
     assert public_stack_builder is build_agent_stack_capabilities
 
 
+def test_stack_facade_preserves_atomic_module_identities():
+    assert compose_capability_stack is manifest_compose_capability_stack
+    assert load_agent_stack_manifest is manifest_load_agent_stack_manifest
+    assert build_agent_stack_capabilities is preset_build_agent_stack_capabilities
+    assert probe_capability_stack is runtime_probe_capability_stack
+
+
 def test_generic_stack_composes_arbitrary_domain_capabilities():
     robotics = CapabilitySpec(name="robot-planner", argv=("robot-planner",), kind="command")
     operations = CapabilitySpec(name="ticket-router", argv=("ticket-router",), kind="command")
     assert compose_capability_stack((robotics,), (operations,)) == (robotics, operations)
     with pytest.raises(ValueError, match="duplicate names"):
         compose_capability_stack((robotics, robotics))
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"argv": ["runner", 1]}, "argv must contain only strings"),
+        ({"required_tools": ["inspect", 1]}, "required_tools must contain only strings"),
+        ({"allowed_tools": ["inspect", 1]}, "allowed_tools must contain only strings"),
+        ({"env_passthrough": ["FLYTO_TOKEN", 1]}, "env_passthrough must contain only strings"),
+        ({"tool_permissions": {"inspect": 1}}, "keys and values must be strings"),
+    ],
+)
+def test_capability_mapping_rejects_non_string_boundary_values(override, message):
+    value = {"name": "boundary", "argv": ["runner"], "kind": "command"}
+    value.update(override)
+    with pytest.raises(ValueError, match=message):
+        CapabilitySpec.from_mapping(value)
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"required": 1}, "required must be a boolean"),
+        ({"contract_version": 1}, "contract_version must be a string"),
+        ({"protocol_version": 1}, "protocol_version must be a string"),
+        ({"timeout_seconds": True}, "timeout_seconds must be an integer"),
+        ({"argv": ("runner", 1)}, "argv contains an invalid item"),
+    ],
+)
+def test_capability_contract_rejects_invalid_direct_python_values(override, message):
+    value = {"name": "boundary", "argv": ("runner",)}
+    value.update(override)
+    with pytest.raises(ValueError, match=message):
+        CapabilitySpec(**value)
 
 
 def test_capability_manager_satisfies_generic_agent_tool_executor(tmp_path):
@@ -169,6 +221,65 @@ def test_manifest_fails_closed_on_scope_schema_and_path_escape(tmp_path):
     workspace.mkdir()
     with pytest.raises(ValueError, match="inside the workspace"):
         load_agent_stack_manifest(str(workspace), "../agent-stack.yaml")
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (b"\xff", "not valid UTF-8 YAML"),
+        (b"- not-an-object\n", "must be a YAML object"),
+        (b"version: unknown\nprofile: test\ncapabilities: []\n", "unsupported"),
+        (
+            b"version: flyto.agent-stack.v1\nprofile: unsafe/name\ncapabilities: []\n",
+            "safe identifier",
+        ),
+        (
+            b"version: flyto.agent-stack.v1\nprofile: test\ncapabilities: {}\n",
+            "must be a YAML array",
+        ),
+        (
+            b"version: flyto.agent-stack.v1\nprofile: test\ncapabilities:\n  - nope\n",
+            "must be an object",
+        ),
+    ],
+)
+def test_manifest_decoder_rejects_each_invalid_document_boundary(tmp_path, payload, message):
+    manifest_path = tmp_path / "agent-stack.yaml"
+    manifest_path.write_bytes(payload)
+    with pytest.raises(ValueError, match=message):
+        load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+
+
+def test_manifest_file_boundary_rejects_absolute_missing_directory_and_oversize(tmp_path):
+    manifest_path = tmp_path / "agent-stack.yaml"
+    with pytest.raises(ValueError, match="must be relative"):
+        load_agent_stack_manifest(str(tmp_path), str(manifest_path))
+    with pytest.raises(ValueError, match="regular file"):
+        load_agent_stack_manifest(str(tmp_path), "missing.yaml")
+    directory = tmp_path / "profile"
+    directory.mkdir()
+    with pytest.raises(ValueError, match="regular file"):
+        load_agent_stack_manifest(str(tmp_path), "profile")
+    manifest_path.write_bytes(b"x" * (MAX_AGENT_STACK_MANIFEST_BYTES + 1))
+    with pytest.raises(ValueError, match="256 KiB"):
+        load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+
+
+def test_manifest_fingerprint_is_deterministic_and_profile_sensitive(tmp_path):
+    manifest_path = tmp_path / "agent-stack.yaml"
+    capability = {
+        "name": "observer",
+        "argv": ["observer"],
+        "allowed_tools": ["inspect"],
+    }
+    _write_manifest(manifest_path, [capability], profile="profile-a")
+    first = load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+    _write_manifest(manifest_path, [capability], profile="profile-a")
+    second = load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+    _write_manifest(manifest_path, [capability], profile="profile-b")
+    changed = load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
+    assert first.manifest_fingerprint == second.manifest_fingerprint
+    assert changed.manifest_fingerprint != first.manifest_fingerprint
 
 
 def test_v2_manifest_requires_exhaustive_tool_permission_classification(tmp_path):
@@ -323,7 +434,9 @@ def test_real_full_stack_preflight_negotiates_isolated_tool_surfaces(tmp_path):
     result = asyncio.run(probe_agent_stack(str(tmp_path)))
     assert result["contract_version"] == AGENT_STACK_CONTRACT_VERSION
     assert result["ok"] is True
-    assert len(result["composition_fingerprint"]) == 64
+    assert result["composition_fingerprint"] == (
+        "648c821f1c2a6d462a8b9afce3e8a575366aa4c952b9887f8a3717637e56854f"
+    )
     components = {item["name"]: item for item in result["components"]}
     assert tuple(components) == DEFAULT_COMPONENTS
     assert components["flyto-page-inspector"]["tools"] == ("inspect_page",)

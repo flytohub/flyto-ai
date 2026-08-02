@@ -46,6 +46,31 @@ def _merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None:
     accumulated["cache_read_input_tokens"] += new.cache_read_input_tokens
 
 
+def _bind_tool_executor(
+    tool_executor: Optional[ToolExecutor],
+    tools: Optional[List[Dict]],
+    dispatch_fn,
+):
+    """Bind one generic executor and validate optional permission metadata."""
+    if tool_executor is None:
+        return tools or [], dispatch_fn, {}
+    bound_tools = tool_executor.tools
+    bound_dispatch = tool_executor.dispatch
+    if not isinstance(bound_tools, list):
+        raise ValueError("tool_executor tools must be a list")
+    if not callable(bound_dispatch):
+        raise ValueError("tool_executor dispatch must be callable")
+    declared_overrides = getattr(tool_executor, "permission_overrides", {})
+    if not isinstance(declared_overrides, dict) or any(
+        not isinstance(name, str) or not isinstance(level, PermissionLevel)
+        for name, level in declared_overrides.items()
+    ):
+        raise ValueError(
+            "tool_executor permission_overrides must map names to PermissionLevel",
+        )
+    return bound_tools, bound_dispatch, dict(declared_overrides)
+
+
 class Agent:
     """High-level AI agent that translates natural language to Flyto2 workflows.
 
@@ -79,23 +104,10 @@ class Agent:
         self._system_prompt = system_prompt
         self._policies = policies
 
-        # When a ToolExecutor is provided, derive tools + dispatch from it
-        permission_overrides: Dict[str, PermissionLevel] = {}
-        if tool_executor is not None:
-            self._tools = tool_executor.tools
-            self._dispatch_fn = tool_executor.dispatch
-            declared_overrides = getattr(tool_executor, "permission_overrides", {})
-            if not isinstance(declared_overrides, dict) or any(
-                not isinstance(name, str) or not isinstance(level, PermissionLevel)
-                for name, level in declared_overrides.items()
-            ):
-                raise ValueError(
-                    "tool_executor permission_overrides must map names to PermissionLevel",
-                )
-            permission_overrides = dict(declared_overrides)
-        else:
-            self._tools = tools or []
-            self._dispatch_fn = dispatch_fn
+        # When a ToolExecutor is provided, derive tools + dispatch from it.
+        self._tools, self._dispatch_fn, permission_overrides = _bind_tool_executor(
+            tool_executor, tools, dispatch_fn,
+        )
 
         # Permission enforcer (three-tier: READ_ONLY / WORKSPACE_WRITE / DANGER_FULL)
         self._permission_enforcer = PermissionEnforcer(

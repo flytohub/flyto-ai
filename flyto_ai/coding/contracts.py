@@ -18,6 +18,71 @@ _PASSTHROUGH_ENV_RE = re.compile(r"^FLYTO_[A-Z0-9_]{1,120}$")
 TOOL_PERMISSION_LEVELS = frozenset({"read_only", "workspace_write", "danger_full"})
 
 
+def _require_string_array(value: Any, field_name: str) -> Tuple[str, ...]:
+    """Normalize one JSON/YAML string array without coercing unsafe values."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError("{} must be a JSON/YAML array".format(field_name))
+    if any(not isinstance(item, str) for item in value):
+        raise ValueError("{} must contain only strings".format(field_name))
+    return tuple(value)
+
+
+def _validate_argv(argv: Sequence[str], field_name: str) -> None:
+    """Enforce the shared bounded argv contract used at process boundaries."""
+    if not argv or len(argv) > 32:
+        raise ValueError("{} must contain between 1 and 32 items".format(field_name))
+    if any(not isinstance(arg, str) or not arg or len(arg) > 4096 for arg in argv):
+        raise ValueError("{} contains an invalid item".format(field_name))
+
+
+def _validate_tool_names(field_name: str, names: Sequence[str]) -> None:
+    """Validate a bounded, unique tuple of provider-neutral tool names."""
+    if len(names) > 100:
+        raise ValueError("{} cannot exceed 100 items".format(field_name))
+    if any(not isinstance(name, str) or not _NAME_RE.fullmatch(name) for name in names):
+        raise ValueError("{} contains an invalid name".format(field_name))
+    if len(set(names)) != len(names):
+        raise ValueError("{} contains duplicates".format(field_name))
+
+
+def _normalize_tool_permissions(value: Any) -> Tuple[Tuple[str, str], ...]:
+    """Convert one permission object into a deterministic immutable policy."""
+    if not isinstance(value, Mapping):
+        raise ValueError("capability tool_permissions must be a JSON/YAML object")
+    if any(
+        not isinstance(name, str) or not isinstance(level, str)
+        for name, level in value.items()
+    ):
+        raise ValueError("capability tool_permissions keys and values must be strings")
+    return tuple(sorted(value.items()))
+
+
+def _validate_tool_permissions(
+    permissions: Sequence[Tuple[str, str]],
+    allowed_tools: Sequence[str],
+) -> None:
+    """Validate permission pairs independently from profile-version policy."""
+    if len(permissions) > 100:
+        raise ValueError("capability tool_permissions cannot exceed 100 items")
+    if any(not isinstance(item, (list, tuple)) or len(item) != 2 for item in permissions):
+        raise ValueError("capability tool_permissions entries must be name/level pairs")
+    permission_names = tuple(item[0] for item in permissions)
+    if any(
+        not isinstance(name, str) or not _NAME_RE.fullmatch(name)
+        for name in permission_names
+    ):
+        raise ValueError("capability tool_permissions contains an invalid tool name")
+    if len(set(permission_names)) != len(permission_names):
+        raise ValueError("capability tool_permissions contains duplicate tool names")
+    if any(
+        not isinstance(item[1], str) or item[1] not in TOOL_PERMISSION_LEVELS
+        for item in permissions
+    ):
+        raise ValueError("capability tool_permissions contains an invalid permission level")
+    if allowed_tools and not set(permission_names).issubset(allowed_tools):
+        raise ValueError("capability tool_permissions must refer only to allowed_tools")
+
+
 class ApprovalPolicy(str, Enum):
     """Whether a host may pause for operations outside the sandbox policy."""
 
@@ -55,21 +120,16 @@ class CheckSpec:
     def __post_init__(self) -> None:
         if not _NAME_RE.fullmatch(self.name):
             raise ValueError("check name must be a safe identifier")
-        if not self.argv or len(self.argv) > 32:
-            raise ValueError("check argv must contain between 1 and 32 items")
-        if any(not isinstance(arg, str) or not arg or len(arg) > 4096 for arg in self.argv):
-            raise ValueError("check argv contains an invalid item")
+        _validate_argv(self.argv, "check argv")
         if not 1 <= self.timeout_seconds <= 900:
             raise ValueError("check timeout_seconds must be between 1 and 900")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "CheckSpec":
-        argv = value.get("argv")
-        if not isinstance(argv, Sequence) or isinstance(argv, (str, bytes)):
-            raise ValueError("check argv must be a JSON/YAML array")
+        argv = _require_string_array(value.get("argv"), "check argv")
         return cls(
             name=str(value.get("name", "")),
-            argv=tuple(str(item) for item in argv),
+            argv=argv,
             timeout_seconds=int(value.get("timeout_seconds", 120)),
             required=bool(value.get("required", True)),
         )
@@ -94,45 +154,22 @@ class CapabilitySpec:
     def __post_init__(self) -> None:
         if not _NAME_RE.fullmatch(self.name):
             raise ValueError("capability name must be a safe identifier")
+        if not isinstance(self.required, bool):
+            raise ValueError("capability required must be a boolean")
         if self.kind not in {"mcp-stdio", "command"}:
             raise ValueError("capability kind must be mcp-stdio or command")
-        if not self.argv or len(self.argv) > 32:
-            raise ValueError("capability argv must contain between 1 and 32 items")
+        _validate_argv(self.argv, "capability argv")
+        if not isinstance(self.contract_version, str):
+            raise ValueError("capability contract_version must be a string")
+        if not isinstance(self.protocol_version, str):
+            raise ValueError("capability protocol_version must be a string")
         if self.kind == "mcp-stdio" and not self.protocol_version:
             raise ValueError("MCP capability protocol_version is required")
-        if len(self.required_tools) > 100:
-            raise ValueError("capability required_tools cannot exceed 100 items")
-        if any(not _NAME_RE.fullmatch(name) for name in self.required_tools):
-            raise ValueError("capability required_tools contains an invalid name")
-        if len(set(self.required_tools)) != len(self.required_tools):
-            raise ValueError("capability required_tools contains duplicates")
-        if len(self.allowed_tools) > 100:
-            raise ValueError("capability allowed_tools cannot exceed 100 items")
-        if any(not _NAME_RE.fullmatch(name) for name in self.allowed_tools):
-            raise ValueError("capability allowed_tools contains an invalid name")
-        if len(set(self.allowed_tools)) != len(self.allowed_tools):
-            raise ValueError("capability allowed_tools contains duplicates")
+        _validate_tool_names("capability required_tools", self.required_tools)
+        _validate_tool_names("capability allowed_tools", self.allowed_tools)
         if self.allowed_tools and not set(self.required_tools).issubset(self.allowed_tools):
             raise ValueError("capability required_tools must be included in allowed_tools")
-        if len(self.tool_permissions) > 100:
-            raise ValueError("capability tool_permissions cannot exceed 100 items")
-        if any(
-            not isinstance(item, (list, tuple)) or len(item) != 2
-            for item in self.tool_permissions
-        ):
-            raise ValueError("capability tool_permissions entries must be name/level pairs")
-        permission_names = tuple(item[0] for item in self.tool_permissions)
-        if any(not isinstance(name, str) or not _NAME_RE.fullmatch(name) for name in permission_names):
-            raise ValueError("capability tool_permissions contains an invalid tool name")
-        if len(set(permission_names)) != len(permission_names):
-            raise ValueError("capability tool_permissions contains duplicate tool names")
-        if any(
-            not isinstance(item[1], str) or item[1] not in TOOL_PERMISSION_LEVELS
-            for item in self.tool_permissions
-        ):
-            raise ValueError("capability tool_permissions contains an invalid permission level")
-        if self.allowed_tools and not set(permission_names).issubset(self.allowed_tools):
-            raise ValueError("capability tool_permissions must refer only to allowed_tools")
+        _validate_tool_permissions(self.tool_permissions, self.allowed_tools)
         if self.kind == "command" and self.tool_permissions:
             raise ValueError("command capabilities cannot declare tool_permissions")
         if len(self.env_passthrough) > 32:
@@ -141,42 +178,35 @@ class CapabilitySpec:
             raise ValueError("capability env_passthrough accepts only explicit FLYTO_* names")
         if len(set(self.env_passthrough)) != len(self.env_passthrough):
             raise ValueError("capability env_passthrough contains duplicates")
+        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int):
+            raise ValueError("capability timeout_seconds must be an integer")
         if not 1 <= self.timeout_seconds <= 60:
             raise ValueError("capability timeout_seconds must be between 1 and 60")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "CapabilitySpec":
-        argv = value.get("argv")
-        if not isinstance(argv, Sequence) or isinstance(argv, (str, bytes)):
-            raise ValueError("capability argv must be a JSON/YAML array")
-        required_tools = value.get("required_tools", ())
-        allowed_tools = value.get("allowed_tools", ())
-        tool_permissions = value.get("tool_permissions", {})
-        env_passthrough = value.get("env_passthrough", ())
-        if not isinstance(required_tools, Sequence) or isinstance(required_tools, (str, bytes)):
-            raise ValueError("capability required_tools must be a JSON/YAML array")
-        if not isinstance(allowed_tools, Sequence) or isinstance(allowed_tools, (str, bytes)):
-            raise ValueError("capability allowed_tools must be a JSON/YAML array")
-        if not isinstance(tool_permissions, Mapping):
-            raise ValueError("capability tool_permissions must be a JSON/YAML object")
-        if any(
-            not isinstance(name, str) or not isinstance(level, str)
-            for name, level in tool_permissions.items()
-        ):
-            raise ValueError("capability tool_permissions keys and values must be strings")
-        if not isinstance(env_passthrough, Sequence) or isinstance(env_passthrough, (str, bytes)):
-            raise ValueError("capability env_passthrough must be a JSON/YAML array")
+        argv = _require_string_array(value.get("argv"), "capability argv")
+        required_tools = _require_string_array(
+            value.get("required_tools", ()), "capability required_tools",
+        )
+        allowed_tools = _require_string_array(
+            value.get("allowed_tools", ()), "capability allowed_tools",
+        )
+        tool_permissions = _normalize_tool_permissions(value.get("tool_permissions", {}))
+        env_passthrough = _require_string_array(
+            value.get("env_passthrough", ()), "capability env_passthrough",
+        )
         return cls(
             name=str(value.get("name", "")),
-            argv=tuple(str(item) for item in argv),
+            argv=argv,
             required=bool(value.get("required", False)),
             kind=str(value.get("kind", "mcp-stdio")),
             contract_version=str(value.get("contract_version", "")),
             protocol_version=str(value.get("protocol_version", "2025-06-18")),
-            required_tools=tuple(str(item) for item in required_tools),
-            allowed_tools=tuple(str(item) for item in allowed_tools),
-            tool_permissions=tuple(sorted(tool_permissions.items())),
-            env_passthrough=tuple(str(item) for item in env_passthrough),
+            required_tools=required_tools,
+            allowed_tools=allowed_tools,
+            tool_permissions=tool_permissions,
+            env_passthrough=env_passthrough,
             timeout_seconds=int(value.get("timeout_seconds", 10)),
         )
 

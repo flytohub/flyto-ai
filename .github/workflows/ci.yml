@@ -68,9 +68,14 @@ jobs:
             tests/test_browser_retry.py \
             tests/test_tool_registry.py \
             tests/test_validation.py \
+            -W error::DeprecationWarning \
+            -W error::pytest.PytestUnhandledThreadExceptionWarning \
             -q
       - name: Verify complete test suite
-        run: python -m pytest -q
+        run: >-
+          python -m pytest -q
+          -W error::DeprecationWarning
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
       - name: Verify with flyto-indexer
         if: matrix.python-version != '3.10'
         run: |

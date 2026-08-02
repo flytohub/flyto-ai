@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 import sys
 from pathlib import Path
 
@@ -189,6 +188,8 @@ def test_workspace_file_tools_hide_credentials_and_vcs_internals(tmp_path):
 
 def test_workspace_runs_real_argv_without_shell_and_redacts_output(tmp_path):
     tools = WorkspaceTools(str(tmp_path))
+    if not tools.command_sandbox_backend:
+        pytest.skip("functional OS command sandbox backend is unavailable")
     result = run(tools.run([
         sys.executable, "-c", "print('password=hunter-two')",
     ], 10))
@@ -220,10 +221,6 @@ def test_docker_sandbox_masks_protected_files_with_an_unreadable_inode(tmp_path,
     )
 
 
-@pytest.mark.skipif(
-    not (shutil.which("docker") or shutil.which("bwrap")),
-    reason="OS command sandbox backend is unavailable",
-)
 def test_model_command_os_sandbox_denies_host_read_and_all_workspace_writes(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -232,6 +229,8 @@ def test_model_command_os_sandbox_denies_host_read_and_all_workspace_writes(tmp_
     (workspace / "source.txt").write_text("workspace-readable")
     (workspace / ".env").write_text("API_KEY=workspace-secret")
     tools = WorkspaceTools(str(workspace))
+    if not tools.command_sandbox_backend:
+        pytest.skip("functional OS command sandbox backend is unavailable")
 
     readable = run(tools.run([
         sys.executable, "-c", "from pathlib import Path; print(Path('source.txt').read_text())",

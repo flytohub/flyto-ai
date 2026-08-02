@@ -37,7 +37,7 @@
 - The complete clean-runner suite checks out the exact Blueprint benchmark
   dependency commit beside `flyto-ai` and installs it explicitly. Local sibling
   availability must not hide a missing CI dependency, and an unpinned moving
-  Blueprint branch must not change the proof after a Flyto AI commit lands.
+  Blueprint branch must not change the proof after a `flyto-ai` commit lands.
 
 Rollback is layered: detach the policy controller, trace sink, or conformance
 runner independently while preserving the existing facade and profile

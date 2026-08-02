@@ -120,6 +120,12 @@ flyto_ai.coding.capabilities (stable facade + lifecycle coordinator)
      -> mcp_catalog   (scope, provider names, machine-readable result status)
   -> tool_registry  (transactional routing and collision rejection)
   -> permissions    (host ceiling plus monotonic argument-risk resolvers)
+  -> execution_policy (budgets, concurrency, sandbox paths, secrets, approval)
+  -> execution_trace  (redacted hash chain, deterministic replay, feedback)
+
+flyto_ai.coding adapter quality plane
+  -> conformance      (one-adapter contract/runtime/domain/lifecycle suite)
+  -> scenario_matrix  (bounded aggregation with no domain-name branches)
 ```
 
 The ordinary `Agent` separately validates and binds the generic
@@ -130,6 +136,26 @@ has validated. Any collision or incomplete mapping closes all affected
 sessions and clears runtime dispatch metadata. Transport close first closes
 stdin and awaits EOF, then uses bounded terminate/kill escalation, so repeated
 attach/detach cycles do not leave orphaned subprocess transports.
+
+The runtime quality plane is additive and independently replaceable.
+`ExecutionPolicyController` grants an exactly-once concurrency lease only
+after argument byte/depth/node, secret-key, workspace-path,
+elapsed/call/failure, approval-timeout, concurrency, and result budgets pass.
+`ExecutionTraceLedger` records Manager execution and Agent-level denials in a
+deeply immutable, redacted content-addressed hash chain. Replay uses a fixed
+snapshot and the same safe dispatcher; it defaults to replay-safe read-only
+events, requires explicit permission opt-in for writes/dangerous work, skips
+redacted arguments, supports domain-owned normalizers, and publishes an
+idempotency-ready Blueprint outcome through a host-owned sink.
+`run_adapter_conformance()` verifies one adapter's declared permissions,
+complete tool coverage, handshake, exact catalog, domain cases, execution
+evidence/policy lease closure, and idempotent shutdown. The separate scenario
+matrix runs arbitrary sets of those suites under bounded concurrency;
+workflow, page, robotics, and authorized-security fixtures are tests, not
+branches in production routing. Both conformance entry points default to
+read-only authority; controlled write or danger fixtures must opt in
+explicitly, and an expected domain failure must still prove whether dispatch
+occurred.
 
 Optional service composition:
 

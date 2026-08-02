@@ -1,5 +1,45 @@
 # Decisions
 
+## 2026-08-02: Capability quality controls are separate atomic planes
+
+- Keep authority, resource admission, evidence/replay, adapter conformance,
+  and scenario aggregation in separate modules. They have different reasons
+  to change and must be independently replaceable without rewriting the MCP
+  transport, registry, or central manager.
+- Enforce call, failure, elapsed-time, concurrency/queue, argument/result
+  byte/depth/node, and approval-timeout limits in `execution_policy`. Reject
+  non-finite/non-JSON arguments, unapproved secret-shaped keys, and configured
+  workspace path escape before a concurrency lease is granted. Ambiguous
+  domain fields such as `path` are not assumed to be filesystem paths; hosts
+  add their own path keys. Human approval is a host callback receiving redacted
+  arguments; a missing, timed-out, failed, or malformed decision fails closed.
+- Store capability evidence only through `execution_trace`: a bounded, deeply
+  immutable redacted hash chain whose content fingerprint excludes wall-clock
+  noise. Agent outer denials and Manager outcomes enter that same evidence
+  boundary. Replay freezes its input snapshot, skips redacted arguments,
+  permits only read-only calls by default, and requires explicit host opt-in
+  for write/danger tiers; optional domain-owned normalizers handle legitimate
+  drift. Blueprint feedback is emitted through a host-owned sink with a
+  trace-derived stable execution id, never by exposing signing/trust authority
+  to the model.
+- Make adapter acceptance executable through `run_adapter_conformance()`:
+  exhaustive permission classification and allowed-tool case coverage, exact
+  protocol/catalog, domain-owned results, trace/policy evidence, and idempotent
+  close are one content-bound report. Default test authority is read-only;
+  write/danger fixtures opt in explicitly, and cases bind expected dispatch
+  state so a denial cannot impersonate a domain failure. Aggregate suites
+  through `scenario_matrix`; scenario/domain strings remain metadata, never
+  manager routing branches.
+- Keep external reality honest. Workflow, page, robotics, and authorized
+  security-lab fixtures prove composition semantics and failure containment;
+  they do not claim control of unconfigured hardware or authorization against
+  third-party systems.
+
+Rollback is layered: detach the policy controller, trace sink, or conformance
+runner independently while preserving the existing facade and profile
+contracts. Do not roll back by widening tool catalogs, accepting secret
+arguments, skipping approval, or trusting unmatched replay evidence.
+
 ## 2026-08-02: Agent-stack internals are atomic behind stable facades
 
 - Keep `flyto_ai.coding.stack` as the public composition/CLI facade and

@@ -217,6 +217,20 @@ module:
 - coding `permissions` combines the host ceiling, declared requirement, and
   optional host-owned argument-risk resolver. Dynamic risk is monotonic and
   cannot lower the declared tier.
+- `execution_policy` grants a bounded concurrency lease only after lifecycle
+  call/failure/time, concurrency/queue, JSON byte/depth/node, secret-bearing
+  key, configurable workspace-path, result, and approval-timeout gates pass.
+- `execution_trace` stores a deeply immutable redacted content-addressed hash
+  chain for Manager execution and Agent outer denials. Fixed-snapshot replay
+  skips redacted inputs, defaults to read-only authority, requires explicit
+  host opt-in for write/danger tiers, and emits trace-bound outcome feedback
+  through a host-owned Blueprint sink.
+- `conformance` validates one adapter's exhaustive permission and tool-case
+  coverage, handshake, exact catalog, domain results, evidence chain, released
+  policy leases, and shutdown; `scenario_matrix` aggregates arbitrary suites
+  with bounded concurrency and no domain-name logic. Both default to read-only;
+  controlled write/danger fixtures opt in and assert whether each case actually
+  crossed the dispatch boundary.
 
 `CapabilityManager` now only coordinates lifecycle, registration, permission
 evaluation, and dispatch. Adding a new domain adapter does not require a task
@@ -231,7 +245,15 @@ The closed-loop test matrix covers each boundary independently and together:
 - real MCP subprocess handshake, response correlation, domain-failure, and
   repeated open/dispatch/close tests with unraisable warnings promoted to
   errors;
-- outer Agent denial plus direct Manager bypass denial;
+- out-of-order concurrent response correlation, timeout/cancellation recovery,
+  child crash fan-out, malformed/wrong-version/oversized wire responses,
+  sustained stderr, deterministic property cases, and YAML alias/depth/node
+  amplification boundaries;
+- end-to-end conformance scenarios for general workflow, page inspection,
+  robotics simulation, and an explicitly authorized inert security lab;
+- outer Agent denial plus direct Manager bypass denial, policy admission,
+  result budgets, cancellation lease release, trace exhaustion, safe replay,
+  and trace-bound Blueprint feedback;
 - full routing, Blueprint, coding, robotics, real four-lane preflight, and
   repository regression suites.
 
@@ -242,6 +264,29 @@ has specialized adapters for general Agent workflows, coding, robotics
 planning, and explicitly authorized footprint/pentest/red-team campaigns.
 Physical actuation and security actions remain behind their respective safety,
 scope, and human-authorization gates.
+
+Hosts replace policy without editing dispatch code:
+
+```python
+from flyto_ai.coding import CapabilityManager, ExecutionLimits, ExecutionPolicy
+
+policy = ExecutionPolicy(
+    limits=ExecutionLimits(max_calls=500, max_concurrency=8),
+    workspace_path_keys=("artifact_path",),
+)
+manager = CapabilityManager(workspace, execution_policy=policy)
+
+# Read-only and unredacted events only by default.
+report = await manager.replay_execution_trace()
+# A controlled fixture may opt into additional tiers explicitly.
+report = await manager.replay_execution_trace(
+    allowed_permissions=("read_only", "workspace_write"),
+)
+```
+
+Approval callbacks and Blueprint outcome sinks may be synchronous or
+asynchronous. The host wait is bounded, callback exceptions are reduced to
+stable non-secret errors, and malformed approval decisions fail closed.
 
 Authenticated Flyto2 product adapters opt into runtime variables by name:
 

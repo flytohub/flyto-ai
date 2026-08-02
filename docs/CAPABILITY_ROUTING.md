@@ -84,6 +84,31 @@ escalate a declared permission but cannot downgrade it. `CapabilityManager`
 therefore remains domain-neutral instead of accumulating robotics, security,
 browser, or workflow task branches.
 
+Every production adapter should also ship an `AdapterConformanceCase` set.
+`run_adapter_conformance()` proves exhaustive permission classification, exact
+MCP protocol/catalog negotiation, at least one case for every allowed tool,
+domain-owned success and failure evidence, a valid trace, released policy
+leases, and complete lifecycle cleanup. Its fingerprint binds the tested
+contract, redacted inputs, observed trace, and checks. `run_scenario_matrix()`
+aggregates those independent suites under a concurrency bound. The matrix
+accepts arbitrary scenario and domain labels; adding a robot, ticketing, data,
+or security adapter changes its own spec/cases/verifier, not the shared runner.
+Conformance defaults to read-only permission. Tests that intentionally exercise
+writes or dangerous actions must select higher test authority explicitly, and
+each case states whether a real dispatch is expected so a policy denial cannot
+masquerade as the requested domain failure.
+
+Runtime admission remains separate from routing. `ExecutionPolicyController`
+applies lifecycle/concurrency, JSON byte/depth/node, secret/path, result, and
+bounded optional human-approval checks after permission evaluation but before
+dispatch. `ExecutionTraceLedger` then records deeply immutable redacted
+hash-chained evidence; the Agent also forwards outer denials to an
+evidence-aware executor. Replay takes a fixed snapshot, skips redacted inputs,
+and defaults to read-only events. Workspace-write or danger-full replay is an
+explicit host decision. A mismatch fails the evidence comparison; only a
+host-owned feedback sink may translate the replay report into a trusted
+Blueprint outcome.
+
 The shared domain-neutral loop is:
 
 ```text

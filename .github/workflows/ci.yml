@@ -49,6 +49,8 @@ jobs:
             tests/test_tool_registry.py \
             tests/test_validation.py \
             -q
+      - name: Verify complete test suite
+        run: python -m pytest -q
       - name: Verify with flyto-indexer
         if: matrix.python-version != '3.10'
         run: |

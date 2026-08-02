@@ -3,6 +3,19 @@
 Last updated: 2026-08-02
 
 Implemented:
+- The capability quality plane now has four additional atomic modules:
+  `execution_policy` bounds calls, failures, elapsed time, concurrency, JSON
+  bytes/depth/nodes, configurable workspace paths, secret-bearing arguments,
+  results, and bounded optional human approval; `execution_trace` provides
+  deeply immutable redacted hash-chained evidence, fixed-snapshot safe replay,
+  and host-owned Blueprint feedback; `conformance` binds every allowed tool,
+  runtime result, trace, policy lease, and lifecycle check into one report; and
+  `scenario_matrix` aggregates arbitrary domain suites without adding domain
+  branches. Manager dispatch consumes these controls directly, Agent outer
+  denials join the same trace, and CI runs the complete repository suite on
+  both supported Python matrix versions. Conformance defaults to read-only,
+  requires explicit higher authority for controlled fixtures, and distinguishes
+  a real domain failure from an undispatched policy denial.
 - The agent-stack runtime is now split behind stable compatibility facades into
   atomic manifest, preset, probe, MCP transport, catalog, session,
   transactional registry, and monotonic permission-policy modules. Provider
@@ -223,6 +236,12 @@ suite, generated-reference check, sdist/wheel build, and strict Indexer
 full-scan. Twine metadata validation was not rerun for this source-only change.
 
 Known constraints:
+- Replay is deterministic only for evidence selected by the adapter's domain
+  verifier/normalizer. A hardware sensor, external service, or security target
+  can legitimately change between runs; a hash mismatch is evidence of drift,
+  not automatic proof that either observation is false. Replay skips any event
+  whose arguments changed during redaction and defaults to read-only authority;
+  a host must explicitly opt into workspace-write or danger-full replay.
 - Native workspace confinement is an application boundary, not hostile-code OS
   isolation for source-controlled verification commands. Model-issued commands
   use Docker or `bwrap`, but untrusted repositories must still run the whole

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added atomic capability execution policy, redacted content-addressed trace,
+  fixed-snapshot authority-bounded replay/Blueprint feedback, reusable
+  evidence-bound adapter conformance, and a bounded domain-neutral scenario
+  matrix. Manager dispatch now enforces the policy/result gates and records
+  outcomes while Agent outer denials enter the same deeply immutable trace.
+  Conformance defaults to read-only authority and verifies expected dispatch
+  state; approval callbacks and outcome sinks have bounded waits and stable
+  failure projection.
+  Hardened real MCP transport for
+  concurrent out-of-order responses, cancellation, timeouts, child crashes,
+  malformed/oversized JSON-RPC, sustained stderr, and strict catalog schemas;
+  CI now runs the complete suite on Python 3.10 and 3.12.
 - Split the policy-bearing agent stack into atomic manifest, preset, probe,
   MCP transport, catalog, session, transactional registry, and runtime
   permission modules behind the existing `stack` and `capabilities` facades.

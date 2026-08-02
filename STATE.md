@@ -16,6 +16,9 @@ Implemented:
   both supported Python matrix versions. Conformance defaults to read-only,
   requires explicit higher authority for controlled fixtures, and distinguishes
   a real domain failure from an undispatched policy denial.
+- Clean-runner CI checks out the exact `flyto-blueprint` benchmark dependency
+  commit beside `flyto-ai` before running the complete suite on Python 3.10 and
+  3.12; local sibling imports no longer hide missing remote test setup.
 - The agent-stack runtime is now split behind stable compatibility facades into
   atomic manifest, preset, probe, MCP transport, catalog, session,
   transactional registry, and monotonic permission-policy modules. Provider

@@ -308,7 +308,14 @@ def test_code_mcp_cli_runs_as_a_real_stdio_process(tmp_path: Path) -> None:
         json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         "",
     ])
-    stdout, stderr = process.communicate(requests, timeout=10)
+    try:
+        # This proves protocol behavior, not cold-import performance. On busy
+        # hosts the isolated CLI imports the full public package before serving.
+        stdout, stderr = process.communicate(requests, timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        raise
     assert process.returncode == 0, stderr
     responses = [json.loads(line) for line in stdout.splitlines()]
     assert responses[0]["result"]["protocolVersion"] == MCP_PROTOCOL_VERSION

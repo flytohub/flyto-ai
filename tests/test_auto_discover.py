@@ -62,19 +62,27 @@ def test_toolless_agent_has_no_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_toolless_chat_returns_response(monkeypatch):
+async def test_toolless_chat_returns_response(monkeypatch, tmp_path):
     """Toolless agent chat returns a valid ChatResponse."""
-    config = AgentConfig(provider="ollama", api_key="test")
+    config = AgentConfig(
+        provider="ollama",
+        api_key="test",
+        memory_db_path=str(tmp_path / "memory.db"),
+        enable_transcript=False,
+    )
 
     # Mock provider to avoid real LLM call
     async def mock_chat(messages, system_prompt, tools, dispatch_fn, max_rounds=30, on_stream=None):
         return "Here is a sample workflow:\n```yaml\nname: test\nsteps: []\n```", [], 1, {}
 
-    agent = Agent(config=config)
-    agent._tools = []
-    agent._dispatch_fn = None
-    monkeypatch.setattr(agent._provider, "chat", mock_chat)
-
-    result = await agent.chat("hello")
+    async with Agent(config=config) as agent:
+        agent._tools = []
+        agent._dispatch_fn = None
+        monkeypatch.setattr(agent._provider, "chat", mock_chat)
+        result = await agent.chat("hello")
     assert result.ok
     assert "yaml" in result.message.lower() or "test" in result.message.lower()
+    assert agent.memory_store is None
+    await agent.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        await agent.chat("after close")

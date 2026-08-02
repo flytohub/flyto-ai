@@ -126,7 +126,7 @@ async def test_custom_system_prompt_ignores_mode(monkeypatch):
         captured_prompt["value"] = system_prompt
         return "OK", [], 1, {}
 
-    config = AgentConfig(provider="ollama", api_key="test")
+    config = AgentConfig(provider="ollama", api_key="test", enable_memory=False)
     agent = Agent(config=config, system_prompt=custom)
     agent._tools = []
     agent._dispatch_fn = None

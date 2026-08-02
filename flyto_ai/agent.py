@@ -132,6 +132,7 @@ class Agent:
         self._summarizer = None
         self._memory_search = None
         self._memory_initialized = False
+        self._closed = False
         self._session_id = uuid.uuid4().hex[:12]
 
         # Assistant middleware — single entry point for all intelligence
@@ -212,6 +213,33 @@ class Agent:
         if self._last_model_route is None:
             return None
         return self._last_model_route.to_dict()
+
+    async def __aenter__(self) -> "Agent":
+        if self._closed:
+            raise RuntimeError("agent is closed")
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        await self.close()
+
+    async def close(self) -> None:
+        """Close agent-owned persistence and transcript resources once."""
+        if self._closed:
+            return
+        self._closed = True
+        memory_store = self._memory_store
+        transcript = self._transcript
+        self._memory_store = None
+        self._memory_search = None
+        self._summarizer = None
+        self._transcript = None
+        try:
+            if memory_store is not None:
+                await memory_store.close()
+        finally:
+            if transcript is not None:
+                transcript.close()
 
     @property
     def routing_decision(self) -> Optional[Dict[str, Any]]:
@@ -1010,6 +1038,8 @@ class Agent:
         dispatch_wrapper=None,
     ) -> ChatResponse:
         """Run one chat turn: message → tool loop → validation → response."""
+        if self._closed:
+            raise RuntimeError("agent is closed")
         t0 = time.monotonic()
 
         if not self._config.api_key and self._config.provider != "ollama":

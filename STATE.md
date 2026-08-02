@@ -3,6 +3,13 @@
 Last updated: 2026-08-02
 
 Implemented:
+- The agent-stack runtime is now split behind stable compatibility facades into
+  atomic manifest, preset, probe, MCP transport, catalog, session,
+  transactional registry, and monotonic permission-policy modules. Provider
+  name collisions and partial registrations roll back completely; child
+  process close is idempotent, closes stdin, awaits normal EOF exit, and uses
+  bounded terminate/kill fallback. Domain-specific argument-risk resolvers can
+  be injected by the host and may only raise, never lower, declared risk.
 - The recommended `flyto.agent-stack.v2` profile adds exhaustive per-tool
   `read_only` / `workspace_write` / `danger_full` classification without
   hardcoding domain names. Profile metadata is only a minimum requirement;
@@ -165,7 +172,7 @@ Implemented:
   module totals are discovered from the installed runtime registry.
 
 Verified on Python 3.11:
-- full suite: 1309 passed, 15 optional/live-integration skips;
+- full suite: 1379 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;
 - strict documentation contract: pass;

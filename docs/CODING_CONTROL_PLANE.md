@@ -196,6 +196,45 @@ argument-sensitive check after MCP name isolation: a shell, process, Docker,
 Kubernetes, SSH, network, filesystem, environment, or Git module escalates to
 danger-full even when the generic tool entry is workspace-write.
 
+### Atomic runtime boundaries
+
+The public imports remain `flyto_ai.coding.stack` and
+`flyto_ai.coding.capabilities`, but their internals have one responsibility per
+module:
+
+- `stack_manifest` validates bounded workspace-local YAML, typed capabilities,
+  v1/v2 policy, and the configured fingerprint.
+- `stack_presets` builds only the four detachable built-in lanes.
+- `stack_probe` negotiates real catalogs and hashes observed runtime identity.
+- `mcp_transport` owns the isolated child environment, byte-bounded JSON-RPC,
+  request correlation, timeouts, and deterministic shutdown.
+- `mcp_catalog` owns provider-safe names, required/allowed tool scope, schemas,
+  and machine-readable nested result status.
+- `mcp_session` owns initialize, catalog negotiation, and tool-call
+  orchestration over the transport and catalog atoms.
+- `tool_registry` commits a complete session catalog transactionally and
+  rejects provider-name collisions without leaving partial routes.
+- coding `permissions` combines the host ceiling, declared requirement, and
+  optional host-owned argument-risk resolver. Dynamic risk is monotonic and
+  cannot lower the declared tier.
+
+`CapabilityManager` now only coordinates lifecycle, registration, permission
+evaluation, and dispatch. Adding a new domain adapter does not require a task
+name or tool name branch in that manager. A host can supply a risk resolver for
+argument-sensitive operations such as physical actuation; the manifest cannot
+install a resolver or raise runtime authority.
+
+The closed-loop test matrix covers each boundary independently and together:
+
+- pure contract, wire-codec, catalog, fingerprint, and permission tests;
+- transactional collision and incomplete-mapping rollback tests;
+- real MCP subprocess handshake, response correlation, domain-failure, and
+  repeated open/dispatch/close tests with unraisable warnings promoted to
+  errors;
+- outer Agent denial plus direct Manager bypass denial;
+- full routing, Blueprint, coding, robotics, real four-lane preflight, and
+  repository regression suites.
+
 “Domain-neutral” does not mean unguarded universal execution. A production
 domain still supplies its typed action contract, policy and authorization
 checks, executor boundary, verifier, and evidence projection. Flyto2 already

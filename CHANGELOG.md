@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Split the policy-bearing agent stack into atomic manifest, preset, probe,
+  MCP transport, catalog, session, transactional registry, and runtime
+  permission modules behind the existing `stack` and `capabilities` facades.
+  Added fail-closed provider-name collision rollback, pluggable monotonic
+  argument-risk resolvers, deterministic subprocess cleanup, pure boundary
+  tests, real MCP subprocess tests, and full Agent/Manager bypass coverage.
 - Added backward-compatible `flyto.agent-stack.v2` profiles with exhaustive
   per-tool read-only, workspace-write, or danger-full classification. The host
   runtime ceiling is enforced inside `CapabilityManager` and again by `Agent`;

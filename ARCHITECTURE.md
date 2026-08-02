@@ -106,6 +106,31 @@ re-evaluates the concrete `module_id`, preserving danger-category escalation
 after MCP tool names have been isolated. Legacy v1 manifests remain accepted
 with their historical workspace-write default.
 
+The implementation is deliberately finer-grained than the public API:
+
+```text
+flyto_ai.coding.stack (stable facade + CLI)
+  -> stack_manifest (bounded I/O, schema, composition, configured fingerprint)
+  -> stack_presets  (detachable built-in catalog only)
+  -> stack_probe    (runtime negotiation and observed fingerprint)
+
+flyto_ai.coding.capabilities (stable facade + lifecycle coordinator)
+  -> mcp_session    (handshake and call orchestration)
+     -> mcp_transport (isolated process, bounded JSON-RPC, deterministic close)
+     -> mcp_catalog   (scope, provider names, machine-readable result status)
+  -> tool_registry  (transactional routing and collision rejection)
+  -> permissions    (host ceiling plus monotonic argument-risk resolvers)
+```
+
+The ordinary `Agent` separately validates and binds the generic
+`ToolExecutor`. A new domain extends `CapabilitySpec`, its profile, and an
+optional host-owned argument-risk resolver; it does not add task-name branches
+to the manager. Registry updates commit only after the complete session catalog
+has validated. Any collision or incomplete mapping closes all affected
+sessions and clears runtime dispatch metadata. Transport close first closes
+stdin and awaits EOF, then uses bounded terminate/kill escalation, so repeated
+attach/detach cycles do not leave orphaned subprocess transports.
+
 Optional service composition:
 
 ```text

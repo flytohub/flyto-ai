@@ -74,6 +74,16 @@ many domains without turning a broad catalog into blanket execution authority.
 The profile's classification is only a lower-bound requirement; the runtime
 permission ceiling is host-owned and enforced again at dispatch.
 
+The composition implementation is also replaceable by layer. Manifest parsing,
+built-in presets, runtime probing, MCP transport, catalog normalization,
+session negotiation, registry state, and permission evaluation are independent
+modules behind stable facades. Domain growth should normally add a
+`CapabilitySpec`, routing manifest, typed domain contract, verifier, and—only
+when call arguments change harm—a host-owned risk resolver. Risk resolvers may
+escalate a declared permission but cannot downgrade it. `CapabilityManager`
+therefore remains domain-neutral instead of accumulating robotics, security,
+browser, or workflow task branches.
+
 The shared domain-neutral loop is:
 
 ```text

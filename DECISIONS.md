@@ -1,5 +1,39 @@
 # Decisions
 
+## 2026-08-02: Agent-stack internals are atomic behind stable facades
+
+- Keep `flyto_ai.coding.stack` as the public composition/CLI facade and
+  `flyto_ai.coding.capabilities` as the public session/manager facade. Existing
+  imports remain identical while their implementation responsibilities are
+  split into independently replaceable modules.
+- Give each module one reason to change: `stack_manifest` owns bounded profile
+  I/O, schema, composition, and configured fingerprint; `stack_presets` owns
+  only the detachable built-in catalog; `stack_probe` owns observed runtime
+  attestation; `mcp_transport` owns isolated subprocess and bounded JSON-RPC;
+  `mcp_catalog` owns tool naming, scoping, and domain-result normalization;
+  `mcp_session` owns handshake and call orchestration; `tool_registry` owns
+  transactional provider-name registration; and coding `permissions` owns the
+  monotonic runtime permission evaluation.
+- Reject partial registry state and provider-name collisions. A failed session
+  registration closes the new process, closes previously started sessions,
+  and clears all dispatch and permission metadata.
+- Keep argument-sensitive risk resolvers host-owned and pluggable. A resolver
+  may raise the manifest-declared requirement but can never lower it. Adding a
+  robotics, security, data, or operations adapter therefore does not require a
+  new task-name branch in `CapabilityManager`.
+- Close stdin and await normal child exit before bounded terminate/kill
+  escalation. Session and manager close operations are idempotent and leave no
+  dispatchable tools or orphaned asyncio subprocess transports.
+- Require evidence at four levels: pure boundary tests, real subprocess MCP
+  integration, Agent/Manager bypass tests, and the complete repository suite.
+  The four-lane observed composition fingerprint remains exactly
+  `648c821f1c2a6d462a8b9afce3e8a575366aa4c952b9887f8a3717637e56854f`.
+
+Rollback is one atomic implementation change: revert the internal modules and
+facade imports together. Do not roll back by weakening v2 classification,
+runtime ceilings, catalog scoping, lifecycle cleanup, or collision rejection;
+the stable facades and v1 profile compatibility remove the need for that.
+
 ## 2026-08-02: v2 profiles classify authority per tool and enforce it twice
 
 - Keep `flyto.agent-stack.v1` readable for compatibility, with its historical

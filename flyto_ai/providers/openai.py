@@ -227,6 +227,80 @@ class OpenAIProvider(LLMProvider):
             self._client = openai.AsyncOpenAI(**kwargs)
         return self._client
 
+    async def complete_json_schema(
+        self,
+        *,
+        messages,
+        schema,
+        timeout_seconds: float = 120.0,
+    ) -> Dict[str, Any]:
+        """Return a schema-constrained completion, shaped like the other providers.
+
+        Satisfies the StructuredJsonProvider boundary that
+        ``flyto_ai.robotics_planning`` defines, so bounded planning has one
+        provider interface rather than one per vendor.
+
+        ``strict`` structured outputs rather than a prompt asking for JSON:
+        the model then cannot return prose, a fence, or an extra field, which
+        removes the three shapes a caller would otherwise have to reject. The
+        caller still validates the *content* — a schema constrains the shape,
+        and an enum baked into this call can be satisfied by a value the caller
+        no longer accepts.
+
+        Returned in the provider-native shape (``message.content``) that the
+        adapter reads, so a caller does not have to know which vendor answered.
+        """
+        if not 1.0 <= timeout_seconds <= 300.0:
+            raise ValueError("timeout_seconds must be between 1 and 300")
+
+        normalized: List[Dict[str, str]] = []
+        for message in messages:
+            role = str(message.get("role", ""))
+            content = str(message.get("content", ""))
+            if role not in {"system", "user", "assistant"}:
+                raise ValueError("structured messages contain an unsupported role")
+            if not content or len(content) > 256_000:
+                raise ValueError("structured message content is empty or too large")
+            normalized.append({"role": role, "content": content})
+        if not normalized:
+            raise ValueError("structured completion needs at least one message")
+
+        client = self._make_client()
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=normalized,
+            temperature=0,
+            max_tokens=self._max_tokens,
+            timeout=timeout_seconds,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_reply",
+                    "strict": True,
+                    "schema": dict(schema),
+                },
+            },
+        )
+        choice = response.choices[0] if response.choices else None
+        if choice is None:
+            raise RuntimeError("structured completion returned no choices")
+        # A length stop means the JSON is truncated, and truncated JSON parses
+        # as a refusal downstream rather than as the wrong answer — say which it
+        # was so an operator is not left guessing at a bad reply.
+        if getattr(choice, "finish_reason", None) == "length":
+            raise RuntimeError("structured completion was cut off by max_tokens")
+        refusal = getattr(choice.message, "refusal", None)
+        if refusal:
+            raise RuntimeError("model refused the structured request: {}".format(str(refusal)[:200]))
+
+        usage = getattr(response, "usage", None)
+        return {
+            "message": {"content": choice.message.content or ""},
+            "model": getattr(response, "model", self._model),
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+        }
+
     def _is_native_openai(self) -> bool:
         """True if talking to real OpenAI API (not Ollama / custom base_url)."""
         if not self._base_url:

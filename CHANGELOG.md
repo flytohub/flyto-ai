@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `OpenAIProvider.complete_json_schema` drives OpenAI strict structured
+  outputs, so a caller that needs a shape gets it enforced upstream rather
+  than parsing whatever came back; refusals and truncated replies are
+  reported as such instead of being returned as content that fails to parse.
+  Released as 0.15.0 rather than a patch because consumers branch on the
+  method's presence: flyto-cloud's space planner calls it and checks for it
+  by name, since an adapter without it degrades silently to rule-based
+  planning, which still produces a plan and therefore looks healthy.
+
 - Added atomic capability execution policy, redacted content-addressed trace,
   fixed-snapshot authority-bounded replay/Blueprint feedback, reusable
   evidence-bound adapter conformance, and a bounded domain-neutral scenario

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flyto-ai"
-version = "0.15.0"
+version = "0.16.0"
 description = "Open-source AI agent layer for natural-language workflow automation with runtime-discovered modules and reusable YAML recipes."
 readme = "README.md"
 license = "Apache-2.0"
@@ -20,10 +20,6 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0.0",
     "openai>=1.0.0",
-    "anthropic>=0.20.0",
-    "flyto-core[browser]>=2.16.1",
-    "flyto-pro-core>=0.1.0",
-    "flyto-blueprint>=0.1.0",
     "langdetect>=1.0.9",
     "aiosqlite>=0.19.0",
     "rich>=13.0",
@@ -33,6 +29,25 @@ dependencies = [
 [project.optional-dependencies]
 lite = ["pyyaml>=6.0", "pydantic>=2.0.0"]
 serve = ["aiohttp>=3.8"]
+# These four were unconditional base deps through 0.15.0. Every call site
+# that touches them (pro_bridge, planner's Blueprint lookups, the Anthropic
+# provider, robotics-adjacent Core tooling) already lazily imports and
+# try/excepts ImportError — nothing in flyto_ai needs them present to import
+# the package. The only thing that ever needed them unconditionally was
+# pip's resolver, and flyto-core[browser] alone drags in Playwright plus a
+# Chrome download, which is what made flyto-ai uninstallable in a slim
+# image that only wants e.g. OpenAIProvider. Split into extras so a light
+# install stays light; "full" reproduces the pre-0.16.0 base exactly.
+anthropic = ["anthropic>=0.20.0"]
+browser = ["flyto-core[browser]>=2.16.1"]
+pro = ["flyto-pro-core>=0.1.0"]
+blueprint = ["flyto-blueprint>=0.1.0"]
+full = [
+    "anthropic>=0.20.0",
+    "flyto-core[browser]>=2.16.1",
+    "flyto-pro-core>=0.1.0",
+    "flyto-blueprint>=0.1.0",
+]
 # The native coding control plane uses the normal Flyto provider stack.  The
 # Claude SDK remains an explicitly detachable compatibility backend.
 agent = ["claude-agent-sdk>=0.1.0"]

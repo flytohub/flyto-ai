@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Split `flyto-core[browser]`, `flyto-pro-core`, `flyto-blueprint`, and
+  `anthropic` out of the unconditional base `dependencies` into `browser`,
+  `pro`, `blueprint`, and `anthropic` extras (`full` restores all four
+  together). None of them was ever imported at module import time — every
+  call site already lazily imports and try/excepts `ImportError` around
+  them — so the split changes nothing at runtime for a caller that already
+  has them installed. What it fixes is install-time: `flyto-core[browser]`
+  alone pulls Playwright plus a Chrome download, which made `pip install
+  flyto-ai` impossible inside a slim image that only needs e.g.
+  `OpenAIProvider`. Released as 0.16.0, not a patch, because this changes
+  what a bare `pip install flyto-ai` gives you: existing consumers of the
+  full agent stack (flyto-cloud's worker, the desktop build) must move to
+  `flyto-ai[full]` to keep the same install shape.
+
 - `OpenAIProvider.complete_json_schema` drives OpenAI strict structured
   outputs, so a caller that needs a shape gets it enforced upstream rather
   than parsing whatever came back; refusals and truncated replies are

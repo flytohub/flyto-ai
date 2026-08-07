@@ -2,6 +2,18 @@
 """Manual integration test: starts a fake Telegram API + flyto-ai server,
 sends curl-like requests and prints the actual replies that would go to TG."""
 import asyncio
+
+import pytest
+
+# aiohttp is the `serve` extra, not a base dependency, and this file has no
+# test_* functions for pytest to run anyway — it is a script, invoked
+# directly (see __main__ below). Collection still matches it by name
+# (*_test.py), so without this it fails the whole CI run over a module
+# nothing was ever going to execute. Skipping the module, not lazily
+# importing aiohttp inside main(), keeps the failure at collection time
+# obvious rather than deferred to whoever runs this by hand without `[serve]`.
+pytest.importorskip("aiohttp")
+
 from aiohttp import web
 
 # --- Collect replies sent to "Telegram" ---

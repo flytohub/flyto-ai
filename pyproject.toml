@@ -52,7 +52,20 @@ full = [
 # Claude SDK remains an explicitly detachable compatibility backend.
 agent = ["claude-agent-sdk>=0.1.0"]
 claude-sdk = ["claude-agent-sdk>=0.1.0"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0"]
+# Same four packages as `full`, listed again rather than referenced: dev/CI
+# needs the complete feature surface to test Blueprint, Pro and the Anthropic
+# provider, which the base install no longer carries for free now that those
+# are extras. Found by running the real test suite against a bare `[dev]`
+# install, not assumed — test_benchmarking_v3.py (flyto_blueprint) and
+# manual_tg_test.py (aiohttp, the pre-existing `serve` extra) both broke
+# collection the moment the split landed.
+dev = [
+    "pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0",
+    "anthropic>=0.20.0",
+    "flyto-core[browser]>=2.16.1",
+    "flyto-pro-core>=0.1.0",
+    "flyto-blueprint>=0.1.0",
+]
 
 [project.scripts]
 flyto-ai = "flyto_ai.cli:main"

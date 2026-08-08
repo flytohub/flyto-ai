@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import io
 import json
 import os
 import stat
@@ -15,11 +17,13 @@ from urllib.request import Request, urlopen
 
 import pytest
 from flyto_ai.coding import (
+    ApprovalPolicy,
     CapabilityManager,
     CapabilitySpec,
     CheckSpec,
     CodingTaskRequest,
     FlytoCodingAgent,
+    SandboxMode,
 )
 from flyto_ai.coding.contracts import (
     MAX_AUDIT_FINDINGS,
@@ -34,7 +38,7 @@ from flyto_ai.coding.contracts import (
     audit_findings_sha256,
     validate_audit_submission,
 )
-from flyto_ai.coding.http_server import build_http_server
+from flyto_ai.coding.http_server import CodingHTTPHandler, build_http_server
 from flyto_ai.coding.mcp_server import (
     _AUDIT_ARGUMENT_FIELDS,
     CodingMCPServer,
@@ -777,6 +781,608 @@ def _awaiting(service: CodingService, tenant: str, key: str, workspace: Path):
     receipt = _wait(service, tenant, queued.job_id)
     assert receipt.state is CodingJobState.AWAITING_CODEX_AUDIT
     return receipt
+
+
+class FakeClaudeBackend:
+    """Stands in for the Claude SDK: real edits, real response shape, no network."""
+
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        session: str = "sdk-session-1",
+        ok: bool = True,
+        writes: bool = True,
+    ) -> None:
+        self.workspace = workspace
+        self.session = session
+        self.ok = ok
+        self.writes = writes
+        self.requests: list = []
+
+    async def run(self, request):
+        self.requests.append(request)
+        round_index = len(self.requests)
+        if self.writes:
+            (self.workspace / "result.txt").write_text("verified\n")
+            (self.workspace / "notes.txt").write_text("round {}\n".format(round_index))
+        from flyto_ai.agents.models import CodeTaskResponse
+        return CodeTaskResponse(
+            ok=self.ok,
+            message="applied changes in {}".format(self.workspace),
+            session_id="local-evidence-{}".format(round_index),
+            attempts=1,
+            claude_session_id=self.session,
+            claude_num_turns=3,
+            claude_usage={"input_tokens": 11, "output_tokens": 7, "cost_usd": 1.5, "ok": True},
+        )
+
+
+def _claude_workspace(tmp_path: Path, *, check: str = "pass") -> Path:
+    workspace = tmp_path / "claude-workspace"
+    workspace.mkdir(parents=True)
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir()
+    argv = {
+        "pass": [sys.executable, "-c", "from pathlib import Path; assert Path('result.txt').read_text() == 'verified\\n'"],
+        "trivial": [sys.executable, "-c", "pass"],
+        "fail": [sys.executable, "-c", "raise SystemExit(3)"],
+    }[check]
+    config.write_text(
+        "version: flyto.coding-config.v1\n"
+        "checks:\n"
+        "  - name: real_claude_check\n"
+        "    argv: {}\n".format(json.dumps(argv))
+    )
+    return workspace
+
+
+def _claude_adapter(tmp_path: Path, workspace: Path, backend: FakeClaudeBackend):
+    from flyto_ai.agents.claude_code import ClaudeCodingAgent
+    from flyto_ai.coding.store import ThreadStore
+
+    store = ThreadStore(str(tmp_path / "claude-threads"))
+    return ClaudeCodingAgent(store, agent=backend), store
+
+
+def test_claude_adapter_binds_the_sdk_session_and_uses_real_repository_checks(
+    tmp_path: Path,
+) -> None:
+    workspace = _claude_workspace(tmp_path)
+    backend = FakeClaudeBackend(workspace)
+    adapter, store = _claude_adapter(tmp_path, workspace, backend)
+
+    first = asyncio.run(adapter.run(_request(workspace)))
+    assert first.ok is True
+    assert first.thread_id == "sdk-session-1"
+    assert backend.requests[0].service_mode is True
+    assert backend.requests[0].sdk_session_id is None
+    # Attribution comes from independent snapshots, not from model prose.
+    assert first.files_changed == ["notes.txt", "result.txt"]
+    assert [check.name for check in first.checks] == ["real_claude_check"]
+    assert first.checks[0].passed is True
+    # Only bounded integer counters survive; floats and booleans are dropped.
+    assert first.usage == {"input_tokens": 11, "output_tokens": 7}
+    assert first.evidence_path == ""
+    assert str(workspace) not in first.message
+    assert os.path.realpath(str(workspace)) not in first.message
+    assert len(store.digest("sdk-session-1")) == 64
+
+    second = asyncio.run(adapter.run(CodingTaskRequest(
+        message="apply the audit feedback",
+        working_dir=str(workspace),
+        thread_id="sdk-session-1",
+        resume=True,
+    )))
+    assert second.ok is True
+    assert second.thread_id == "sdk-session-1"
+    assert backend.requests[1].sdk_session_id == "sdk-session-1"
+    assert second.files_changed == ["notes.txt"]
+    # The service adapter keeps evidence in the ThreadStore only.
+    assert not list((tmp_path / "claude-threads").glob("**/evidence-*.json"))
+
+
+def test_claude_adapter_fails_closed_on_verification_session_and_capability(
+    tmp_path: Path,
+) -> None:
+    from flyto_ai.agents.claude_code import ClaudeCodingAgent
+    from flyto_ai.coding.store import ThreadStore
+
+    unchecked = tmp_path / "unchecked"
+    unchecked.mkdir()
+    store = ThreadStore(str(tmp_path / "threads-a"))
+    result = asyncio.run(
+        ClaudeCodingAgent(store, agent=FakeClaudeBackend(unchecked)).run(_request(unchecked))
+    )
+    assert result.ok is False and result.failure_code == "verification_required"
+
+    failing = _claude_workspace(tmp_path / "b", check="fail")
+    adapter, _ = _claude_adapter(tmp_path / "b", failing, FakeClaudeBackend(failing))
+    result = asyncio.run(adapter.run(_request(failing)))
+    assert result.ok is False and result.failure_code == "verification_failed"
+
+    idle = _claude_workspace(tmp_path / "c", check="trivial")
+    adapter, _ = _claude_adapter(
+        tmp_path / "c", idle, FakeClaudeBackend(idle, writes=False),
+    )
+    result = asyncio.run(adapter.run(_request(idle)))
+    assert result.ok is False and result.failure_code == "no_changes"
+
+    provider_failure = _claude_workspace(tmp_path / "d")
+    adapter, _ = _claude_adapter(
+        tmp_path / "d", provider_failure, FakeClaudeBackend(provider_failure, ok=False),
+    )
+    result = asyncio.run(adapter.run(_request(provider_failure)))
+    assert result.ok is False and result.failure_code == "provider_failed"
+
+    drifting = _claude_workspace(tmp_path / "e")
+    adapter, _ = _claude_adapter(
+        tmp_path / "e", drifting, FakeClaudeBackend(drifting, session="sdk-other"),
+    )
+    result = asyncio.run(adapter.run(CodingTaskRequest(
+        message="rework", working_dir=str(drifting),
+        thread_id="sdk-session-1", resume=True,
+    )))
+    assert result.ok is False and result.failure_code == "session_binding_failed"
+
+    capability = _claude_workspace(tmp_path / "f")
+    (capability / ".flyto" / "coding.yaml").write_text(
+        "version: flyto.coding-config.v1\n"
+        "checks:\n"
+        "  - name: real_claude_check\n"
+        "    argv: {}\n"
+        "capabilities:\n"
+        "  - name: indexer\n"
+        "    argv: [flyto-indexer-mcp]\n"
+        "    required: true\n"
+        "    required_tools: [context]\n".format(json.dumps([sys.executable, "-c", "pass"]))
+    )
+    adapter, _ = _claude_adapter(tmp_path / "f", capability, FakeClaudeBackend(capability))
+    result = asyncio.run(adapter.run(_request(capability)))
+    assert result.ok is False
+    assert result.failure_code == "required_capability_unavailable"
+
+
+class ExplodingClaudeBackend:
+    """Fails before any SDK session identity exists."""
+
+    def __init__(self) -> None:
+        self.requests: list = []
+
+    async def run(self, request):
+        self.requests.append(request)
+        raise RuntimeError("sdk transport failure")
+
+
+def _claude_service(
+    tmp_path: Path,
+    workspace: Path,
+    backend,
+    *,
+    require_codex_audit: bool = False,
+    sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE,
+    approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER,
+) -> CodingService:
+    from flyto_ai.agents.claude_code import ClaudeCodingAgent
+
+    return CodingService(
+        lambda store: ClaudeCodingAgent(store, agent=backend),
+        state_root=str(tmp_path / "claude-service-state"),
+        workspace_roots=(str(workspace),),
+        max_workers=2,
+        max_queued=8,
+        require_codex_audit=require_codex_audit,
+        sandbox_mode=sandbox_mode,
+        approval_policy=approval_policy,
+    )
+
+
+@pytest.mark.parametrize(("sandbox_mode", "approval_policy", "code"), [
+    (SandboxMode.READ_ONLY, ApprovalPolicy.NEVER, "workspace_read_only"),
+    (SandboxMode.READ_ONLY, ApprovalPolicy.ALWAYS, "workspace_read_only"),
+    (SandboxMode.WORKSPACE_WRITE, ApprovalPolicy.ON_REQUEST, "approval_required"),
+    (SandboxMode.WORKSPACE_WRITE, ApprovalPolicy.ALWAYS, "approval_required"),
+])
+def test_claude_refuses_impossible_write_tasks_before_calling_the_backend(
+    tmp_path: Path, sandbox_mode: SandboxMode, approval_policy: ApprovalPolicy, code: str,
+) -> None:
+    workspace = _claude_workspace(tmp_path)
+    backend = FakeClaudeBackend(workspace)
+    service = _claude_service(
+        tmp_path, workspace, backend,
+        sandbox_mode=sandbox_mode, approval_policy=approval_policy,
+    )
+    try:
+        queued = service.submit("tenant-claude", "claude-authority", _request(workspace))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == code
+        assert failed.thread_id and len(failed.evidence_sha256) == 64
+        # The model was never asked to do something its authority forbids.
+        assert backend.requests == []
+        assert not (workspace / "result.txt").exists()
+    finally:
+        service.close()
+
+
+def test_claude_read_only_authority_runs_with_read_only_tools_and_no_edits(
+    tmp_path: Path,
+) -> None:
+    from flyto_ai.agents.claude_code import SERVICE_READONLY_TOOLS, ClaudeCodeAgent
+
+    workspace = _claude_workspace(tmp_path, check="trivial")
+    backend = FakeClaudeBackend(workspace, writes=False)
+    service = _claude_service(
+        tmp_path, workspace, backend, sandbox_mode=SandboxMode.READ_ONLY,
+    )
+    try:
+        queued = service.submit("tenant-claude", "claude-readonly", CodingTaskRequest(
+            message="review the workspace", working_dir=str(workspace),
+            require_changes=False,
+        ))
+        finished = _wait(service, "tenant-claude", queued.job_id)
+        assert finished.state is CodingJobState.COMPLETED
+        assert len(backend.requests) == 1
+        code_request = backend.requests[0]
+        assert code_request.service_edit_authority is False
+        options = ClaudeCodeAgent()._option_kwargs(
+            code_request, session_id=None, system_prompt="s", max_turns=1, max_budget=1.0,
+        )
+        assert set(options["allowed_tools"]) == set(SERVICE_READONLY_TOOLS)
+        assert options["permission_mode"] == "default"
+    finally:
+        service.close()
+
+
+def test_claude_read_only_authority_never_accepts_an_observed_change(
+    tmp_path: Path,
+) -> None:
+    workspace = _claude_workspace(tmp_path, check="trivial")
+    # The backend writes anyway, standing in for an SDK catalog regression.
+    backend = FakeClaudeBackend(workspace)
+    service = _claude_service(
+        tmp_path, workspace, backend, sandbox_mode=SandboxMode.READ_ONLY,
+    )
+    try:
+        queued = service.submit("tenant-claude", "claude-drift", CodingTaskRequest(
+            message="review only", working_dir=str(workspace), require_changes=False,
+        ))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "unexpected_workspace_change"
+        assert failed.landable is False
+    finally:
+        service.close()
+
+
+def test_claude_session_id_beyond_the_thread_boundary_fails_durably(
+    tmp_path: Path,
+) -> None:
+    from flyto_ai.agents.claude_code import HOST_THREAD_PREFIX
+
+    workspace = _claude_workspace(tmp_path)
+    backend = FakeClaudeBackend(workspace, session="s" * 100)
+    service = _claude_service(tmp_path, workspace, backend)
+    try:
+        queued = service.submit("tenant-claude", "claude-longid", _request(workspace))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "session_binding_failed"
+        assert failed.thread_id.startswith(HOST_THREAD_PREFIX)
+        assert len(failed.thread_id) <= 64
+        assert len(failed.evidence_sha256) == 64
+        assert failed.implementation_session_id == ""
+    finally:
+        service.close()
+
+
+def test_claude_accepts_a_normal_uuid_session(tmp_path: Path) -> None:
+    workspace = _claude_workspace(tmp_path)
+    session = "8f14e45f-ceea-467a-9e0f-6b1a2c3d4e5f"
+    backend = FakeClaudeBackend(workspace, session=session)
+    service = _claude_service(tmp_path, workspace, backend, require_codex_audit=True)
+    try:
+        queued = service.submit("tenant-claude", "claude-uuid", _request(workspace))
+        awaiting = _wait(service, "tenant-claude", queued.job_id)
+        assert awaiting.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert awaiting.implementation_session_id == session
+        assert awaiting.thread_id == session
+    finally:
+        service.close()
+
+
+def test_pre_session_failures_carry_a_durable_non_sdk_thread_id(tmp_path: Path) -> None:
+    from flyto_ai.agents.claude_code import HOST_THREAD_PREFIX, ClaudeCodingAgent
+    from flyto_ai.coding.store import ThreadStore
+
+    generated = ClaudeCodingAgent.host_thread_id("")
+    assert generated.startswith(HOST_THREAD_PREFIX)
+    assert ClaudeCodingAgent.host_thread_id("sdk-session-1") == "sdk-session-1"
+    for unusable in ("", None, "../escape", "a" * 100, 5, True):
+        assert ClaudeCodingAgent.host_thread_id(unusable).startswith(HOST_THREAD_PREFIX)
+    # The provisional id is a real ThreadStore identifier, so the service can
+    # always compute an evidence digest for a failed round.
+    assert len(ThreadStore(str(tmp_path / "threads")).digest(generated)) == 64
+
+
+def test_claude_missing_checks_fail_durably_through_the_real_service(tmp_path: Path) -> None:
+    workspace = tmp_path / "unchecked-workspace"
+    workspace.mkdir()
+    backend = FakeClaudeBackend(workspace)
+    service = _claude_service(tmp_path, workspace, backend)
+    try:
+        queued = service.submit("tenant-claude", "claude-checks", _request(workspace))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "verification_required"
+        assert failed.result is not None
+        assert failed.result.failure_code == "verification_required"
+        assert failed.thread_id and len(failed.evidence_sha256) == 64
+        assert failed.landable is False
+    finally:
+        service.close()
+
+
+def test_claude_provider_exception_fails_durably_before_any_sdk_session(
+    tmp_path: Path,
+) -> None:
+    from flyto_ai.agents.claude_code import HOST_THREAD_PREFIX
+
+    workspace = _claude_workspace(tmp_path)
+    backend = ExplodingClaudeBackend()
+    service = _claude_service(tmp_path, workspace, backend)
+    try:
+        queued = service.submit("tenant-claude", "claude-boom", _request(workspace))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "provider_failed"
+        assert failed.thread_id.startswith(HOST_THREAD_PREFIX)
+        assert len(failed.evidence_sha256) == 64
+        assert failed.implementation_session_id == ""
+        assert "sdk transport failure" not in json.dumps(receipt_to_mapping(failed))
+    finally:
+        service.close()
+
+
+def test_claude_adapter_completes_a_codex_rework_cycle_through_the_real_service(
+    tmp_path: Path,
+) -> None:
+    workspace = _claude_workspace(tmp_path)
+    backend = FakeClaudeBackend(workspace)
+    service = _claude_service(tmp_path, workspace, backend, require_codex_audit=True)
+    try:
+        queued = service.submit("tenant-claude", "claude-cycle", _request(workspace))
+        first = _wait(service, "tenant-claude", queued.job_id)
+        assert first.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert first.thread_id == "sdk-session-1"
+        assert first.implementation_session_id == "sdk-session-1"
+        assert first.implementation_backend == "native"
+        assert backend.requests[0].sdk_session_id is None
+
+        service.audit(
+            "tenant-claude", queued.job_id, first.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK, (_blocker(),),
+        )
+        second = _wait(service, "tenant-claude", queued.job_id)
+        assert second.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert second.job_id == first.job_id
+        assert second.implementation_session_id == "sdk-session-1"
+        assert second.implementation_revision_sha256 != first.implementation_revision_sha256
+        assert len(backend.requests) == 2
+        assert backend.requests[1].sdk_session_id == "sdk-session-1"
+        assert backend.requests[1].service_mode is True
+
+        accepted = service.audit(
+            "tenant-claude", queued.job_id, second.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert accepted.landable is True
+        assert accepted.audit_count == 2 and accepted.rework_count == 1
+    finally:
+        service.close()
+
+
+def test_public_message_redacts_every_canonical_workspace_spelling(tmp_path: Path) -> None:
+    from flyto_ai.agents.claude_code import ClaudeCodingAgent
+
+    real = tmp_path / "real-ws"
+    real.mkdir()
+    link = tmp_path / "link-ws"
+    link.symlink_to(real)
+
+    class _Response:
+        message = "edited {}/app.py then re-read {}/app.py".format(link, real)
+
+    text = ClaudeCodingAgent._public_message(_Response(), str(link))
+    for spelling in (str(link), str(real), os.path.realpath(str(link))):
+        assert spelling not in text
+    assert text.count("<workspace>") == 2
+
+
+class _FakeHTTPConnection:
+    """Socket-free transport so handler routing is testable without binding."""
+
+    def __init__(self, raw: bytes) -> None:
+        self._reader = io.BytesIO(raw)
+        self.sent = bytearray()
+
+    def makefile(self, mode: str = "rb", *args, **kwargs):
+        return self._reader
+
+    def sendall(self, data) -> None:
+        self.sent.extend(bytes(data))
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeHTTPServer:
+    def __init__(self, service, tenant_id: str, auth_token: str) -> None:
+        self.coding_service = service
+        self.tenant_id = tenant_id
+        self.auth_token_sha256 = hashlib.sha256(auth_token.encode()).digest()
+
+
+def _http(
+    service,
+    method: str,
+    path: str,
+    *,
+    tenant: str = "tenant-http",
+    token: str = TEST_BEARER_TOKEN,
+    body=None,
+    content_type: str = "application/json",
+    extra_headers: str = "",
+):
+    payload = b"" if body is None else json.dumps(body).encode()
+    head = "{} {} HTTP/1.1\r\nHost: 127.0.0.1\r\n".format(method, path)
+    if body is not None:
+        head += "Content-Type: {}\r\nContent-Length: {}\r\n".format(content_type, len(payload))
+    if token:
+        head += "Authorization: Bearer {}\r\n".format(token)
+    head += extra_headers + "Connection: close\r\n\r\n"
+    connection = _FakeHTTPConnection(head.encode() + payload)
+    CodingHTTPHandler(
+        connection, ("127.0.0.1", 0), _FakeHTTPServer(service, tenant, TEST_BEARER_TOKEN),
+    )
+    raw = bytes(connection.sent)
+    header, _, tail = raw.partition(b"\r\n\r\n")
+    status = int(header.split(b" ")[1])
+    return status, (json.loads(tail) if tail else {}), header.decode("latin-1")
+
+
+def test_http_audit_endpoint_drives_the_real_state_machine(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    provider = ReworkingProvider()
+    service = _audited_service(tmp_path, workspace, provider=provider)
+    try:
+        awaiting = _awaiting(service, "tenant-http", "http-audit", workspace)
+        route = "/v1/coding/jobs/{}/audit".format(awaiting.job_id)
+
+        status, payload, _ = _http(service, "POST", route, token="", body={
+            "implementation_revision_sha256": awaiting.implementation_revision_sha256,
+            "verdict": "accept", "findings": [],
+        })
+        assert status == 401 and payload["error"] == "unauthorized"
+
+        status, payload, _ = _http(service, "POST", route, tenant="tenant-other", body={
+            "implementation_revision_sha256": awaiting.implementation_revision_sha256,
+            "verdict": "accept", "findings": [],
+        })
+        assert status == 404 and payload["error"] == "job_not_found"
+
+        status, payload, _ = _http(service, "POST", route, body={
+            "implementation_revision_sha256": _AUDIT_REVISION,
+            "verdict": "accept", "findings": [],
+        })
+        assert status == 409 and payload["error"] == "revision_mismatch"
+
+        assert service.get("tenant-http", awaiting.job_id).audit_count == 0
+
+        status, payload, headers = _http(service, "POST", route, body={
+            "implementation_revision_sha256": awaiting.implementation_revision_sha256,
+            "verdict": "rework", "findings": [_valid_finding_payload()],
+        })
+        assert status == 200
+        assert payload["job"]["state"] == CodingJobState.REWORK_QUEUED.value
+        assert payload["job"]["landable"] is False
+        assert "no-store" in headers
+        assert "evidence_path" not in json.dumps(payload)
+
+        repaired = _wait(service, "tenant-http", awaiting.job_id)
+        status, payload, _ = _http(service, "POST", route, body={
+            "implementation_revision_sha256": repaired.implementation_revision_sha256,
+            "verdict": "accept", "findings": [],
+        })
+        assert status == 200
+        assert payload["job"]["state"] == CodingJobState.CODEX_ACCEPTED.value
+        assert payload["job"]["landable"] is True
+        assert payload["job"]["audit_count"] == 2
+
+        status, payload, _ = _http(service, "POST", route, body={
+            "implementation_revision_sha256": repaired.implementation_revision_sha256,
+            "verdict": "accept", "findings": [],
+        })
+        assert status == 409 and payload["error"] == "audit_state_conflict"
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("body", [
+    {"verdict": "accept", "findings": []},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "findings": []},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "accept"},
+    {"implementation_revision_sha256": "B3" * 32, "verdict": "accept", "findings": []},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "approve", "findings": []},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": True, "findings": []},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "rework", "findings": {}},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "rework",
+     "findings": [{"code": "c1", "severity": "minor", "message": "m", "log": "secret"}]},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "accept", "findings": [],
+     "implementation_backend": "claude"},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "accept", "findings": [],
+     "require_codex_audit": False},
+    {"implementation_revision_sha256": _AUDIT_REVISION, "verdict": "accept", "findings": [],
+     "landable": True},
+])
+def test_http_audit_rejects_malformed_or_authority_bearing_bodies(
+    tmp_path: Path, body: dict,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = _audited_service(tmp_path, workspace)
+    try:
+        awaiting = _awaiting(service, "tenant-http", "http-malformed", workspace)
+        status, payload, _ = _http(
+            service, "POST", "/v1/coding/jobs/{}/audit".format(awaiting.job_id), body=body,
+        )
+        assert status == 400
+        assert payload == {"ok": False, "error": "invalid_request"}
+        unchanged = service.get("tenant-http", awaiting.job_id)
+        assert unchanged.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert unchanged.audit_count == 0 and unchanged.landable is False
+    finally:
+        service.close()
+
+
+def test_http_routes_stay_compatible_and_reject_unknown_audit_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = _service(tmp_path, workspace)
+    try:
+        status, payload, _ = _http(service, "GET", "/healthz", token="")
+        assert status == 200 and payload["ok"] is True
+
+        status, payload, _ = _http(
+            service, "POST", "/v1/coding/jobs",
+            body={"message": "task", "working_dir": str(workspace)},
+            extra_headers="Idempotency-Key: http-compat\r\n",
+        )
+        assert status == 202
+        job_id = payload["job"]["job_id"]
+        completed = _wait(service, "tenant-http", job_id)
+        assert completed.state is CodingJobState.COMPLETED
+
+        status, payload, _ = _http(service, "GET", "/v1/coding/jobs/" + job_id)
+        assert status == 200 and payload["job"]["job_id"] == job_id
+
+        for unknown in ("/v1/coding/jobs/not-a-job/audit", "/v1/coding/audit", "/v1/other"):
+            status, payload, _ = _http(service, "POST", unknown, body={})
+            assert status == 404 and payload["error"] == "not_found"
+
+        # Audit stays unavailable while the service is not audit-required.
+        status, payload, _ = _http(
+            service, "POST", "/v1/coding/jobs/{}/audit".format(job_id),
+            body={
+                "implementation_revision_sha256": _AUDIT_REVISION,
+                "verdict": "accept", "findings": [],
+            },
+        )
+        assert status == 403 and payload["error"] == "audit_not_enabled"
+    finally:
+        service.close()
 
 
 def test_public_package_exports_the_canonical_audit_surface() -> None:

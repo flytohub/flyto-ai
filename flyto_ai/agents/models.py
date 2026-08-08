@@ -6,8 +6,24 @@ The provider-neutral public contracts live in :mod:`flyto_ai.coding`.  These
 models intentionally remain small so existing integrations can keep selecting
 the Claude SDK backend without making it the default Flyto coding runtime.
 """
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+
+MAX_SDK_SESSION_ID_CHARS = 128
+#: An SDK session id is opaque. It is bounded and free of separators so it can
+#: also be used as a durable thread identifier, but it is never parsed.
+_SDK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def is_safe_sdk_session_id(value: Any) -> bool:
+    """Check one opaque Claude SDK session identity without interpreting it."""
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, str)
+        and bool(_SDK_SESSION_ID_RE.fullmatch(value))
+    )
 
 
 @dataclass
@@ -21,6 +37,21 @@ class CodeTaskRequest:
     max_fix_attempts: int = 3
     max_budget_usd: float = 5.0
     max_turns: int = 30
+    # Internal service-mode state. Direct CLI and legacy callers never set
+    # these, so every existing constructor keeps its exact behavior.
+    sdk_session_id: Optional[str] = None
+    service_mode: bool = False
+    #: Whether the startup sandbox/approval authority permits model edits.
+    #: Only the in-process adapter sets this; no remote payload can reach it.
+    service_edit_authority: bool = True
+
+    def __post_init__(self) -> None:
+        if self.sdk_session_id is not None and not is_safe_sdk_session_id(self.sdk_session_id):
+            raise ValueError("sdk_session_id must be a bounded opaque identifier")
+        if not isinstance(self.service_mode, bool):
+            raise ValueError("service_mode must be a boolean")
+        if not isinstance(self.service_edit_authority, bool):
+            raise ValueError("service_edit_authority must be a boolean")
 
 
 @dataclass

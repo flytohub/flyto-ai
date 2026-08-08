@@ -680,3 +680,480 @@ class TestPackageExports:
         assert StreamEventType.PHASE_START.value == "phase_start"
         assert StreamEventType.PHASE_END.value == "phase_end"
         assert StreamEventType.VERIFICATION_RESULT.value == "verification_result"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Exact Claude SDK session continuation and pinned model
+# ──────────────────────────────────────────────────────────────────────
+
+class TestClaudeSdkSessionContinuation:
+    """The SDK session id is the only identity that can resume a conversation."""
+
+    def _agent(self, tmp_path):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+        agent = ClaudeCodeAgent()
+        agent._cc.evidence_dir = str(tmp_path / "evidence")
+        return agent
+
+    def _record(self, agent):
+        seen = []
+
+        async def fake(**kwargs):
+            seen.append(kwargs["session_id"])
+            return {
+                "session_id": agent._next_session, "message": "done", "cost": 0.0,
+                "num_turns": 1, "duration_ms": 1, "usage": {"input_tokens": 2},
+            }
+
+        agent._run_claude_code = fake
+        return seen
+
+    def test_first_round_starts_without_a_session_and_adopts_the_sdk_identity(
+        self, event_loop, tmp_path,
+    ):
+        agent = self._agent(tmp_path)
+        agent._next_session = "sdk-fresh"
+        seen = self._record(agent)
+        result = event_loop.run_until_complete(
+            agent.run(CodeTaskRequest(message="build", working_dir=str(tmp_path)))
+        )
+        assert seen == [None]
+        assert result.ok is True
+        assert result.claude_session_id == "sdk-fresh"
+        # The local evidence id is a different identity entirely.
+        assert result.session_id != result.claude_session_id
+
+    def test_resumed_request_uses_the_supplied_id_on_the_first_sdk_call(
+        self, event_loop, tmp_path,
+    ):
+        agent = self._agent(tmp_path)
+        agent._next_session = "sdk-resume"
+        seen = self._record(agent)
+        result = event_loop.run_until_complete(agent.run(CodeTaskRequest(
+            message="rework", working_dir=str(tmp_path),
+            sdk_session_id="sdk-resume", service_mode=True,
+        )))
+        assert seen == ["sdk-resume"]
+        assert result.ok is True
+        assert result.claude_session_id == "sdk-resume"
+
+    @pytest.mark.parametrize("returned", [None, "", "   ", "../escape", "a" * 200])
+    def test_missing_or_unsafe_session_identity_fails_closed(
+        self, event_loop, tmp_path, returned,
+    ):
+        agent = self._agent(tmp_path)
+        agent._next_session = returned
+        self._record(agent)
+        result = event_loop.run_until_complete(
+            agent.run(CodeTaskRequest(message="build", working_dir=str(tmp_path)))
+        )
+        assert result.ok is False
+        assert result.claude_session_id is None
+
+    def test_changed_session_identity_fails_closed(self, event_loop, tmp_path):
+        agent = self._agent(tmp_path)
+        agent._next_session = "sdk-other"
+        self._record(agent)
+        result = event_loop.run_until_complete(agent.run(CodeTaskRequest(
+            message="rework", working_dir=str(tmp_path),
+            sdk_session_id="sdk-resume", service_mode=True,
+        )))
+        assert result.ok is False
+        assert result.claude_session_id is None
+
+    def test_service_mode_writes_no_legacy_evidence_file(self, event_loop, tmp_path):
+        agent = self._agent(tmp_path)
+        agent._next_session = "sdk-quiet"
+        self._record(agent)
+        evidence_dir = tmp_path / "evidence"
+        event_loop.run_until_complete(agent.run(CodeTaskRequest(
+            message="build", working_dir=str(tmp_path),
+            sdk_session_id="sdk-quiet", service_mode=True,
+        )))
+        assert not evidence_dir.exists() or not list(evidence_dir.glob("*"))
+
+        event_loop.run_until_complete(
+            agent.run(CodeTaskRequest(message="build", working_dir=str(tmp_path)))
+        )
+        assert list(evidence_dir.glob("*"))
+
+    def test_internal_session_state_is_validated_and_optional(self):
+        assert CodeTaskRequest(message="m", working_dir="/tmp").sdk_session_id is None
+        assert CodeTaskRequest(message="m", working_dir="/tmp").service_mode is False
+        with pytest.raises(ValueError, match="bounded opaque identifier"):
+            CodeTaskRequest(message="m", working_dir="/tmp", sdk_session_id="../escape")
+        with pytest.raises(ValueError, match="service_mode must be a boolean"):
+            CodeTaskRequest(message="m", working_dir="/tmp", service_mode="yes")
+
+
+class TestClaudeSdkOptions:
+    """Option construction is inspectable without importing or calling the SDK."""
+
+    def _options(self, tmp_path, **request_kwargs):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+        agent = ClaudeCodeAgent()
+        request = CodeTaskRequest(
+            message="task", working_dir=str(tmp_path), **request_kwargs,
+        )
+        return agent, agent._option_kwargs(
+            request, session_id=request_kwargs.get("sdk_session_id"),
+            system_prompt="system", max_turns=7, max_budget=1.25,
+        )
+
+    def test_model_is_pinned_and_never_auto_selected(self, tmp_path):
+        from flyto_ai.agents.claude_code import DEFAULT_CLAUDE_MODEL
+        agent, options = self._options(tmp_path)
+        assert DEFAULT_CLAUDE_MODEL == "claude-opus-5"
+        assert options["model"] == "claude-opus-5"
+
+        agent._cc.model = "claude-sonnet-4-6"
+        assert agent.resolve_model(agent._cc) == "claude-sonnet-4-6"
+        for invalid in ("", "not a model", None, 5, "x" * 100):
+            agent._cc.model = invalid
+            assert agent.resolve_model(agent._cc) == "claude-opus-5"
+
+    def test_legacy_mode_keeps_its_tool_catalog_and_permission_mode(self, tmp_path):
+        _, options = self._options(tmp_path)
+        assert "Bash" in options["allowed_tools"]
+        assert options["permission_mode"] == "default"
+        assert options["system_prompt"] == "system"
+        assert "resume" not in options
+
+    def test_service_mode_ignores_a_configured_model(self, tmp_path):
+        """Configuration may vary the legacy backend; it cannot redirect service work."""
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+        agent = ClaudeCodeAgent()
+        agent._cc.model = "claude-sonnet-4-6"
+        legacy = CodeTaskRequest(message="task", working_dir=str(tmp_path))
+        service = CodeTaskRequest(
+            message="task", working_dir=str(tmp_path), service_mode=True,
+        )
+        common = {"system_prompt": "system", "max_turns": 7, "max_budget": 1.25}
+        assert agent._option_kwargs(legacy, session_id=None, **common)["model"] == (
+            "claude-sonnet-4-6"
+        )
+        assert agent._option_kwargs(service, session_id=None, **common)["model"] == (
+            "claude-opus-5"
+        )
+        for configured in ("claude-haiku-4-5-20251001", "", "not a model", None):
+            agent._cc.model = configured
+            assert agent._option_kwargs(service, session_id=None, **common)["model"] == (
+                "claude-opus-5"
+            )
+
+    def test_service_mode_has_no_process_execution_tool(self, tmp_path):
+        from flyto_ai.agents.claude_code import SERVICE_ALLOWED_TOOLS
+        _, options = self._options(
+            tmp_path, service_mode=True, sdk_session_id="sdk-1",
+        )
+        assert set(options["allowed_tools"]) == set(SERVICE_ALLOWED_TOOLS)
+        assert "Bash" not in options["allowed_tools"]
+        assert options["permission_mode"] == "acceptEdits"
+        assert options["resume"] == "sdk-1"
+        assert "system_prompt" not in options
+        assert options["model"] == "claude-opus-5"
+
+
+class TestServiceEditAuthority:
+    """Startup sandbox/approval authority reaches the SDK tool catalog."""
+
+    def _options(self, tmp_path, *, edit_authority):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+        request = CodeTaskRequest(
+            message="task", working_dir=str(tmp_path),
+            service_mode=True, service_edit_authority=edit_authority,
+        )
+        return ClaudeCodeAgent()._option_kwargs(
+            request, session_id=None, system_prompt="system",
+            max_turns=7, max_budget=1.25,
+        )
+
+    def test_writable_authority_keeps_edit_tools_and_accept_edits(self, tmp_path):
+        from flyto_ai.agents.claude_code import SERVICE_ALLOWED_TOOLS
+        options = self._options(tmp_path, edit_authority=True)
+        assert set(options["allowed_tools"]) == set(SERVICE_ALLOWED_TOOLS)
+        assert options["permission_mode"] == "acceptEdits"
+
+    def test_read_only_authority_removes_every_write_tool(self, tmp_path):
+        from flyto_ai.agents.claude_code import SERVICE_READONLY_TOOLS
+        options = self._options(tmp_path, edit_authority=False)
+        assert set(options["allowed_tools"]) == set(SERVICE_READONLY_TOOLS)
+        assert set(options["allowed_tools"]) == {"Read", "Glob"}
+        assert options["permission_mode"] == "default"
+        assert options["model"] == "claude-opus-5"
+
+    def test_no_service_catalog_exposes_content_search_or_bash(self, tmp_path):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+        for authority in (True, False):
+            catalog = set(self._options(tmp_path, edit_authority=authority)["allowed_tools"])
+            assert "Grep" not in catalog
+            assert "Bash" not in catalog
+        assert set(self._options(tmp_path, edit_authority=True)["allowed_tools"]) == {
+            "Read", "Edit", "Write", "Glob",
+        }
+        # The legacy direct catalog is unchanged and still configurable.
+        agent = ClaudeCodeAgent()
+        legacy = agent._option_kwargs(
+            CodeTaskRequest(message="task", working_dir=str(tmp_path)),
+            session_id=None, system_prompt="s", max_turns=1, max_budget=1.0,
+        )
+        assert set(legacy["allowed_tools"]) >= {"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
+
+    def test_service_mode_denies_content_search_even_inside_the_workspace(
+        self, event_loop, tmp_path,
+    ):
+        (tmp_path / ".env").write_text("API_TOKEN=s3cr3t\n")
+        for arguments in (
+            {"pattern": "API_TOKEN", "path": "."},
+            {"pattern": "API_TOKEN"},
+            {"pattern": "API_TOKEN", "path": str(tmp_path)},
+        ):
+            with pytest.raises(GuardianBlocked) as blocked:
+                event_loop.run_until_complete(guardian_pre_hook(
+                    "Grep", arguments, "id",
+                    workspace=str(tmp_path), service_mode=True,
+                ))
+            message = str(blocked.value)
+            assert "content search is not available" in message
+            for fragment in ("API_TOKEN", "s3cr3t", str(tmp_path), "."):
+                assert fragment not in message.replace("service mode.", "service mode")
+
+        # Names-only search stays available inside the workspace.
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Glob", {"pattern": "**/*.py"}, "id",
+            workspace=str(tmp_path), service_mode=True,
+        )) == {}
+
+    def test_legacy_content_search_remains_available(self, event_loop, tmp_path):
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Grep", {"pattern": "value", "path": "."}, "id", workspace=str(tmp_path),
+        )) == {}
+        assert event_loop.run_until_complete(
+            guardian_pre_hook("Grep", {"pattern": "value"}, "id")
+        ) == {}
+
+    @pytest.mark.parametrize("tool", ["Glob", "Grep"])
+    @pytest.mark.parametrize("root", [None, 5, True, ["."], {"path": "."}])
+    def test_non_string_search_paths_fail_closed(self, event_loop, tmp_path, tool, root):
+        with pytest.raises(GuardianBlocked, match="search path must be a string"):
+            event_loop.run_until_complete(guardian_pre_hook(
+                tool, {"pattern": "*", "path": root}, "id", workspace=str(tmp_path),
+            ))
+
+    def test_flag_is_validated_and_defaults_to_the_legacy_behavior(self):
+        assert CodeTaskRequest(message="m", working_dir="/tmp").service_edit_authority is True
+        with pytest.raises(ValueError, match="service_edit_authority must be a boolean"):
+            CodeTaskRequest(message="m", working_dir="/tmp", service_edit_authority="yes")
+
+    @pytest.mark.parametrize("tool", ["Edit", "Write", "NotebookEdit", "MultiEdit"])
+    def test_guardian_denies_mutation_without_edit_authority(
+        self, event_loop, tmp_path, tool,
+    ):
+        with pytest.raises(GuardianBlocked, match="no workspace write authority"):
+            event_loop.run_until_complete(guardian_pre_hook(
+                tool, {"file_path": str(tmp_path / "app.py")}, "id",
+                workspace=str(tmp_path), service_mode=True, edit_authority=False,
+            ))
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Read", {"file_path": str(tmp_path / "app.py")}, "id",
+            workspace=str(tmp_path), service_mode=True, edit_authority=False,
+        )) == {}
+
+
+class TestGuardianSearchRootConfinement:
+    def test_search_roots_share_the_workspace_boundary(self, event_loop, tmp_path):
+        workspace = tmp_path / "ws"
+        (workspace / "pkg").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (workspace / "linked").symlink_to(outside)
+        (workspace / "inner").symlink_to(workspace / "pkg")
+
+        for tool in ("Glob", "Grep"):
+            for allowed in ({}, {"path": ""}, {"path": "pkg"}, {"path": str(workspace)},
+                            {"path": "inner"}):
+                arguments = {"pattern": "**/*.py"}
+                arguments.update(allowed)
+                assert event_loop.run_until_complete(guardian_pre_hook(
+                    tool, arguments, "id", workspace=str(workspace),
+                )) == {}
+            for denied in ("..", "../outside", str(outside), "/etc", "linked"):
+                with pytest.raises(GuardianBlocked) as blocked:
+                    event_loop.run_until_complete(guardian_pre_hook(
+                        tool, {"pattern": "*", "path": denied}, "id",
+                        workspace=str(workspace),
+                    ))
+                message = str(blocked.value)
+                assert "outside the run workspace" in message
+                for fragment in (denied, str(outside), str(workspace)):
+                    if fragment:
+                        assert fragment not in message
+
+    def test_search_roots_ignore_write_extension_rules(self, event_loop, tmp_path):
+        (tmp_path / "data.bin").mkdir()
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Glob", {"pattern": "*", "path": "data.bin"}, "id", workspace=str(tmp_path),
+        )) == {}
+
+
+class TestGuardianWorkspaceConfinement:
+    def test_paths_must_resolve_inside_the_run_workspace(self, event_loop, tmp_path):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "app.py").write_text("value = 1\n")
+        outside = tmp_path / "outside.py"
+        outside.write_text("secret = 1\n")
+        (workspace / "escape.py").symlink_to(outside)
+
+        for allowed in ("app.py", str(workspace / "app.py"), "./app.py"):
+            assert event_loop.run_until_complete(guardian_pre_hook(
+                "Read", {"file_path": allowed}, "id", workspace=str(workspace),
+            )) == {}
+        for denied in ("../outside.py", str(outside), "escape.py", "/etc/hosts"):
+            with pytest.raises(GuardianBlocked, match="outside the run workspace"):
+                event_loop.run_until_complete(guardian_pre_hook(
+                    "Read", {"file_path": denied}, "id", workspace=str(workspace),
+                ))
+
+    def test_resolved_symlink_targets_are_rejected(self, event_loop, tmp_path):
+        """A link's name says nothing about what it resolves to."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / ".env").write_text("API_TOKEN=s3cr3t\n")
+        (workspace / "real.py").write_text("value = 1\n")
+        (workspace / "safe.py").symlink_to(workspace / ".env")
+        (workspace / "alias.py").symlink_to(workspace / "real.py")
+
+        for tool in ("Read", "Edit", "Write"):
+            for linked in ("safe.py", "alias.py"):
+                with pytest.raises(GuardianBlocked) as blocked:
+                    event_loop.run_until_complete(guardian_pre_hook(
+                        tool, {"file_path": linked}, "id", workspace=str(workspace),
+                    ))
+                message = str(blocked.value)
+                assert "symlink" in message
+                for fragment in ("s3cr3t", ".env", linked, str(workspace)):
+                    assert fragment not in message
+
+        # A regular in-workspace file keeps working.
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Edit", {"file_path": "real.py"}, "id", workspace=str(workspace),
+        )) == {}
+
+    def test_sensitive_policy_is_reapplied_after_resolution(self, event_loop, tmp_path):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        nested = workspace / "config"
+        nested.mkdir()
+        (nested / "credentials.json").write_text("{}\n")
+        with pytest.raises(GuardianBlocked, match="sensitive"):
+            event_loop.run_until_complete(guardian_pre_hook(
+                "Read", {"file_path": "config/credentials.json"}, "id",
+                workspace=str(workspace),
+            ))
+
+    def test_without_a_workspace_the_legacy_contract_is_unchanged(self, event_loop):
+        assert event_loop.run_until_complete(
+            guardian_pre_hook("Read", {"file_path": "/tmp/test.py"}, "id")
+        ) == {}
+
+    def test_errors_do_not_echo_the_path(self, event_loop):
+        with pytest.raises(GuardianBlocked) as blocked:
+            event_loop.run_until_complete(
+                guardian_pre_hook("Write", {"file_path": "/app/deploy/.env"}, "id")
+            )
+        assert "/app/deploy/.env" not in str(blocked.value)
+
+
+class TestGuardianServiceLandingBoundary:
+    LANDING = [
+        "git add -A",
+        "git commit -m 'ship it'",
+        "git push",
+        "git   push   origin   main",
+        "git push --force origin main",
+        "git -C /repo push",
+        "git --git-dir=/repo/.git push",
+        "FLYTO=1 sudo git push",
+        "/usr/bin/git push",
+        "git tag v1.0.0",
+        "git merge feature",
+        "git rebase -i main",
+        "git reset --hard HEAD~1",
+        "git clean -fdx",
+        "git restore --staged .",
+        "git rm -r src",
+        "git cherry-pick abc123",
+        "git revert HEAD",
+        "echo done && git push",
+        "true; git commit -m x",
+        "npm publish",
+        "yarn publish",
+        "pnpm publish",
+        "twine upload dist/*",
+        "poetry publish",
+        "cargo publish",
+        "gem push pkg.gem",
+        "docker push registry/image:tag",
+        "kubectl apply -f deploy.yaml",
+        "kubectl rollout restart deploy/api",
+        "helm upgrade api ./chart",
+        "terraform apply -auto-approve",
+        "pulumi up",
+        "serverless deploy",
+        "vercel deploy --prod",
+        "netlify deploy",
+        "flyctl deploy",
+        "gh pr merge 12",
+        "gh release create v1.0.0",
+    ]
+
+    @pytest.mark.parametrize("command", LANDING)
+    def test_service_mode_denies_landing_publish_and_deploy(self, event_loop, command):
+        with pytest.raises(GuardianBlocked) as blocked:
+            event_loop.run_until_complete(guardian_pre_hook(
+                "Bash", {"command": command}, "id", service_mode=True,
+            ))
+        # The denial names the matched rule, never the caller's command body.
+        message = str(blocked.value)
+        assert message.startswith("Bash blocked:")
+        assert len(message) <= 80
+
+    def test_denial_never_echoes_command_arguments_or_credentials(self, event_loop):
+        with pytest.raises(GuardianBlocked) as blocked:
+            event_loop.run_until_complete(guardian_pre_hook(
+                "Bash",
+                {"command": "git push https://ci-user:s3cr3t@example.invalid/repo.git main"},
+                "id", service_mode=True,
+            ))
+        message = str(blocked.value)
+        for fragment in ("s3cr3t", "ci-user", "example.invalid", "repo.git", "main"):
+            assert fragment not in message
+
+    @pytest.mark.parametrize("command", [
+        "git status --short",
+        "git log --oneline -5",
+        "git diff --stat",
+        "git show HEAD",
+        "git rev-parse HEAD",
+        "ls -la",
+        "python -m pytest -q",
+    ])
+    def test_read_only_inspection_stays_available(self, event_loop, command):
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Bash", {"command": command}, "id", service_mode=True,
+        )) == {}
+        assert event_loop.run_until_complete(
+            guardian_pre_hook("Bash", {"command": command}, "id")
+        ) == {}
+
+    def test_legacy_mode_still_permits_ordinary_git_work(self, event_loop):
+        assert event_loop.run_until_complete(
+            guardian_pre_hook("Bash", {"command": "git commit -m x"}, "id")
+        ) == {}
+
+    def test_non_string_command_is_rejected(self, event_loop):
+        with pytest.raises(GuardianBlocked):
+            event_loop.run_until_complete(
+                guardian_pre_hook("Bash", {"command": {"cmd": "git push"}}, "id")
+            )

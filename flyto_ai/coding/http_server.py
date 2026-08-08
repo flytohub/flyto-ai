@@ -6,10 +6,17 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Tuple
 from urllib.parse import urlsplit
 
+from flyto_ai.coding.contracts import (
+    MAX_AUDIT_FINDINGS,
+    CodingAuditFinding,
+    CodingAuditVerdict,
+    require_revision_sha256,
+)
 from flyto_ai.coding.service import (
     CodingJobNotFound,
     CodingService,
@@ -20,6 +27,20 @@ from flyto_ai.coding.service import (
 
 
 MAX_REQUEST_BYTES = 256 * 1024
+_JOB_ID_RE = re.compile(r"^job_[a-f0-9]{24}$")
+_AUDIT_FIELDS = frozenset({"implementation_revision_sha256", "verdict", "findings"})
+#: Stale revisions, wrong state, and exhausted rework are conflicts; missing
+#: startup authority is a policy denial. Unlisted codes stay 403.
+_AUDIT_STATUS = {
+    "revision_mismatch": 409,
+    "revision_unavailable": 409,
+    "audit_state_conflict": 409,
+    "rework_limit_reached": 409,
+    "rework_not_resumable": 409,
+    "session_binding_failed": 409,
+    "idempotency_conflict": 409,
+    "service_busy": 429,
+}
 
 
 class CodingHTTPServer(ThreadingHTTPServer):
@@ -64,8 +85,13 @@ class CodingHTTPHandler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "job": receipt_to_mapping(receipt)})
 
     def do_POST(self) -> None:  # noqa: N802
-        if urlsplit(self.path).path != "/v1/coding/jobs":
-            self._json(404, {"ok": False, "error": "not_found"})
+        path = urlsplit(self.path).path
+        if path != "/v1/coding/jobs":
+            job_id = self._audit_target(path)
+            if job_id is None:
+                self._json(404, {"ok": False, "error": "not_found"})
+            else:
+                self._audit(job_id)
             return
         if not self._authorized():
             self._json(401, {"ok": False, "error": "unauthorized"})
@@ -85,6 +111,58 @@ class CodingHTTPHandler(BaseHTTPRequestHandler):
             self._json(status, {"ok": False, "error": exc.code})
             return
         self._json(202, {"ok": True, "job": receipt_to_mapping(receipt)})
+
+    @staticmethod
+    def _audit_target(path: str) -> Any:
+        """Return the job id for the audit route, or None when unmatched."""
+        prefix, suffix = "/v1/coding/jobs/", "/audit"
+        if not path.startswith(prefix) or not path.endswith(suffix):
+            return None
+        job_id = path[len(prefix):-len(suffix)]
+        return job_id if _JOB_ID_RE.fullmatch(job_id) else None
+
+    def _audit(self, job_id: str) -> None:
+        """Forward one authenticated audit decision to the tenant-bound service.
+
+        The transport validates shape only. Acceptance, revision binding, and
+        rework limits remain the service's decision.
+        """
+        if not self._authorized():
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
+        try:
+            body = self._read_json()
+            unknown = set(body) - _AUDIT_FIELDS
+            if unknown:
+                # Backend selection and audit authority are startup-only.
+                raise ValueError("unsupported audit fields")
+            findings = body.get("findings")
+            if not isinstance(findings, list) or len(findings) > MAX_AUDIT_FINDINGS:
+                raise ValueError("findings must be a bounded array")
+            verdict = body.get("verdict")
+            if isinstance(verdict, bool) or not isinstance(verdict, str):
+                raise ValueError("verdict must be a string")
+            receipt = self.server.coding_service.audit(
+                self.server.tenant_id,
+                job_id,
+                require_revision_sha256(
+                    body.get("implementation_revision_sha256"),
+                    "implementation_revision_sha256",
+                ),
+                CodingAuditVerdict(verdict),
+                tuple(CodingAuditFinding.from_mapping(item) for item in findings),
+            )
+        except CodingJobNotFound:
+            self._json(404, {"ok": False, "error": "job_not_found"})
+            return
+        except (ValueError, json.JSONDecodeError):
+            # Never echo audit payload material back to the caller.
+            self._json(400, {"ok": False, "error": "invalid_request"})
+            return
+        except CodingServiceError as exc:
+            self._json(_AUDIT_STATUS.get(exc.code, 403), {"ok": False, "error": exc.code})
+            return
+        self._json(200, {"ok": True, "job": receipt_to_mapping(receipt)})
 
     def _authorized(self) -> bool:
         provided = self.headers.get("Authorization", "")

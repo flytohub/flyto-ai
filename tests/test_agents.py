@@ -854,6 +854,77 @@ class TestClaudeSdkOptions:
         assert options["model"] == "claude-opus-5"
 
 
+class TestClaudeCodeConfigModel:
+    """The legacy direct backend has a validated, bounded model setting."""
+
+    def test_default_is_opus_5(self):
+        assert ClaudeCodeConfig().model == "claude-opus-5"
+        assert AgentConfig().claude_code.model == "claude-opus-5"
+
+    def test_from_dict_preserves_and_validates_the_model(self):
+        cfg = AgentConfig.from_dict({"claude_code": {"model": "claude-sonnet-4-6"}})
+        assert cfg.claude_code.model == "claude-sonnet-4-6"
+        assert AgentConfig.from_dict({"claude_code": {}}).claude_code.model == "claude-opus-5"
+        for invalid in ("", "not a model", "x" * 100, 5, None):
+            with pytest.raises(ValueError, match="bounded model identifier"):
+                AgentConfig.from_dict({"claude_code": {"model": invalid}})
+
+    def test_from_env_reads_a_bounded_model(self, monkeypatch):
+        monkeypatch.delenv("FLYTO_AI_CC_MODEL", raising=False)
+        assert AgentConfig.from_env().claude_code.model == "claude-opus-5"
+        monkeypatch.setenv("FLYTO_AI_CC_MODEL", "claude-haiku-4-5-20251001")
+        assert AgentConfig.from_env().claude_code.model == "claude-haiku-4-5-20251001"
+        monkeypatch.setenv("FLYTO_AI_CC_MODEL", "not a model")
+        with pytest.raises(ValueError, match="bounded model identifier"):
+            AgentConfig.from_env()
+
+    @pytest.mark.parametrize(("field", "accepted"), [
+        ("max_budget_usd", (0.01, 1000.0, 5.0, 99.0)),
+        ("max_turns", (1, 100, 30)),
+        ("max_fix_attempts", (1, 5, 3)),
+        ("verification_timeout", (1, 3600, 120)),
+    ])
+    def test_numeric_bounds_accept_their_documented_range(self, field, accepted):
+        for value in accepted:
+            assert getattr(ClaudeCodeConfig(**{field: value}), field) == value
+
+    @pytest.mark.parametrize(("field", "rejected"), [
+        ("max_budget_usd", (True, 0, -1.0, 1000.1, float("nan"), float("inf"),
+                            float("-inf"), "5.0", None)),
+        ("max_turns", (True, 0, -1, 101, 3.5, "30", None)),
+        ("max_fix_attempts", (True, 0, -1, 6, 3.0, "3", None)),
+        ("verification_timeout", (True, 0, -1, 3601, 120.0, "120", None)),
+    ])
+    def test_numeric_bounds_fail_closed_without_clamping(self, field, rejected):
+        for value in rejected:
+            with pytest.raises(ValueError, match="claude_code " + field):
+                ClaudeCodeConfig(**{field: value})
+
+    def test_out_of_range_values_are_rejected_from_dict_and_env(self, monkeypatch):
+        with pytest.raises(ValueError, match="max_fix_attempts"):
+            AgentConfig.from_dict({"claude_code": {"max_fix_attempts": -1}})
+        monkeypatch.setenv("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "-1")
+        with pytest.raises(ValueError, match="max_fix_attempts"):
+            AgentConfig.from_env()
+        monkeypatch.delenv("FLYTO_AI_CC_MAX_FIX_ATTEMPTS")
+        for value in ("nan", "inf", "-inf", "0", "-5", "1000.1"):
+            monkeypatch.setenv("FLYTO_AI_CC_MAX_BUDGET", value)
+            with pytest.raises(ValueError, match="max_budget_usd"):
+                ClaudeCodeConfig.from_env()
+
+    @pytest.mark.parametrize(("variable", "raw"), [
+        ("FLYTO_AI_CC_MAX_BUDGET", "five"),
+        ("FLYTO_AI_CC_MAX_BUDGET", ""),
+        ("FLYTO_AI_CC_MAX_TURNS", "30.5"),
+        ("FLYTO_AI_CC_MAX_TURNS", "lots"),
+        ("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "0x3"),
+    ])
+    def test_malformed_env_conversion_names_the_setting(self, monkeypatch, variable, raw):
+        monkeypatch.setenv(variable, raw)
+        with pytest.raises(ValueError, match=variable):
+            ClaudeCodeConfig.from_env()
+
+
 class TestServiceEditAuthority:
     """Startup sandbox/approval authority reaches the SDK tool catalog."""
 

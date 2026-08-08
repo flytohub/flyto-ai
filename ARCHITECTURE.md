@@ -239,6 +239,33 @@ LLM planner
   the runtime closed loop, assertions, budgets, and one proof record per
   executed request; otherwise the verdict is `not_proved`.
 
+## Mission Stations interpretation boundary
+
+```text
+judge physically draws Zone + Objective cards
+  → operator records card_source=judge_draw
+  → deterministic request/card/capability validation
+  → LLM sees cards as immutable data and APPROVED capability IDs only
+  → bounded reading + clarification + capability candidates
+  → independent output validation
+  → live interpretation or deterministic card-only fallback
+  → card evidence copied outside model output with content hashes
+  → Cloud plans/assigns; Robotics validates/executes
+```
+
+`mission_interpretation.py` owns this boundary without importing Cloud or
+Robotics source. The provider schema has no fields for evidence requirements,
+resource identity, assignment, executor kind, task status, completion, or raw
+commands. The model therefore cannot draw the cards, rewrite the challenge,
+bind a robot, authorize motion, or declare success.
+
+The independent validator requires `card_source=judge_draw`, preserves the
+exact evidence array, enforces required capabilities against the APPROVED
+registry ceiling, and rejects actuator-shaped fields recursively. Invalid or
+unavailable provider output produces a deterministic fallback using the card
+goal and required capabilities. The attestation records hashes and a bounded
+reason class, never raw provider error text.
+
 ## Robotics planning boundary
 
 ```text

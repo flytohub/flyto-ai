@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added judge-drawn Mission Station card interpretation with an immutable
+  evidence boundary, APPROVED-capability ceiling, strict hostile-output
+  validation, deterministic provider fallback, and content-addressed
+  attestation. Flyto2 AI does not draw cards, bind resources, authorize motion,
+  or decide Task completion.
 - Added atomic capability execution policy, redacted content-addressed trace,
   fixed-snapshot authority-bounded replay/Blueprint feedback, reusable
   evidence-bound adapter conformance, and a bounded domain-neutral scenario

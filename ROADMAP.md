@@ -1,6 +1,9 @@
 # Roadmap
 
 Near term:
+- Connect the Mission interpretation request/attestation to the Cloud Task War
+  Room while preserving physical judge-card provenance and deterministic
+  fallback telemetry.
 - Expand agent eval datasets for tool selection, schema validity, guardrail blocks, and MCP execution regressions.
 - Add production service wiring and offline top-k recall/plan-validity datasets
   for the capability-router contract.

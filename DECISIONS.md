@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-08-08: Physical judge cards are immutable model input
+
+- The competition judge physically draws one Zone card and one Objective card.
+  The operator records the exact pair with `card_source=judge_draw`; Flyto2 AI
+  has no draw, shuffle, or random-task behavior.
+- The model schema contains only a reading, a clarification decision/key, and
+  APPROVED capability IDs. Evidence requirements are repeated outside the
+  model-owned object and cannot be removed or expanded by it.
+- Invalid JSON, extra fields, raw controls, shortlist escape, missing card
+  capabilities, or provider failure uses a deterministic fallback. The
+  attestation exposes only bounded reason classes and hashes.
+- Interpretation is not authority: Cloud owns plan and resource revisions,
+  Robotics owns dispatch/control safety, and the control plane owns evidence
+  completion.
+
+Rollback is additive: callers can skip the interpretation service and use the
+reviewed card contract directly. Do not roll back by letting a model choose the
+cards, evidence contract, live resource, motor command, or completion state.
+
 ## 2026-08-02: Capability quality controls are separate atomic planes
 
 - Keep authority, resource admission, evidence/replay, adapter conformance,

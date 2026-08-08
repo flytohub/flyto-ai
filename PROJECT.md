@@ -15,6 +15,8 @@ Shipped surfaces:
 - Interactive, batch, coding-agent, blueprint, prompt-lab, HTTP/SSE, Telegram, and MCP entrypoints.
 - OpenAI-compatible, Anthropic, Ollama, and ordered failover providers.
 - Registry-backed Flyto2 Core tools with schema validation, permission checks, retry, evidence, and runtime capability discovery.
+- Judge-drawn Mission Station interpretation and structured Robotics planning;
+  both are advisory/attested model boundaries, not execution authorization.
 - Memory, transcript, blueprint learning, prompt evaluation/evolution, scheduling, channels, extensions, vault, sandbox, and security-workflow generation.
 
 Documentation contract:

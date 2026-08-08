@@ -29,6 +29,7 @@ Regenerate with `python3 scripts/generate_reference.py`; CI rejects stale output
 - [Adaptive security campaigns](API.md#adaptive-security-campaigns)
 - [Deterministic capability routing](CAPABILITY_ROUTING.md)
 - [Structured Robotics planner](API.md#structured-robotics-planner)
+- [Judge-card Mission interpretation](API.md#mission-station-card-interpretation)
 - [Model compatibility](MODEL_COMPATIBILITY.md)
 - [Architecture map](architecture-map.md)
 - [Demo asset](demo.svg)

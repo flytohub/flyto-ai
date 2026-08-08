@@ -130,3 +130,15 @@ Extensions declare manifests, load from approved locations, and register hooks.
 Shell hooks receive an allowlisted environment and return structured allow/deny
 decisions. Telemetry supports memory, JSONL, composite sinks, session traces,
 cost/usage records, and redacted audit events.
+
+## Physical Mission Interpretation And Planning
+
+- `mission_interpretation` reads only the Zone and Objective cards physically
+  drawn by a judge and recorded by an operator. The model may explain the task,
+  request clarification, and select from APPROVED capability IDs; deterministic
+  code preserves card evidence and supplies a raw-error-free fallback.
+- `robotics_planning` converts a prefiltered Robotics shortlist and complete
+  route candidates into a schema-bound plan with independent safety checks and
+  attestation.
+- Neither surface selects a live resource, grants motor authority, runs a
+  controller, or decides whether evidence completes a Task.

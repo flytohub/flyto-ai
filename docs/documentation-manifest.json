@@ -61,6 +61,12 @@
       "documentation": ["docs/FEATURES.md#security-test-workflow-generation", "docs/WHITEPAPER.md#trust-boundaries", "docs/reference/python/security.md"]
     },
     {
+      "id": "physical-mission-planning",
+      "description": "Judge-card Mission interpretation, deterministic fallback, approved-capability selection, and structured Robotics planning attestations.",
+      "paths": ["flyto_ai/mission_interpretation.py", "flyto_ai/robotics_planning.py", "flyto_ai/robotics_planner_server.py"],
+      "documentation": ["docs/FEATURES.md#physical-mission-interpretation-and-planning", "docs/API.md#structured-robotics-planner", "ARCHITECTURE.md#mission-stations-interpretation-boundary"]
+    },
+    {
       "id": "packaging-operations",
       "description": "CLI and package metadata, environment contract, release/demo scripts, sandbox image, distribution metadata, and CI/security/publishing workflows.",
       "paths": ["flyto_ai/cli.py", "flyto_ai/package_metadata.py", "flyto_ai/static/**", "scripts/**", "pyproject.toml", ".env.example", ".github/workflows/**", "flyto_ai/sandbox/Dockerfile"],
@@ -147,6 +153,16 @@
       "source": ["scripts/generate_reference.py"],
       "documentation": ["docs/reference/README.md", "docs/reference/python/README.md"],
       "verification": ["python3 scripts/generate_reference.py --check"]
+    },
+    {
+      "id": "mission-card-interpretation",
+      "title": "Judge-card Mission interpretation",
+      "kind": "workflow",
+      "status": "active",
+      "description": "Interprets physical judge-drawn Zone and Objective cards without changing evidence, assigning resources, authorizing execution, or claiming completion.",
+      "source": ["flyto_ai/mission_interpretation.py", "flyto_ai/robotics_planning.py"],
+      "documentation": ["docs/API.md#mission-station-card-interpretation", "docs/FEATURES.md#physical-mission-interpretation-and-planning"],
+      "tests": ["tests/test_mission_interpretation.py", "tests/test_robotics_planning.py"]
     }
   ]
 }

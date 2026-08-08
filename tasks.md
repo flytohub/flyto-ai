@@ -13,3 +13,9 @@
 - [x] Repair full-suite pytest drift after deterministic planning and Python 3.11 event loop changes.
 - [x] Add an exhaustive source-generated implementation reference and strict documentation contract.
 - [x] Eliminate hard-coded runtime module totals from package, CLI, MCP, and demo behavior.
+# Mission Stations
+
+- [x] Add strict judge-drawn card interpretation and deterministic fallback.
+- [x] Keep evidence requirements outside model-owned structured output.
+- [ ] Wire the versioned interpretation response into the Cloud Mission Task
+  planning adapter without granting resource or execution authority.

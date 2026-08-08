@@ -1,8 +1,17 @@
 # State
 
-Last updated: 2026-08-02
+Last updated: 2026-08-08
 
 Implemented:
+- Mission Stations interpretation now has a provider-neutral, fail-closed
+  contract. Judges physically draw the Zone and Objective cards; an operator
+  records `card_source=judge_draw`; the system never draws or randomizes them.
+  The model can return only a bounded reading, clarification state, and IDs
+  from an APPROVED capability ceiling. Card-defined evidence is copied outside
+  model output and remains authoritative. Hostile/invalid output and provider
+  failure use a deterministic card-only fallback with content-addressed,
+  raw-error-free attestation. Execution authorization, resource assignment,
+  and task completion remain outside `flyto-ai`.
 - The capability quality plane now has four additional atomic modules:
   `execution_policy` bounds calls, failures, elapsed time, concurrency, JSON
   bytes/depth/nodes, configurable workspace paths, secret-bearing arguments,

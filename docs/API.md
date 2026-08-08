@@ -101,6 +101,27 @@ boolean.
 
 ## Structured Robotics planner
 
+### Mission Station card interpretation
+
+`flyto_ai.mission_interpretation.MissionInterpretationService` accepts a
+`flyto.ai.mission-interpretation-request.v1` document after the competition
+judge has physically drawn one Zone card and one Objective card. The operator
+records that result as `card_source: judge_draw`; Flyto2 AI does not draw,
+shuffle, or randomize cards.
+
+The structured model schema contains only a bounded reading, clarification
+flag/key, and approved capability IDs. It deliberately has no evidence,
+resource, assignment, executor, completion, or command fields. Independent
+validation requires every card capability and rejects shortlist escape or raw
+controls. The response repeats the original evidence requirements as
+`authoritative_evidence_requirements` outside model-owned output and carries
+request/schema/interpretation hashes.
+
+Invalid JSON, hostile extra fields, an unapproved capability, or provider
+failure produces a deterministic card-only fallback. The bounded reason is
+recorded without raw provider errors. This service interprets a challenge; it
+does not authorize execution or decide Task completion.
+
 `flyto_ai.robotics_planning.RoboticsPlanningService` accepts
 `flyto.robotics.planner-request.v1` and returns:
 

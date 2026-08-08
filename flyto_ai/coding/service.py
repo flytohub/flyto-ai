@@ -16,9 +16,8 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence, Tuple
 
-from flyto_ai.coding.agent import FlytoCodingAgent
 from flyto_ai.coding.contracts import (
     MAX_AUDIT_ROUNDS,
     ApprovalPolicy,
@@ -122,7 +121,19 @@ _INTERRUPTED_JOB_STATES = frozenset({
 })
 
 
-AgentFactory = Callable[[ThreadStore], FlytoCodingAgent]
+class CodingImplementer(Protocol):
+    """One implementation round, whichever backend the host selected.
+
+    The native `FlytoCodingAgent` and the optional Claude adapter are explicit
+    peers at this boundary; neither is privileged and neither is a fallback for
+    the other.
+    """
+
+    async def run(self, request: CodingTaskRequest) -> CodingTaskResult:
+        ...  # pragma: no cover - structural protocol
+
+
+AgentFactory = Callable[[ThreadStore], CodingImplementer]
 
 
 def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:

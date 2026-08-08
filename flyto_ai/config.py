@@ -3,10 +3,56 @@
 """Agent configuration."""
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+_CLAUDE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+#: Claude backend numeric ceilings. Attempts and turns match the coding
+#: contract's own `max_attempts` / `max_rounds` bounds; the budget ceiling is a
+#: finite, positive spend limit; the verification timeout stays under an hour.
+CC_MIN_BUDGET_USD = 0.01
+CC_MAX_BUDGET_USD = 1000.0
+CC_MAX_TURNS_CEILING = 100
+CC_MAX_FIX_ATTEMPTS_CEILING = 5
+CC_MAX_VERIFICATION_TIMEOUT = 3600
+
+
+def _bounded_int(value: object, name: str, low: int, high: int) -> int:
+    """Accept one in-range integer; reject booleans and other numeric types."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("claude_code {} must be an integer".format(name))
+    if not low <= value <= high:
+        raise ValueError(
+            "claude_code {} must be between {} and {}".format(name, low, high),
+        )
+    return value
+
+
+def _bounded_float(value: object, name: str, low: float, high: float) -> float:
+    """Accept one finite in-range number; reject booleans and NaN/infinity."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("claude_code {} must be a number".format(name))
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ValueError("claude_code {} must be a finite number".format(name))
+    if not low <= number <= high:
+        raise ValueError(
+            "claude_code {} must be between {} and {}".format(name, low, high),
+        )
+    return number
+
+
+def _env_number(variable: str, default: str, convert):
+    """Convert one environment setting, naming it in any failure."""
+    raw = os.getenv(variable, default)
+    try:
+        return convert(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("{} must be a valid number".format(variable)) from exc
 
 # Function calling quality ratings for known models.
 # Used by docs and model selection guidance.
@@ -38,6 +84,42 @@ class ClaudeCodeConfig:
     ])
     verification_timeout: int = 120
     evidence_dir: str = "~/.flyto/evidence"
+    #: Model for the legacy direct Claude SDK backend. The audited service
+    #: adapter stays pinned to `claude-opus-5` regardless of this value.
+    model: str = "claude-opus-5"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.model, str) or not _CLAUDE_MODEL_RE.fullmatch(self.model):
+            raise ValueError("claude_code model must be a bounded model identifier")
+        # Every numeric setting bounds a real loop or spend. An out-of-range
+        # value is rejected, never clamped: silently running a different
+        # budget or attempt count than the operator configured is worse than
+        # refusing to start.
+        object.__setattr__(self, "max_budget_usd", _bounded_float(
+            self.max_budget_usd, "max_budget_usd",
+            CC_MIN_BUDGET_USD, CC_MAX_BUDGET_USD,
+        ))
+        for name, low, high in (
+            ("max_turns", 1, CC_MAX_TURNS_CEILING),
+            ("max_fix_attempts", 1, CC_MAX_FIX_ATTEMPTS_CEILING),
+            ("verification_timeout", 1, CC_MAX_VERIFICATION_TIMEOUT),
+        ):
+            object.__setattr__(self, name, _bounded_int(getattr(self, name), name, low, high))
+
+    @classmethod
+    def from_env(cls) -> "ClaudeCodeConfig":
+        """Read only the bounded `FLYTO_AI_CC_*` settings.
+
+        This deliberately touches no provider, credential, model, base-URL, or
+        failover variable, so the Claude coding route can be configured without
+        resolving native provider authority.
+        """
+        return cls(
+            max_budget_usd=_env_number("FLYTO_AI_CC_MAX_BUDGET", "5.0", float),
+            max_turns=_env_number("FLYTO_AI_CC_MAX_TURNS", "30", int),
+            max_fix_attempts=_env_number("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "3", int),
+            model=os.getenv("FLYTO_AI_CC_MODEL", "claude-opus-5"),
+        )
 
 
 @dataclass
@@ -147,7 +229,8 @@ class AgentConfig:
             claude_code=ClaudeCodeConfig(
                 **{k: v for k, v in data.get("claude_code", {}).items()
                    if k in ("max_budget_usd", "max_turns", "max_fix_attempts",
-                            "allowed_tools", "verification_timeout", "evidence_dir")},
+                            "allowed_tools", "verification_timeout", "evidence_dir",
+                            "model")},
             ),
             fallback_providers=fallbacks,
             session_budget_usd=data.get("session_budget_usd"),
@@ -230,11 +313,7 @@ class AgentConfig:
             enable_sandbox=os.getenv("FLYTO_AI_ENABLE_SANDBOX", "false").lower() == "true",
             sandbox_image=os.getenv("FLYTO_AI_SANDBOX_IMAGE", "flyto-sandbox:latest"),
             sandbox_timeout=int(os.getenv("FLYTO_AI_SANDBOX_TIMEOUT", "60")),
-            claude_code=ClaudeCodeConfig(
-                max_budget_usd=float(os.getenv("FLYTO_AI_CC_MAX_BUDGET", "5.0")),
-                max_turns=int(os.getenv("FLYTO_AI_CC_MAX_TURNS", "30")),
-                max_fix_attempts=int(os.getenv("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "3")),
-            ),
+            claude_code=ClaudeCodeConfig.from_env(),
             fallback_providers=fallbacks,
             session_budget_usd=float(session_budget) if session_budget else None,
             global_budget_usd=float(global_budget) if global_budget else None,

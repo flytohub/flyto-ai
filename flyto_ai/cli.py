@@ -14,6 +14,12 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 
+#: The operator picks exactly one implementer at process startup. There is no
+#: per-job field, no auto-routing, and no fallback between the two.
+CODING_BACKENDS = ("native", "claude")
+CODING_BACKEND_ENV = "FLYTO_AI_CODING_BACKEND"
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="flyto-ai",
@@ -150,6 +156,18 @@ def main():
         )
         service_parser.add_argument("--max-workers", type=int, default=2, help="Concurrent job workers")
         service_parser.add_argument("--max-queued", type=int, default=100, help="Maximum queued/running jobs")
+        # The environment default is resolved when a coding service is built,
+        # not while this parser is constructed: an invalid value must never
+        # break `version`, `chat`, or plain `--help`.
+        service_parser.add_argument(
+            "--implementation-backend", choices=CODING_BACKENDS, default=None,
+            help="Startup implementer selection (default: native, or "
+                 "{}; no per-job override)".format(CODING_BACKEND_ENV),
+        )
+        service_parser.add_argument(
+            "--max-rework-rounds", type=int, default=3,
+            help="Maximum Codex-requested rework rounds per job (default: 3)",
+        )
 
     code_serve_p = sub.add_parser(
         "code-serve", help="Start the detachable authenticated coding HTTP service",
@@ -319,6 +337,42 @@ def _cmd_code_native(args):
     sys.exit(0 if result.ok else 1)
 
 
+def _default_coding_backend():
+    """Read the optional bounded environment default for the implementer."""
+    configured = _os.environ.get(CODING_BACKEND_ENV, "").strip()
+    if not configured:
+        return "native"
+    if configured not in CODING_BACKENDS:
+        raise SystemExit(
+            "invalid {}: choose one of {}".format(
+                CODING_BACKEND_ENV, ", ".join(CODING_BACKENDS),
+            ),
+        )
+    return configured
+
+
+def _build_claude_agent_factory(args):
+    """Bind one startup Claude configuration reused read-only by every job.
+
+    The optional SDK must already be installed. This never performs an SDK
+    call, reads a credential, or falls back to the native backend.
+    """
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError as exc:
+        raise ValueError(
+            "the 'claude' implementation backend requires the optional Claude "
+            "Agent SDK; install it with: pip install flyto-ai[claude-sdk]"
+        ) from exc
+    from flyto_ai.agents.claude_code import ClaudeCodingAgent
+    from flyto_ai.config import AgentConfig, ClaudeCodeConfig
+
+    # Only bounded FLYTO_AI_CC_* settings are read. This route resolves no
+    # provider, credential, model, base-URL, or failover configuration.
+    startup_config = AgentConfig(claude_code=ClaudeCodeConfig.from_env())
+    return lambda store: ClaudeCodingAgent(store, config=startup_config)
+
+
 def _create_native_coding_provider(args):
     """Build one normal Flyto2 provider; service secrets come from env only."""
     from flyto_ai.config import AgentConfig
@@ -354,15 +408,34 @@ def _create_native_coding_provider(args):
 
 
 def _build_coding_service(args):
-    """Create the optional service with all authority fixed at startup."""
+    """Create the optional service with all authority fixed at startup.
+
+    `code-serve` and `code-mcp` are one public route: exactly one implementer
+    is selected here, every job requires a Codex audit, and no remote payload
+    can change either decision.
+    """
     from flyto_ai.coding import ApprovalPolicy, FlytoCodingAgent, SandboxMode
     from flyto_ai.coding.service import CodingService
 
-    # Fail startup early, then create an isolated provider client per worker job.
-    _create_native_coding_provider(args)
+    backend = getattr(args, "implementation_backend", None) or _default_coding_backend()
+    if backend not in CODING_BACKENDS:
+        raise ValueError(
+            "invalid --implementation-backend: choose one of {}".format(
+                ", ".join(CODING_BACKENDS),
+            ),
+        )
+    if backend == "claude":
+        agent_factory = _build_claude_agent_factory(args)
+    else:
+        # Fail startup early, then create an isolated provider client per job.
+        _create_native_coding_provider(args)
+
+        def agent_factory(store):
+            return FlytoCodingAgent(_create_native_coding_provider(args), store=store)
+
     roots = tuple(_os.path.abspath(_os.path.expanduser(path)) for path in args.workspace_root)
     return CodingService(
-        lambda store: FlytoCodingAgent(_create_native_coding_provider(args), store=store),
+        agent_factory,
         state_root=_os.path.abspath(_os.path.expanduser(args.state_dir)),
         workspace_roots=roots,
         max_workers=args.max_workers,
@@ -371,6 +444,11 @@ def _build_coding_service(args):
         sandbox_mode=SandboxMode(args.sandbox),
         config_path=args.config,
         sandbox_image=args.sandbox_image,
+        # Both public commands are audit-required. There is deliberately no
+        # flag or environment variable that turns this off.
+        require_codex_audit=True,
+        implementation_backend=backend,
+        max_rework_rounds=getattr(args, "max_rework_rounds", 3),
     )
 
 

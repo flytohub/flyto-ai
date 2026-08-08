@@ -1385,6 +1385,60 @@ def test_http_routes_stay_compatible_and_reject_unknown_audit_paths(tmp_path: Pa
         service.close()
 
 
+def test_cli_built_native_service_stops_at_awaiting_codex_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public route never reaches completed/landable without Codex."""
+    import argparse
+
+    import flyto_ai.cli as cli
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "version: flyto.coding-config.v1\n"
+        "checks:\n"
+        "  - name: real_file_check\n"
+        "    argv: {}\n".format(json.dumps([
+            sys.executable,
+            "-c",
+            "from pathlib import Path; assert Path('result.txt').read_text() == 'verified\\n'",
+        ]))
+    )
+    monkeypatch.setattr(
+        cli, "_create_native_coding_provider", lambda args: RealToolProvider(),
+    )
+    service = cli._build_coding_service(argparse.Namespace(
+        tenant="tenant-route", workspace_root=[str(workspace)],
+        state_dir=str(tmp_path / "route-state"), provider="ollama", model=None,
+        base_url=None, config=".flyto/coding.yaml", approval="never",
+        sandbox="workspace-write", sandbox_image="python:3.12-slim",
+        max_workers=2, max_queued=8, implementation_backend="native",
+        max_rework_rounds=3,
+    ))
+    try:
+        queued = service.submit("tenant-route", "route-001", _request(workspace))
+        awaiting = _wait(service, "tenant-route", queued.job_id)
+        assert awaiting.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert awaiting.state is not CodingJobState.COMPLETED
+        assert awaiting.landable is False
+        assert awaiting.implementation_backend == "native"
+        assert awaiting.audit_count == 0
+        assert receipt_to_mapping(awaiting)["landable"] is False
+        assert (workspace / "result.txt").read_text() == "verified\n"
+
+        accepted = service.audit(
+            "tenant-route", queued.job_id, awaiting.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert accepted.landable is True
+    finally:
+        service.close()
+
+
 def test_public_package_exports_the_canonical_audit_surface() -> None:
     import flyto_ai.coding as coding
     from flyto_ai.coding import contracts, service as service_module
@@ -2007,6 +2061,10 @@ def test_audit_authority_is_startup_only_and_receipts_stay_redacted(tmp_path: Pa
         {"require_codex_audit": False},
         {"max_rework_rounds": 99},
         {"landable": True},
+        {"model": "claude-opus-5"},
+        {"provider": "anthropic"},
+        {"audit_findings_sha256": _AUDIT_REVISION},
+        {"implementation_session_id": "sdk-1"},
     ):
         payload = {"message": "task", "working_dir": str(workspace)}
         payload.update(forbidden)

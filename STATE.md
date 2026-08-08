@@ -63,9 +63,6 @@ eligibility evidence for the caller, not an action the service performs.
 
 ### Not yet proved / current gaps
 
-- The active local Python environment did not have `claude_agent_sdk`
-  installed at audit time, so live Claude-backend MCP execution is not yet
-  verified. Adapter coverage uses in-process fakes only.
 - `flyto-engine` still contains a direct `internal/ai/openai.go::OpenAIProvider`
   path, so unified routing through `flyto-ai` as the only AI gateway is partial,
   not implemented.
@@ -83,7 +80,11 @@ eligibility evidence for the caller, not an action the service performs.
 - generated references current: 23 files, `generate_reference.py --check` clean;
 - `tests/test_generate_reference.py`: 2 passed;
 - focused coding / control-plane / MCP / adapter tests: 165 passed, 2 skipped;
-- `git diff --check`: clean.
+- `git diff --check`: clean;
+- live `code-mcp` with the startup-selected `claude` backend pinned to
+  `claude-opus-5` ran a real job under an opaque implementation session,
+  passed the required repo checks, and reached `awaiting_codex_audit`; the
+  revision verdict and any commit remain caller-owned.
 
 These are focused checks, not a full-suite run. The full-suite evidence below
 is historical.

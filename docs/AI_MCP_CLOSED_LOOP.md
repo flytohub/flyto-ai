@@ -54,6 +54,28 @@ The `get_core_capability_manifest` tool exposes:
   keys or trusted-publisher mappings. Unsigned imports are quarantined by
   `flyto-blueprint`.
 
+## The coding closed loop is a separate, audited loop
+
+The loop above turns a model claim into runtime evidence for Core module work.
+Coding work has its own closed loop with an additional independent gate, and it
+does not reuse this one:
+
+```text
+host submits          -> flyto_coding_submit
+implementer round     -> exactly one startup-selected backend (native | claude)
+real checks           -> source-controlled subprocess verification
+                      -> awaiting_codex_audit + implementation_revision_sha256
+host inspects/tests   -> independently, against that exact workspace revision
+host verdict          -> flyto_coding_audit / POST /v1/coding/jobs/{id}/audit
+  accept              -> codex_accepted, landable evidence
+  rework              -> typed findings back to the same job and session
+```
+
+The implementer never issues its own verdict: it has no audit tool. The service
+validates the transport shape and forwards; it cannot prove which principal is
+auditing, and it never stages, commits, pushes, publishes, or deploys. See
+[the coding control plane guide](CODING_CONTROL_PLANE.md).
+
 ## What you can measure
 
 The resulting Blueprint Evidence Card shows:

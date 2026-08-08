@@ -405,13 +405,45 @@ was a real `python -m unittest -q` subprocess, and hidden retries were zero.
 The two failures remain in the evidence. See
 `out/benchmarks/native-coding/native-coding-benchmark-4495b61ad2d979b5a9a19a04dfdef2052ea7fb833285f4ae32d2f693fb9eecc1.json`.
 
+## Audited coding service
+
+`flyto-ai code-serve` and `flyto-ai code-mcp` are two transports over one
+audit-required coding service. The operator selects the implementer once at
+startup — `--implementation-backend native|claude`, default `native`, with an
+optional bounded `FLYTO_AI_CODING_BACKEND` default. There is no per-job
+selection and no fallback between implementers. The `claude` route needs the
+optional `flyto-ai[claude-sdk]` extra and is pinned to `claude-opus-5`.
+
+An implementer round never lands by itself. It stops at
+`awaiting_codex_audit`, bound to an exact `implementation_revision_sha256`. An
+authenticated host independently inspects and tests that workspace revision and
+submits a verdict through the `flyto_coding_audit` MCP tool or
+`POST /v1/coding/jobs/{job_id}/audit`: `accept` produces an accepted, landable
+receipt; `rework` returns typed findings to the same job and implementation
+session for another bounded round.
+
+A provider or check failure is terminal `failed`. Work interrupted while queued
+or running becomes `failed` with `failure_code=service_restarted`. A rework
+request past the ceiling is **rejected** rather than recorded: the job keeps its
+current exact revision `awaiting_codex_audit` and non-landable, and no new
+session starts. Only a valid `accept` on that exact revision can make it
+landable. The service never stages, commits, pushes, publishes, or deploys —
+`landable` is evidence, not an action.
+
+Direct `flyto-ai code` and direct Python `CodingService` use remain supported
+for legacy and library work, but they sit outside this audited route and cannot
+produce its accepted, landable receipt. See
+[the coding control plane guide](docs/CODING_CONTROL_PLANE.md).
+
 ## Optional Claude SDK compatibility backend
 
 Use Claude Code only when the explicitly detachable compatibility backend is
-desired:
+desired. This direct path is outside the host-managed audited route above: it
+cannot produce an accepted, landable receipt and is never the fallback for
+audited work.
 
 ```bash
-pip install flyto-ai[agent]   # Installs claude-agent-sdk
+pip install flyto-ai[claude-sdk]   # Installs claude-agent-sdk
 
 # Basic — Claude Code writes code, no verification
 flyto-ai code "fix the login form validation" --dir ./my-project --backend claude-sdk
@@ -426,7 +458,10 @@ flyto-ai code "match the Figma design for the login page" \
   --max-attempts 3
 
 # JSON output for CI/CD
-flyto-ai code "add unit tests for auth module" --dir ./project --json
+flyto-ai code "add unit tests for auth module" \
+  --dir ./project \
+  --backend claude-sdk \
+  --json
 ```
 
 **How it works:**
@@ -574,6 +609,13 @@ flyto-ai chat "..." --model <name>    # Any specific model
 - **Webhook output** — structured JSON only, no raw credentials in payload
 
 ## Architecture
+
+The canonical Flytohub product topology — who owns what across `flyto-admin`,
+`flyto-app`, `flyto-cloud`/`flyto2`, `flyto-code`/`flyto-engine`, `flyto-ai`,
+`flyto-blueprint`, `flyto-core`, `flyto-modules-*`, and `flyto-indexer` — is in
+[ARCHITECTURE.md](ARCHITECTURE.md) and [docs/architecture-map.md](docs/architecture-map.md).
+The diagrams below are runtime call flows inside `flyto-ai`, not that ownership
+map.
 
 ```
 User message

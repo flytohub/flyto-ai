@@ -1,9 +1,14 @@
 # Flyto2 coding control plane
 
-`flyto_ai.coding` is a provider-neutral coding loop. It uses the configured
-Flyto2 provider (OpenAI, Anthropic, Ollama, or a compatible adapter) and does not
-require Codex or Claude Agent SDK. Claude SDK support remains an optional,
-detachable compatibility backend.
+`flyto_ai.coding` is a provider-neutral coding loop. The native implementer uses
+the configured Flyto2 provider (OpenAI, Anthropic, Ollama, or a compatible
+adapter) and requires no vendor agent SDK. An optional Claude adapter is its
+peer behind the same contracts; the operator selects exactly one at startup.
+
+The public `code-mcp` and `code-serve` commands are one audit-required route:
+an implementer round ends at `awaiting_codex_audit`, and only an authenticated
+host verdict can reach an accepted, landable receipt. See
+[Detachable service adapters](#detachable-service-adapters).
 
 ## Success contract
 
@@ -18,6 +23,10 @@ A coding run succeeds only when all of these statements are true:
 Missing checks fail before the provider can edit. A model response never counts
 as verification. Check output, events, and tool evidence are bounded and
 credential-shaped values are redacted before JSONL persistence.
+
+This is the *implementer* success contract. On the audit-required public route
+it produces `awaiting_codex_audit`, not a landable result; the host verdict is
+a separate, independent gate.
 
 ## Project configuration
 
@@ -309,16 +318,114 @@ changing the coding agent.
 
 ## Detachable service adapters
 
-`flyto.coding-service.v1` exposes the same native loop as asynchronous jobs. It
-is an optional composition layer, not a second coding agent:
+`flyto.coding-service.v2` exposes bounded asynchronous jobs behind one audited
+route. `code-mcp` and `code-serve` are two transports over the same service,
+not two products:
 
 ```text
 authenticated loopback HTTP / configured-tenant MCP stdio
   -> CodingService (idempotency, queue, tenant, workspace policy)
-  -> FlytoCodingAgent
+  -> exactly one startup-selected implementer
+       native  -> FlytoCodingAgent
+       claude  -> ClaudeCodingAgent (optional adapter)
   -> real checks + evidence
+  -> awaiting_codex_audit
+  -> host/auditor verdict
   -> durable secret-redacted receipt
 ```
+
+### Startup implementer selection
+
+The operator picks the implementer once, when the process starts:
+
+```text
+--implementation-backend native|claude      (default: native)
+FLYTO_AI_CODING_BACKEND=native|claude       (optional bounded default)
+```
+
+There is no per-job backend field, no provider/model auto-routing, and no
+fallback in either direction. An invalid or unavailable selection fails
+startup. `--max-rework-rounds` (default 3) is a process option too; a remote
+request cannot override either.
+
+Selecting `claude` requires the optional `flyto-ai[claude-sdk]` extra; startup
+fails with an actionable error if the SDK is absent. That route is pinned to
+`claude-opus-5` for service work regardless of configuration, reads only
+bounded `FLYTO_AI_CC_*` settings, and resolves no native provider credential.
+Its tool catalog is Read/Edit/Write/Glob with write authority and Read/Glob
+without; it never receives Bash, content search (`Grep`), or the audit tool, so
+an implementer cannot approve its own work. Rework continues in the exact same
+Claude SDK session; a changed or missing session identity fails closed.
+
+### Audit state machine
+
+An implementer success is never public success:
+
+```text
+queued -> running -> awaiting_codex_audit
+                       |
+                       +-- accept  -> codex_accepted  (landable = true)
+                       |
+                       +-- rework  -> rework_queued -> rework_running
+                                        -> awaiting_codex_audit  (same job,
+                                           same thread, same implementation
+                                           session, new cumulative revision)
+
+terminal, never landable:
+  failed                       provider, check, session, or revision failure
+  failed (service_restarted)   queued/running/rework work interrupted by restart
+
+rejected without any state change:
+  rework_limit_reached         the job stays awaiting_codex_audit on its
+                               current exact revision, still non-landable,
+                               and no new session is started
+```
+
+At `awaiting_codex_audit` the receipt binds `implementation_backend`, an opaque
+`implementation_session_id`, and the exact `implementation_revision_sha256` — a
+streaming digest over the cumulative attributable change set, recomputed live
+before every verdict. The host/auditor independently inspects and tests that
+workspace revision, then binds its verdict to that digest. A stale, wrong, or
+concurrently mutated revision is rejected without mutating the job.
+
+A rework verdict must carry at least one typed bounded finding (stable code,
+severity, message, optional evidence reference); an accept verdict must carry
+none. Rework is bounded by `--max-rework-rounds`. Past that ceiling the request
+is rejected before the record is touched — the job keeps its current exact
+revision `awaiting_codex_audit` and non-landable, and no replacement session is
+started. Rework that cannot be resumed in the original session after a restart
+fails closed the same way. Only a valid accept on that exact revision can make
+the job landable.
+
+`landable` is eligibility evidence, never an action. Nothing in this service
+stages, commits, pushes, publishes, or deploys, and the Claude adapter's
+guardian denies those command classes as defense in depth.
+
+### Audit surfaces
+
+MCP stdio exposes exactly three tools — `flyto_coding_submit`,
+`flyto_coding_get`, and `flyto_coding_audit` — and its `initialize` result
+carries bounded instructions describing this loop. HTTP exposes the equivalent
+authenticated routes:
+
+```text
+POST /v1/coding/jobs                      submit (bearer + Idempotency-Key)
+GET  /v1/coding/jobs/{job_id}             poll
+POST /v1/coding/jobs/{job_id}/audit       verdict (bearer)
+      {"implementation_revision_sha256": "...",
+       "verdict": "accept" | "rework",
+       "findings": [ ... ]}
+```
+
+Neither surface accepts a model, provider, backend, or audit-authority field.
+Unknown fields are rejected before the service mutates anything: 404 for an
+unknown job, 400 for an invalid shape, 409 for a stale revision / wrong state /
+exhausted rework, 429 when busy, 403 for a policy denial. Receipts stay
+secret-redacted and never expose an evidence path or raw check output.
+
+Verdicts come from the principal the host authenticates. The transport
+validates shape and forwards; it cannot itself prove which principal is
+calling, and it never makes the acceptance decision.
 
 The host injects the provider, provider credentials, tenant ID, allowed
 workspace roots, and state root when the process starts. A job accepts only the
@@ -326,23 +433,26 @@ versioned coding request. Fields such as `provider`, `api_key`, `tenant`, and
 `auth_token` are rejected rather than persisted. HTTP requires a bearer token
 and `Idempotency-Key`; the built-in server binds only to loopback because public
 TLS, identity, quota, and organization policy belong at the Flyto2 Cloud edge.
-MCP stdio receives its tenant from process configuration and exposes only
-`flyto_coding_submit` and `flyto_coding_get`.
+MCP stdio receives its tenant from process configuration.
 
-Start either adapter without putting a credential on the command line:
+Start either transport without putting a credential on the command line:
 
 ```bash
 export FLYTO_AI_CODING_SERVER_TOKEN='use-a-runtime-secret-manager'
 flyto-ai code-serve \
   --tenant acme \
   --workspace-root /srv/workspaces/acme \
+  --implementation-backend native \
   --provider ollama \
+  --max-rework-rounds 3 \
   --sandbox-image flyto/coding-python@sha256:REPLACE_WITH_LOCAL_DIGEST
 
+# Claude implementer; needs the optional flyto-ai[claude-sdk] extra.
 flyto-ai code-mcp \
   --tenant acme \
   --workspace-root /srv/workspaces/acme \
-  --provider ollama
+  --implementation-backend claude \
+  --max-rework-rounds 3
 ```
 
 The HTTP token is read only from the named environment variable. For cloud
@@ -391,10 +501,72 @@ The command sandbox is defense in depth, not a complete hostile-repository
 boundary: source-controlled checks intentionally execute project code. Run the
 whole coding process in a dedicated container or VM for untrusted repositories.
 
+## Connecting an auditing host over MCP
+
+An orchestrator such as Codex reaches this service as a local STDIO MCP server.
+Project-scoped Codex configuration lives in `.codex/config.toml`, applies only
+in projects you trust, and needs a Codex restart to take effect. The example
+below is documentation: it uses placeholders and contains no credential value.
+
+```toml
+# .codex/config.toml — project-scoped; trusted projects only.
+[mcp_servers.flyto_coding]
+# Use an absolute path to the interpreter or console script for this project,
+# for example /absolute/path/to/.venv/bin/flyto-ai.
+command = "/ABSOLUTE/PATH/TO/.venv/bin/flyto-ai"
+args = [
+  "code-mcp",
+  "--tenant", "REPLACE_WITH_TENANT",
+  "--workspace-root", "/ABSOLUTE/PATH/TO/WORKSPACE",
+  "--state-dir", "/ABSOLUTE/PATH/TO/STATE",
+  # Claude implementer; requires the flyto-ai[claude-sdk] extra.
+  "--implementation-backend", "claude",
+  "--max-rework-rounds", "3",
+]
+cwd = "/ABSOLUTE/PATH/TO/WORKSPACE"
+required = true
+enabled_tools = ["flyto_coding_submit", "flyto_coding_get", "flyto_coding_audit"]
+startup_timeout_sec = 30
+tool_timeout_sec = 900
+```
+
+Native alternative — swap the two selection arguments, or drop them and set the
+bounded environment default before Codex starts the server:
+
+```toml
+args = [
+  "code-mcp",
+  "--tenant", "REPLACE_WITH_TENANT",
+  "--workspace-root", "/ABSOLUTE/PATH/TO/WORKSPACE",
+  "--implementation-backend", "native",
+  "--provider", "ollama",
+]
+```
+
+```bash
+export FLYTO_AI_CODING_BACKEND=native   # or: claude
+```
+
+Credentials never belong in this file. Provide them through the runtime
+environment or a secret manager for the process that Codex launches.
+
 ## Rollback and composition
 
-Remove a capability entry to detach that server. Select the optional
-`claude-sdk` backend when compatibility is required. Removing
-the HTTP/MCP service process restores direct `flyto-ai code` use without a data
-migration. Removing `flyto_ai.coding` does not alter provider interfaces, Core
-execution authority, Blueprint contracts, or the legacy Claude adapter.
+Rollback is configuration, and it stays inside the audited route:
+
+- Remove a capability entry to detach that MCP server.
+- Select `--implementation-backend native` to detach the Claude adapter.
+- Lower `--max-rework-rounds` to tighten the repair ceiling.
+
+Each of these keeps `code-mcp` and `code-serve` audit-required. Stopping the
+service **pauses** host-managed implementation until it is restarted; it does
+not move that work to another path.
+
+`flyto-ai code` and direct Python `CodingService` construction (which keeps
+`require_codex_audit=False`) remain supported for legacy and library use, but
+they sit outside the host-managed audited route. They cannot produce its
+`codex_accepted` state or its `landable` evidence, and they are never the
+fallback when the audited service is unavailable.
+
+Removing `flyto_ai.coding` does not alter provider interfaces, Core execution
+authority, Blueprint contracts, or the legacy Claude adapter.

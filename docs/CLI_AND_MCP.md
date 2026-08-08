@@ -9,7 +9,11 @@ lists every command and option.
 - `flyto-ai chat <message>`: one request with provider/model, YAML-only plan,
   JSON output, memory, sandbox, webhook, and round controls.
 - `flyto-ai code <message>`: bounded coding-agent execution with optional Core
-  verification recipe, reference image, attempts, budget, and turn limits.
+  verification recipe, reference image, attempts, budget, and turn limits. This
+  is direct legacy/library use; it sits outside the audited service route below
+  and cannot produce an accepted, landable receipt.
+- `flyto-ai code-serve` and `flyto-ai code-mcp`: the two transports of the one
+  audit-required coding service. See [Audited coding service](#audited-coding-service).
 - `flyto-ai blueprints`: list or export learned workflows.
 - `flyto-ai prompt-lab eval|evolve|cases|report`: evaluate and evolve prompts
   without automatically promoting results.
@@ -29,9 +33,64 @@ must configure an explicit key and origin allowlist. The service supports health
 chat/streaming, Claude command execution, steering, status, and Telegram webhook
 integration as implemented in `flyto_ai.cli`.
 
+## Audited coding service
+
+`flyto-ai code-serve` (authenticated loopback HTTP) and `flyto-ai code-mcp`
+(configured-tenant MCP stdio) are two transports over one `CodingService`. Both
+are audit-required unconditionally; there is no flag or environment variable
+that disables the requirement.
+
+The operator selects the implementer once at startup with
+`--implementation-backend native|claude` (default `native`, optional bounded
+`FLYTO_AI_CODING_BACKEND` default) plus `--max-rework-rounds` (default 3). There
+is no per-job backend selection and no fallback between implementers; an
+invalid or unavailable selection fails startup. The `claude` route needs the
+optional `flyto-ai[claude-sdk]` extra, is pinned to `claude-opus-5` for service
+work, reuses the exact same SDK session across rework, and receives no Bash,
+no content search, and no audit tool.
+
+An implementer round ends at `awaiting_codex_audit` bound to an exact
+`implementation_revision_sha256`. The authenticated host independently inspects
+and tests that workspace revision, then submits a verdict bound to that digest:
+`accept` reaches `codex_accepted` with `landable` evidence, while `rework`
+returns typed findings to the same job and implementation session for another
+bounded round.
+
+A provider or check failure is terminal `failed`. Work interrupted while queued
+or running becomes `failed` with `failure_code=service_restarted`. A rework
+request past the ceiling is rejected before any record change (HTTP 409 /
+`rework_limit_reached`): the job stays at its current exact revision,
+`awaiting_codex_audit` and non-landable, and no new session starts. Only a
+valid `accept` on that exact revision can make it landable. The service never
+stages, commits, pushes, publishes, or deploys; `landable` is evidence, not an
+action.
+
+Surfaces:
+
+| Transport | Operation |
+| --- | --- |
+| MCP tool | `flyto_coding_submit` |
+| MCP tool | `flyto_coding_get` |
+| MCP tool | `flyto_coding_audit` |
+| HTTP | `POST /v1/coding/jobs` (bearer + `Idempotency-Key`) |
+| HTTP | `GET /v1/coding/jobs/{job_id}` |
+| HTTP | `POST /v1/coding/jobs/{job_id}/audit` (bearer) |
+
+Neither surface accepts a model, provider, backend, or audit-authority field.
+The MCP `initialize` result advertises server version `2` and bounded
+instructions describing this loop. Details, the state machine, and a
+project-scoped Codex `.codex/config.toml` example are in
+[the coding control plane guide](CODING_CONTROL_PLANE.md).
+
 ## MCP Protocol
 
-Both MCP servers support the stateless 2026-07-28 protocol and the older
+This section describes the two general-purpose MCP servers: the general server
+and the closed-loop server. It does **not** describe the coding MCP service
+above, which is a separate surface that negotiates exactly one protocol
+version, `2025-06-18`, and rejects anything else. Do not assume the coding
+service supports the stateless 2026 protocol or the legacy handshake range.
+
+Both general MCP servers support the stateless 2026-07-28 protocol and the older
 handshake-based revisions from 2024-11-05 through 2025-11-25. Modern hosts can
 discover capabilities without opening a sticky protocol session, so reconnects
 do not depend on hidden server state. Every modern response identifies the

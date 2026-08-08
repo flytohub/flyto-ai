@@ -27,6 +27,23 @@ from flyto_ai.coding.service import (
 
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
+#: Advanced from "1" when the audit tool and audit states joined this surface.
+#: The protocol version and every existing tool schema stay compatible.
+CODING_MCP_SERVER_VERSION = "2"
+MAX_INSTRUCTIONS_CHARS = 512
+#: Self-contained description of the host-owned loop. It states what the
+#: caller must do and what this server will not do; it deliberately does not
+#: claim the server can prove which principal is auditing.
+CODING_MCP_INSTRUCTIONS = (
+    "Coding: use flyto_coding_submit; poll flyto_coding_get to "
+    "awaiting_codex_audit or terminal. failed is terminal/non-landable. At "
+    "awaiting_codex_audit independently inspect/test the workspace, then "
+    "audit exact implementation_revision_sha256 with flyto_coding_audit. "
+    "rework sends typed findings to the same job/session; poll and re-audit. "
+    "Only accept is landable. The verdict is from the host-authenticated "
+    "auditor; server cannot prove caller identity. Never stages, commits, "
+    "pushes, publishes, or deploys."
+)
 MAX_MESSAGE_BYTES = 256 * 1024
 _JOB_ID_PATTERN = "^job_[a-f0-9]{24}$"
 _SHA256_PATTERN = "^[a-f0-9]{64}$"
@@ -87,7 +104,10 @@ class CodingMCPServer:
                 return self._result(request_id, {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "flyto-coding", "version": "1"},
+                    "serverInfo": {
+                        "name": "flyto-coding", "version": CODING_MCP_SERVER_VERSION,
+                    },
+                    "instructions": CODING_MCP_INSTRUCTIONS,
                 })
             if method == "tools/list":
                 return self._result(request_id, {"tools": self._tools()})

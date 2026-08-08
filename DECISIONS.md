@@ -19,6 +19,59 @@ Rollback is additive: callers can skip the interpretation service and use the
 reviewed card contract directly. Do not roll back by letting a model choose the
 cards, evidence contract, live resource, motor command, or completion state.
 
+## 2026-08-08: One audited coding route with a startup-selected implementer
+
+Supersedes the 2026-08-01 statement that the native `FlytoCodingAgent` is the
+only coding-loop implementation. It is now one of exactly two peer
+implementers behind the same audited service contract.
+
+- Codex, or whichever principal the host authenticates, is the orchestrator and
+  the independent auditor. `flyto-ai` is the single coding route between them
+  and the implementer; there is no second path that reaches a landable result.
+- The operator selects exactly one implementer at process startup with
+  `--implementation-backend native|claude`, or the bounded
+  `FLYTO_AI_CODING_BACKEND` default. `native` remains the default. There is no
+  per-job backend field, no provider/model auto-routing, and no fallback in
+  either direction; an invalid or unavailable selection fails startup.
+- Claude service rounds are pinned to `claude-opus-5`. Configuration can vary
+  the legacy direct backend's model but can never redirect audited service
+  work. The Claude route reads only bounded `FLYTO_AI_CC_*` settings and
+  resolves no native provider credential or configuration.
+- An implementer success is never public success. It reaches
+  `awaiting_codex_audit` bound to an exact `implementation_revision_sha256`,
+  the implementer backend, and an opaque implementation session id.
+- A `rework` verdict carries typed bounded findings and resumes the exact same
+  job, thread, and implementation session. A changed session fails closed.
+  Rework is bounded by the startup `--max-rework-rounds` ceiling.
+- Only an `accept` verdict on the exact current revision reaches
+  `codex_accepted` and `landable`. Landability is eligibility evidence, never
+  an action: nothing in this service stages, commits, pushes, publishes, or
+  deploys, and the Claude adapter's guardian denies those command classes.
+- The Claude adapter receives only Read/Edit/Write/Glob under write authority
+  and Read/Glob otherwise. It never receives Bash or content search, and the
+  audit tool is not in its catalog, so an implementer cannot approve itself.
+- `code-mcp` and `code-serve` are audit-required unconditionally. No flag or
+  environment variable disables that requirement. The MCP `initialize` result
+  now advertises server version `2` and bounded instructions describing this
+  loop, without claiming the transport can prove the auditing principal.
+
+Rollback is configuration, not code, and it never leaves the audited route.
+Select `--implementation-backend native` to detach the Claude adapter, or lower
+`--max-rework-rounds` to tighten the repair ceiling; both keep `code-mcp` and
+`code-serve` audit-required. Stopping the service **pauses** Codex-managed
+implementation until it is restarted; it does not hand that work to another
+path.
+
+`flyto-ai code` and direct Python `CodingService` construction (which keeps
+`require_codex_audit=False`) remain for legacy and library compatibility, but
+they sit outside the Codex-managed audited route. They cannot produce its
+`codex_accepted` receipt or its `landable` evidence, and they are never the
+fallback when the service is unavailable.
+
+Do not roll back by adding an audit-disable switch to the public commands, a
+per-job backend field, a fallback between implementers, a second route to a
+landable receipt, or a landing action inside the service.
+
 ## 2026-08-02: Capability quality controls are separate atomic planes
 
 - Keep authority, resource admission, evidence/replay, adapter conformance,

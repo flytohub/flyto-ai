@@ -486,6 +486,53 @@ def _valid_finding_payload() -> dict:
     }
 
 
+def test_initialize_declares_the_host_owned_audit_loop() -> None:
+    from flyto_ai.coding.mcp_server import (
+        CODING_MCP_INSTRUCTIONS,
+        CODING_MCP_SERVER_VERSION,
+        MAX_INSTRUCTIONS_CHARS,
+    )
+
+    server = CodingMCPServer(RecordingAuditService(), "tenant-audit")
+    result = server.handle({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": MCP_PROTOCOL_VERSION},
+    })["result"]
+    assert result["protocolVersion"] == MCP_PROTOCOL_VERSION
+    assert result["serverInfo"] == {"name": "flyto-coding", "version": "2"}
+    assert CODING_MCP_SERVER_VERSION == "2"
+
+    instructions = result["instructions"]
+    assert isinstance(instructions, str)
+    assert instructions == CODING_MCP_INSTRUCTIONS
+    assert 0 < len(instructions) <= MAX_INSTRUCTIONS_CHARS == 512
+
+    # The loop must be readable without any out-of-band documentation.
+    for tool in ("flyto_coding_submit", "flyto_coding_get", "flyto_coding_audit"):
+        assert tool in instructions
+    for phrase in (
+        "awaiting_codex_audit or terminal",
+        "failed is terminal/non-landable",
+        "At awaiting_codex_audit independently inspect/test the workspace",
+        "audit exact implementation_revision_sha256",
+        "rework sends typed findings to the same job/session",
+        "poll and re-audit", "Only accept is landable",
+        "host-authenticated auditor", "cannot prove caller identity",
+        "Never stages, commits, pushes, publishes, or deploys",
+    ):
+        assert phrase in instructions
+    # It must not claim an authority the transport does not have.
+    assert "Codex is the caller" not in instructions
+    # No remote model, provider, or backend selector is advertised.
+    for forbidden in ("model", "provider", "backend"):
+        assert forbidden not in instructions.lower()
+
+    listed = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    assert {item["name"] for item in listed["result"]["tools"]} == {
+        "flyto_coding_submit", "flyto_coding_get", "flyto_coding_audit",
+    }
+
+
 def test_audit_tool_schema_is_strict_and_hides_backend_selection() -> None:
     server = CodingMCPServer(RecordingAuditService(), "tenant-audit")
     listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})

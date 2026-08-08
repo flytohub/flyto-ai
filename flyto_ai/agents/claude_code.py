@@ -11,8 +11,11 @@ Flow:
   Loop back to Phase 2 if verification fails
 """
 import logging
+import os
+import re
 import sys
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from flyto_ai.agents.evidence import EvidenceCollector, evidence_post_hook
@@ -21,6 +24,7 @@ from flyto_ai.agents.models import (
     CodeTaskRequest,
     CodeTaskResponse,
     VerificationResult,
+    is_safe_sdk_session_id,
 )
 from flyto_ai.agents.prompts import build_system_prompt
 from flyto_ai.agents.verifier import VerificationEngine
@@ -29,6 +33,27 @@ logger = logging.getLogger(__name__)
 
 # Type alias for streaming callback
 StreamCallback = Optional[Callable[[Dict[str, Any]], None]]
+
+#: The pinned Claude model. There is deliberately no fallback chain and no
+#: auto-selection: an unavailable model is an operator problem, not a reason to
+#: silently run a different one.
+DEFAULT_CLAUDE_MODEL = "claude-opus-5"
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: Service mode inspects and edits; host-owned checks run afterward. Process
+#: execution is not delegated to the model.
+#: Content search is absent on purpose. A pre-hook can authorize the search
+#: root but not every result path, so `Grep` could return bytes from `.env`,
+#: `.ssh`, or a credentials file that `Read` would have refused. `Glob` exposes
+#: names only and keeps its canonical root confinement.
+SERVICE_ALLOWED_TOOLS = ("Read", "Edit", "Write", "Glob")
+#: Catalog for a run whose startup authority does not permit model edits.
+SERVICE_READONLY_TOOLS = ("Read", "Glob")
+#: Prefix for a provisional host thread id used when a service round fails
+#: before any Claude session exists. It can never be mistaken for, or resumed
+#: as, an SDK session.
+HOST_THREAD_PREFIX = "host-"
+#: A durable ThreadStore identifier is narrower than an opaque SDK session id.
+_HOST_THREAD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 class ClaudeCodeAgent:
@@ -61,8 +86,11 @@ class ClaudeCodeAgent:
         Returns:
             CodeTaskResponse with pass/fail, evidence, and files changed.
         """
+        # The local evidence id is not the Claude SDK session id. Only the
+        # latter can resume a conversation.
         session_id = uuid.uuid4().hex[:12]
         evidence = EvidenceCollector(session_id, self._cc.evidence_dir)
+        service_mode = bool(getattr(request, "service_mode", False))
         verification_results: List[VerificationResult] = []
 
         max_attempts = min(request.max_fix_attempts, self._cc.max_fix_attempts)
@@ -82,7 +110,10 @@ class ClaudeCodeAgent:
         self._emit(on_stream, "phase_end", {"phase": "context"})
 
         # ── Phase 2-4 loop ──
-        sdk_session_id: Optional[str] = None
+        # A resumed service round must continue the exact SDK session it was
+        # given, starting with the very first call.
+        sdk_session_id: Optional[str] = getattr(request, "sdk_session_id", None) or None
+        requested_session = sdk_session_id
         total_cost = 0.0
         total_turns = 0
         total_duration_ms = 0
@@ -107,7 +138,29 @@ class ClaudeCodeAgent:
                 evidence=evidence,
                 on_stream=on_stream,
             )
-            sdk_session_id = sdk_result.get("session_id")
+            returned_session = sdk_result.get("session_id")
+            if not is_safe_sdk_session_id(returned_session) or (
+                requested_session is not None and returned_session != requested_session
+            ):
+                # Fail closed: without a stable identity a later attempt would
+                # silently continue some other conversation.
+                await self._save_evidence(evidence, service_mode)
+                return CodeTaskResponse(
+                    ok=False,
+                    message="Claude SDK session identity is unavailable or changed.",
+                    session_id=session_id,
+                    attempts=attempt,
+                    verification_results=verification_results,
+                    evidence=evidence.to_list(),
+                    files_changed=evidence.files_changed,
+                    total_cost_usd=total_cost,
+                    claude_session_id=None,
+                    claude_num_turns=total_turns,
+                    claude_duration_ms=total_duration_ms,
+                    claude_usage=last_usage,
+                )
+            sdk_session_id = returned_session
+            requested_session = returned_session
             total_cost += sdk_result.get("cost", 0.0)
             total_turns += sdk_result.get("num_turns", 0)
             total_duration_ms += sdk_result.get("duration_ms", 0)
@@ -123,7 +176,7 @@ class ClaudeCodeAgent:
             # Phase 3: Verification
             if not request.verification_recipe:
                 # No verification configured — consider it a pass
-                await evidence.save()
+                await self._save_evidence(evidence, service_mode)
                 return CodeTaskResponse(
                     ok=True,
                     message=sdk_result.get("message", "Code changes applied."),
@@ -164,7 +217,7 @@ class ClaudeCodeAgent:
             self._emit(on_stream, "phase_end", {"phase": "verification", "attempt": attempt})
 
             if vr.passed:
-                await evidence.save()
+                await self._save_evidence(evidence, service_mode)
                 return CodeTaskResponse(
                     ok=True,
                     message="Verification passed on attempt {}.".format(attempt),
@@ -186,7 +239,7 @@ class ClaudeCodeAgent:
                 break
 
         # All attempts exhausted
-        await evidence.save()
+        await self._save_evidence(evidence, service_mode)
         return CodeTaskResponse(
             ok=False,
             message="Verification failed after {} attempts.".format(max_attempts),
@@ -250,7 +303,12 @@ class ClaudeCodeAgent:
             tool_name = input_data.get("tool_name", "")
             tool_input = input_data.get("tool_input", {})
             try:
-                await guardian_pre_hook(tool_name, tool_input, tool_use_id or "")
+                await guardian_pre_hook(
+                    tool_name, tool_input, tool_use_id or "",
+                    workspace=request.working_dir,
+                    service_mode=bool(getattr(request, "service_mode", False)),
+                    edit_authority=bool(getattr(request, "service_edit_authority", True)),
+                )
                 evidence.record("coding", "tool_approved", {
                     "tool": tool_name,
                     "id": tool_use_id,
@@ -288,30 +346,18 @@ class ClaudeCodeAgent:
             }
 
         # Build options
-        options_kwargs: Dict[str, Any] = {
-            "max_turns": max_turns,
-            "max_budget_usd": max_budget,
-            "cwd": request.working_dir,
-            "allowed_tools": self._cc.allowed_tools,
-            # Never disable the SDK permission system implicitly.  The
-            # guardian hook is an additional policy boundary, not a reason to
-            # bypass the SDK's own approval prompts.
-            "permission_mode": "default",
-            "env": {"CLAUDECODE": ""},
-            "hooks": {
-                "PreToolUse": [HookMatcher(hooks=[_pre_hook])],
-                "PostToolUse": [HookMatcher(hooks=[_post_hook])],
-            },
+        options_kwargs = self._option_kwargs(
+            request,
+            session_id=session_id,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            max_budget=max_budget,
+            mcp_servers=mcp_servers,
+        )
+        options_kwargs["hooks"] = {
+            "PreToolUse": [HookMatcher(hooks=[_pre_hook])],
+            "PostToolUse": [HookMatcher(hooks=[_post_hook])],
         }
-
-        if mcp_servers:
-            options_kwargs["mcp_servers"] = mcp_servers
-
-        # Resume existing session or start new
-        if session_id:
-            options_kwargs["resume"] = session_id
-        else:
-            options_kwargs["system_prompt"] = system_prompt
 
         options = ClaudeAgentOptions(**options_kwargs)
 
@@ -352,6 +398,68 @@ class ClaudeCodeAgent:
             "usage": usage,
         }
 
+    def _option_kwargs(
+        self,
+        request: CodeTaskRequest,
+        *,
+        session_id: Optional[str],
+        system_prompt: str,
+        max_turns: int,
+        max_budget: float,
+        mcp_servers: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build SDK options without importing or calling the SDK."""
+
+        service_mode = bool(getattr(request, "service_mode", False))
+        edits_allowed = bool(getattr(request, "service_edit_authority", True))
+        if service_mode:
+            service_tools = list(
+                SERVICE_ALLOWED_TOOLS if edits_allowed else SERVICE_READONLY_TOOLS,
+            )
+        options_kwargs: Dict[str, Any] = {
+            # The service route is pinned to Opus 5. Configuration can vary the
+            # legacy direct backend only; it can never redirect service work.
+            "model": DEFAULT_CLAUDE_MODEL if service_mode else self.resolve_model(self._cc),
+            "max_turns": max_turns,
+            "max_budget_usd": max_budget,
+            "cwd": request.working_dir,
+            "allowed_tools": service_tools if service_mode else self._cc.allowed_tools,
+            # Never disable the SDK permission system implicitly.  The
+            # guardian hook is an additional policy boundary, not a reason to
+            # bypass the SDK's own approval prompts.  Service mode accepts
+            # edits only when the startup sandbox and approval policy grant
+            # write authority; it never has a process-execution tool.
+            "permission_mode": (
+                "acceptEdits" if service_mode and edits_allowed else "default"
+            ),
+            "env": {"CLAUDECODE": ""},
+        }
+        if mcp_servers:
+            options_kwargs["mcp_servers"] = mcp_servers
+        # Resume existing session or start new
+        if session_id:
+            options_kwargs["resume"] = session_id
+        else:
+            options_kwargs["system_prompt"] = system_prompt
+        return options_kwargs
+
+    @staticmethod
+    def resolve_model(claude_config: Any) -> str:
+        """Return the validated configured model or the pinned default."""
+
+        configured = getattr(claude_config, "model", "")
+        if isinstance(configured, str) and _MODEL_RE.fullmatch(configured):
+            return configured
+        return DEFAULT_CLAUDE_MODEL
+
+    @staticmethod
+    async def _save_evidence(evidence: EvidenceCollector, service_mode: bool) -> None:
+        """Service mode records bounded metadata in the ThreadStore instead."""
+
+        if service_mode:
+            return
+        await evidence.save()
+
     def _find_indexer_command(self) -> Optional[List[str]]:
         """Find the flyto-indexer MCP server command."""
         try:
@@ -388,3 +496,273 @@ class ClaudeCodeAgent:
             on_stream({"type": event_type, **data})
         except Exception:
             pass
+
+
+class ClaudeCodingAgent:
+    """CodingService-compatible adapter over the optional Claude SDK backend.
+
+    It satisfies the same callable shape as ``FlytoCodingAgent``::
+
+        agent = ClaudeCodingAgent(store, config=config)
+        result = await agent.run(CodingTaskRequest(...))
+
+    Attribution, verification, and evidence stay host-owned: changed files come
+    from independent workspace snapshots, checks come from the repository's
+    ``.flyto/coding.yaml``, and the returned ``thread_id`` is the exact Claude
+    SDK session so CodingService can enforce same-session rework.
+    """
+
+    MAX_MESSAGE_CHARS = 2000
+    MAX_USAGE_KEYS = 16
+    MAX_USAGE_VALUE = 10 ** 9
+
+    def __init__(
+        self,
+        store: Any,
+        *,
+        config: Any = None,
+        agent: Optional[ClaudeCodeAgent] = None,
+    ) -> None:
+        self.store = store
+        self.agent = agent if agent is not None else ClaudeCodeAgent(config)
+
+    async def run(self, request: Any) -> Any:
+        """Run one bounded implementation round for the coding service."""
+
+        from flyto_ai.coding.checks import CheckRunner, load_project_config
+        from flyto_ai.coding.contracts import CodingTaskResult
+        from flyto_ai.coding.workspace import WorkspaceTools, WorkspaceViolation
+
+        thread_id = str(request.thread_id or "")
+        try:
+            tools = WorkspaceTools(
+                request.working_dir,
+                sandbox_mode=request.sandbox_mode,
+                approval_policy=request.approval_policy,
+                sandbox_image=request.command_sandbox_image,
+            )
+            checks, capabilities = load_project_config(
+                request.working_dir, request.config_path,
+            )
+        except (ValueError, OSError, WorkspaceViolation):
+            return self._failed(thread_id, "invalid_config")
+
+        if not [check for check in checks if check.required]:
+            return self._failed(thread_id, "verification_required")
+        if [spec for spec in capabilities if spec.required]:
+            # An optional adapter must never let a required capability pass by
+            # simply not being attachable here.
+            return self._failed(thread_id, "required_capability_unavailable")
+
+        # The Claude backend gets exactly the authority the host granted at
+        # startup. An impossible task fails before the model is ever called.
+        writable, denial = self._edit_authority(request)
+        if denial and request.require_changes:
+            return self._failed(thread_id, denial)
+
+        try:
+            before = tools.snapshot()
+        except WorkspaceViolation:
+            return self._failed(thread_id, "snapshot_failed")
+
+        code_request = CodeTaskRequest(
+            message=request.message,
+            working_dir=request.working_dir,
+            max_fix_attempts=request.max_attempts,
+            max_turns=request.max_rounds,
+            sdk_session_id=thread_id if request.resume and thread_id else None,
+            service_mode=True,
+            service_edit_authority=writable,
+        )
+        try:
+            response = await self.agent.run(code_request)
+        except Exception:  # noqa: BLE001 - the backend is detachable
+            return self._failed(thread_id, "provider_failed")
+
+        session = response.claude_session_id
+        if (
+            not is_safe_sdk_session_id(session)
+            or not _HOST_THREAD_RE.fullmatch(session)
+            or (
+                code_request.sdk_session_id is not None
+                and session != code_request.sdk_session_id
+            )
+        ):
+            return self._failed(thread_id, "session_binding_failed")
+        try:
+            after = tools.snapshot()
+        except WorkspaceViolation:
+            return self._failed(session, "snapshot_failed")
+        changed = self._attributable(tools, before, after)
+        if not writable and changed:
+            # A read-only run that still mutated the workspace is evidence of a
+            # boundary failure, never an acceptable implementation.
+            return self._failed(session, "unexpected_workspace_change")
+
+        try:
+            self._bind_thread(session, request.working_dir)
+        except (ValueError, OSError):
+            return self._failed(session, "thread_binding_failed")
+        self.store.append(session, "coding.round", {
+            "backend": "claude-sdk",
+            "attempts": int(getattr(response, "attempts", 0) or 0),
+            "files_changed": len(changed),
+        })
+
+        results = await CheckRunner(tools).run(tuple(checks))
+        verified = CheckRunner.passed(results)
+        changed_ok = bool(changed) or not request.require_changes
+        ok = bool(response.ok) and verified and changed_ok
+        failure_code = None
+        if not response.ok:
+            failure_code = "provider_failed"
+        elif not verified:
+            failure_code = "verification_failed"
+        elif not changed_ok:
+            failure_code = "no_changes"
+        self.store.append(session, "coding.outcome", {
+            "ok": ok, "failure_code": failure_code or "",
+        })
+        self.store.update(session, status="completed" if ok else "failed")
+
+        return CodingTaskResult(
+            ok=ok,
+            message=self._public_message(response, request.working_dir),
+            thread_id=session,
+            attempts=int(getattr(response, "attempts", 0) or 0),
+            status="completed" if ok else "failed",
+            files_changed=list(changed),
+            checks=list(results),
+            capabilities=[],
+            usage=self._bounded_usage(response.claude_usage),
+            rounds_used=int(getattr(response, "claude_num_turns", 0) or 0),
+            evidence_path="",
+            failure_code=failure_code,
+        )
+
+    @staticmethod
+    def _edit_authority(request: Any) -> "tuple[bool, str]":
+        """Resolve write authority from the startup sandbox and approval policy.
+
+        Returns the authority and, when it is absent, the stable reason a task
+        that requires changes cannot run at all. `never` and `on-failure` keep
+        the native-compatible behavior of granting writes up front.
+        """
+
+        from flyto_ai.coding.contracts import ApprovalPolicy, SandboxMode
+
+        if SandboxMode(request.sandbox_mode) is not SandboxMode.WORKSPACE_WRITE:
+            return False, "workspace_read_only"
+        if ApprovalPolicy(request.approval_policy) in {
+            ApprovalPolicy.ON_REQUEST, ApprovalPolicy.ALWAYS,
+        }:
+            # A detached service has no interactive host to pause for.
+            return False, "approval_required"
+        return True, ""
+
+    def _bind_thread(self, session: str, workspace: str) -> None:
+        """Create or resume the durable thread under the exact SDK session id."""
+
+        try:
+            self.store.load(session, workspace)
+        except FileNotFoundError:
+            self.store.create(workspace, session)
+
+    def _attributable(
+        self, tools: Any, before: Dict[str, str], after: Dict[str, str],
+    ) -> List[str]:
+        """Derive changed files from snapshots, never from model prose."""
+
+        changed = tools.changed_since(before, after)
+        try:
+            evidence_root = Path(str(self.store.root)).resolve()
+            prefix = evidence_root.relative_to(Path(tools.root).resolve()).as_posix() + "/"
+        except (AttributeError, ValueError, OSError):
+            return list(changed)
+        return [item for item in changed if not item.startswith(prefix)]
+
+    @classmethod
+    def _public_message(cls, response: Any, workspace: str) -> str:
+        """Bound the model message and keep host paths out of the receipt."""
+
+        text = str(getattr(response, "message", "") or "")[: cls.MAX_MESSAGE_CHARS]
+        for variant in cls._workspace_variants(workspace):
+            text = text.replace(variant, "<workspace>")
+        return "".join(
+            character for character in text
+            if character.isprintable() or character == "\n"
+        )
+
+    @staticmethod
+    def _workspace_variants(workspace: str) -> List[str]:
+        """Every canonical spelling of this run's workspace, longest first.
+
+        A relative or symlinked request still lets the model echo the resolved
+        absolute path, so redaction cannot rely on the request string alone.
+        """
+
+        if not workspace:
+            return []
+        variants = {str(workspace)}
+        expanded = os.path.expanduser(str(workspace))
+        variants.add(expanded)
+        try:
+            variants.add(os.path.abspath(expanded))
+            variants.add(os.path.realpath(expanded))
+            variants.add(str(Path(expanded).resolve()))
+        except OSError:  # pragma: no cover - resolution is local and bounded
+            pass
+        return sorted((item for item in variants if item), key=len, reverse=True)
+
+    @classmethod
+    def _bounded_usage(cls, usage: Any) -> Dict[str, int]:
+        """Convert only bounded integer counters; drop everything else."""
+
+        if not isinstance(usage, dict):
+            return {}
+        projected: Dict[str, int] = {}
+        for key, value in usage.items():
+            if len(projected) >= cls.MAX_USAGE_KEYS:
+                break
+            if not isinstance(key, str) or not key.isidentifier() or len(key) > 64:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            if 0 <= value <= cls.MAX_USAGE_VALUE:
+                projected[key] = value
+        return projected
+
+    @staticmethod
+    def host_thread_id(supplied: Any) -> str:
+        """Return a durable host thread id for any round, including failures.
+
+        A resumed round keeps its supplied thread so its evidence stays in one
+        place. A round that fails before any Claude session exists still needs
+        an id the ThreadStore accepts, so it gets a provisional host id that is
+        deliberately distinguishable from an SDK session.
+        """
+
+        if isinstance(supplied, str) and _HOST_THREAD_RE.fullmatch(supplied):
+            return supplied
+        return "{}{}".format(HOST_THREAD_PREFIX, uuid.uuid4().hex[:20])
+
+    @classmethod
+    def _failed(cls, thread_id: str, code: str) -> Any:
+        """Return a stable failed result without leaking host material."""
+
+        from flyto_ai.coding.contracts import CodingTaskResult
+
+        return CodingTaskResult(
+            ok=False,
+            message="Claude coding round failed: {}".format(code),
+            thread_id=cls.host_thread_id(thread_id),
+            attempts=0,
+            status="failed",
+            files_changed=[],
+            checks=[],
+            capabilities=[],
+            usage={},
+            rounds_used=0,
+            evidence_path="",
+            failure_code=code,
+        )

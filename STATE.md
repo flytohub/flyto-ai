@@ -1,6 +1,94 @@
 # State
 
-Last updated: 2026-08-02
+Last updated: 2026-08-08
+
+## Current: audited coding route and canonical topology (2026-08-08)
+
+### Governing architecture
+
+The canonical Flytohub product topology is governed by `ARCHITECTURE.md`,
+`docs/architecture-map.md`, the architecture-invariant rule in `AGENTS.md`, and
+the 2026-08-08 `DECISIONS.md` entry. `flyto-cloud` sits parallel to the combined
+`flyto-code` / `flyto-engine` column at the same product-plane level; Code and
+Engine must never be drawn beneath Cloud. Changing cross-repo ownership, a
+product role, an integration arrow, the coding route, or a repository name
+requires updating `ARCHITECTURE.md`, `docs/architecture-map.md`, `STATE.md`, and
+`DECISIONS.md` in the same change.
+
+### Public coding route
+
+```text
+Codex
+  -> flyto-ai coding service (code-mcp / code-serve, audit-required)
+  -> startup-selected implementer: native or claude
+  -> awaiting independent Codex audit
+  -> same-session bounded rework, or acceptance
+  -> caller-owned commit/push
+```
+
+The service never stages, commits, pushes, publishes, or deploys. `landable` is
+eligibility evidence for the caller, not an action the service performs.
+
+### Implemented and covered by focused tests
+
+- `flyto.coding-service.v2` audit states and receipt fields:
+  `awaiting_codex_audit`, `rework_queued`, `rework_running`, `codex_accepted`,
+  plus `implementation_backend`, opaque `implementation_session_id`, exact
+  `implementation_revision_sha256`, audit/rework counts, `audit_findings_sha256`,
+  and `landable`.
+- Revision-bound independent audit: the digest covers the cumulative
+  attributable change set through a single no-follow descriptor per file and is
+  recomputed live before every verdict. Caller digest, stored digest, and live
+  recomputation must all match.
+- Bounded rework: typed findings resume the exact same job, thread, and
+  implementation session; a request past the startup ceiling is rejected before
+  any record change and leaves the job awaiting audit and non-landable.
+- Landability guard: acceptance and landability are enforced in both
+  directions, and only a Codex-accepted receipt on the exact current revision
+  can be landable.
+- Guarded Claude SDK adapter with stable same-session identity, workspace-
+  confined tools, no Bash, no content search, and no audit tool.
+- Startup backend selector `--implementation-backend native|claude` with the
+  bounded `FLYTO_AI_CODING_BACKEND` default, no per-job override and no
+  fallback; the Claude route is pinned to `claude-opus-5` and reads only
+  bounded `FLYTO_AI_CC_*` settings.
+- Public audit surface on both transports: `flyto_coding_submit`,
+  `flyto_coding_get`, `flyto_coding_audit`, and authenticated
+  `POST /v1/coding/jobs/{job_id}/audit`.
+- Coding MCP `initialize` advertises server version `2` and bounded
+  instructions describing the host-owned loop; it negotiates only `2025-06-18`.
+- Fail-closed behavior for stale or mutated revisions, wrong state, wrong
+  tenant, missing or changed session identity, unsafe attributable paths,
+  read-only or approval-gated authority, and restart of in-flight work.
+
+### Not yet proved / current gaps
+
+- The active local Python environment did not have `claude_agent_sdk`
+  installed at audit time, so live Claude-backend MCP execution is not yet
+  verified. Adapter coverage uses in-process fakes only.
+- `flyto-engine` still contains a direct `internal/ai/openai.go::OpenAIProvider`
+  path, so unified routing through `flyto-ai` as the only AI gateway is partial,
+  not implemented.
+- Universal `flyto-modules-*` registration with Core is unverified. The Core
+  registration mechanism exists; complete per-module compliance was not
+  inventoried.
+- The Indexer's Core and modules scan inputs were not separately traced.
+- The `flyto-cloud` -> `flyto2` packaging edge is unverified; `flyto2` currently
+  has no indexed files.
+- The loopback HTTP socket tests could not execute in the sandbox used for the
+  implementation work; they pass in the independent audit environment.
+
+### Latest independent focused checks (2026-08-08)
+
+- generated references current: 23 files, `generate_reference.py --check` clean;
+- `tests/test_generate_reference.py`: 2 passed;
+- focused coding / control-plane / MCP / adapter tests: 165 passed, 2 skipped;
+- `git diff --check`: clean.
+
+These are focused checks, not a full-suite run. The full-suite evidence below
+is historical.
+
+## Historical
 
 Implemented:
 - The capability quality plane now has four additional atomic modules:
@@ -199,7 +287,7 @@ Implemented:
 - Package, CLI, and MCP versions share project/distribution metadata, while Core
   module totals are discovered from the installed runtime registry.
 
-Verified on Python 3.11:
+Verified on Python 3.11 (historical 2026-08-02 baseline; not a current run):
 - full suite: 1379 passed, 15 optional/live-integration skips;
 - Ruff fatal/error rules and `compileall`: pass;
 - wheel and source distribution build plus Twine metadata validation: pass;

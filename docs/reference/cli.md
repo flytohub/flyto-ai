@@ -7,69 +7,100 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | Command owner | Command / option | Purpose | Source |
 |---|---|---|---|
 | `chat` | `command` | Send a message to the agent | [`flyto_ai/cli.py:31`](../../flyto_ai/cli.py#L31) |
-| `chat` | `message, +` | What you want to automate | [`flyto_ai/cli.py:32`](../../flyto_ai/cli.py#L32) |
+| `chat` | `message` | What you want to automate | [`flyto_ai/cli.py:32`](../../flyto_ai/cli.py#L32) |
 | `chat` | `--provider, -p` | LLM provider (openai, anthropic, ollama) | [`flyto_ai/cli.py:33`](../../flyto_ai/cli.py#L33) |
 | `chat` | `--model, -m` | Model name | [`flyto_ai/cli.py:34`](../../flyto_ai/cli.py#L34) |
 | `chat` | `--api-key, -k` | API key (or use env vars) | [`flyto_ai/cli.py:35`](../../flyto_ai/cli.py#L35) |
-| `chat` | `--json, store_true` | Output raw JSON | [`flyto_ai/cli.py:36`](../../flyto_ai/cli.py#L36) |
-| `chat` | `--plan, store_true` | Only generate YAML workflow (don | [`flyto_ai/cli.py:37`](../../flyto_ai/cli.py#L37) |
-| `chat` | `--max-rounds, Max tool call rounds (default: from config)` | Max tool call rounds (default: from config) | [`flyto_ai/cli.py:38`](../../flyto_ai/cli.py#L38) |
+| `chat` | `--json` | Output raw JSON | [`flyto_ai/cli.py:36`](../../flyto_ai/cli.py#L36) |
+| `chat` | `--plan` | Only generate YAML workflow (don't execute) | [`flyto_ai/cli.py:37`](../../flyto_ai/cli.py#L37) |
+| `chat` | `--max-rounds` | Max tool call rounds (default: from config) | [`flyto_ai/cli.py:38`](../../flyto_ai/cli.py#L38) |
 | `chat` | `--webhook, -w` | POST result to this webhook URL | [`flyto_ai/cli.py:39`](../../flyto_ai/cli.py#L39) |
-| `chat` | `--no-memory, store_true` | Disable memory system | [`flyto_ai/cli.py:40`](../../flyto_ai/cli.py#L40) |
-| `chat` | `--sandbox, store_true` | Enable Docker sandbox for dangerous modules | [`flyto_ai/cli.py:41`](../../flyto_ai/cli.py#L41) |
+| `chat` | `--no-memory` | Disable memory system | [`flyto_ai/cli.py:40`](../../flyto_ai/cli.py#L40) |
+| `chat` | `--sandbox` | Enable Docker sandbox for dangerous modules | [`flyto_ai/cli.py:41`](../../flyto_ai/cli.py#L41) |
 | `version` | `command` | Show version and optional dependency status | [`flyto_ai/cli.py:44`](../../flyto_ai/cli.py#L44) |
 | `blueprints` | `command` | List and export learned blueprints | [`flyto_ai/cli.py:47`](../../flyto_ai/cli.py#L47) |
-| `blueprints` | `--export, store_true` | Export top blueprints as YAML | [`flyto_ai/cli.py:48`](../../flyto_ai/cli.py#L48) |
-| `blueprints` | `--min-score, Minimum score to show (default: 0)` | Minimum score to show (default: 0) | [`flyto_ai/cli.py:49`](../../flyto_ai/cli.py#L49) |
+| `blueprints` | `--export` | Export top blueprints as YAML | [`flyto_ai/cli.py:48`](../../flyto_ai/cli.py#L48) |
+| `blueprints` | `--min-score` | Minimum score to show (default: 0) | [`flyto_ai/cli.py:49`](../../flyto_ai/cli.py#L49) |
 | `serve` | `command` | Start HTTP server for webhook triggers | [`flyto_ai/cli.py:52`](../../flyto_ai/cli.py#L52) |
-| `serve` | `--host, 127.0.0.1` | Bind host (default: 127.0.0.1) | [`flyto_ai/cli.py:53`](../../flyto_ai/cli.py#L53) |
-| `serve` | `--port, Bind port (default: 7411)` | Bind port (default: 7411) | [`flyto_ai/cli.py:54`](../../flyto_ai/cli.py#L54) |
+| `serve` | `--host` | Bind host (default: 127.0.0.1) | [`flyto_ai/cli.py:53`](../../flyto_ai/cli.py#L53) |
+| `serve` | `--port` | Bind port (default: 7411) | [`flyto_ai/cli.py:54`](../../flyto_ai/cli.py#L54) |
 | `serve` | `--provider, -p` | LLM provider | [`flyto_ai/cli.py:55`](../../flyto_ai/cli.py#L55) |
 | `serve` | `--model, -m` | Model name | [`flyto_ai/cli.py:56`](../../flyto_ai/cli.py#L56) |
 | `serve` | `--api-key, -k` | API key (or use env vars) | [`flyto_ai/cli.py:57`](../../flyto_ai/cli.py#L57) |
-| `serve` | `--dir, Working directory for /claude commands` | Working directory for /claude commands | [`flyto_ai/cli.py:58`](../../flyto_ai/cli.py#L58) |
+| `serve` | `--dir` | Working directory for /claude commands | [`flyto_ai/cli.py:58`](../../flyto_ai/cli.py#L58) |
 | `mcp` | `command` | Start MCP server (JSON-RPC 2.0 over STDIO) | [`flyto_ai/cli.py:61`](../../flyto_ai/cli.py#L61) |
 | `prompt-lab` | `command` | Prompt evolution system — eval, evolve, report | [`flyto_ai/cli.py:64`](../../flyto_ai/cli.py#L64) |
 | `eval` | `command` | Evaluate current prompt against test cases | [`flyto_ai/cli.py:66`](../../flyto_ai/cli.py#L66) |
-| `eval` | `--cases, Path to eval cases YAML` | Path to eval cases YAML | [`flyto_ai/cli.py:67`](../../flyto_ai/cli.py#L67) |
-| `eval` | `--rubric, Path to rubric YAML` | Path to rubric YAML | [`flyto_ai/cli.py:68`](../../flyto_ai/cli.py#L68) |
-| `eval` | `--json, store_true` | Output JSON | [`flyto_ai/cli.py:69`](../../flyto_ai/cli.py#L69) |
+| `eval` | `--cases` | Path to eval cases YAML | [`flyto_ai/cli.py:67`](../../flyto_ai/cli.py#L67) |
+| `eval` | `--rubric` | Path to rubric YAML | [`flyto_ai/cli.py:68`](../../flyto_ai/cli.py#L68) |
+| `eval` | `--json` | Output JSON | [`flyto_ai/cli.py:69`](../../flyto_ai/cli.py#L69) |
 | `evolve` | `command` | Run evolution loop | [`flyto_ai/cli.py:70`](../../flyto_ai/cli.py#L70) |
-| `evolve` | `--cases, Path to eval cases YAML` | Path to eval cases YAML | [`flyto_ai/cli.py:71`](../../flyto_ai/cli.py#L71) |
-| `evolve` | `--rubric, Path to rubric YAML` | Path to rubric YAML | [`flyto_ai/cli.py:72`](../../flyto_ai/cli.py#L72) |
-| `evolve` | `--generations, Max generations` | Max generations | [`flyto_ai/cli.py:73`](../../flyto_ai/cli.py#L73) |
-| `evolve` | `--population, Candidates per generation` | Candidates per generation | [`flyto_ai/cli.py:74`](../../flyto_ai/cli.py#L74) |
-| `evolve` | `--output, Output directory for results` | Output directory for results | [`flyto_ai/cli.py:75`](../../flyto_ai/cli.py#L75) |
+| `evolve` | `--cases` | Path to eval cases YAML | [`flyto_ai/cli.py:71`](../../flyto_ai/cli.py#L71) |
+| `evolve` | `--rubric` | Path to rubric YAML | [`flyto_ai/cli.py:72`](../../flyto_ai/cli.py#L72) |
+| `evolve` | `--generations` | Max generations | [`flyto_ai/cli.py:73`](../../flyto_ai/cli.py#L73) |
+| `evolve` | `--population` | Candidates per generation | [`flyto_ai/cli.py:74`](../../flyto_ai/cli.py#L74) |
+| `evolve` | `--output` | Output directory for results | [`flyto_ai/cli.py:75`](../../flyto_ai/cli.py#L75) |
 | `evolve` | `--provider, -p` | LLM provider | [`flyto_ai/cli.py:76`](../../flyto_ai/cli.py#L76) |
 | `evolve` | `--api-key, -k` | API key | [`flyto_ai/cli.py:77`](../../flyto_ai/cli.py#L77) |
 | `cases` | `command` | List all eval cases | [`flyto_ai/cli.py:78`](../../flyto_ai/cli.py#L78) |
 | `report` | `command` | Show latest evolution report | [`flyto_ai/cli.py:79`](../../flyto_ai/cli.py#L79) |
 | `code` | `command` | Provider-neutral Flyto2 coding agent with real verification | [`flyto_ai/cli.py:82`](../../flyto_ai/cli.py#L82) |
-| `code` | `message, +` | What you want to build/fix | [`flyto_ai/cli.py:83`](../../flyto_ai/cli.py#L83) |
+| `code` | `message` | What you want to build/fix | [`flyto_ai/cli.py:83`](../../flyto_ai/cli.py#L83) |
 | `code` | `--dir, -d` | Project working directory (default: .) | [`flyto_ai/cli.py:84`](../../flyto_ai/cli.py#L84) |
+| `code` | `--backend` | Coding backend (default: native; Claude SDK is optional) | [`flyto_ai/cli.py:85`](../../flyto_ai/cli.py#L85) |
 | `code` | `--provider, -p` | Flyto2 provider for native mode | [`flyto_ai/cli.py:89`](../../flyto_ai/cli.py#L89) |
 | `code` | `--model, -m` | Model for native mode | [`flyto_ai/cli.py:90`](../../flyto_ai/cli.py#L90) |
 | `code` | `--api-key, -k` | Provider key (prefer environment variables) | [`flyto_ai/cli.py:91`](../../flyto_ai/cli.py#L91) |
-| `code` | `--base-url, OpenAI-compatible or Ollama base URL` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:92`](../../flyto_ai/cli.py#L92) |
-| `code` | `--config, .flyto/coding.yaml` | Source-controlled coding config | [`flyto_ai/cli.py:93`](../../flyto_ai/cli.py#L93) |
-| `code` | `--thread-id, Stable coding thread ID` | Stable coding thread ID | [`flyto_ai/cli.py:94`](../../flyto_ai/cli.py#L94) |
-| `code` | `--resume, store_true` | Resume --thread-id in the same workspace | [`flyto_ai/cli.py:95`](../../flyto_ai/cli.py#L95) |
-| `code` | `--state-dir, Thread/evidence directory (default: ~/.flyto/coding)` | Thread/evidence directory (default: ~/.flyto/coding) | [`flyto_ai/cli.py:96`](../../flyto_ai/cli.py#L96) |
-| `code` | `--max-attempts, Max fix attempts (default: 3)` | Max fix attempts (default: 3) | [`flyto_ai/cli.py:121`](../../flyto_ai/cli.py#L121) |
-| `code` | `--max-rounds, Max native tool rounds (default: 30)` | Max native tool rounds (default: 30) | [`flyto_ai/cli.py:122`](../../flyto_ai/cli.py#L122) |
-| `code` | `--verify, Claude SDK verification recipe` | Claude SDK verification recipe | [`flyto_ai/cli.py:124`](../../flyto_ai/cli.py#L124) |
-| `code` | `--verify-args, Claude SDK recipe args as JSON` | Claude SDK recipe args as JSON | [`flyto_ai/cli.py:125`](../../flyto_ai/cli.py#L125) |
-| `code` | `--reference, Claude SDK visual reference image` | Claude SDK visual reference image | [`flyto_ai/cli.py:126`](../../flyto_ai/cli.py#L126) |
-| `code` | `--budget, Max budget in USD (default: 5.0)` | Max budget in USD (default: 5.0) | [`flyto_ai/cli.py:127`](../../flyto_ai/cli.py#L127) |
-| `code` | `--max-turns, Max Claude SDK turns (default: 30)` | Max Claude SDK turns (default: 30) | [`flyto_ai/cli.py:128`](../../flyto_ai/cli.py#L128) |
-| `code` | `--json, store_true` | Output raw JSON | [`flyto_ai/cli.py:129`](../../flyto_ai/cli.py#L129) |
-| `service_parser` | `--tenant, Startup-bound tenant identifier` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
-| `service_parser` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
-| `service_parser` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
-| `service_parser` | `--base-url, OpenAI-compatible or Ollama base URL` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
-| `service_parser` | `--config, .flyto/coding.yaml` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
-| `service_parser` | `--max-workers, Concurrent job workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
-| `service_parser` | `--max-queued, Maximum queued/running jobs` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
-| `code_serve_p` | `--host, 127.0.0.1` | Loopback bind host | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
-| `code_serve_p` | `--port, Loopback bind port` | Loopback bind port | [`flyto_ai/cli.py:177`](../../flyto_ai/cli.py#L177) |
+| `code` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:92`](../../flyto_ai/cli.py#L92) |
+| `code` | `--config` | Source-controlled coding config | [`flyto_ai/cli.py:93`](../../flyto_ai/cli.py#L93) |
+| `code` | `--thread-id` | Stable coding thread ID | [`flyto_ai/cli.py:94`](../../flyto_ai/cli.py#L94) |
+| `code` | `--resume` | Resume --thread-id in the same workspace | [`flyto_ai/cli.py:95`](../../flyto_ai/cli.py#L95) |
+| `code` | `--state-dir` | Thread/evidence directory (default: ~/.flyto/coding) | [`flyto_ai/cli.py:96`](../../flyto_ai/cli.py#L96) |
+| `code` | `--approval` | Host approval policy for native operations | [`flyto_ai/cli.py:97`](../../flyto_ai/cli.py#L97) |
+| `code` | `--sandbox` | Native workspace authority (no unrestricted mode) | [`flyto_ai/cli.py:101`](../../flyto_ai/cli.py#L101) |
+| `code` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:105`](../../flyto_ai/cli.py#L105) |
+| `code` | `--check-json` | Repeatable real check, e.g. {"name":"unit","argv":["pytest","-q"]} | [`flyto_ai/cli.py:109`](../../flyto_ai/cli.py#L109) |
+| `code` | `--capability-json` | Repeatable detachable command/MCP capability contract | [`flyto_ai/cli.py:113`](../../flyto_ai/cli.py#L113) |
+| `code` | `--allow-no-changes` | Allow a verified read-only task to succeed without file changes | [`flyto_ai/cli.py:117`](../../flyto_ai/cli.py#L117) |
+| `code` | `--max-attempts` | Max fix attempts (default: 3) | [`flyto_ai/cli.py:121`](../../flyto_ai/cli.py#L121) |
+| `code` | `--max-rounds` | Max native tool rounds (default: 30) | [`flyto_ai/cli.py:122`](../../flyto_ai/cli.py#L122) |
+| `code` | `--verify` | Claude SDK verification recipe | [`flyto_ai/cli.py:124`](../../flyto_ai/cli.py#L124) |
+| `code` | `--verify-args` | Claude SDK recipe args as JSON | [`flyto_ai/cli.py:125`](../../flyto_ai/cli.py#L125) |
+| `code` | `--reference` | Claude SDK visual reference image | [`flyto_ai/cli.py:126`](../../flyto_ai/cli.py#L126) |
+| `code` | `--budget` | Max budget in USD (default: 5.0) | [`flyto_ai/cli.py:127`](../../flyto_ai/cli.py#L127) |
+| `code` | `--max-turns` | Max Claude SDK turns (default: 30) | [`flyto_ai/cli.py:128`](../../flyto_ai/cli.py#L128) |
+| `code` | `--json` | Output raw JSON | [`flyto_ai/cli.py:129`](../../flyto_ai/cli.py#L129) |
+| `code-serve` | `command` | Start the detachable authenticated coding HTTP service | [`flyto_ai/cli.py:172`](../../flyto_ai/cli.py#L172) |
+| `code-serve` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
+| `code-serve` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
+| `code-serve` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
+| `code-serve` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
+| `code-serve` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
+| `code-serve` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
+| `code-serve` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
+| `code-serve` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:145`](../../flyto_ai/cli.py#L145) |
+| `code-serve` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
+| `code-serve` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
+| `code-serve` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
+| `code-serve` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
+| `code-serve` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
+| `code-serve` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
+| `code-serve` | `--host` | Loopback bind host | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
+| `code-serve` | `--port` | Loopback bind port | [`flyto_ai/cli.py:177`](../../flyto_ai/cli.py#L177) |
+| `code-serve` | `--auth-token-env` | Environment variable containing the HTTP bearer token | [`flyto_ai/cli.py:178`](../../flyto_ai/cli.py#L178) |
+| `code-mcp` | `command` | Start the detachable tenant-bound coding MCP stdio service | [`flyto_ai/cli.py:183`](../../flyto_ai/cli.py#L183) |
+| `code-mcp` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
+| `code-mcp` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
+| `code-mcp` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
+| `code-mcp` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
+| `code-mcp` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
+| `code-mcp` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
+| `code-mcp` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
+| `code-mcp` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:145`](../../flyto_ai/cli.py#L145) |
+| `code-mcp` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
+| `code-mcp` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
+| `code-mcp` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
+| `code-mcp` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
+| `code-mcp` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
+| `code-mcp` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
 | `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:189`](../../flyto_ai/cli.py#L189) |

@@ -176,6 +176,63 @@ def python_references() -> dict[Path, str]:
     return result
 
 
+ENVIRONMENT_READS = {
+    "os.getenv", "_os.getenv", "os.environ.get", "_os.environ.get", "environ.get",
+}
+ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]+")
+
+
+def environment_constants(tree: ast.Module) -> dict[str, str]:
+    """Map module-level constants that hold a statically provable variable name."""
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            continue
+        if not ENVIRONMENT_NAME.fullmatch(value.value):
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = value.value
+    return constants
+
+
+def environment_helpers(tree: ast.Module) -> dict[str, tuple[int, int | None]]:
+    """Find functions that really read the environment through a parameter.
+
+    Returns helper name -> (key parameter index, default parameter index). Only
+    a function whose body passes one of its own parameters to a known
+    environment read qualifies, so an arbitrary string-taking helper is never
+    mistaken for an environment surface.
+    """
+    helpers: dict[str, tuple[int, int | None]] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        positions = {
+            argument.arg: index
+            for index, argument in enumerate(node.args.posonlyargs + node.args.args)
+        }
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call) or not inner.args:
+                continue
+            if ast.unparse(inner.func) not in ENVIRONMENT_READS:
+                continue
+            key = inner.args[0]
+            if not isinstance(key, ast.Name) or key.id not in positions:
+                continue
+            default = inner.args[1] if len(inner.args) > 1 else None
+            default_index = (
+                positions.get(default.id) if isinstance(default, ast.Name) else None
+            )
+            helpers[node.name] = (positions[key.id], default_index)
+            break
+    return helpers
+
+
 def environment_reference() -> str:
     observations: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for path in [*sorted((ROOT / "flyto_ai").rglob("*.py")), *sorted((ROOT / "scripts").rglob("*.py"))]:
@@ -183,17 +240,35 @@ def environment_reference() -> str:
         if tree is None:
             continue
         rel = path.relative_to(ROOT).as_posix()
+        constants = environment_constants(tree)
+        helpers = environment_helpers(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue
             called = ast.unparse(node.func)
-            if called not in {"os.getenv", "_os.getenv", "os.environ.get", "environ.get"}:
+            if called in ENVIRONMENT_READS:
+                key_index, default_index = 0, 1
+            elif called in helpers:
+                key_index, default_index = helpers[called]
+            else:
                 continue
-            key = node.args[0]
-            if not isinstance(key, ast.Constant) or not isinstance(key.value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]+", key.value):
+            if key_index >= len(node.args):
                 continue
-            default = ast.unparse(node.args[1]) if len(node.args) > 1 else "required/None"
-            observations[key.value].add((default, rel))
+            key = node.args[key_index]
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                name = key.value
+            elif isinstance(key, ast.Name) and key.id in constants:
+                # A module constant is as statically provable as a literal.
+                name = constants[key.id]
+            else:
+                continue
+            if not ENVIRONMENT_NAME.fullmatch(name):
+                continue
+            if default_index is not None and default_index < len(node.args):
+                default = ast.unparse(node.args[default_index])
+            else:
+                default = "required/None"
+            observations[name].add((default, rel))
     lines = ["# Environment Variable Reference", "", NOTICE, "", "Every statically named environment read in package and Python scripts. Credentials belong in deployment secrets, never committed files.", "", "| Variable | Observed defaults | Owners |", "|---|---|---|"]
     for key, values in sorted(observations.items()):
         defaults = ", ".join(sorted({value[0] for value in values})).replace("|", "\\|")
@@ -202,32 +277,224 @@ def environment_reference() -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+ARGUMENT_FALLBACK = "See argparse declaration for behavior/default."
+
+
+def module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Map every module-level `NAME = "literal"` binding in one file."""
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = value.value
+    return constants
+
+
+def static_text(node: ast.expr, constants: dict[str, str]) -> str | None:
+    """Resolve one expression to text, or None when it is not provably static.
+
+    Only string literals, same-module string constants, and concatenation of
+    those resolve. No application code is imported or executed, and no
+    runtime-only value is guessed.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, (str, int, float)):
+        return str(node.value)
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = static_text(node.left, constants)
+        right = static_text(node.right, constants)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for piece in node.values:
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                parts.append(piece.value)
+            elif isinstance(piece, ast.FormattedValue):
+                resolved = static_text(piece.value, constants)
+                if resolved is None:
+                    return None
+                parts.append(resolved)
+            else:
+                return None
+        return "".join(parts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr != "format":
+            return None
+        template = static_text(node.func.value, constants)
+        if template is None:
+            return None
+        positional = [static_text(argument, constants) for argument in node.args]
+        named = {
+            keyword.arg: static_text(keyword.value, constants)
+            for keyword in node.keywords if keyword.arg
+        }
+        if any(item is None for item in positional) or any(
+            item is None for item in named.values()
+        ):
+            return None
+        # Substitute by scanning, never by calling str.format, so a template
+        # can never reach attribute or index access on a real object.
+        rendered, index = [], 0
+        remaining = template
+        while True:
+            start = remaining.find("{")
+            if start < 0:
+                rendered.append(remaining)
+                break
+            end = remaining.find("}", start)
+            if end < 0:
+                rendered.append(remaining)
+                break
+            field = remaining[start + 1:end]
+            rendered.append(remaining[:start])
+            if field == "":
+                if index >= len(positional):
+                    return None
+                rendered.append(positional[index])
+                index += 1
+            elif field.isdigit():
+                position = int(field)
+                if position >= len(positional):
+                    return None
+                rendered.append(positional[position])
+            elif field in named:
+                rendered.append(named[field])
+            else:
+                return None
+            remaining = remaining[end + 1:]
+        return "".join(rendered)
+    return None
+
+
+def literal_parts(node: ast.expr) -> str:
+    """Safe fallback: keep only the static literal parts of an expression."""
+    return " ".join(
+        literal.value.strip() for literal in ast.walk(node)
+        if isinstance(literal, ast.Constant) and isinstance(literal.value, str)
+        and literal.value.strip()
+    )
+
+
+def argument_row(node: ast.Call, constants: dict[str, str] | None = None) -> tuple[str, str]:
+    """Project one `add_argument(...)` call into its names and help text."""
+    constants = constants or {}
+    names = ", ".join(
+        argument.value for argument in node.args[:2]
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+    )
+    description = ARGUMENT_FALLBACK
+    for keyword in node.keywords:
+        if keyword.arg != "help":
+            continue
+        resolved = static_text(keyword.value, constants)
+        if resolved is None:
+            resolved = literal_parts(keyword.value)
+        description = resolved.strip() or ARGUMENT_FALLBACK
+    return names or "dynamic", description
+
+
+def parser_helpers(
+    tree: ast.Module, constants: dict[str, str] | None = None,
+) -> dict[str, list[tuple[str, str, int]]]:
+    """Collect arguments that a helper adds to whichever parser it is given.
+
+    `flyto_ai.cli` shares options between `code-mcp` and `code-serve` through
+    one helper, so the inventory must attribute them to every parser passed in
+    rather than dropping them or inventing a fake owner.
+    """
+    helpers: dict[str, list[tuple[str, str, int]]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        parameters = {argument.arg for argument in node.args.posonlyargs + node.args.args}
+        if not parameters:
+            continue
+        added: list[tuple[str, str, int]] = []
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
+                continue
+            if inner.func.attr != "add_argument":
+                continue
+            if not isinstance(inner.func.value, ast.Name) or inner.func.value.id not in parameters:
+                continue
+            names, description = argument_row(inner, constants)
+            added.append((names, description, inner.lineno))
+        if added:
+            helpers[node.name] = sorted(added, key=lambda item: item[2])
+    return helpers
+
+
 def cli_reference() -> str:
     path = ROOT / "flyto_ai" / "cli.py"
-    lines_source = path.read_text(encoding="utf-8").splitlines()
-    rows: list[tuple[str, str, str, int]] = []
+    tree = parse(path)
+    rows: list[tuple[tuple[int, int], str, str, str, int]] = []
     parser_vars: dict[str, str] = {"parser": "root", "sub": "root"}
-    for index, line in enumerate(lines_source, 1):
-        parser = re.search(r"(\w+)\s*=\s*\w+\.add_parser\(\s*['\"]([^'\"]+)['\"](?:,\s*help=['\"]([^'\"]*)['\"])?", line)
-        if parser:
-            parser_vars[parser.group(1)] = parser.group(2)
-            rows.append((parser.group(2), "command", parser.group(3) or "Subcommand", index))
+    constants = module_string_constants(tree) if tree is not None else {}
+    helpers = parser_helpers(tree, constants) if tree is not None else {}
+    for node in ast.walk(tree) if tree is not None else []:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser":
+                command = command_name(call)
+                if command:
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            parser_vars[target.id] = command
+    for node in ast.walk(tree) if tree is not None else []:
+        if not isinstance(node, ast.Call):
             continue
-        direct = re.search(r"\w+\.add_parser\(\s*['\"]([^'\"]+)['\"](?:,\s*help=['\"]([^'\"]*)['\"])?", line)
-        if direct:
-            rows.append((direct.group(1), "command", direct.group(2) or "Subcommand", index))
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "add_parser":
+            command = command_name(node)
+            if command:
+                rows.append(((node.lineno, 0), command, "command", command_help(node), node.lineno))
             continue
-        argument = re.search(r"(\w+)\.add_argument\((.+)", line)
-        if argument:
-            owner = parser_vars.get(argument.group(1), argument.group(1))
-            expression = argument.group(2)
-            names = ", ".join(re.findall(r"['\"]([^'\"]+)['\"]", expression)[:2]) or "dynamic"
-            help_match = re.search(r"help=['\"]([^'\"]*)['\"]", expression)
-            rows.append((owner, names, help_match.group(1) if help_match else "See argparse declaration for behavior/default.", index))
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
+            if not isinstance(node.func.value, ast.Name):
+                continue
+            owner_var = node.func.value.id
+            if owner_var not in parser_vars and owner_var not in {"parser", "sub"}:
+                # A helper parameter; attributed at each call site instead.
+                if any(owner_var in {
+                    argument.arg
+                    for argument in helper.args.posonlyargs + helper.args.args
+                } for helper in ast.walk(tree) if isinstance(helper, (ast.FunctionDef, ast.AsyncFunctionDef))):
+                    continue
+            names, description = argument_row(node, constants)
+            owner = parser_vars.get(owner_var, owner_var)
+            rows.append(((node.lineno, 0), owner, names, description, node.lineno))
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in helpers and node.args:
+            target = node.args[0]
+            if not isinstance(target, ast.Name):
+                continue
+            owner = parser_vars.get(target.id, target.id)
+            for index, (names, description, declared) in enumerate(helpers[node.func.id], 1):
+                rows.append(((node.lineno, index), owner, names, description, declared))
     output = ["# CLI Reference", "", NOTICE, "", "Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDIO MCP server.", "", "| Command owner | Command / option | Purpose | Source |", "|---|---|---|---|"]
-    for owner, item, description, line in rows:
+    for _key, owner, item, description, line in sorted(rows, key=lambda row: row[0]):
         output.append(f"| `{owner}` | `{item}` | {md(description)} | {source_link(path, line, depth=2)} |")
     return "\n".join(output).rstrip() + "\n"
+
+
+def command_name(node: ast.Call) -> str:
+    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+        return node.args[0].value
+    return ""
+
+
+def command_help(node: ast.Call) -> str:
+    for keyword in node.keywords:
+        if keyword.arg == "help" and isinstance(keyword.value, ast.Constant):
+            if isinstance(keyword.value.value, str):
+                return keyword.value.value
+    return "Subcommand"
 
 
 def tool_reference() -> str:

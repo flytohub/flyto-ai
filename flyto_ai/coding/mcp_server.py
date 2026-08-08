@@ -4,9 +4,19 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any, Dict, Mapping, Optional
 
+from flyto_ai.coding.contracts import (
+    MAX_AUDIT_EVIDENCE_REF_CHARS,
+    MAX_AUDIT_FINDINGS,
+    MAX_AUDIT_MESSAGE_CHARS,
+    CodingAuditFinding,
+    CodingAuditSeverity,
+    CodingAuditVerdict,
+    require_revision_sha256,
+)
 from flyto_ai.coding.service import (
     CodingJobNotFound,
     CodingService,
@@ -18,6 +28,38 @@ from flyto_ai.coding.service import (
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 MAX_MESSAGE_BYTES = 256 * 1024
+_JOB_ID_PATTERN = "^job_[a-f0-9]{24}$"
+_SHA256_PATTERN = "^[a-f0-9]{64}$"
+_AUDIT_CODE_PATTERN = "^[A-Za-z][A-Za-z0-9_.-]{1,63}$"
+_JOB_ID_RE = re.compile(_JOB_ID_PATTERN)
+_AUDIT_ARGUMENT_FIELDS = frozenset({
+    "job_id", "implementation_revision_sha256", "verdict", "findings",
+})
+
+
+def _tool_string(arguments: Mapping[str, Any], field_name: str) -> str:
+    """Read one tool argument as a string without truthiness or str() coercion."""
+    value = arguments.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("{} must be a string".format(field_name))
+    return value
+
+
+def _tool_job_id(arguments: Mapping[str, Any]) -> str:
+    """Enforce the declared job id pattern at runtime, not only in the schema."""
+    job_id = _tool_string(arguments, "job_id")
+    if not _JOB_ID_RE.fullmatch(job_id):
+        raise ValueError("job_id must match the published job identifier pattern")
+    return job_id
+
+
+def _reject_unknown_arguments(arguments: Mapping[str, Any], allowed: frozenset) -> None:
+    """Apply `additionalProperties: false` at runtime; hosts may not validate."""
+    unknown = set(arguments) - allowed
+    if unknown:
+        raise ValueError("unsupported tool arguments: {}".format(
+            ", ".join(sorted(str(name) for name in unknown)),
+        ))
 
 
 class CodingMCPServer:
@@ -79,6 +121,26 @@ class CodingMCPServer:
                 receipt = self.service.get(self.tenant_id, str(arguments.get("job_id", "")))
             except CodingJobNotFound:
                 raise
+        elif name == "flyto_coding_audit":
+            _reject_unknown_arguments(arguments, _AUDIT_ARGUMENT_FIELDS)
+            findings = arguments.get("findings")
+            if not isinstance(findings, list):
+                raise ValueError("findings must be an array")
+            if len(findings) > MAX_AUDIT_FINDINGS:
+                raise ValueError("findings cannot exceed {} items".format(MAX_AUDIT_FINDINGS))
+            # Transport validates shape only. Whether this revision is
+            # acceptable, and whether the verdict and findings are coherent,
+            # is decided by the authenticated tenant-bound service.
+            receipt = self.service.audit(
+                self.tenant_id,
+                _tool_job_id(arguments),
+                require_revision_sha256(
+                    arguments.get("implementation_revision_sha256"),
+                    "implementation_revision_sha256",
+                ),
+                CodingAuditVerdict(_tool_string(arguments, "verdict")),
+                tuple(CodingAuditFinding.from_mapping(item) for item in findings),
+            )
         else:
             raise ValueError("unknown coding tool")
         payload = {"ok": True, "job": receipt_to_mapping(receipt)}
@@ -124,7 +186,57 @@ class CodingMCPServer:
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["job_id"],
-                    "properties": {"job_id": {"type": "string", "pattern": "^job_[a-f0-9]{24}$"}},
+                    "properties": {"job_id": {"type": "string", "pattern": _JOB_ID_PATTERN}},
+                },
+            },
+            {
+                "name": "flyto_coding_audit",
+                "description": (
+                    "Record the authenticated auditor's verdict on one exact implementation "
+                    "revision. accept marks the job landable; rework must list findings and "
+                    "continues the same job and thread. The implementer cannot call this."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "job_id", "implementation_revision_sha256", "verdict", "findings",
+                    ],
+                    "properties": {
+                        "job_id": {"type": "string", "pattern": _JOB_ID_PATTERN},
+                        "implementation_revision_sha256": {
+                            "type": "string", "pattern": _SHA256_PATTERN,
+                        },
+                        "verdict": {
+                            "type": "string",
+                            "enum": [item.value for item in CodingAuditVerdict],
+                        },
+                        "findings": {
+                            "type": "array",
+                            "maxItems": MAX_AUDIT_FINDINGS,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["code", "severity", "message"],
+                                "properties": {
+                                    "code": {"type": "string", "pattern": _AUDIT_CODE_PATTERN},
+                                    "severity": {
+                                        "type": "string",
+                                        "enum": [item.value for item in CodingAuditSeverity],
+                                    },
+                                    "message": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": MAX_AUDIT_MESSAGE_CHARS,
+                                    },
+                                    "evidence_ref": {
+                                        "type": "string",
+                                        "maxLength": MAX_AUDIT_EVIDENCE_REF_CHARS,
+                                    },
+                                },
+                            },
+                        },
+                    },
                 },
             },
         ]

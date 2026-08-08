@@ -12,6 +12,7 @@ Primary users:
 
 Current priority — one audited coding route:
 - Codex reaches implementation only through the `flyto-ai` coding service (`code-mcp` / `code-serve`), which is audit-required.
+- Host-owned lanes surround whichever implementer is selected: a mandatory Indexer gate before any model edit and again after the source-controlled checks, a mandatory read-only Blueprint reuse discovery lane, and Core validation through `flyto_ai.tools.core_tools`. All four are configured on every strict public route and none is detachable; Blueprint and Core are conditional only in outcome. A lane outcome comes only from completed allowlisted calls, never from model prose, and a lane failure never reaches an auditable state.
 - The operator selects the implementer once at startup, `native` or `claude`. There is no per-job override and no fallback between them.
 - When `claude` is selected, Claude implements; Codex never implements and never approves its own work.
 - Codex independently inspects and tests the exact workspace revision, then binds its verdict to that revision digest.
@@ -25,6 +26,7 @@ Shipped surfaces:
 - Python package facade and provider-agnostic agent runtime.
 - Interactive, batch, coding-agent, blueprint, prompt-lab, HTTP/SSE, Telegram, and MCP entrypoints.
 - The `flyto.coding-service.v2` audited coding service: startup backend selector, MCP and HTTP audit boundary, bounded same-session rework, stable implementation-session identity, and revision-bound landability receipts.
+- The `flyto.coding-route.v1` host-owned orchestration contract with typed lane policy, bounded allowlisted Indexer/Blueprint/Core lanes, and a secret-free digest-bound route receipt.
 - OpenAI-compatible, Anthropic, Ollama, and ordered failover providers.
 - Registry-backed Flyto2 Core tools with schema validation, permission checks, retry, evidence, and runtime capability discovery.
 - Judge-drawn Mission Station interpretation and structured Robotics planning;
@@ -33,7 +35,6 @@ Shipped surfaces:
 
 Current gaps:
 - `flyto-engine` still contains a direct OpenAI provider path, so routing every product through this gateway is a migration target rather than a completed state.
-- Live Claude-backend MCP execution is not yet verified in the active environment: the optional `claude-agent-sdk` was absent at audit time, so that adapter is covered by in-process fakes only.
 - Universal `flyto-modules-*` registration with Core and full four-repository runtime closure are not claimed. See the dated alignment snapshot in [`docs/architecture-map.md`](docs/architecture-map.md) and the evidence detail in [`STATE.md`](STATE.md).
 
 Documentation contract:

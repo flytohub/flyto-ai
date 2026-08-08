@@ -567,6 +567,9 @@ class CodingJobReceipt:
     rework_count: int = 0
     audit_findings_sha256: str = ""
     landable: bool = False
+    #: Secret-free proof of which host-owned lanes ran around the round.
+    #: Absent for a legacy direct-library service that has no strict route.
+    route_receipt: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state", CodingJobState(self.state))
@@ -622,3 +625,18 @@ class CodingJobReceipt:
             raise ValueError("only a Codex-accepted receipt may be landable")
         if self.state is CodingJobState.CODEX_ACCEPTED and not self.landable:
             raise ValueError("a Codex-accepted receipt must be landable")
+        if self.route_receipt is not None:
+            if not isinstance(self.route_receipt, Mapping):
+                raise ValueError("route_receipt must be a JSON object")
+            # Revalidate the persisted lane evidence, so a tampered or
+            # truncated record cannot present itself as a passed route.
+            from flyto_ai.coding.route import CodingRouteReceipt
+
+            route = CodingRouteReceipt.from_mapping(self.route_receipt)
+            if self.landable and not route.ok:
+                raise ValueError("a failed coding route cannot produce a landable receipt")
+            if self.landable and not route.strict:
+                raise ValueError(
+                    "a landable receipt requires strict coding route evidence",
+                )
+            object.__setattr__(self, "route_receipt", route.to_mapping())

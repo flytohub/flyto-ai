@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- The public `code-mcp` / `code-serve` coding service is now a true single
+  entry: the new `flyto.coding-route.v1` contract runs host-owned lanes around
+  whichever implementer startup selected. The Indexer gate is mandatory before
+  any model edit and again after the source-controlled checks; Blueprint reuse
+  discovery is a mandatory read-only lane whose outcome is conditional on
+  real relevance; Core validation is always enabled on the strict route and
+  flows through `flyto_ai.tools.core_tools` with a validation-only allowlist.
+  Plan steps run in order through an allowlist under bounded step, response,
+  iteration, and gate-remediation limits, and no lane outcome is taken from
+  model prose. A missing catalog, failed domain result, malformed evidence,
+  incomplete gate, exceeded bound, or unavailable Indexer fails the round
+  closed instead of reaching `awaiting_codex_audit`.
+- Added an additive secret-free `route_receipt` to the public job receipt
+  recording which lane was required, applied, skipped, not applicable, or
+  failed, which calls and gates ran, and a content digest. It is validated on
+  construction and revalidated on deserialization, and only a strict route
+  that succeeded can appear on a landable receipt. A strict service also
+  revalidates persisted route evidence when it reads an audit-ready,
+  reworking, or accepted job back, including after a restart, so a record
+  whose proof was removed or edited fails closed instead of reading as
+  landable. Lane success is read from the producing tool's own field with
+  fail-closed precedence: a present `pass` or `valid` is authoritative and a
+  fallback field can never rescue it.
+- Added `--indexer-command` and `--blueprint-command` startup options to both
+  public coding commands. They replace a lane's startup command only; no flag
+  detaches a lane, and Core validation is always enabled on the strict public
+  route. Direct library `CodingService` construction is unchanged and still
+  runs no route, so it stays compatible but is not the public audited route.
+
 - Added judge-drawn Mission Station card interpretation with an immutable
   evidence boundary, APPROVED-capability ceiling, strict hostile-output
   validation, deterministic provider fallback, and content-addressed

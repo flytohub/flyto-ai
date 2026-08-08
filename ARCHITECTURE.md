@@ -263,13 +263,34 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
   -> flyto.coding-service.v2
   -> tenant namespace + workspace allowlist + bounded queue
   -> per-workspace serialization
-  -> exactly one startup-selected implementer
-       native -> the FlytoCodingAgent control flow above
-       claude -> ClaudeCodingAgent (optional adapter, same contracts)
+  -> flyto.coding-route.v1 host-owned lanes
+       Indexer pre-work        (mandatory: context, real plan, ordered
+                                steps, gates, before any model edit)
+       Blueprint discovery     (read-only, relevance-checked projection)
+       -> exactly one startup-selected implementer
+            native -> the FlytoCodingAgent control flow above
+            claude -> ClaudeCodingAgent (optional adapter, same contracts)
+          + required source-controlled checks
+       Core validation         (allowlisted calls closed by validate_params)
+       Indexer post-work       (mandatory: task.validate, task.gate.verify,
+                                verify.strict on the final workspace)
   -> awaiting_codex_audit bound to an exact implementation_revision_sha256
   -> authenticated host/auditor verdict
-  -> durable CodingJobReceipt
+  -> durable CodingJobReceipt + secret-free CodingRouteReceipt
 ```
+
+The lanes are host-owned, not a prompt convention. `flyto_ai.coding.route`
+owns the typed policy, the allowlists, the bounded loops, and the evidence.
+The implementer receives no audit tool and cannot assert that a lane ran: a
+lane outcome is derived only from completed allowlisted calls. A missing
+catalog, failed domain result, incomplete required gate, malformed evidence,
+or unavailable Indexer fails the round closed, so it never reaches
+`awaiting_codex_audit`. Source-controlled checks remain the trusted host
+command lane; a green check does not substitute for the Indexer post-gate.
+Core validation flows through `flyto_ai.tools.core_tools` with a
+validation-only allowlist that excludes `execute_module` and browser
+authority. Blueprint is read-only discovery that yields a compact
+content-addressed projection, never an executed workflow.
 
 Provider selection, credentials, tenant identity, workspace roots, the state
 root, the implementer, the rework ceiling, and the audit requirement are all

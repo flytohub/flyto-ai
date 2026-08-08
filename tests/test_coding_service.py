@@ -1457,14 +1457,34 @@ def test_cli_built_native_service_stops_at_awaiting_codex_audit(
     monkeypatch.setattr(
         cli, "_create_native_coding_provider", lambda args: RealToolProvider(),
     )
-    service = cli._build_coding_service(argparse.Namespace(
-        tenant="tenant-route", workspace_root=[str(workspace)],
-        state_dir=str(tmp_path / "route-state"), provider="ollama", model=None,
-        base_url=None, config=".flyto/coding.yaml", approval="never",
-        sandbox="workspace-write", sandbox_image="python:3.12-slim",
-        max_workers=2, max_queued=8, implementation_backend="native",
-        max_rework_rounds=3,
-    ))
+    # The public route always enables the host-owned lanes, so a real Indexer
+    # capability must be reachable before the implementer may edit.
+    from test_coding_route import BLUEPRINT_FIXTURE, INDEXER_FIXTURE
+
+    fixture = tmp_path / "indexer_fixture.py"
+    fixture.write_text(INDEXER_FIXTURE)
+    blueprint_fixture = tmp_path / "blueprint_fixture.py"
+    blueprint_fixture.write_text(BLUEPRINT_FIXTURE)
+
+    def _args(**overrides):
+        values = dict(
+            tenant="tenant-route", workspace_root=[str(workspace)],
+            state_dir=str(tmp_path / "route-state"), provider="ollama", model=None,
+            base_url=None, config=".flyto/coding.yaml", approval="never",
+            sandbox="workspace-write", sandbox_image="python:3.12-slim",
+            max_workers=2, max_queued=8, implementation_backend="native",
+            max_rework_rounds=3,
+            indexer_command="{} {}".format(sys.executable, fixture),
+            blueprint_command="{} {}".format(sys.executable, blueprint_fixture),
+        )
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    service = cli._build_coding_service(_args())
+    assert service.route_policy is not None and service.route_policy.strict is True
+    # The strict public route attaches Blueprint and Core without a flag.
+    assert service.route_policy.blueprint is not None
+    assert service.route_policy.core_enabled is True
     try:
         queued = service.submit("tenant-route", "route-001", _request(workspace))
         awaiting = _wait(service, "tenant-route", queued.job_id)
@@ -1475,6 +1495,14 @@ def test_cli_built_native_service_stops_at_awaiting_codex_audit(
         assert awaiting.audit_count == 0
         assert receipt_to_mapping(awaiting)["landable"] is False
         assert (workspace / "result.txt").read_text() == "verified\n"
+        # The host-owned lanes actually ran around the native implementer.
+        assert awaiting.route_receipt is not None
+        assert awaiting.route_receipt["ok"] is True
+        lane_states = {
+            item["lane"]: item["status"] for item in awaiting.route_receipt["lanes"]
+        }
+        assert lane_states["indexer_pre"] == "applied"
+        assert lane_states["indexer_post"] == "applied"
 
         accepted = service.audit(
             "tenant-route", queued.job_id, awaiting.implementation_revision_sha256,
@@ -1482,6 +1510,57 @@ def test_cli_built_native_service_stops_at_awaiting_codex_audit(
         )
         assert accepted.state is CodingJobState.CODEX_ACCEPTED
         assert accepted.landable is True
+    finally:
+        service.close()
+
+
+def test_public_route_fails_closed_when_the_indexer_lane_is_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A green repository check must not mask an unreachable host-owned lane."""
+    import argparse
+
+    import flyto_ai.cli as cli
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "version: flyto.coding-config.v1\n"
+        "checks:\n"
+        "  - name: trivial\n"
+        "    argv: {}\n".format(json.dumps([sys.executable, "-c", "pass"]))
+    )
+    monkeypatch.setattr(
+        cli, "_create_native_coding_provider", lambda args: RealToolProvider(),
+    )
+    service = cli._build_coding_service(argparse.Namespace(
+        tenant="tenant-route", workspace_root=[str(workspace)],
+        state_dir=str(tmp_path / "closed-state"), provider="ollama", model=None,
+        base_url=None, config=".flyto/coding.yaml", approval="never",
+        sandbox="workspace-write", sandbox_image="python:3.12-slim",
+        max_workers=2, max_queued=8, implementation_backend="native",
+        max_rework_rounds=3,
+        indexer_command="{} {}".format(sys.executable, tmp_path / "absent.py"),
+        blueprint_command=None,
+    ))
+    try:
+        queued = service.submit("tenant-route", "closed-001", _request(workspace))
+        failed = _wait(service, "tenant-route", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.state is not CodingJobState.AWAITING_CODEX_AUDIT
+        assert failed.failure_code == "route_capability_unavailable"
+        assert failed.landable is False
+        assert failed.route_receipt["ok"] is False
+        # The implementer never edited, so no revision exists to audit.
+        assert failed.implementation_revision_sha256 == ""
+        assert not (workspace / "result.txt").exists()
+        with pytest.raises(AuditStateConflict):
+            service.audit(
+                "tenant-route", queued.job_id, _AUDIT_REVISION,
+                CodingAuditVerdict.ACCEPT, (),
+            )
     finally:
         service.close()
 

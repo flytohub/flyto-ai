@@ -1,6 +1,6 @@
 # State
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 ## Current: audited coding route and canonical topology (2026-08-08)
 
@@ -20,7 +20,12 @@ requires updating `ARCHITECTURE.md`, `docs/architecture-map.md`, `STATE.md`, and
 ```text
 Codex
   -> flyto-ai coding service (code-mcp / code-serve, audit-required)
+  -> host-owned Indexer pre-work gate (mandatory, before any model edit)
+  -> host-owned Blueprint discovery (mandatory lane, read-only projection)
   -> startup-selected implementer: native or claude
+     + required source-controlled checks
+  -> host-owned Core validation (mandatory lane, allowlisted validation calls)
+  -> host-owned Indexer post-work gate (mandatory, final workspace state)
   -> awaiting independent Codex audit
   -> same-session bounded rework, or acceptance
   -> caller-owned commit/push
@@ -60,6 +65,22 @@ eligibility evidence for the caller, not an action the service performs.
 - Fail-closed behavior for stale or mutated revisions, wrong state, wrong
   tenant, missing or changed session identity, unsafe attributable paths,
   read-only or approval-gated authority, and restart of in-flight work.
+- `flyto.coding-route.v1` host-owned orchestration in `flyto_ai/coding/route.py`
+  wraps whichever implementer startup selected, using the real public Indexer
+  contract (`structure`, `search`, `task` plan/gate/validate, `verify`). The
+  Indexer lanes are mandatory; Blueprint and Core are configured on every
+  strict route and may only finish applied or not-applicable. Plan steps run
+  in the server's own order through an allowlist with bounded step, response,
+  call, and gate-remediation limits, and no lane outcome comes from model
+  prose. Verified live against the installed `.venv` `flyto-indexer 2.18.1`:
+  a routed job reached `awaiting_codex_audit` and an exact-revision accept.
+- `CodingRouteReceipt`: an additive, secret-free, digest-bound record of which
+  lane was required, applied, skipped, not applicable, or failed. It is
+  coherence-validated on construction, revalidated on deserialization and
+  after restart, and only a strict route that succeeded can appear on a
+  landable receipt. A strict service revalidates persisted evidence when it
+  reads an audit-ready, reworking, or accepted job back, so removed or edited
+  proof fails closed rather than reading as landable.
 
 ### Not yet proved / current gaps
 
@@ -72,22 +93,53 @@ eligibility evidence for the caller, not an action the service performs.
 - The Indexer's Core and modules scan inputs were not separately traced.
 - The `flyto-cloud` -> `flyto2` packaging edge is unverified; `flyto2` currently
   has no indexed files.
-- The loopback HTTP socket tests could not execute in the sandbox used for the
-  implementation work; they pass in the independent audit environment.
+- The loopback HTTP socket tests, a SOCKS-proxy provider test, and the
+  telegram SQLite tests cannot run in the restricted implementation sandbox.
+  They pass in the independent unrestricted environment.
+- A deployment must still supply a reachable `--indexer-command`. An
+  unreachable Indexer fails every public job closed rather than degrading.
 
-### Latest independent focused checks (2026-08-08)
+### Verified evidence (2026-08-09)
 
-- generated references current: 23 files, `generate_reference.py --check` clean;
-- `tests/test_generate_reference.py`: 2 passed;
-- focused coding / control-plane / MCP / adapter tests: 165 passed, 2 skipped;
-- `git diff --check`: clean;
-- live `code-mcp` with the startup-selected `claude` backend pinned to
-  `claude-opus-5` ran a real job under an opaque implementation session,
-  passed the required repo checks, and reached `awaiting_codex_audit`; the
-  revision verdict and any commit remain caller-owned.
+Independent Codex audit, unrestricted full suite: **1843 passed, 17 skipped,
+exit 0** in 83.59 s. The restricted implementation sandbox's socket-bind
+failures and its interpreter-finalization hang do not reproduce there. This
+run is owned by the independent auditor, not by the implementation worker.
 
-These are focused checks, not a full-suite run. The full-suite evidence below
-is historical.
+Independent Codex audit, Indexer full strict verify: **18 checks passed, 0
+warnings, 0 failures**. That is a repository-hygiene and contract-conformance
+result; it does not by itself prove runtime or business correctness.
+
+Permanent tests in `tests/test_coding_route.py` prove the route against the
+real runtimes, not fixtures:
+
+- the installed `.venv` `flyto-indexer 2.18.1` drives a complete public strict
+  route end to end in a real indexed git workspace: `structure`, `search`,
+  `task(action="plan")`, the plan's own ordered steps and gates, then
+  `task.validate`, `task.gate.verify`, and a passing `verify(strict=true)`,
+  reaching `awaiting_codex_audit` and an exact-revision accept with
+  `landable=true`;
+- the real Core adapter `flyto_ai.tools.core_tools.dispatch_core_tool` proves
+  a changed `modules/array/join.py` through `search_modules`,
+  `get_module_info`, and a genuine `validate_params` returning
+  `{"valid": true, "module_id": "array.join"}`, so the Core lane reaches
+  `applied`; an unidentifiable module still fails `core_proof_unavailable`;
+- the real Blueprint adapter `flyto_ai.tools.blueprint_tools` matches
+  `ConvertCSVtoJSON` for a CSV-to-JSON request and reaches `applied` with a
+  sanitized untrusted-data projection, while unrelated work stays
+  `not_applicable`;
+- the coding MCP contract test asserts every allowlisted tool and argument
+  against the live `tools/list` schemas, and a routed service subprocess exits
+  cleanly under a hard timeout.
+
+Also current: generated references 23 files clean, Ruff and `compileall`
+clean, and `git diff --check` clean.
+
+Implementation-worker (Claude sandbox) focused evidence for the strict-route
+hardening, 2026-08-09: `tests/test_coding_route.py` 139 passed;
+`tests/test_coding_service.py` 119 passed with only the sandbox-forbidden
+loopback socket case deselected. These are focused checks by the worker, never
+a substitute for the independent unrestricted run recorded above.
 
 ## Historical
 

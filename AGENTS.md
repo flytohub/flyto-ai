@@ -8,6 +8,26 @@
 - Keep `.flyto-index/`, transcripts, evidence, build output, local DBs, and eval results out of commits.
 - For deep changes, run flyto-indexer impact/search/verify before finalizing.
 
+## Coding Route Rules
+
+- The public `code-mcp` / `code-serve` service is one audited entry. Host-owned
+  lanes surround whichever implementer startup selected: a mandatory Indexer
+  gate before any model edit and again after the source-controlled checks,
+  a mandatory read-only Blueprint discovery lane, and Core validation. All
+  four lanes are configured on every strict public route; none is detachable,
+  and Blueprint and Core may resolve only applied or not-applicable.
+- Never let model prose assert that a lane, plan step, or gate ran. A lane
+  outcome must come from a completed allowlisted call recorded in the route
+  receipt.
+- Do not add a route-bypass flag, do not let a green repository check stand in
+  for the Indexer post-gate, and do not grant the implementer the audit tool,
+  Blueprint execution authority, or Core danger/browser authority.
+- Core execution keeps flowing through `flyto_ai.tools.core_tools`. Do not
+  import sibling `flyto-core`, `flyto-blueprint`, or `flyto-indexer` source.
+- Changing a lane, allowlist, bound, or receipt field is an architecture change:
+  update `ARCHITECTURE.md`, `docs/architecture-map.md`, `STATE.md`, and
+  `DECISIONS.md` in the same change.
+
 ## Architecture Invariant: Flytohub Product Topology
 
 The canonical product topology in `ARCHITECTURE.md` and

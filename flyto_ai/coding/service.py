@@ -34,6 +34,7 @@ from flyto_ai.coding.contracts import (
     require_revision_sha256,
     validate_audit_submission,
 )
+from flyto_ai.coding.route import CodingRoutePolicy, CodingRouteReceipt, route_thread_id
 from flyto_ai.coding.store import ThreadStore, redact_evidence
 
 
@@ -113,6 +114,18 @@ class ReworkNotResumable(CodingServiceError):
     code = "rework_not_resumable"
 
 
+class RouteEvidenceMissing(CodingServiceError):
+    code = "route_evidence_missing"
+
+
+#: States whose persisted route evidence must still hold when read back.
+_ROUTE_EVIDENCE_STATES = frozenset({
+    CodingJobState.AWAITING_CODEX_AUDIT.value,
+    CodingJobState.REWORK_QUEUED.value,
+    CodingJobState.REWORK_RUNNING.value,
+    CodingJobState.CODEX_ACCEPTED.value,
+})
+
 _INTERRUPTED_JOB_STATES = frozenset({
     CodingJobState.QUEUED.value,
     CodingJobState.RUNNING.value,
@@ -186,6 +199,7 @@ class CodingService:
         require_codex_audit: bool = False,
         implementation_backend: str = "native",
         max_rework_rounds: int = 3,
+        route_policy: Optional[CodingRoutePolicy] = None,
     ) -> None:
         if not 1 <= max_workers <= 16:
             raise ValueError("max_workers must be between 1 and 16")
@@ -220,6 +234,11 @@ class CodingService:
                 "max_rework_rounds must be between 1 and {}".format(MAX_AUDIT_ROUNDS - 1),
             )
         self.max_rework_rounds = max_rework_rounds
+        if route_policy is not None and not isinstance(route_policy, CodingRoutePolicy):
+            raise ValueError("route_policy must be a CodingRoutePolicy")
+        # Host-owned lane authority is a startup decision like every other
+        # field above. No job payload can enable, detach, or relax it.
+        self.route_policy = route_policy
         # Reuse the request contract's path/image validation without persisting
         # a synthetic request or accepting those authority fields remotely.
         config_parts = Path(self.config_path).parts
@@ -235,14 +254,26 @@ class CodingService:
         self._pending: set[Future[Any]] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="flyto-coding")
         self._closed = False
-        self._lock_fd = os.open(self.state_root / ".service.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            self._lock_fd = os.open(
+                self.state_root / ".service.lock", os.O_CREAT | os.O_RDWR, 0o600,
+            )
+        except OSError:
+            # Never leave worker threads behind when construction fails.
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            raise
         if fcntl is not None:
             try:
                 fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as exc:
                 os.close(self._lock_fd)
+                self._executor.shutdown(wait=False, cancel_futures=True)
                 raise CodingServiceBusy("coding state root is already served") from exc
-        self._reconcile_interrupted_jobs()
+        try:
+            self._reconcile_interrupted_jobs()
+        except BaseException:
+            self.close(wait=False)
+            raise
 
     def submit(
         self,
@@ -319,6 +350,11 @@ class CodingService:
             record = self._read_json(path)
         except FileNotFoundError as exc:
             raise CodingJobNotFound("coding job does not exist") from exc
+        # Reading an audit-ready, accepted, or landable record on a strict
+        # service revalidates its route evidence, so a job whose persisted
+        # proof was removed or edited can never read back as landable.
+        if str(record.get("state")) in _ROUTE_EVIDENCE_STATES or record.get("landable") is True:
+            self._require_route_evidence(record)
         return self._receipt(record)
 
     def audit(
@@ -361,6 +397,7 @@ class CodingService:
             # implementation cannot inherit an earlier audit decision.
             if self._stored_revision(record) != stored:
                 raise RevisionMismatch("the implementation revision changed since it was submitted")
+            self._require_route_evidence(record)
             digest = audit_findings_sha256(findings)
             audit_count = int(record.get("audit_count", 0)) + 1
             if audit_count > MAX_AUDIT_ROUNDS:
@@ -475,12 +512,145 @@ class CodingService:
             ).value)
             try:
                 store = ThreadStore(str(self._tenant_dir(tenant_ref) / "threads"))
-                result = asyncio.run(self.agent_factory(store).run(request))
-                self._record_outcome(path, tenant_ref, job_id, request, result, store, rework)
+                result, route = asyncio.run(self._implement(store, request))
+                self._record_outcome(
+                    path, tenant_ref, job_id, request, result, store, rework, route,
+                )
             except CodingServiceError as exc:
                 self._fail_job(path, tenant_ref, job_id, exc.code, exc)
             except Exception as exc:
                 self._fail_job(path, tenant_ref, job_id, "service_execution_failed", exc)
+
+    async def _implement(
+        self, store: ThreadStore, request: CodingTaskRequest,
+    ) -> "tuple[CodingTaskResult, Optional[CodingRouteReceipt]]":
+        """Run the selected implementer, wrapped by the host-owned route.
+
+        Without a strict startup policy this is exactly the historical direct
+        call, so existing library callers keep their behavior. The public
+        `code-mcp` / `code-serve` builders always enable the strict route.
+        """
+
+        policy = self.route_policy
+        if policy is None or not policy.strict:
+            return await self.agent_factory(store).run(request), None
+
+        from flyto_ai.coding.capabilities import CapabilityManager
+        from flyto_ai.coding.route import CodingRouteOrchestrator
+
+        specs = tuple(
+            spec for spec in (policy.indexer, policy.blueprint) if spec is not None
+        )
+        # The host lanes need the least authority that actually permits the
+        # real calls: Indexer `task`/`verify` persist state and reindex.
+        manager = CapabilityManager(request.working_dir, "workspace_write")
+        try:
+            try:
+                statuses = await manager.start(specs)
+            except Exception:
+                # A capability that cannot even be launched is an unavailable
+                # Indexer, not a service crash.
+                return self._route_unavailable(request), self._route_unavailable_receipt(policy)
+            missing = [status.name for status in statuses if status.required and not status.available]
+            if missing or not manager.required_available:
+                # A stale or unavailable Indexer must never reach an auditable
+                # state, so the round fails before the model can edit.
+                return self._route_unavailable(request), self._route_unavailable_receipt(policy)
+            orchestrator = CodingRouteOrchestrator(
+                policy,
+                capability_dispatch=self._lane_dispatcher(manager, specs),
+                core_dispatch=self._core_dispatcher() if policy.core_enabled else None,
+            )
+
+            async def implement(
+                bound_request: CodingTaskRequest, projection: str,
+            ) -> CodingTaskResult:
+                effective = bound_request
+                if projection:
+                    effective = dataclasses.replace(
+                        bound_request,
+                        message="{}\n\n{}".format(bound_request.message, projection),
+                    )
+                return await self.agent_factory(store).run(effective)
+
+            outcome = await orchestrator.run(request, implement)
+        finally:
+            closed = True
+            try:
+                await manager.close()
+            except Exception:
+                closed = False
+        if not closed:
+            # A capability that will not shut down cleanly leaves an
+            # unaccounted process. That is never a passed route.
+            return (
+                self._route_unavailable(request, "route_capability_close_failed"),
+                self._route_unavailable_receipt(policy, "capability_close_failed"),
+            )
+        return outcome
+
+    @staticmethod
+    def _lane_dispatcher(manager: Any, specs: Sequence[Any]) -> Any:
+        """Map a bare lane tool name onto its provider-scoped capability tool."""
+
+        from flyto_ai.coding.mcp_catalog import provider_tool_name
+
+        async def dispatch(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+            for spec in specs:
+                scoped = provider_tool_name(spec.name, tool)
+                if any(item.get("name") == scoped for item in manager.definitions):
+                    return await manager.dispatch(scoped, dict(arguments))
+            return {"ok": False, "error": "unknown route tool"}
+
+        return dispatch
+
+    @staticmethod
+    def _core_dispatcher() -> Any:
+        """Route Core validation through the one supported adapter boundary."""
+
+        from flyto_ai.coding.route import CORE_ALLOWED_TOOLS
+
+        async def dispatch(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+            if tool not in CORE_ALLOWED_TOOLS:
+                return {"ok": False, "error": "core tool is not allowlisted"}
+            from flyto_ai.tools.core_tools import dispatch_core_tool
+
+            return await dispatch_core_tool(tool, dict(arguments))
+
+        return dispatch
+
+    @staticmethod
+    def _route_unavailable(
+        request: CodingTaskRequest, code: str = "route_capability_unavailable",
+    ) -> CodingTaskResult:
+        return CodingTaskResult(
+            ok=False,
+            message="coding route lane indexer_pre failed: {}".format(code),
+            thread_id=route_thread_id(request.thread_id or request.working_dir),
+            attempts=0,
+            status="failed",
+            evidence_path="",
+            failure_code=code,
+        )
+
+    @staticmethod
+    def _route_unavailable_receipt(
+        policy: Any, code: str = "capability_unavailable",
+    ) -> "CodingRouteReceipt":
+        from flyto_ai.coding.route import (
+            CodingRouteReceipt,
+            RouteLane,
+            RouteLaneReceipt,
+            RouteLaneStatus,
+        )
+
+        return CodingRouteReceipt(
+            strict=True, ok=False, failure_code=code,
+            lanes=(RouteLaneReceipt(
+                lane=RouteLane.INDEXER_PRE.value, required=True,
+                status=RouteLaneStatus.FAILED, reason_code=code,
+            ),),
+        )
 
     def _record_outcome(
         self,
@@ -491,12 +661,14 @@ class CodingService:
         result: CodingTaskResult,
         store: ThreadStore,
         rework: bool,
+        route: Optional["CodingRouteReceipt"] = None,
     ) -> None:
         """Move one finished implementation round into its durable state."""
 
         result_record = dataclasses.asdict(result)
         result_record["evidence_path"] = ""
         outcome: Dict[str, Any] = {
+            "route_receipt": route.to_mapping() if route is not None else None,
             "thread_id": result.thread_id,
             "evidence_sha256": store.digest(result.thread_id),
             "result": result_record,
@@ -550,6 +722,26 @@ class CodingService:
             failure_code=code,
             error=str(redact_evidence(str(exc)))[:1000],
         )
+
+    def _require_route_evidence(self, record: Mapping[str, Any]) -> None:
+        """A strict public round is auditable only with its own route proof.
+
+        Deleting or editing `route_receipt` in the persisted job JSON cannot
+        produce an acceptance: the evidence must be present, valid, strict,
+        and successful for this exact implementation round.
+        """
+        policy = self.route_policy
+        if policy is None or not policy.strict:
+            return
+        stored = record.get("route_receipt")
+        if not isinstance(stored, dict):
+            raise RouteEvidenceMissing("this round has no coding route evidence")
+        try:
+            route = CodingRouteReceipt.from_mapping(stored)
+        except ValueError as exc:
+            raise RouteEvidenceMissing("coding route evidence is invalid") from exc
+        if not route.strict or not route.ok:
+            raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
 
     def _stored_revision(self, record: Mapping[str, Any]) -> str:
         """Recompute the digest of a persisted attributable change set."""
@@ -778,6 +970,10 @@ class CodingService:
             rework_count=int(record.get("rework_count") or 0),
             audit_findings_sha256=str(record.get("audit_findings_sha256") or ""),
             landable=record.get("landable") is True,
+            route_receipt=(
+                record["route_receipt"]
+                if isinstance(record.get("route_receipt"), dict) else None
+            ),
         )
 
     def _reconcile_interrupted_jobs(self) -> None:

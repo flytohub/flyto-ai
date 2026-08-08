@@ -357,6 +357,90 @@ without; it never receives Bash, content search (`Grep`), or the audit tool, so
 an implementer cannot approve its own work. Rework continues in the exact same
 Claude SDK session; a changed or missing session identity fails closed.
 
+### Host-owned route lanes
+
+`flyto.coding-route.v1` (`flyto_ai/coding/route.py`) is a typed, provider-
+neutral orchestration contract at the service boundary. Both public commands
+enable it at startup; it is not a prompt convention and does not depend on
+which implementer was selected.
+
+```text
+Indexer pre-work gate   mandatory: workspace context/structure, impact/task
+                        planning, ordered plan-step execution, gates
+Blueprint discovery     read-only, relevance-checked: a sanitized
+                        content-addressed label, or a deterministic
+                        not-applicable outcome
+  -> selected implementer + required source-controlled checks
+Core validation         allowlisted validation/discovery calls through
+                        flyto_ai.tools.core_tools, closed by validate_params
+Indexer post-work       mandatory: task.validate, task.gate.verify, and
+                        verify.strict against the final workspace
+```
+
+Rules that hold on every public round:
+
+- The implementer never asserts that a lane ran. Each outcome is derived from
+  completed allowlisted calls; plan steps execute in order and a step naming
+  anything outside the Indexer allowlist is refused.
+- Step count, response bytes and depth, calls per lane, iterations, and gate
+  remediations are all bounded. A `pass=false` gate blocks only its own phase
+  and is remediated and re-gated inside that bound.
+- A missing catalog, failed domain result, malformed evidence, incomplete
+  required action or gate, exceeded bound, or unavailable Indexer fails the
+  round closed with a stable code. It never reaches `awaiting_codex_audit`.
+- Blueprint is read-only. `use_blueprint`, `save_as_blueprint`, and the
+  export/import tools are outside its allowlist, so it can never execute a
+  workflow or receive workspace authority.
+- Core validation excludes `execute_module`, danger-full, and browser
+  authority. Relevance is derived from the request and the attributable
+  changed files; relevant work without an executable proof fails closed rather
+  than being marked passed, and irrelevant work records a reasoned
+  not-applicable receipt.
+- Source-controlled checks remain the trusted host command lane. They are
+  necessary but never substitute for the Indexer post-gate: a green check
+  cannot mask a failed lane.
+
+Startup options only *replace* a lane command; they never detach a lane.
+`--indexer-command` and `--blueprint-command` default to this interpreter
+running `flyto_indexer.mcp_server` and `flyto_ai.mcp_server`. Core validation
+is always enabled on the strict route — there is no opt-in flag, because the
+real Codex configuration does not pass one.
+
+The pre-work lane calls the real public Indexer surface: `structure`,
+`search`, `task(action="plan")`, the returned plan's own steps and gate steps,
+then any remaining mandatory gate. A `pass=false` gate is remediated with real
+`impact`/`search` evidence and re-gated; a state key needing human or external
+authority fails closed instead of being asserted. Post-work refuses outright
+if the implementer did not succeed or a required source-controlled check
+failed, then runs `task(action="validate", run_tests=false)`,
+`task(action="gate", next_phase="verify")`, and `verify(strict=true)`.
+
+### Route receipt
+
+Every routed round carries an additive, secret-free `route_receipt` on the
+public job receipt:
+
+```json
+{"contract_version": "flyto.coding-route.v1", "strict": true, "ok": true,
+ "failure_code": "",
+ "lanes": [{"lane": "indexer_pre", "required": true, "status": "applied",
+            "reason_code": "completed",
+            "calls": [{"lane": "indexer_pre", "action": "structure",
+                       "ok": true, "detail_code": "completed"}],
+            "gates_passed": ["verify"], "gates_failed": []}],
+ "digest": "<sha256 over the lanes>"}
+```
+
+It carries no prompt, source, raw MCP output, absolute path, credential, or
+model response. Lane coherence is validated on construction and revalidated on
+deserialization, so a truncated or edited record fails closed. A strict receipt
+cannot claim success without all four canonical lanes present, required, and
+finished applied or not-applicable, and only a strict route that succeeded can
+appear on a landable job receipt. A strict service revalidates the persisted
+evidence whenever it reads an audit-ready, reworking, or accepted job back,
+including after a restart, so proof that was removed or edited on disk refuses
+the read instead of reading as landable.
+
 ### Audit state machine
 
 An implementer success is never public success:

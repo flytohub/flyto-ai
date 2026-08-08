@@ -70,7 +70,7 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code` | `--budget` | Max budget in USD (default: 5.0) | [`flyto_ai/cli.py:127`](../../flyto_ai/cli.py#L127) |
 | `code` | `--max-turns` | Max Claude SDK turns (default: 30) | [`flyto_ai/cli.py:128`](../../flyto_ai/cli.py#L128) |
 | `code` | `--json` | Output raw JSON | [`flyto_ai/cli.py:129`](../../flyto_ai/cli.py#L129) |
-| `code-serve` | `command` | Start the detachable authenticated coding HTTP service | [`flyto_ai/cli.py:172`](../../flyto_ai/cli.py#L172) |
+| `code-serve` | `command` | Start the detachable authenticated coding HTTP service | [`flyto_ai/cli.py:182`](../../flyto_ai/cli.py#L182) |
 | `code-serve` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
 | `code-serve` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
 | `code-serve` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
@@ -85,10 +85,12 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code-serve` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
 | `code-serve` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
 | `code-serve` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
-| `code-serve` | `--host` | Loopback bind host | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
-| `code-serve` | `--port` | Loopback bind port | [`flyto_ai/cli.py:177`](../../flyto_ai/cli.py#L177) |
-| `code-serve` | `--auth-token-env` | Environment variable containing the HTTP bearer token | [`flyto_ai/cli.py:178`](../../flyto_ai/cli.py#L178) |
-| `code-mcp` | `command` | Start the detachable tenant-bound coding MCP stdio service | [`flyto_ai/cli.py:183`](../../flyto_ai/cli.py#L183) |
+| `code-serve` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
+| `code-serve` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
+| `code-serve` | `--host` | Loopback bind host | [`flyto_ai/cli.py:186`](../../flyto_ai/cli.py#L186) |
+| `code-serve` | `--port` | Loopback bind port | [`flyto_ai/cli.py:187`](../../flyto_ai/cli.py#L187) |
+| `code-serve` | `--auth-token-env` | Environment variable containing the HTTP bearer token | [`flyto_ai/cli.py:188`](../../flyto_ai/cli.py#L188) |
+| `code-mcp` | `command` | Start the detachable tenant-bound coding MCP stdio service | [`flyto_ai/cli.py:193`](../../flyto_ai/cli.py#L193) |
 | `code-mcp` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
 | `code-mcp` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
 | `code-mcp` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
@@ -103,4 +105,6 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code-mcp` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
 | `code-mcp` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
 | `code-mcp` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:189`](../../flyto_ai/cli.py#L189) |
+| `code-mcp` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
+| `code-mcp` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:199`](../../flyto_ai/cli.py#L199) |

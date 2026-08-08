@@ -168,6 +168,16 @@ def main():
             "--max-rework-rounds", type=int, default=3,
             help="Maximum Codex-requested rework rounds per job (default: 3)",
         )
+        service_parser.add_argument(
+            "--indexer-command", default=None,
+            help="Indexer MCP argv for the mandatory route lane "
+                 "(default: this interpreter running flyto_indexer.mcp_server)",
+        )
+        service_parser.add_argument(
+            "--blueprint-command", default=None,
+            help="Override the Blueprint MCP argv for read-only reuse discovery "
+                 "(the lane is always attached on the strict public route)",
+        )
 
     code_serve_p = sub.add_parser(
         "code-serve", help="Start the detachable authenticated coding HTTP service",
@@ -337,6 +347,80 @@ def _cmd_code_native(args):
     sys.exit(0 if result.ok else 1)
 
 
+def _build_coding_route_policy(args):
+    """Build the strict host-owned route both public commands always enable.
+
+    All three lanes are configured here and none is detachable. The Indexer
+    lanes are mandatory around every round; Blueprint is a mandatory
+    read-only discovery lane whose *outcome* is conditional on real relevance;
+    Core validation is always enabled and conditional on the request and the
+    attributable changed paths. `--indexer-command` and `--blueprint-command`
+    replace a lane's startup command, never remove the lane. Every field here
+    is startup authority; no job payload can reach it.
+    """
+    import shlex
+
+    from flyto_ai.coding import CapabilitySpec
+    from flyto_ai.coding.route import CodingRoutePolicy
+
+    def argv_for(value, fallback):
+        if not value:
+            return fallback
+        parsed = tuple(shlex.split(value))
+        if not parsed:
+            raise ValueError("capability command must not be empty")
+        return parsed
+
+    indexer = CapabilitySpec(
+        name="flyto-indexer",
+        argv=argv_for(
+            getattr(args, "indexer_command", None),
+            (sys.executable, "-m", "flyto_indexer.mcp_server"),
+        ),
+        required=True,
+        contract_version="flyto-indexer.mcp.v1",
+        required_tools=("search", "structure", "impact", "task", "verify"),
+        allowed_tools=(
+            "search", "impact", "call_hierarchy", "structure", "task", "verify",
+        ),
+        # `task` and `verify` persist Indexer state and may reindex, so they
+        # are workspace_write in the canonical stack preset. These lanes are
+        # host-owned and never exposed to the implementer.
+        tool_permissions=(
+            ("call_hierarchy", "read_only"), ("impact", "read_only"),
+            ("search", "read_only"), ("structure", "read_only"),
+            ("task", "workspace_write"), ("verify", "workspace_write"),
+        ),
+        timeout_seconds=30,
+    )
+    # The strict public route always attaches read-only Blueprint discovery
+    # through the supported boundary. An override may replace the command; it
+    # can never detach the lane.
+    blueprint = CapabilitySpec(
+        name="flyto-blueprint",
+        argv=argv_for(
+            getattr(args, "blueprint_command", None),
+            (sys.executable, "-m", "flyto_ai.mcp_server"),
+        ),
+        # Mandatory on the strict public route: the lane is conditional in
+        # outcome, never in configuration.
+        required=True,
+        contract_version="flyto-blueprint.mcp.v1",
+        required_tools=("list_blueprints",),
+        allowed_tools=("list_blueprints",),
+        tool_permissions=(("list_blueprints", "read_only"),),
+        timeout_seconds=30,
+    )
+    return CodingRoutePolicy(
+        strict=True,
+        indexer=indexer,
+        blueprint=blueprint,
+        # Conditional Core validation is part of the strict route, not an
+        # opt-in flag a caller has to remember to pass.
+        core_enabled=True,
+    )
+
+
 def _default_coding_backend():
     """Read the optional bounded environment default for the implementer."""
     configured = _os.environ.get(CODING_BACKEND_ENV, "").strip()
@@ -449,6 +533,9 @@ def _build_coding_service(args):
         require_codex_audit=True,
         implementation_backend=backend,
         max_rework_rounds=getattr(args, "max_rework_rounds", 3),
+        # The public route is one entry: host-owned lanes always surround
+        # whichever implementer was selected above.
+        route_policy=_build_coding_route_policy(args),
     )
 
 

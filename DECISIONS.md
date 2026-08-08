@@ -19,6 +19,64 @@ Rollback is additive: callers can skip the interpretation service and use the
 reviewed card contract directly. Do not roll back by letting a model choose the
 cards, evidence contract, live resource, motor command, or completion state.
 
+## 2026-08-08: Host-owned lanes surround the audited coding route
+
+Extends the same-day decision below. Startup-selected implementers were
+correct, but the public service still invoked the implementer directly, so the
+advertised Indexer / Blueprint / Core chain was not an automatic part of an
+audited job. That gap is closed at the service boundary.
+
+- `flyto.coding-route.v1` is a typed, provider-neutral orchestration contract
+  in `flyto_ai/coding/route.py`. It is not a Claude prompt convention and does
+  not depend on which implementer is selected.
+- `code-mcp` and `code-serve` always enable the strict route at startup.
+  Direct library `CodingService` construction stays backward compatible with
+  no route, and its receipt carries no route evidence rather than a fabricated
+  one, so it can never be mistaken for the public audited route.
+- The Indexer lane is mandatory before implementation and again after the
+  source-controlled checks. Pre-work gathers real workspace context and an
+  impact/task plan, executes the returned plan steps in order through an
+  allowlist, and must pass its gates before the model may edit. Post-work runs
+  strict verification against the final workspace state.
+- Model prose never asserts that a lane ran. Every outcome is derived from
+  completed allowlisted calls. A missing catalog, failed domain result,
+  incomplete required action or gate, malformed evidence, exceeded bound, or
+  unavailable Indexer fails closed and never reaches `awaiting_codex_audit`.
+- `pass=false` blocks only its own phase and is remediated and re-gated inside
+  a bounded loop; exhausting the remediation bound fails the round.
+- Blueprint is a host-owned, read-only reuse lane governed by startup policy.
+  It passes only a compact content-addressed projection to the implementer and
+  never grants workspace or execution authority. `use_blueprint`,
+  `save_as_blueprint`, and the export/import tools are outside its allowlist.
+  No relevant contract yields a deterministic `not_applicable` outcome.
+- Core is a host-owned validation lane, always enabled on the strict route
+  and conditional only in outcome, running after implementation.
+  Relevance is derived deterministically from the request and the attributable
+  changed files. Calls flow through `flyto_ai.tools.core_tools` with a
+  validation-only allowlist; `execute_module`, danger-full, and browser
+  authority are excluded. Relevant work without an executable proof fails
+  closed and is never silently marked passed.
+- `CodingRouteReceipt` is an additive, secret-free, machine-checkable record
+  of which lane was required, applied, skipped, not applicable, or failed,
+  which calls and gates ran, and a content digest. It is coherence-validated
+  on construction and revalidated on deserialization, and a failed route can
+  never appear on a landable receipt.
+- Nothing above weakens the existing audit: the implementer receives no audit
+  tool, Claude stays pinned to `claude-opus-5` without Bash or content search,
+  selection stays startup-only with no fallback, rework stays bound to the
+  same job, thread, and implementation session, and Codex remains the final
+  independent authority over an exact `implementation_revision_sha256`.
+
+Rollback is configuration and stays inside the audited route. The only
+supported moves are pointing `--indexer-command` or `--blueprint-command` at a
+different negotiated server, or stopping the public service, which pauses
+host-managed implementation. No flag detaches a lane: all four lanes are
+configured on every strict public route, the Indexer lanes are always
+mandatory, and Blueprint and Core may resolve only `applied` or
+`not_applicable`. Do not roll back by adding a route-bypass flag, by letting a
+green repository check stand in for the Indexer post-gate, or by accepting a
+model-asserted lane outcome.
+
 ## 2026-08-08: One audited coding route with a startup-selected implementer
 
 Supersedes the 2026-08-01 statement that the native `FlytoCodingAgent` is the

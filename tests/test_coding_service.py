@@ -2271,3 +2271,151 @@ def test_mcp_audit_tool_drives_the_real_service_state_machine(tmp_path: Path) ->
         assert "evidence_path" not in json.dumps(accepted)
     finally:
         service.close()
+
+
+def test_service_options_never_reintroduce_the_nested_session_marker(
+    tmp_path: Path,
+) -> None:
+    """A real provider start must not look like a nested Claude Code session.
+
+    The installed SDK strips an inherited ``CLAUDECODE`` from the child
+    environment and then merges ``options.env`` over it, so shipping the key
+    with any value at all puts the marker back and the CLI rejects the start
+    before a session exists. The key has to be absent, not empty or false.
+    """
+
+    from flyto_ai.agents.claude_code import ClaudeCodeAgent
+    from flyto_ai.agents.models import CodeTaskRequest
+
+    for authority in (True, False):
+        options = ClaudeCodeAgent()._option_kwargs(
+            CodeTaskRequest(
+                message="task", working_dir=str(tmp_path),
+                service_mode=True, service_edit_authority=authority,
+            ),
+            session_id=None, system_prompt="s", max_turns=1, max_budget=1.0,
+        )
+        env = options["env"]
+        assert isinstance(env, dict)
+        assert "CLAUDECODE" not in env
+        # Nothing else may smuggle the marker back in under another value.
+        assert "CLAUDECODE" not in json.dumps(env)
+        # The pinned service route is unchanged by the fix.
+        assert options["model"] == "claude-opus-5"
+
+
+class RaisingClaudeBackend:
+    """Stands in for an SDK that dies before any session exists."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+        self.requests: list = []
+
+    async def run(self, request):
+        self.requests.append(request)
+        raise self.exc
+
+
+def _provider_error_event(store, thread_id: str):
+    events = [
+        event for event in store.events(thread_id)
+        if event.get("type") == "coding.provider_error"
+    ]
+    assert len(events) == 1
+    return events[0]
+
+
+def test_provider_start_failure_is_durably_recorded_under_the_returned_thread(
+    tmp_path: Path,
+) -> None:
+    """A start that dies before a session still leaves sanitized evidence."""
+
+    workspace = _claude_workspace(tmp_path, check="trivial")
+    secret = "sk-live-DEADBEEF /Users/someone/private/token.txt"
+    backend = RaisingClaudeBackend(RuntimeError(secret))
+    adapter, store = _claude_adapter(tmp_path, workspace, backend)
+
+    failed = asyncio.run(adapter.run(CodingTaskRequest(
+        message="implement", working_dir=str(workspace), require_changes=False,
+    )))
+    assert failed.ok is False
+    assert failed.failure_code == "provider_failed"
+    assert failed.thread_id.startswith("host-")
+
+    # The diagnostic is durable and lives under the exact returned thread id.
+    event = _provider_error_event(store, failed.thread_id)
+    assert event["data"] == {
+        "backend": "claude-sdk",
+        "error_class": "RuntimeError",
+        "failure_code": "provider_failed",
+    }
+    # Nothing derived from the message, arguments, or environment is kept.
+    recorded = json.dumps(store.events(failed.thread_id))
+    assert secret not in recorded
+    assert "sk-live" not in recorded and "token.txt" not in recorded
+    assert secret not in failed.message
+
+
+def test_provider_start_failure_uses_one_host_thread_id(tmp_path: Path) -> None:
+    """The diagnostic and the returned failure must name the same thread."""
+
+    workspace = _claude_workspace(tmp_path, check="trivial")
+    adapter, store = _claude_adapter(
+        tmp_path, workspace, RaisingClaudeBackend(RuntimeError("boom")),
+    )
+    failed = asyncio.run(adapter.run(CodingTaskRequest(
+        message="implement", working_dir=str(workspace), require_changes=False,
+    )))
+    # Exactly one provisional thread exists, and it is the one returned.
+    threads = [
+        thread.name for thread in (tmp_path / "claude-threads").iterdir()
+        if thread.is_dir()
+    ]
+    assert threads == [failed.thread_id]
+    _provider_error_event(store, failed.thread_id)
+
+    # A supplied safe thread id is preserved rather than replaced.
+    supplied = "sdk-session-resume"
+    resumed = asyncio.run(adapter.run(CodingTaskRequest(
+        message="implement", working_dir=str(workspace), thread_id=supplied,
+        resume=True, require_changes=False,
+    )))
+    assert resumed.thread_id == supplied
+    _provider_error_event(store, supplied)
+
+
+@pytest.mark.parametrize("text", [
+    "Claude Code returned an error result: Reached maximum number of turns (2)",
+    "error_max_turns",
+])
+def test_known_turn_limit_is_classified_apart_from_an_unknown_failure(
+    tmp_path: Path, text: str,
+) -> None:
+    """A bounded turn limit is nameable; anything else stays provider_failed."""
+
+    workspace = _claude_workspace(tmp_path, check="trivial")
+    adapter, store = _claude_adapter(
+        tmp_path, workspace, RaisingClaudeBackend(Exception(text)),
+    )
+    limited = asyncio.run(adapter.run(CodingTaskRequest(
+        message="implement", working_dir=str(workspace), require_changes=False,
+    )))
+    assert limited.ok is False
+    assert limited.failure_code == "turn_limit_exceeded"
+    # The raw SDK text never reaches the receipt or the durable record.
+    assert text not in limited.message
+    event = _provider_error_event(store, limited.thread_id)
+    assert event["data"]["failure_code"] == "turn_limit_exceeded"
+    assert event["data"]["error_class"] == "Exception"
+    assert text not in json.dumps(event)
+
+    unknown_adapter, unknown_store = _claude_adapter(
+        tmp_path / "unknown", workspace,
+        RaisingClaudeBackend(Exception("upstream 500 from the provider")),
+    )
+    unknown = asyncio.run(unknown_adapter.run(CodingTaskRequest(
+        message="implement", working_dir=str(workspace), require_changes=False,
+    )))
+    assert unknown.failure_code == "provider_failed"
+    unknown_event = _provider_error_event(unknown_store, unknown.thread_id)
+    assert unknown_event["data"]["failure_code"] == "provider_failed"

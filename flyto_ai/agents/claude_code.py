@@ -54,6 +54,14 @@ SERVICE_READONLY_TOOLS = ("Read", "Glob")
 HOST_THREAD_PREFIX = "host-"
 #: A durable ThreadStore identifier is narrower than an opaque SDK session id.
 _HOST_THREAD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+#: Lowercase markers for provider conditions the host can name on its own.
+#: The SDK reports a bounded turn limit only as exception text, so the text is
+#: matched in memory and discarded; the marker list stays deliberately short so
+#: an unrecognized failure keeps the conservative ``provider_failed`` code.
+PROVIDER_FAILURE_MARKERS = (
+    ("error_max_turns", "turn_limit_exceeded"),
+    ("reached maximum number of turns", "turn_limit_exceeded"),
+)
 
 
 class ClaudeCodeAgent:
@@ -432,7 +440,13 @@ class ClaudeCodeAgent:
             "permission_mode": (
                 "acceptEdits" if service_mode and edits_allowed else "default"
             ),
-            "env": {"CLAUDECODE": ""},
+            # The SDK already drops an inherited CLAUDECODE from the child
+            # environment so a spawned CLI never believes it is nested inside
+            # a Claude Code parent. It merges options.env *over* that
+            # filtering, so passing the key at all - even empty - puts the
+            # marker back and the CLI refuses to start before a session
+            # exists. Leave it absent and let the SDK's filtering stand.
+            "env": {},
         }
         if mcp_servers:
             options_kwargs["mcp_servers"] = mcp_servers
@@ -576,8 +590,14 @@ class ClaudeCodingAgent:
         )
         try:
             response = await self.agent.run(code_request)
-        except Exception:  # noqa: BLE001 - the backend is detachable
-            return self._failed(thread_id, "provider_failed")
+        except Exception as exc:  # noqa: BLE001 - the backend is detachable
+            # A round that dies here has no Claude session, so one provisional
+            # host id is derived once and used for both the durable diagnostic
+            # and the returned receipt; two derivations would name two threads.
+            round_thread = self.host_thread_id(thread_id)
+            code = self._provider_failure_code(exc)
+            self._note_provider_error(round_thread, request.working_dir, exc, code)
+            return self._failed(round_thread, code)
 
         session = response.claude_session_id
         if (
@@ -745,6 +765,51 @@ class ClaudeCodingAgent:
         if isinstance(supplied, str) and _HOST_THREAD_RE.fullmatch(supplied):
             return supplied
         return "{}{}".format(HOST_THREAD_PREFIX, uuid.uuid4().hex[:20])
+
+    @classmethod
+    def _provider_failure_code(cls, exc: BaseException) -> str:
+        """Name the bounded provider conditions the host can classify safely.
+
+        The SDK raises a bare ``Exception`` whose text is the only signal for a
+        turn limit, so the text is matched in memory against a fixed marker
+        list and then discarded. It is never stored, logged, or returned, and
+        anything unrecognized stays the conservative ``provider_failed``.
+        """
+
+        try:
+            text = str(exc)[: cls.MAX_MESSAGE_CHARS].lower()
+        except Exception:  # noqa: BLE001 - a hostile __str__ is not a category
+            return "provider_failed"
+        for marker, code in PROVIDER_FAILURE_MARKERS:
+            if marker in text:
+                return code
+        return "provider_failed"
+
+    def _note_provider_error(
+        self, thread_id: str, workspace: str, exc: BaseException, code: str,
+    ) -> None:
+        """Durably record the sanitized category of a failed provider start.
+
+        A start that dies before any Claude session leaves no other trace, so
+        the provisional thread is created if it does not exist yet and the
+        exception class plus the host's own failure code are appended under the
+        exact id the caller receives. The exception message, arguments,
+        traceback, and environment are never recorded: they can carry paths,
+        tokens, or prompt material. A store that refuses the note still never
+        fails the round.
+        """
+
+        category = type(exc).__name__
+        if not category.isidentifier() or len(category) > 64:
+            category = "unknown"
+        try:
+            self._bind_thread(thread_id, workspace)
+            self.store.append(thread_id, "coding.provider_error", {
+                "backend": "claude-sdk", "error_class": category,
+                "failure_code": code,
+            })
+        except Exception:  # noqa: BLE001 - diagnostics never break the round
+            return
 
     @classmethod
     def _failed(cls, thread_id: str, code: str) -> Any:

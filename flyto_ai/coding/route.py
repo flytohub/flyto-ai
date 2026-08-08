@@ -42,6 +42,8 @@ ROUTE_CONTRACT_VERSION = "flyto.coding-route.v1"
 _ROUTE_DOMAIN = b"flyto.coding-route.v1\n"
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _ACTION_RE = re.compile(r"^[a-z][a-z0-9_.:-]{1,63}$")
+#: A leading drive letter spells a Windows path, never a repository-relative one.
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 #: The real public Indexer surface. These names and their argument schemas come
 #: from the installed sibling server; nothing here invents a tool.
@@ -921,8 +923,41 @@ class CodingRouteOrchestrator:
         return "refactor"
 
     @staticmethod
-    def _derive_targets(found: Any) -> list:
-        """Take bounded target hints from real search evidence only."""
+    def _relative_path(item: Mapping[str, Any]) -> str:
+        """Return a search hit's canonical repository-relative POSIX path.
+
+        Only a path spelled the way the repository itself spells it is a
+        target. A drive, UNC, or any other backslash form, an absolute or
+        home-prefixed path, a `..` component, or any ASCII control character
+        disqualifies the value outright. Unsafe input is never repaired into
+        an accepted path: the caller falls back to the symbol id or the name.
+        """
+
+        value = item.get("path")
+        if not isinstance(value, str) or not value:
+            return ""
+        if "\\" in value or _DRIVE_PREFIX_RE.match(value):
+            return ""
+        if value.startswith(("/", "~")):
+            return ""
+        if any(char < " " or char == "\x7f" for char in value):
+            return ""
+        if ".." in PurePosixPath(value).parts:
+            return ""
+        return value
+
+    @classmethod
+    def _derive_targets(cls, found: Any) -> list:
+        """Take bounded target hints from real search evidence only.
+
+        The repository-relative path comes first. A plan built on a path is the
+        one the Indexer's intent ledger can express as an allowed path, so the
+        post-work diff of that exact file validates; planning on a root-level
+        symbol id instead yields no allowed path and rejects the planned edit.
+        A symbol id is still better evidence than a bare name, so it stays the
+        second choice and the name remains the last.
+        """
+
         targets: list = []
         if isinstance(found, Mapping):
             for key in ("results", "matches", "symbols"):
@@ -931,7 +966,11 @@ class CodingRouteOrchestrator:
                     continue
                 for item in items[:5]:
                     if isinstance(item, Mapping):
-                        value = item.get("symbol_id") or item.get("path") or item.get("name")
+                        value = (
+                            cls._relative_path(item)
+                            or item.get("symbol_id")
+                            or item.get("name")
+                        )
                         if isinstance(value, str) and value:
                             targets.append(value[:200])
                 if targets:

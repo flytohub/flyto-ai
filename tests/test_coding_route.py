@@ -2228,3 +2228,128 @@ def _landable_after_tamper(tmp_path, mutate, state_dir):
 def test_tampered_route_evidence_never_reads_back_as_landable(tmp_path, name, mutate):
     outcomes = _landable_after_tamper(tmp_path, mutate, "persist-" + name)
     assert all(item is not True for item in outcomes), (name, outcomes)
+
+
+def _plan_targets(indexer):
+    plans = [
+        args for tool, args in indexer.calls
+        if tool == "task" and args.get("action") == "plan"
+    ]
+    assert len(plans) == 1
+    return plans[0]["targets"]
+
+
+def test_plan_targets_prefer_the_repository_path_over_a_symbol_id(tmp_path):
+    """The plan must name what the diff will actually touch.
+
+    A real search hit carries both a `path` and a root-level `symbol_id`.
+    Planning on the symbol id yields an empty `intent_ledger.allowed_paths`,
+    so the post-work `task.validate` rejects the exact edit the plan asked
+    for as an unplanned diff. The path is the only projection the ledger and
+    the diff agree on.
+    """
+
+    indexer = IndexerDouble(search_results=[
+        {"path": "smoke.py", "symbol_id": "repo:smoke.py:file:smoke", "name": "smoke"},
+    ])
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    assert result.ok is True and receipt.ok is True and receipt.strict is True
+    assert indexer.violations == []
+    assert _plan_targets(indexer) == ["smoke.py"]
+    # The post-work validate ran against that same planned path.
+    assert any(
+        tool == "task" and args.get("action") == "validate"
+        for tool, args in indexer.calls
+    )
+
+
+@pytest.mark.parametrize("item, expected", [
+    # A usable path always wins, in any key order.
+    ({"symbol_id": "repo:a.py:file:a", "path": "a.py"}, "a.py"),
+    ({"path": "pkg/mod.py", "symbol_id": "repo:pkg/mod.py:file:mod", "name": "mod"}, "pkg/mod.py"),
+    # Without a path the symbol id is still better evidence than a bare name.
+    ({"symbol_id": "repo:b.py:file:b", "name": "b"}, "repo:b.py:file:b"),
+    ({"name": "c"}, "c"),
+    # A path that is not repository-relative is not a target; it falls back
+    # rather than sending the Indexer something it can never plan against.
+    ({"path": "/etc/passwd", "symbol_id": "repo:d.py:file:d"}, "repo:d.py:file:d"),
+    ({"path": "../outside.py", "symbol_id": "repo:e.py:file:e"}, "repo:e.py:file:e"),
+    ({"path": "", "symbol_id": "repo:f.py:file:f"}, "repo:f.py:file:f"),
+    ({"path": 7, "symbol_id": "repo:g.py:file:g"}, "repo:g.py:file:g"),
+])
+def test_target_projection_precedence_is_path_then_symbol_then_name(item, expected):
+    assert CodingRouteOrchestrator._derive_targets({"results": [item]}) == [expected]
+
+
+@pytest.mark.parametrize("path", [
+    "smoke.py",
+    "pkg/mod.py",
+    "a/b/c/deep_module.py",
+    "docs/reference/python/README.md",
+    ".flyto/coding.yaml",
+    "pkg/sub-dir/name_with.dots.py",
+    "..hidden/x.py",
+    "pkg/...py",
+])
+def test_a_canonical_relative_posix_path_is_projected(path):
+    """Ordinary root-level and nested repository paths stay usable targets."""
+
+    item = {"path": path, "symbol_id": "repo:x:file:x"}
+    assert CodingRouteOrchestrator._derive_targets({"results": [item]}) == [path]
+
+
+@pytest.mark.parametrize("path", [
+    # Drive and UNC spellings, and any other backslash form.
+    "C:\\secrets.txt",
+    "c:/secrets.txt",
+    "\\\\server\\share\\x.py",
+    "pkg\\mod.py",
+    ".\\mod.py",
+    # Absolute and home-prefixed.
+    "/etc/passwd",
+    "//server/share/x.py",
+    "~/.ssh/id_rsa",
+    "~root/x.py",
+    # Traversal in any position.
+    "../outside.py",
+    "pkg/../../outside.py",
+    "pkg/..",
+    "..",
+    # Every ASCII control character class, including CR, LF, tab, NUL, DEL.
+    "pkg/mod.py\r",
+    "pkg\r\nmod.py",
+    "pkg/mod.py\n",
+    "pkg\tmod.py",
+    "pkg/mod.py\x00",
+    "pkg/mod.py\x7f",
+    "\x01pkg/mod.py",
+    "pkg/\x1fmod.py",
+    "pkg/mod.py\x0b",
+])
+def test_an_unsafe_path_spelling_is_never_projected_or_normalized(path):
+    """Unsafe evidence falls back; it is never repaired into an accepted target."""
+
+    fallback = CodingRouteOrchestrator._derive_targets({"results": [
+        {"path": path, "symbol_id": "repo:safe.py:file:safe"},
+    ]})
+    assert fallback == ["repo:safe.py:file:safe"]
+    # With no symbol id the name is the last resort, still never the path.
+    assert CodingRouteOrchestrator._derive_targets({"results": [
+        {"path": path, "name": "safe"},
+    ]}) == ["safe"]
+    # And a hit carrying only the unsafe path yields no target at all.
+    assert CodingRouteOrchestrator._derive_targets({"results": [{"path": path}]}) == []
+
+
+def test_target_projection_keeps_its_count_and_length_bounds():
+    many = {"results": [{"path": "f{}.py".format(index)} for index in range(9)]}
+    assert CodingRouteOrchestrator._derive_targets(many) == [
+        "f0.py", "f1.py", "f2.py", "f3.py", "f4.py",
+    ]
+    long_path = "d/" * 300 + "x.py"
+    projected = CodingRouteOrchestrator._derive_targets({"results": [{"path": long_path}]})
+    assert projected == [long_path[:200]]
+    # Evidence that carries no usable hint is still refused entirely.
+    assert CodingRouteOrchestrator._derive_targets({"results": [{"kind": "file"}]}) == []
+    assert CodingRouteOrchestrator._derive_targets({"results": "smoke.py"}) == []
+    assert CodingRouteOrchestrator._derive_targets("smoke.py") == []

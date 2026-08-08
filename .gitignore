@@ -12,7 +12,10 @@ venv/
 env/
 .env
 *.db
-.flyto/
+# Local .flyto state stays out of the repository, except the source-controlled
+# verification contract the audited coding route requires.
+.flyto/*
+!.flyto/coding.yaml
 .flyto-index/
 eval/results/
 out/

@@ -1,0 +1,33 @@
+# Repository-owned verification contract for the audited coding route.
+# Every command runs as a real subprocess from the repository root before an
+# implementation round can reach `awaiting_codex_audit`. Model prose never
+# counts as verification. See docs/CODING_CONTROL_PLANE.md.
+#
+# No `capabilities:` are declared on purpose: the Claude service adapter fails
+# closed when a required capability cannot be attached, so declaring one here
+# would make every audited round fail before Claude is ever contacted.
+version: flyto.coding-config.v1
+checks:
+  # Catches syntax and import-shape breakage anywhere in the package.
+  - name: compile
+    argv: [python, -m, compileall, -q, flyto_ai]
+    timeout_seconds: 300
+    required: true
+  # The exact fatal/error Ruff selection this repository's CI enforces.
+  - name: lint
+    argv: [python, -m, ruff, check, --select, "E9,F63,F7,F82", flyto_ai, tests]
+    timeout_seconds: 120
+    required: true
+  # Generated reference must stay current with the source it documents.
+  - name: generated_reference
+    argv: [python, scripts/generate_reference.py, --check]
+    timeout_seconds: 300
+    required: true
+  # The full canonical suite. Source-controlled checks are the trusted host
+  # command lane -- they are not model-issued commands and do not run in the
+  # network-isolated sandbox -- so loopback-socket suites execute normally
+  # here. An arbitrary future change is only auditable once every test passes.
+  - name: tests
+    argv: [python, -m, pytest, -q]
+    timeout_seconds: 900
+    required: true

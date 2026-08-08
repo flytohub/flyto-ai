@@ -41,3 +41,15 @@ Any frontend, website, dashboard, extension webview, app screen, or generated UI
 8. Hard-to-understand content: copy must be concrete, scannable, current, and consistent with Flyto2 terminology.
 
 Frontend verification must include the relevant automated checks plus manual or screenshot review for responsive layout, accessibility states, navigation clarity, loading/empty/error states, and content readability. Public pages must preserve SEO basics: canonical URL, sitemap coverage, metadata, structured data when relevant, and no broken internal or external links.
+
+## Repo notes
+
+Merged from `CLAUDE.md` so Codex and Claude read one set of rules.
+
+Use Claude Code as an implementation worker, not as a source of credentials or hidden state.
+
+- Prefer MCP tools for project context and `flyto-core` capability discovery.
+- Require approval before file writes, shell execution, browser actions with live accounts, or any operation that can mutate external state.
+- Record tool use as evidence with run id, tool name, module id or recipe name, validation result, and outcome.
+- Do not ask users for secrets through MCP elicitation. Secrets must arrive through the active runtime channel only.
+- Subagents may investigate or verify, but changes must preserve the public `flyto-ai` provider/tool contracts.

@@ -779,6 +779,53 @@ def _awaiting(service: CodingService, tenant: str, key: str, workspace: Path):
     return receipt
 
 
+def test_public_package_exports_the_canonical_audit_surface() -> None:
+    import flyto_ai.coding as coding
+    from flyto_ai.coding import contracts, service as service_module
+
+    exported = {
+        "CodingAuditFinding": contracts.CodingAuditFinding,
+        "CodingAuditSeverity": contracts.CodingAuditSeverity,
+        "CodingAuditVerdict": contracts.CodingAuditVerdict,
+        "CodingJobReceipt": contracts.CodingJobReceipt,
+        "CodingJobState": contracts.CodingJobState,
+        "AUDIT_BOUND_CODING_JOB_STATES": contracts.AUDIT_BOUND_CODING_JOB_STATES,
+        "AUDITED_CODING_JOB_STATES": contracts.AUDITED_CODING_JOB_STATES,
+        "TERMINAL_CODING_JOB_STATES": contracts.TERMINAL_CODING_JOB_STATES,
+        "SERVICE_CONTRACT_VERSION": contracts.SERVICE_CONTRACT_VERSION,
+        "SUPPORTED_SERVICE_CONTRACT_VERSIONS": contracts.SUPPORTED_SERVICE_CONTRACT_VERSIONS,
+        "MAX_AUDIT_FINDINGS": contracts.MAX_AUDIT_FINDINGS,
+        "MAX_AUDIT_MESSAGE_CHARS": contracts.MAX_AUDIT_MESSAGE_CHARS,
+        "MAX_AUDIT_EVIDENCE_REF_CHARS": contracts.MAX_AUDIT_EVIDENCE_REF_CHARS,
+        "MAX_AUDIT_ROUNDS": contracts.MAX_AUDIT_ROUNDS,
+        "audit_findings_sha256": contracts.audit_findings_sha256,
+        "require_revision_sha256": contracts.require_revision_sha256,
+        "validate_audit_submission": contracts.validate_audit_submission,
+        "receipt_to_mapping": service_module.receipt_to_mapping,
+        "CodingServiceError": service_module.CodingServiceError,
+        "AuditNotEnabled": service_module.AuditNotEnabled,
+        "AuditStateConflict": service_module.AuditStateConflict,
+        "RevisionMismatch": service_module.RevisionMismatch,
+        "RevisionUnavailable": service_module.RevisionUnavailable,
+        "ReworkLimitReached": service_module.ReworkLimitReached,
+        "ReworkNotResumable": service_module.ReworkNotResumable,
+        "SessionBindingFailed": service_module.SessionBindingFailed,
+        "CodingJobNotFound": service_module.CodingJobNotFound,
+        "WorkspaceDenied": service_module.WorkspaceDenied,
+    }
+    for name, canonical in exported.items():
+        assert name in coding.__all__, name
+        assert getattr(coding, name) is canonical, name
+
+    # Every advertised name must resolve, and remote-payload decoding and the
+    # workspace digest internals stay out of the public package surface.
+    assert len(coding.__all__) == len(set(coding.__all__))
+    for name in coding.__all__:
+        assert getattr(coding, name) is not None, name
+    for internal in ("request_from_mapping", "CodingService", "_revision_digest"):
+        assert internal not in coding.__all__
+
+
 def test_audit_disabled_service_keeps_the_legacy_completed_flow(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

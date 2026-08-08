@@ -8,6 +8,26 @@
 - Keep `.flyto-index/`, transcripts, evidence, build output, local DBs, and eval results out of commits.
 - For deep changes, run flyto-indexer impact/search/verify before finalizing.
 
+## Architecture Invariant: Flytohub Product Topology
+
+The canonical product topology in `ARCHITECTURE.md` and
+`docs/architecture-map.md` is an architecture invariant, not a drawing.
+
+- Any AI or agent that changes cross-repo ownership, a product role, an
+  integration arrow, the coding route, or a named repository must update
+  `ARCHITECTURE.md`, `docs/architecture-map.md`, `STATE.md`, and
+  `DECISIONS.md` in the same change.
+- Preserve the placement of `flyto-cloud` parallel to the combined
+  `flyto-code` / `flyto-engine` column at the same level. Never nest Code or
+  Engine below Cloud unless a dated `DECISIONS.md` entry explicitly supersedes
+  this invariant.
+- Verify the current repository reality before editing the map. Label an edge
+  that does not exist yet as planned rather than implemented; do not silently
+  rewrite the map to match an assumption.
+- Keep the product topology visually and textually separate from the
+  runtime-call diagrams. The topology records ownership and integration, not
+  that every arrow is a synchronous call.
+
 ## Flyto2 Project Memory Contract
 
 Every Flyto2 repository must keep this project-memory scaffold current:

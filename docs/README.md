@@ -4,6 +4,8 @@ Use this index to move from product behavior to exact implementation contracts.
 
 ## Start Here
 
+- [Architecture map](architecture-map.md): the canonical Flytohub product
+  topology (ownership and integration), then this repository's internals.
 - [Feature and package map](FEATURES.md): shipped behavior and source ownership.
 - [Python API guide](API.md): stable package-level integration contracts.
 - [CLI, HTTP, and MCP](CLI_AND_MCP.md): operator and protocol entrypoints.
@@ -24,7 +26,9 @@ Regenerate with `python3 scripts/generate_reference.py`; CI rejects stale output
 
 ## Design And Integration
 
-- [Provider-neutral coding control plane](CODING_CONTROL_PLANE.md)
+- [Provider-neutral coding control plane](CODING_CONTROL_PLANE.md): the
+  audit-required `code-mcp` / `code-serve` route, startup `native|claude`
+  selection, the audit state machine, and a project-scoped Codex MCP example.
 - [AI/MCP closed loop](AI_MCP_CLOSED_LOOP.md)
 - [Adaptive security campaigns](API.md#adaptive-security-campaigns)
 - [Deterministic capability routing](CAPABILITY_ROUTING.md)

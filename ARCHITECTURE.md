@@ -1,5 +1,104 @@
 # Architecture
 
+## Canonical Flytohub product topology
+
+This is the durable product and ownership map for the whole Flytohub line. It
+is **not** a claim that every arrow is a synchronous runtime call; the
+runtime-call diagrams start in the next section. It is maintained in parallel
+in [`docs/architecture-map.md`](docs/architecture-map.md).
+
+```mermaid
+flowchart TB
+    admin["flyto-admin<br/>manages Cloud and Code projects"]
+
+    subgraph plane[" Product plane — three parallel columns at the same level "]
+      direction LR
+      subgraph colA["Cloud client / packaged"]
+        direction TB
+        app["flyto-app<br/>Cloud control app"]
+        packaged["flyto2<br/>Cloud packaged application"]
+      end
+      subgraph colB["Cloud product"]
+        direction TB
+        cloud["flyto-cloud<br/>frontend + backend"]
+      end
+      subgraph colC["Code product"]
+        direction TB
+        code["flyto-code<br/>frontend"]
+        engine["flyto-engine<br/>backend"]
+        code --- engine
+      end
+    end
+
+    admin --> cloud
+    admin --> code
+    app --> cloud
+    cloud --> packaged
+
+    cloud --> ai["flyto-ai<br/>unified AI gateway / SDK"]
+    engine --> ai
+    ai --> llm["LLM providers<br/>OpenAI / Claude / Gemini / local / ..."]
+    llm --> blueprint["flyto-blueprint<br/>tasks / process / definitions"]
+    blueprint --> core["flyto-core<br/>registry / rules / capability registration"]
+    modules["flyto-modules-*<br/>every extension"] -->|register| core
+    core -->|scanned by| indexer["flyto-indexer<br/>builds the index"]
+    modules -->|scanned by| indexer
+    indexer -. "index / data feed" .-> engine
+```
+
+Compact text invariant, so a renderer's layout choice cannot erase the meaning:
+
+```text
+flyto-admin  ── manages ──>  Cloud project  and  Code project
+
+THREE PARALLEL COLUMNS, SAME LEVEL (never nest Code/Engine under Cloud):
+
+  LEFT (Cloud client)        CENTER (Cloud product)     RIGHT (Code product)
+  flyto-app           ──>    flyto-cloud                flyto-code    (frontend)
+  flyto2              <──    (frontend + backend)              +
+  (packaged app)                                        flyto-engine  (backend)
+
+              flyto-cloud ──>  flyto-ai  <── flyto-engine
+                        (unified AI gateway / SDK)
+                                    |
+              LLM providers (OpenAI / Claude / Gemini / local / ...)
+                                    |
+              flyto-blueprint (tasks / process / definitions)
+                                    |
+              flyto-core (registry / rules / capability registration)
+                                    ^
+              flyto-modules-*  ──register──>  flyto-core
+
+              flyto-core       ──scanned by──>  flyto-indexer
+              flyto-modules-*  ──scanned by──>  flyto-indexer
+              flyto-indexer    ──index / data feed──>  flyto-engine
+```
+
+Invariants:
+
+- `flyto-admin` sits above and manages both the Cloud and the Code project.
+- `flyto-cloud` and the combined `flyto-code` / `flyto-engine` column sit at
+  exactly the same horizontal level. Code and Engine are never drawn as
+  children below Cloud.
+- The left column holds `flyto-app` above `flyto2`. `flyto-app` points across
+  to `flyto-cloud`, and `flyto-cloud` points back across to `flyto2`; neither
+  is stacked inside the center Cloud column.
+- `flyto-cloud` owns its own frontend and backend; `flyto-code` is the Code
+  frontend and `flyto-engine` is the Code backend in one product column.
+- Both product columns converge on `flyto-ai`, the unified AI gateway/SDK.
+- The platform chain below `flyto-ai` is LLM providers -> `flyto-blueprint` ->
+  `flyto-core`. Every `flyto-modules-*` extension registers with Core.
+- `flyto-indexer` scans `flyto-core` and every `flyto-modules-*` extension as
+  two separate inputs, builds the index, and feeds it to `flyto-engine`. That
+  lower arrow is an index/data feed only; it does not place Engine lower in the
+  product hierarchy.
+
+This map is the governing target, not a claim that every edge is already
+implemented. The dated current-alignment snapshot — including the
+`flyto-engine` direct-provider migration gap and the unverified
+`flyto-cloud` -> `flyto2` packaging edge — is in
+[`docs/architecture-map.md`](docs/architecture-map.md#current-alignment-snapshot-2026-08-08).
+
 Runtime flow:
 
 ```text
@@ -161,22 +260,39 @@ Optional service composition:
 
 ```text
 loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
-  -> flyto.coding-service.v1
+  -> flyto.coding-service.v2
   -> tenant namespace + workspace allowlist + bounded queue
   -> per-workspace serialization
-  -> the same FlytoCodingAgent control flow above
+  -> exactly one startup-selected implementer
+       native -> the FlytoCodingAgent control flow above
+       claude -> ClaudeCodingAgent (optional adapter, same contracts)
+  -> awaiting_codex_audit bound to an exact implementation_revision_sha256
+  -> authenticated host/auditor verdict
   -> durable CodingJobReceipt
 ```
 
-Provider selection, credentials, tenant identity, workspace roots, and the
-state root are startup dependencies. They are not accepted from a job payload.
-This makes Cloud, Engine, Robotics, Core, and Indexer consumers replaceable at
-the process contract instead of coupling their source trees to `flyto-ai`.
+Provider selection, credentials, tenant identity, workspace roots, the state
+root, the implementer, the rework ceiling, and the audit requirement are all
+startup dependencies. None is accepted from a job payload. This makes Cloud,
+Engine, Robotics, Core, and Indexer consumers replaceable at the process
+contract instead of coupling their source trees to `flyto-ai`.
 
-The native backend is the default architecture. `ClaudeCodeAgent` remains a
-separate optional adapter and never receives implicit permission bypass. A
-capability can be removed from `.flyto/coding.yaml` without changing the
-provider, workspace tool, check, or result contracts.
+The native implementer is the default and `claude` is its peer, selected once
+with `--implementation-backend` or the bounded `FLYTO_AI_CODING_BACKEND`
+default. There is no per-job selection and no fallback between them. The
+public `code-mcp` and `code-serve` commands are audit-required
+unconditionally: an implementer round reaches `awaiting_codex_audit`, and only
+an `accept` verdict on that exact revision reaches `codex_accepted` with
+`landable` evidence. A `rework` verdict returns typed findings to the same job
+and implementation session for another bounded round. `landable` is evidence
+only; the service never stages, commits, pushes, publishes, or deploys.
+
+`ClaudeCodeAgent` also remains a separate direct compatibility backend for
+`flyto-ai code`, outside the audited service route, and never receives
+implicit permission bypass. A capability can be removed from
+`.flyto/coding.yaml` without changing the provider, workspace tool, check, or
+result contracts. The full state machine and audit surfaces are in
+[`docs/CODING_CONTROL_PLANE.md`](docs/CODING_CONTROL_PLANE.md).
 
 An MCP capability is available only when its initialize response negotiates the
 requested protocol and its real `tools/list` includes every required tool.

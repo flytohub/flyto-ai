@@ -1,5 +1,137 @@
 # Architecture Map
 
+## Canonical Flytohub product topology
+
+Durable product and ownership map for the whole Flytohub line. It records who
+owns what and which products integrate, **not** that every arrow is a
+synchronous runtime call — the runtime-call boundary is in
+[Provider Boundary](#provider-boundary) below. This section is maintained in
+parallel with the same diagram in [`../ARCHITECTURE.md`](../ARCHITECTURE.md);
+change both together.
+
+```mermaid
+flowchart TB
+    admin["flyto-admin<br/>manages Cloud and Code projects"]
+
+    subgraph plane[" Product plane — three parallel columns at the same level "]
+      direction LR
+      subgraph colA["Cloud client / packaged"]
+        direction TB
+        app["flyto-app<br/>Cloud control app"]
+        packaged["flyto2<br/>Cloud packaged application"]
+      end
+      subgraph colB["Cloud product"]
+        direction TB
+        cloud["flyto-cloud<br/>frontend + backend"]
+      end
+      subgraph colC["Code product"]
+        direction TB
+        code["flyto-code<br/>frontend"]
+        engine["flyto-engine<br/>backend"]
+        code --- engine
+      end
+    end
+
+    admin --> cloud
+    admin --> code
+    app --> cloud
+    cloud --> packaged
+
+    cloud --> ai["flyto-ai<br/>unified AI gateway / SDK"]
+    engine --> ai
+    ai --> llm["LLM providers<br/>OpenAI / Claude / Gemini / local / ..."]
+    llm --> blueprint["flyto-blueprint<br/>tasks / process / definitions"]
+    blueprint --> core["flyto-core<br/>registry / rules / capability registration"]
+    modules["flyto-modules-*<br/>every extension"] -->|register| core
+    core -->|scanned by| indexer["flyto-indexer<br/>builds the index"]
+    modules -->|scanned by| indexer
+    indexer -. "index / data feed" .-> engine
+```
+
+Compact text invariant, so a renderer's layout choice cannot erase the meaning:
+
+```text
+flyto-admin  ── manages ──>  Cloud project  and  Code project
+
+THREE PARALLEL COLUMNS, SAME LEVEL (never nest Code/Engine under Cloud):
+
+  LEFT (Cloud client)        CENTER (Cloud product)     RIGHT (Code product)
+  flyto-app           ──>    flyto-cloud                flyto-code    (frontend)
+  flyto2              <──    (frontend + backend)              +
+  (packaged app)                                        flyto-engine  (backend)
+
+              flyto-cloud ──>  flyto-ai  <── flyto-engine
+                        (unified AI gateway / SDK)
+                                    |
+              LLM providers (OpenAI / Claude / Gemini / local / ...)
+                                    |
+              flyto-blueprint (tasks / process / definitions)
+                                    |
+              flyto-core (registry / rules / capability registration)
+                                    ^
+              flyto-modules-*  ──register──>  flyto-core
+
+              flyto-core       ──scanned by──>  flyto-indexer
+              flyto-modules-*  ──scanned by──>  flyto-indexer
+              flyto-indexer    ──index / data feed──>  flyto-engine
+```
+
+Invariants:
+
+- `flyto-admin` sits above and manages both the Cloud and the Code project.
+- `flyto-cloud` and the combined `flyto-code` / `flyto-engine` column sit at
+  exactly the same horizontal level. Code and Engine are never drawn as
+  children below Cloud.
+- The left column holds `flyto-app` above `flyto2`. `flyto-app` points across
+  to `flyto-cloud`, and `flyto-cloud` points back across to `flyto2`; neither
+  is stacked inside the center Cloud column.
+- `flyto-cloud` owns its own frontend and backend; `flyto-code` is the Code
+  frontend and `flyto-engine` is the Code backend in one product column.
+- Both product columns converge on `flyto-ai`, the unified AI gateway/SDK.
+- The platform chain below `flyto-ai` is LLM providers -> `flyto-blueprint` ->
+  `flyto-core`. Every `flyto-modules-*` extension registers with Core.
+- `flyto-indexer` scans `flyto-core` and every `flyto-modules-*` extension as
+  two separate inputs, builds the index, and feeds it to `flyto-engine`. That
+  lower arrow is an index/data feed only; it does not place Engine lower in the
+  product hierarchy.
+
+Changing any cross-repo ownership, product role, integration arrow, coding
+route, or repository name in this map is an architecture change. See the
+architecture-invariant rule in [`../AGENTS.md`](../AGENTS.md).
+
+## Current alignment snapshot (2026-08-08)
+
+The topology above is the **governing target**. This snapshot records where the
+current code still differs, so an agent does not assume the map is already
+fully implemented. Status values are deliberately narrow:
+
+- **implemented** — a concrete source artifact exercises the edge;
+- **partial** — the edge exists but a contradicting path also exists;
+- **target** — intended, not yet evidenced in code;
+- **unverified** — not checked in this pass; do not assert either way.
+
+Evidence below comes from a repository inventory pass on 2026-08-08. It is a
+point-in-time observation, not a continuously enforced check.
+
+| Edge | Status | Evidence / gap |
+| --- | --- | --- |
+| All named repositories exist | implemented | Present in the Indexer inventory. |
+| `flyto-app` -> `flyto-cloud` | implemented | `flyto-app` `scripts/audit_mobile_cloud_contract.py` audits the App/Cloud contract. |
+| `flyto-cloud` -> `flyto2` (packaging) | unverified | `flyto2` currently has 0 indexed files, so the packaging edge is not code-index verified. |
+| `flyto-cloud` -> `flyto-ai` | implemented | `flyto-cloud` `src/ui/web/backend/tests/unit/test_ai_moat_integration.py` exercises `flyto_ai` tool dispatch. |
+| `flyto-engine` -> `flyto-ai` as the only AI gateway | **partial / migration gap** | `flyto-engine` still contains `internal/ai/openai.go::OpenAIProvider`, a direct provider path that bypasses the gateway. Treat single-gateway routing as target until that is migrated. |
+| `flyto-ai` -> `flyto-blueprint` | implemented | `flyto_ai/tools/blueprint_tools.py`. |
+| `flyto-ai` -> `flyto-core` | implemented | `flyto_ai/tools/core_tools.py`. |
+| Core registration mechanism exists | implemented | `flyto-core` `src/core/modules/registry/core.py` `ModuleRegistry` with registration validation. This proves the mechanism only. |
+| Every `flyto-modules-*` extension actually registers | unverified | No complete module inventory plus per-module registration trace was performed. Do not read the row above as universal compliance. The invariant still governs: every extension must register with Core. |
+| `flyto-indexer` -> `flyto-engine` index feed | implemented | `flyto-engine` `internal/scanner/scanner.go::populateLayer3FromIndexer`. |
+| `flyto-indexer` scans Core and modules | unverified | Inventory confirms the repositories; the two scan inputs were not separately traced in this pass. |
+| `flyto-admin` manages both projects | partial | Cloud admin surfaces exist and `backend/internal/engine/scans.go::codeOrg` touches the Code side; evidence is not strong enough to claim complete two-product project management. |
+
+Agents changing any of these edges must re-verify the current repository state
+first, update this table with the new status and evidence, and follow the
+architecture-invariant rule in [`../AGENTS.md`](../AGENTS.md).
+
 ## Core Areas
 
 - `flyto_ai/agent.py`, `flyto_ai/assistant/`, and `flyto_ai/orchestration/`:

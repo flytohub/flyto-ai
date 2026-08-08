@@ -9,24 +9,31 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from flyto_ai.coding.agent import FlytoCodingAgent
 from flyto_ai.coding.contracts import (
+    MAX_AUDIT_ROUNDS,
     ApprovalPolicy,
     CapabilityStatus,
     CheckResult,
+    CodingAuditFinding,
+    CodingAuditVerdict,
     CodingJobReceipt,
     CodingJobState,
     CodingTaskRequest,
     CodingTaskResult,
     SandboxMode,
+    audit_findings_sha256,
+    require_revision_sha256,
+    validate_audit_submission,
 )
 from flyto_ai.coding.store import ThreadStore, redact_evidence
 
@@ -39,10 +46,22 @@ except ImportError:  # pragma: no cover
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _JOB_ID = re.compile(r"^job_[a-f0-9]{24}$")
+_BACKEND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ALLOWED_REQUEST_FIELDS = frozenset({
     "message", "working_dir", "thread_id", "resume", "max_attempts",
     "max_rounds", "require_changes",
 })
+# The revision binds only the attributable change set. Version control
+# internals, credential files, evidence, and unrelated workspace content are
+# never read by this digest.
+_PROTECTED_REVISION_PARTS = frozenset({".git", ".hg", ".svn", ".ssh"})
+_REVISION_DOMAIN = b"flyto.coding-revision.v1\n"
+_REVISION_CHUNK_BYTES = 1024 * 1024
+MAX_ATTRIBUTABLE_FILES = 512
+MAX_REVISION_FILE_BYTES = 8 * 1024 * 1024
+MAX_REVISION_TOTAL_BYTES = 128 * 1024 * 1024
+MAX_REWORK_FEEDBACK_CHARS = 60_000
+MAX_REWORK_MESSAGE_CHARS = 180_000
 
 
 class CodingServiceError(RuntimeError):
@@ -65,6 +84,42 @@ class IdempotencyConflict(CodingServiceError):
 
 class WorkspaceDenied(CodingServiceError):
     code = "workspace_denied"
+
+
+class AuditNotEnabled(CodingServiceError):
+    code = "audit_not_enabled"
+
+
+class AuditStateConflict(CodingServiceError):
+    code = "audit_state_conflict"
+
+
+class RevisionMismatch(CodingServiceError):
+    code = "revision_mismatch"
+
+
+class RevisionUnavailable(CodingServiceError):
+    code = "revision_unavailable"
+
+
+class SessionBindingFailed(CodingServiceError):
+    code = "session_binding_failed"
+
+
+class ReworkLimitReached(CodingServiceError):
+    code = "rework_limit_reached"
+
+
+class ReworkNotResumable(CodingServiceError):
+    code = "rework_not_resumable"
+
+
+_INTERRUPTED_JOB_STATES = frozenset({
+    CodingJobState.QUEUED.value,
+    CodingJobState.RUNNING.value,
+    CodingJobState.REWORK_QUEUED.value,
+    CodingJobState.REWORK_RUNNING.value,
+})
 
 
 AgentFactory = Callable[[ThreadStore], FlytoCodingAgent]
@@ -117,6 +172,9 @@ class CodingService:
         sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE,
         config_path: str = ".flyto/coding.yaml",
         sandbox_image: str = "python:3.12-slim",
+        require_codex_audit: bool = False,
+        implementation_backend: str = "native",
+        max_rework_rounds: int = 3,
     ) -> None:
         if not 1 <= max_workers <= 16:
             raise ValueError("max_workers must be between 1 and 16")
@@ -134,6 +192,23 @@ class CodingService:
         self.sandbox_mode = SandboxMode(sandbox_mode)
         self.config_path = str(config_path)
         self.sandbox_image = str(sandbox_image)
+        # Audit authority, implementer identity, and the rework ceiling are
+        # startup decisions. No job payload can reach them.
+        if not isinstance(require_codex_audit, bool):
+            raise ValueError("require_codex_audit must be a boolean")
+        self.require_codex_audit = require_codex_audit
+        if not isinstance(implementation_backend, str) or not _BACKEND_ID.fullmatch(
+            implementation_backend,
+        ):
+            raise ValueError("implementation_backend must be a safe non-empty identifier")
+        self.implementation_backend = implementation_backend
+        if isinstance(max_rework_rounds, bool) or not isinstance(max_rework_rounds, int):
+            raise ValueError("max_rework_rounds must be an integer")
+        if not 1 <= max_rework_rounds < MAX_AUDIT_ROUNDS:
+            raise ValueError(
+                "max_rework_rounds must be between 1 and {}".format(MAX_AUDIT_ROUNDS - 1),
+            )
+        self.max_rework_rounds = max_rework_rounds
         # Reuse the request contract's path/image validation without persisting
         # a synthetic request or accepting those authority fields remotely.
         config_parts = Path(self.config_path).parts
@@ -143,6 +218,9 @@ class CodingService:
             raise ValueError("sandbox_image is invalid")
         self._lock = threading.RLock()
         self._workspace_locks: Dict[str, threading.Lock] = {}
+        # Resume context is process-local on purpose: the task prompt is not
+        # persisted, so a restart cannot silently start a new session.
+        self._resume: Dict[Tuple[str, str], CodingTaskRequest] = {}
         self._pending: set[Future[Any]] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="flyto-coding")
         self._closed = False
@@ -198,13 +276,23 @@ class CodingService:
                 "updated_at": now,
                 "request_sha256": request_digest,
                 "workspace_sha256": hashlib.sha256(request.working_dir.encode()).hexdigest(),
+                "working_dir": request.working_dir,
                 "thread_id": "",
                 "evidence_sha256": "",
                 "result": None,
                 "failure_code": None,
+                "implementation_backend": "",
+                "implementation_session_id": "",
+                "implementation_revision_sha256": "",
+                "implementation_files": [],
+                "audit_count": 0,
+                "rework_count": 0,
+                "audit_findings_sha256": "",
+                "landable": False,
             }
             self._write_json(tenant_dir / "jobs" / (job_id + ".json"), record)
             self._write_json(idempotency_path, {"job_id": job_id, "request_sha256": request_digest})
+            self._resume[(tenant_ref, job_id)] = request
             future = self._executor.submit(self._run_job, tenant_ref, job_id, request)
             self._pending.add(future)
             future.add_done_callback(self._forget_future)
@@ -222,6 +310,65 @@ class CodingService:
             raise CodingJobNotFound("coding job does not exist") from exc
         return self._receipt(record)
 
+    def audit(
+        self,
+        tenant_id: str,
+        job_id: str,
+        implementation_revision_sha256: str,
+        verdict: CodingAuditVerdict,
+        findings: Sequence[CodingAuditFinding],
+    ) -> CodingJobReceipt:
+        """Apply one authenticated audit decision to one exact revision.
+
+        `accept` records landability as evidence only. Nothing in this service
+        stages, commits, pushes, or publishes anything.
+        """
+
+        tenant_ref = self._tenant_ref(tenant_id)
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingJobNotFound("coding job does not exist")
+        claimed = require_revision_sha256(
+            implementation_revision_sha256, "implementation_revision_sha256",
+        )
+        verdict, findings = validate_audit_submission(verdict, findings)
+        if not self.require_codex_audit:
+            raise AuditNotEnabled("this coding service does not require an audit")
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        with self._lock:
+            if self._closed:
+                raise CodingServiceError("coding service is closed")
+            try:
+                record = self._read_json(path)
+            except FileNotFoundError as exc:
+                raise CodingJobNotFound("coding job does not exist") from exc
+            if str(record.get("state")) != CodingJobState.AWAITING_CODEX_AUDIT.value:
+                raise AuditStateConflict("coding job is not awaiting an audit")
+            stored = str(record.get("implementation_revision_sha256") or "")
+            if stored != claimed:
+                raise RevisionMismatch("audit does not bind the recorded implementation revision")
+            # Recompute from the live workspace so an edit landed after the
+            # implementation cannot inherit an earlier audit decision.
+            if self._stored_revision(record) != stored:
+                raise RevisionMismatch("the implementation revision changed since it was submitted")
+            digest = audit_findings_sha256(findings)
+            audit_count = int(record.get("audit_count", 0)) + 1
+            if audit_count > MAX_AUDIT_ROUNDS:
+                raise ReworkLimitReached("coding job exhausted its audit rounds")
+            if verdict is CodingAuditVerdict.ACCEPT:
+                self._update_record(
+                    path,
+                    state=CodingJobState.CODEX_ACCEPTED.value,
+                    audit_count=audit_count,
+                    audit_findings_sha256=digest,
+                    landable=True,
+                    failure_code=None,
+                )
+                self._resume.pop((tenant_ref, job_id), None)
+                return self._receipt(self._read_json(path))
+            return self._schedule_rework(
+                path, tenant_ref, job_id, record, findings, digest, audit_count,
+            )
+
     def close(self, *, wait: bool = True) -> None:
         with self._lock:
             if self._closed:
@@ -234,32 +381,291 @@ class CodingService:
             fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
         os.close(self._lock_fd)
 
-    def _run_job(self, tenant_ref: str, job_id: str, request: CodingTaskRequest) -> None:
+    def _schedule_rework(
+        self,
+        path: Path,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+        findings: Sequence[CodingAuditFinding],
+        digest: str,
+        audit_count: int,
+    ) -> CodingJobReceipt:
+        """Queue one same-session repair round; the caller holds the lock."""
+
+        rework_count = int(record.get("rework_count", 0)) + 1
+        if rework_count > self.max_rework_rounds:
+            raise ReworkLimitReached("coding job exhausted its rework rounds")
+        session = str(record.get("implementation_session_id") or "")
+        original = self._resume.get((tenant_ref, job_id))
+        if not session or original is None:
+            raise ReworkNotResumable("the implementation session cannot be resumed")
+        request = dataclasses.replace(
+            original,
+            message=self._rework_message(original.message, findings),
+            thread_id=session,
+            resume=True,
+        )
+        if len(self._pending) >= self.max_queued:
+            raise CodingServiceBusy("coding job queue is full")
+        # Claim the job before queueing. A concurrent audit then observes a
+        # non-awaiting state and cannot schedule a duplicate rework round.
+        self._update_record(
+            path,
+            state=CodingJobState.REWORK_QUEUED.value,
+            audit_count=audit_count,
+            rework_count=rework_count,
+            audit_findings_sha256=digest,
+            landable=False,
+            failure_code=None,
+        )
+        try:
+            future = self._executor.submit(self._run_job, tenant_ref, job_id, request, rework=True)
+        except RuntimeError as exc:
+            self._update_record(
+                path,
+                state=CodingJobState.FAILED.value,
+                failure_code="service_rework_not_scheduled",
+            )
+            raise CodingServiceError("coding rework could not be scheduled") from exc
+        self._pending.add(future)
+        future.add_done_callback(self._forget_future)
+        return self._receipt(self._read_json(path))
+
+    @staticmethod
+    def _rework_message(original: str, findings: Sequence[CodingAuditFinding]) -> str:
+        """Render bounded, deterministic feedback from typed findings only."""
+
+        lines = ["Audit verdict: rework. Resolve every finding below in this same thread."]
+        for index, finding in enumerate(sorted(
+            findings, key=lambda item: (item.code, item.evidence_ref),
+        ), start=1):
+            reference = " (ref: {})".format(finding.evidence_ref) if finding.evidence_ref else ""
+            lines.append("{}. [{}] {}: {}{}".format(
+                index, finding.severity.value, finding.code, finding.message, reference,
+            ))
+        feedback = "\n".join(lines)[:MAX_REWORK_FEEDBACK_CHARS]
+        remaining = max(0, MAX_REWORK_MESSAGE_CHARS - len(feedback) - 32)
+        return "{}\n\nOriginal task:\n{}".format(feedback, original[:remaining])
+
+    def _run_job(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        request: CodingTaskRequest,
+        *,
+        rework: bool = False,
+    ) -> None:
         path = self._tenant_dir(tenant_ref) / "jobs" / (job_id + ".json")
         workspace_lock = self._workspace_lock(request.working_dir)
         with workspace_lock:
-            self._update_record(path, state=CodingJobState.RUNNING.value)
+            self._update_record(path, state=(
+                CodingJobState.REWORK_RUNNING if rework else CodingJobState.RUNNING
+            ).value)
             try:
                 store = ThreadStore(str(self._tenant_dir(tenant_ref) / "threads"))
                 result = asyncio.run(self.agent_factory(store).run(request))
-                state = CodingJobState.COMPLETED if result.ok else CodingJobState.FAILED
-                result_record = dataclasses.asdict(result)
-                result_record["evidence_path"] = ""
-                self._update_record(
-                    path,
-                    state=state.value,
-                    thread_id=result.thread_id,
-                    evidence_sha256=store.digest(result.thread_id),
-                    result=result_record,
-                    failure_code=result.failure_code,
-                )
+                self._record_outcome(path, tenant_ref, job_id, request, result, store, rework)
+            except CodingServiceError as exc:
+                self._fail_job(path, tenant_ref, job_id, exc.code, exc)
             except Exception as exc:
-                self._update_record(
-                    path,
-                    state=CodingJobState.FAILED.value,
-                    failure_code="service_execution_failed",
-                    error=str(redact_evidence(str(exc)))[:1000],
+                self._fail_job(path, tenant_ref, job_id, "service_execution_failed", exc)
+
+    def _record_outcome(
+        self,
+        path: Path,
+        tenant_ref: str,
+        job_id: str,
+        request: CodingTaskRequest,
+        result: CodingTaskResult,
+        store: ThreadStore,
+        rework: bool,
+    ) -> None:
+        """Move one finished implementation round into its durable state."""
+
+        result_record = dataclasses.asdict(result)
+        result_record["evidence_path"] = ""
+        outcome: Dict[str, Any] = {
+            "thread_id": result.thread_id,
+            "evidence_sha256": store.digest(result.thread_id),
+            "result": result_record,
+            "failure_code": result.failure_code,
+        }
+        if not result.ok:
+            self._resume.pop((tenant_ref, job_id), None)
+            self._update_record(path, state=CodingJobState.FAILED.value, **outcome)
+            return
+        if not self.require_codex_audit:
+            self._resume.pop((tenant_ref, job_id), None)
+            self._update_record(path, state=CodingJobState.COMPLETED.value, **outcome)
+            return
+        session = str(result.thread_id or "")
+        if not session:
+            raise SessionBindingFailed("the implementation session id is missing")
+        files = {str(item) for item in result.files_changed}
+        if rework:
+            record = self._read_json(path)
+            recorded = str(record.get("implementation_session_id") or "")
+            if recorded and recorded != session:
+                raise SessionBindingFailed("rework left the original implementation session")
+            # The agent re-snapshots per round, so a rework round only reports
+            # what it touched. The audited revision must stay cumulative or an
+            # untouched earlier file could change without invalidating it.
+            files |= {str(item) for item in (record.get("implementation_files") or [])}
+        files = sorted(files)
+        if not files:
+            raise RevisionUnavailable("no attributable implementation change to audit")
+        if len(files) > MAX_ATTRIBUTABLE_FILES:
+            raise RevisionUnavailable("the attributable change set is outside the revision bound")
+        self._update_record(
+            path,
+            state=CodingJobState.AWAITING_CODEX_AUDIT.value,
+            implementation_backend=self.implementation_backend,
+            implementation_session_id=session,
+            implementation_revision_sha256=self._revision_digest(request.working_dir, files),
+            implementation_files=files,
+            working_dir=request.working_dir,
+            landable=False,
+            **outcome,
+        )
+
+    def _fail_job(
+        self, path: Path, tenant_ref: str, job_id: str, code: str, exc: Exception,
+    ) -> None:
+        self._resume.pop((tenant_ref, job_id), None)
+        self._update_record(
+            path,
+            state=CodingJobState.FAILED.value,
+            failure_code=code,
+            error=str(redact_evidence(str(exc)))[:1000],
+        )
+
+    def _stored_revision(self, record: Mapping[str, Any]) -> str:
+        """Recompute the digest of a persisted attributable change set."""
+
+        files = record.get("implementation_files")
+        if not isinstance(files, list) or not files:
+            raise RevisionUnavailable("the attributable change set is unreadable")
+        working_dir = str(record.get("working_dir") or "")
+        if not working_dir:
+            raise RevisionUnavailable("the implementation workspace is unavailable")
+        # Startup authority is re-evaluated before any live read. A service
+        # restarted with a narrower allowlist must neither hash nor accept a
+        # workspace it is no longer configured to serve.
+        self._assert_workspace(working_dir)
+        return self._revision_digest(working_dir, [str(item) for item in files])
+
+    @classmethod
+    def _revision_digest(cls, working_dir: str, files: Sequence[str]) -> str:
+        """Hash the exact current bytes of one bounded attributable change set."""
+
+        root = Path(working_dir).resolve() if working_dir else None
+        if root is None or not root.is_dir():
+            raise RevisionUnavailable("the implementation workspace is unavailable")
+        entries = sorted(set(files))
+        if not entries or len(entries) > MAX_ATTRIBUTABLE_FILES:
+            raise RevisionUnavailable("the attributable change set is outside the revision bound")
+        digest = hashlib.sha256()
+        digest.update(_REVISION_DOMAIN)
+        total = 0
+        for relative in entries:
+            target = cls._revision_target(root, relative)
+            entry = cls._revision_entry(target, MAX_REVISION_TOTAL_BYTES - total)
+            if entry is None:
+                # Deletion is part of the revision, not a missing observation.
+                digest.update("{}\0absent\n".format(relative).encode("utf-8"))
+                continue
+            mode, content, size = entry
+            total += size
+            digest.update("{}\0present\0{}\0{}\n".format(
+                relative, mode, content,
+            ).encode("utf-8"))
+        return digest.hexdigest()
+
+    @staticmethod
+    def _revision_entry(
+        target: Path, remaining: int,
+    ) -> Optional[Tuple[str, str, int]]:
+        """Read one file's type, mode, and bytes through a single descriptor.
+
+        Type, size, mode, and content all come from the same open descriptor,
+        so a pathname or inode swapped during hashing is detected instead of
+        silently mixing two files into one revision. `O_NOFOLLOW` refuses a
+        final-component symlink; on platforms without it the lstat/fstat
+        identity comparison still fails closed for the same substitution.
+        """
+
+        try:
+            before = os.lstat(target)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RevisionUnavailable("an attributable path cannot be read") from exc
+        if not stat.S_ISREG(before.st_mode):
+            raise RevisionUnavailable("an attributable path is not a regular file")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        try:
+            handle = os.open(target, flags)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RevisionUnavailable("an attributable path cannot be opened safely") from exc
+        try:
+            opened = os.fstat(handle)
+            if not stat.S_ISREG(opened.st_mode) or (
+                (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise RevisionUnavailable("an attributable path changed while it was read")
+            if opened.st_size > MAX_REVISION_FILE_BYTES or opened.st_size > remaining:
+                raise RevisionUnavailable("attributable content exceeds the revision bound")
+            content = hashlib.sha256()
+            read = 0
+            while True:
+                chunk = os.read(handle, _REVISION_CHUNK_BYTES)
+                if not chunk:
+                    break
+                read += len(chunk)
+                if read > MAX_REVISION_FILE_BYTES or read > remaining:
+                    raise RevisionUnavailable("attributable content exceeds the revision bound")
+                content.update(chunk)
+            after = os.fstat(handle)
+            if read != after.st_size or (
+                (after.st_dev, after.st_ino, after.st_size, after.st_mode, after.st_mtime_ns)
+                != (
+                    opened.st_dev, opened.st_ino, opened.st_size,
+                    opened.st_mode, opened.st_mtime_ns,
                 )
+            ):
+                raise RevisionUnavailable("an attributable path changed while it was read")
+            return "x" if opened.st_mode & 0o111 else "-", content.hexdigest(), read
+        finally:
+            os.close(handle)
+
+    @staticmethod
+    def _revision_target(root: Path, relative: str) -> Path:
+        """Resolve one attributable path or fail closed."""
+
+        if (
+            not relative
+            or len(relative) > 1024
+            or "\x00" in relative
+            or "\\" in relative
+            or relative.startswith(("/", "~"))
+        ):
+            raise RevisionUnavailable("an attributable path is not a safe relative path")
+        parts = PurePosixPath(relative).parts
+        if not parts or any(
+            part in {"", ".", ".."} or part in _PROTECTED_REVISION_PARTS or part.startswith(".env")
+            for part in parts
+        ):
+            raise RevisionUnavailable("an attributable path is not a safe relative path")
+        target = root.joinpath(*parts)
+        if target.is_symlink():
+            raise RevisionUnavailable("an attributable path is a symlink")
+        resolved = Path(os.path.realpath(target))
+        if resolved != root and root not in resolved.parents:
+            raise RevisionUnavailable("an attributable path escapes the workspace")
+        return target
 
     def _forget_future(self, future: Future[Any]) -> None:
         with self._lock:
@@ -354,6 +760,13 @@ class CodingService:
             evidence_sha256=str(record.get("evidence_sha256") or ""),
             result=cls._decode_result(record.get("result")),
             failure_code=str(record["failure_code"]) if record.get("failure_code") else None,
+            implementation_backend=str(record.get("implementation_backend") or ""),
+            implementation_session_id=str(record.get("implementation_session_id") or ""),
+            implementation_revision_sha256=str(record.get("implementation_revision_sha256") or ""),
+            audit_count=int(record.get("audit_count") or 0),
+            rework_count=int(record.get("rework_count") or 0),
+            audit_findings_sha256=str(record.get("audit_findings_sha256") or ""),
+            landable=record.get("landable") is True,
         )
 
     def _reconcile_interrupted_jobs(self) -> None:
@@ -363,10 +776,13 @@ class CodingService:
         for path in tenants.glob("*/jobs/job_*.json"):
             try:
                 record = self._read_json(path)
-                if record.get("state") in {CodingJobState.QUEUED.value, CodingJobState.RUNNING.value}:
+                # An awaiting-audit job survives a restart; in-flight work does
+                # not, because its implementation session no longer exists.
+                if record.get("state") in _INTERRUPTED_JOB_STATES:
                     record.update({
                         "state": CodingJobState.FAILED.value,
                         "updated_at": time.time(),
+                        "landable": False,
                         "failure_code": "service_restarted",
                     })
                     self._write_json(path, record)

@@ -3,6 +3,8 @@
 """Versioned contracts for the provider-neutral Flyto2 coding control plane."""
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -12,10 +14,34 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 CONTRACT_VERSION = "flyto.coding.v1"
 CONFIG_VERSION = "flyto.coding-config.v1"
-SERVICE_CONTRACT_VERSION = "flyto.coding-service.v1"
+# v2 adds the audit states, verdict, finding contract, and the receipt fields
+# that bind one audit to one implementation revision. The provider-neutral
+# task contract above is deliberately unchanged.
+SERVICE_CONTRACT_VERSION = "flyto.coding-service.v2"
+LEGACY_SERVICE_CONTRACT_VERSIONS = ("flyto.coding-service.v1",)
+SUPPORTED_SERVICE_CONTRACT_VERSIONS = (
+    LEGACY_SERVICE_CONTRACT_VERSIONS + (SERVICE_CONTRACT_VERSION,)
+)
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _PASSTHROUGH_ENV_RE = re.compile(r"^FLYTO_[A-Z0-9_]{1,120}$")
+_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+_AUDIT_CODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{1,63}$")
+_AUDIT_EVIDENCE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:#/@-]{0,255}$")
+# C0, DEL, and C1. Findings are machine-readable feedback, not log transport.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 TOOL_PERMISSION_LEVELS = frozenset({"read_only", "workspace_write", "danger_full"})
+MAX_AUDIT_FINDINGS = 50
+MAX_AUDIT_MESSAGE_CHARS = 2000
+MAX_AUDIT_EVIDENCE_REF_CHARS = 256
+MAX_IMPLEMENTATION_SESSION_ID_CHARS = 128
+MAX_AUDIT_ROUNDS = 100
+
+
+def require_revision_sha256(value: Any, field_name: str) -> str:
+    """Validate one exact lowercase 64-hex digest without coercing anything."""
+    if isinstance(value, bool) or not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+        raise ValueError("{} must be a lowercase 64-character sha256 digest".format(field_name))
+    return value
 
 
 def _mapping_string(
@@ -130,12 +156,183 @@ class SandboxMode(str, Enum):
 
 
 class CodingJobState(str, Enum):
-    """Durable state exposed by the detachable coding service."""
+    """Durable state exposed by the detachable coding service.
+
+    The four original states keep their exact public JSON values. The audit
+    states are additive and name their actor explicitly, so a reader cannot
+    confuse "the implementer finished" with "Codex accepted the change".
+    """
 
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    AWAITING_CODEX_AUDIT = "awaiting_codex_audit"
+    REWORK_QUEUED = "rework_queued"
+    REWORK_RUNNING = "rework_running"
+    CODEX_ACCEPTED = "codex_accepted"
+
+
+#: States that must already bind one exact implementation revision.
+AUDIT_BOUND_CODING_JOB_STATES = frozenset({
+    CodingJobState.AWAITING_CODEX_AUDIT,
+    CodingJobState.REWORK_QUEUED,
+    CodingJobState.REWORK_RUNNING,
+    CodingJobState.CODEX_ACCEPTED,
+})
+#: States only reachable after Codex has recorded at least one audit round.
+AUDITED_CODING_JOB_STATES = frozenset({
+    CodingJobState.REWORK_QUEUED,
+    CodingJobState.REWORK_RUNNING,
+    CodingJobState.CODEX_ACCEPTED,
+})
+#: States that never change again without a new job.
+TERMINAL_CODING_JOB_STATES = frozenset({
+    CodingJobState.COMPLETED,
+    CodingJobState.FAILED,
+    CodingJobState.CODEX_ACCEPTED,
+})
+
+
+class CodingAuditVerdict(str, Enum):
+    """The authenticated auditor's binding decision on one revision."""
+
+    ACCEPT = "accept"
+    REWORK = "rework"
+
+    @property
+    def requires_findings(self) -> bool:
+        """`rework` must explain itself; `accept` must not carry findings."""
+        return self is CodingAuditVerdict.REWORK
+
+
+class CodingAuditSeverity(str, Enum):
+    """How strongly one finding argues against landing the revision."""
+
+    BLOCKER = "blocker"
+    MAJOR = "major"
+    MINOR = "minor"
+
+
+_AUDIT_FINDING_FIELDS = frozenset({"code", "severity", "message", "evidence_ref"})
+
+
+@dataclass(frozen=True)
+class CodingAuditFinding:
+    """One bounded, machine-addressable reason a revision needs rework.
+
+    This is deterministic feedback for the implementer, not an evidence
+    channel: it carries a stable code, a severity, a bounded message, and an
+    optional bounded reference. Raw logs, check output, credentials, and
+    arbitrary nested payloads have no representation here.
+    """
+
+    code: str
+    severity: CodingAuditSeverity
+    message: str
+    evidence_ref: str = ""
+
+    def __post_init__(self) -> None:
+        if isinstance(self.code, bool) or not isinstance(self.code, str):
+            raise ValueError("audit finding code must be a string")
+        if not _AUDIT_CODE_RE.fullmatch(self.code):
+            raise ValueError("audit finding code must be a stable safe identifier")
+        if isinstance(self.severity, bool) or not isinstance(self.severity, str):
+            raise ValueError("audit finding severity must be a string")
+        try:
+            object.__setattr__(self, "severity", CodingAuditSeverity(self.severity))
+        except ValueError as exc:
+            raise ValueError("audit finding severity must be blocker, major, or minor") from exc
+        if isinstance(self.message, bool) or not isinstance(self.message, str):
+            raise ValueError("audit finding message must be a string")
+        if not 1 <= len(self.message) <= MAX_AUDIT_MESSAGE_CHARS:
+            raise ValueError(
+                "audit finding message must contain between 1 and {} characters".format(
+                    MAX_AUDIT_MESSAGE_CHARS,
+                ),
+            )
+        if not self.message.strip():
+            raise ValueError("audit finding message must contain visible text")
+        if _CONTROL_CHARS_RE.search(self.message):
+            raise ValueError("audit finding message cannot contain control characters")
+        if isinstance(self.evidence_ref, bool) or not isinstance(self.evidence_ref, str):
+            raise ValueError("audit finding evidence_ref must be a string")
+        if self.evidence_ref:
+            if len(self.evidence_ref) > MAX_AUDIT_EVIDENCE_REF_CHARS:
+                raise ValueError(
+                    "audit finding evidence_ref cannot exceed {} characters".format(
+                        MAX_AUDIT_EVIDENCE_REF_CHARS,
+                    ),
+                )
+            if not _AUDIT_EVIDENCE_REF_RE.fullmatch(self.evidence_ref):
+                raise ValueError("audit finding evidence_ref is not a bounded safe reference")
+            if ".." in self.evidence_ref:
+                raise ValueError("audit finding evidence_ref cannot traverse paths")
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "CodingAuditFinding":
+        if not isinstance(value, Mapping):
+            raise ValueError("audit finding must be a JSON object")
+        unknown = set(value) - _AUDIT_FINDING_FIELDS
+        if unknown:
+            raise ValueError("unsupported audit finding fields: {}".format(
+                ", ".join(sorted(str(name) for name in unknown)),
+            ))
+        return cls(
+            code=_mapping_string(value, "code", ""),
+            severity=_mapping_string(value, "severity", ""),
+            message=_mapping_string(value, "message", ""),
+            evidence_ref=_mapping_string(value, "evidence_ref", ""),
+        )
+
+    def to_mapping(self) -> Dict[str, str]:
+        """Return the canonical JSON projection used for hashing and transport."""
+        return {
+            "code": self.code,
+            "severity": self.severity.value,
+            "message": self.message,
+            "evidence_ref": self.evidence_ref,
+        }
+
+
+def audit_findings_sha256(findings: Sequence[CodingAuditFinding]) -> str:
+    """Digest one audit round's findings so a receipt can bind them exactly."""
+    items = tuple(findings)
+    if len(items) > MAX_AUDIT_FINDINGS:
+        raise ValueError("audit findings cannot exceed {} items".format(MAX_AUDIT_FINDINGS))
+    if any(not isinstance(item, CodingAuditFinding) for item in items):
+        raise ValueError("audit findings must be CodingAuditFinding values")
+    payload = json.dumps(
+        [item.to_mapping() for item in items],
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def validate_audit_submission(
+    verdict: CodingAuditVerdict,
+    findings: Sequence[CodingAuditFinding],
+) -> Tuple[CodingAuditVerdict, Tuple[CodingAuditFinding, ...]]:
+    """Bind a verdict to coherent findings.
+
+    Transports validate shape; the authenticated service calls this to reject
+    an unexplained `rework` or an `accept` that still lists objections. The
+    implementer never reaches this function on its own behalf.
+    """
+    verdict = CodingAuditVerdict(verdict)
+    items = tuple(findings)
+    if any(not isinstance(item, CodingAuditFinding) for item in items):
+        raise ValueError("audit findings must be CodingAuditFinding values")
+    if len(items) > MAX_AUDIT_FINDINGS:
+        raise ValueError("audit findings cannot exceed {} items".format(MAX_AUDIT_FINDINGS))
+    keys = tuple((item.code, item.evidence_ref) for item in items)
+    if len(set(keys)) != len(keys):
+        raise ValueError("audit findings contain duplicate code/evidence_ref pairs")
+    if verdict.requires_findings and not items:
+        raise ValueError("a rework verdict requires at least one audit finding")
+    if not verdict.requires_findings and items:
+        raise ValueError("an accept verdict cannot carry audit findings")
+    return verdict, items
 
 
 @dataclass(frozen=True)
@@ -346,7 +543,13 @@ class CodingTaskResult:
 
 @dataclass(frozen=True)
 class CodingJobReceipt:
-    """Secret-free snapshot returned by HTTP and MCP service facades."""
+    """Secret-free snapshot returned by HTTP and MCP service facades.
+
+    The audit fields are additive and default to the legacy values, so a
+    caller that constructs a pre-audit receipt keeps working. `landable` is
+    eligibility evidence about an audited revision; nothing in this package
+    turns it into a commit, push, or publish.
+    """
 
     job_id: str
     state: CodingJobState
@@ -357,3 +560,65 @@ class CodingJobReceipt:
     evidence_sha256: str = ""
     result: Optional[CodingTaskResult] = None
     failure_code: Optional[str] = None
+    implementation_backend: str = ""
+    implementation_session_id: str = ""
+    implementation_revision_sha256: str = ""
+    audit_count: int = 0
+    rework_count: int = 0
+    audit_findings_sha256: str = ""
+    landable: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "state", CodingJobState(self.state))
+        if not isinstance(self.implementation_backend, str):
+            raise ValueError("implementation_backend must be a string")
+        if self.implementation_backend and not _NAME_RE.fullmatch(self.implementation_backend):
+            raise ValueError("implementation_backend must be a safe identifier")
+        # The session id is opaque to this contract: it is bounded and free of
+        # control characters, but never parsed or given meaning here.
+        if isinstance(self.implementation_session_id, bool) or not isinstance(
+            self.implementation_session_id, str,
+        ):
+            raise ValueError("implementation_session_id must be a string")
+        if (
+            len(self.implementation_session_id) > MAX_IMPLEMENTATION_SESSION_ID_CHARS
+            or _CONTROL_CHARS_RE.search(self.implementation_session_id)
+        ):
+            raise ValueError("implementation_session_id must be a bounded opaque token")
+        for digest_field in ("implementation_revision_sha256", "audit_findings_sha256"):
+            digest = getattr(self, digest_field)
+            if isinstance(digest, bool) or not isinstance(digest, str):
+                raise ValueError("{} must be a string".format(digest_field))
+            if digest:
+                require_revision_sha256(digest, digest_field)
+        for count_field in ("audit_count", "rework_count"):
+            count = getattr(self, count_field)
+            if isinstance(count, bool) or not isinstance(count, int):
+                raise ValueError("{} must be an integer".format(count_field))
+            if not 0 <= count <= MAX_AUDIT_ROUNDS:
+                raise ValueError("{} must be between 0 and {}".format(count_field, MAX_AUDIT_ROUNDS))
+        if self.rework_count > self.audit_count:
+            raise ValueError("rework_count cannot exceed audit_count")
+        if bool(self.audit_count) != bool(self.audit_findings_sha256):
+            raise ValueError("audit_count and audit_findings_sha256 must be recorded together")
+        if self.state in AUDIT_BOUND_CODING_JOB_STATES:
+            # Phase 2 proves that rework continues the same implementation
+            # session, so the identity must already be bound to the revision.
+            if not self.implementation_revision_sha256:
+                raise ValueError(
+                    "{} requires implementation_revision_sha256".format(self.state.value),
+                )
+            if not self.implementation_backend:
+                raise ValueError("{} requires implementation_backend".format(self.state.value))
+            if not self.implementation_session_id:
+                raise ValueError("{} requires implementation_session_id".format(self.state.value))
+        if self.state in AUDITED_CODING_JOB_STATES and self.audit_count < 1:
+            raise ValueError("{} requires at least one recorded audit".format(self.state.value))
+        if not isinstance(self.landable, bool):
+            raise ValueError("landable must be a boolean")
+        # Acceptance and landability are the same public fact seen from two
+        # sides. Neither is an action: nothing here stages, commits, or pushes.
+        if self.landable and self.state is not CodingJobState.CODEX_ACCEPTED:
+            raise ValueError("only a Codex-accepted receipt may be landable")
+        if self.state is CodingJobState.CODEX_ACCEPTED and not self.landable:
+            raise ValueError("a Codex-accepted receipt must be landable")

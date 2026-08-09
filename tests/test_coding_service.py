@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -45,6 +46,7 @@ from flyto_ai.coding.mcp_server import (
     MCP_PROTOCOL_VERSION,
 )
 from flyto_ai.coding.service import (
+    AuditBlockersUnresolved,
     AuditNotEnabled,
     AuditStateConflict,
     CodingJobNotFound,
@@ -895,11 +897,13 @@ class FakeClaudeBackend:
         session: str = "sdk-session-1",
         ok: bool = True,
         writes: bool = True,
+        provider_failure_code: str = "",
     ) -> None:
         self.workspace = workspace
         self.session = session
         self.ok = ok
         self.writes = writes
+        self.provider_failure_code = provider_failure_code
         self.requests: list = []
 
     async def run(self, request):
@@ -917,6 +921,7 @@ class FakeClaudeBackend:
             claude_session_id=self.session,
             claude_num_turns=3,
             claude_usage={"input_tokens": 11, "output_tokens": 7, "cost_usd": 1.5, "ok": True},
+            provider_failure_code=self.provider_failure_code,
         )
 
 
@@ -1281,6 +1286,368 @@ def test_claude_adapter_completes_a_codex_rework_cycle_through_the_real_service(
         assert accepted.state is CodingJobState.CODEX_ACCEPTED
         assert accepted.landable is True
         assert accepted.audit_count == 2 and accepted.rework_count == 1
+    finally:
+        service.close()
+
+
+# ── auditable-needs-rework ────────────────────────────────────────────
+#
+# A round that really ran, really edited the workspace, and really kept its
+# session is not the same failure as a round that never produced anything an
+# auditor could read. These tests pin that difference in both directions.
+
+
+def _install_fake_sdk(
+    monkeypatch,
+    workspace: Path,
+    *,
+    session: str,
+    error: str,
+    emit_init: bool = True,
+):
+    """Install a `claude_agent_sdk` double that edits, then raises mid-stream.
+
+    The edits land in the real workspace before the raise, so the host's own
+    snapshot attribution is what the assertions observe — never model prose.
+    """
+
+    module = types.ModuleType("claude_agent_sdk")
+
+    class SystemMessage:
+        def __init__(self, subtype: str, session_id: str) -> None:
+            self.subtype = subtype
+            self.session_id = session_id
+
+    class AssistantMessage:
+        def __init__(self, content) -> None:
+            self.content = content
+
+    class ResultMessage:  # pragma: no cover - never reached by these rounds
+        pass
+
+    class TextBlock:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class ClaudeAgentOptions:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class HookMatcher:
+        def __init__(self, hooks) -> None:
+            self.hooks = hooks
+
+    async def query(*, prompt, options):
+        if emit_init:
+            yield SystemMessage("init", session)
+        (workspace / "result.txt").write_text("verified\n")
+        (workspace / "notes.txt").write_text("partial\n")
+        yield AssistantMessage([TextBlock("editing the workspace")])
+        raise Exception(error)
+
+    for name, value in (
+        ("query", query),
+        ("ClaudeAgentOptions", ClaudeAgentOptions),
+        ("HookMatcher", HookMatcher),
+        ("AssistantMessage", AssistantMessage),
+        ("ResultMessage", ResultMessage),
+        ("SystemMessage", SystemMessage),
+        ("TextBlock", TextBlock),
+    ):
+        setattr(module, name, value)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", module)
+
+    async def _no_context(message, working_dir):
+        return ""
+
+    monkeypatch.setattr(
+        "flyto_ai.agents.indexer_context.gather_context", _no_context,
+    )
+
+
+def _pinned_claude_agent():
+    """A Claude backend whose loop bounds come from the defaults, not the env."""
+
+    from flyto_ai.agents.claude_code import ClaudeCodeAgent
+    from flyto_ai.config import ClaudeCodeConfig
+
+    agent = ClaudeCodeAgent()
+    agent._cc = ClaudeCodeConfig()
+    return agent
+
+
+def _durable_text(*roots: Path) -> str:
+    """Every byte this service persisted, as one searchable string."""
+
+    parts = []
+    for root in roots:
+        for path in root.rglob("*"):
+            if path.is_file():
+                parts.append(path.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(parts)
+
+
+_TURN_LIMIT_ERROR = "Claude Code process failed with error_max_turns after 100 turns"
+
+
+def test_a_turn_limit_after_session_capture_keeps_the_round_attributable(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Invariant 1: the init session survives a recognized bounded stop."""
+
+    from flyto_ai.agents.claude_code import ClaudeCodingAgent
+    from flyto_ai.coding.store import ThreadStore
+    from flyto_ai.config import ClaudeCodeConfig
+
+    workspace = _claude_workspace(tmp_path)
+    _install_fake_sdk(
+        monkeypatch, workspace, session="sdk-session-9", error=_TURN_LIMIT_ERROR,
+    )
+    threads = tmp_path / "claude-threads"
+    adapter = ClaudeCodingAgent(ThreadStore(str(threads)), agent=_pinned_claude_agent())
+
+    request = _request(workspace)
+    result = asyncio.run(adapter.run(request))
+
+    assert result.ok is False
+    assert result.failure_code == "turn_limit_exceeded"
+    # The exact SDK session, not a provisional host thread.
+    assert result.thread_id == "sdk-session-9"
+    # Host snapshots, not model prose, and never the zeroed shape the broken
+    # route reported for this exact condition.
+    assert result.files_changed == ["notes.txt", "result.txt"]
+    assert result.attempts == 1
+    # Reaching a turn limit proves the configured budget was consumed, so the
+    # host's own ceiling is reported rather than the 0 that arrives when no
+    # ResultMessage does.
+    budget = min(request.max_rounds, ClaudeCodeConfig().max_turns)
+    assert result.rounds_used == budget
+
+    # A resumed round reports the same host-known budget.
+    resumed = asyncio.run(adapter.run(CodingTaskRequest(
+        message="continue the work", working_dir=str(workspace),
+        thread_id="sdk-session-9", resume=True,
+    )))
+    assert resumed.thread_id == "sdk-session-9"
+    assert resumed.failure_code == "turn_limit_exceeded"
+    assert resumed.rounds_used == budget
+    # Invariant 1/7: no provider exception text reaches anything durable.
+    public = json.dumps(dataclasses.asdict(result), default=str)
+    for leak in ("error_max_turns", _TURN_LIMIT_ERROR, "Exception"):
+        assert leak not in public
+        assert leak not in _durable_text(threads)
+
+
+def test_a_turn_limit_before_any_session_stays_terminal(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Invariant 5: the same stop without a session is never auditable."""
+
+    workspace = _claude_workspace(tmp_path)
+    # The workspace is edited before the raise, so the only thing missing is a
+    # session identity. That alone must keep the round terminal.
+    _install_fake_sdk(
+        monkeypatch, workspace, session="sdk-session-9",
+        error=_TURN_LIMIT_ERROR, emit_init=False,
+    )
+    service = _claude_service(
+        tmp_path, workspace, _pinned_claude_agent(), require_codex_audit=True,
+    )
+    try:
+        queued = service.submit("tenant-claude", "claude-nosession", _request(workspace))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "turn_limit_exceeded"
+        assert failed.landable is False
+        # Never invent a session, and never claim a revision without one.
+        assert failed.implementation_session_id == ""
+        assert failed.implementation_revision_sha256 == ""
+        assert failed.implementation_blockers == ()
+        assert failed.thread_id.startswith("host-")
+        state_root = tmp_path / "claude-service-state"
+        for leak in ("error_max_turns", _TURN_LIMIT_ERROR):
+            assert leak not in json.dumps(receipt_to_mapping(failed))
+            assert leak not in _durable_text(state_root)
+    finally:
+        service.close()
+
+
+def test_a_bounded_stop_with_real_changes_awaits_audit_and_reworks_in_session(
+    tmp_path: Path,
+) -> None:
+    """Invariants 2-4, 6: blocked, accept-refused, same-session rework, cleared."""
+
+    workspace = _claude_workspace(tmp_path)
+    backend = FakeClaudeBackend(
+        workspace, ok=False, provider_failure_code="turn_limit_exceeded",
+    )
+    service = _claude_service(tmp_path, workspace, backend, require_codex_audit=True)
+    try:
+        queued = service.submit("tenant-claude", "claude-blocked", _request(workspace))
+        blocked = _wait(service, "tenant-claude", queued.job_id)
+
+        # Invariant 3: auditable, bound to the exact session and revision.
+        assert blocked.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert blocked.landable is False
+        assert blocked.implementation_session_id == "sdk-session-1"
+        assert len(blocked.implementation_revision_sha256) == 64
+        assert blocked.implementer_started is True
+        # Invariant 6: the receipt reports what the host actually observed.
+        assert blocked.result is not None
+        assert blocked.result.files_changed == ["notes.txt", "result.txt"]
+        assert blocked.result.attempts == 1
+        assert blocked.failure_code == "turn_limit_exceeded"
+        assert "turn_limit_exceeded" in blocked.implementation_blockers
+
+        # Invariant 3: accept is refused while the blocker stands, and costs
+        # the job nothing.
+        with pytest.raises(AuditBlockersUnresolved):
+            service.audit(
+                "tenant-claude", queued.job_id,
+                blocked.implementation_revision_sha256,
+                CodingAuditVerdict.ACCEPT, (),
+            )
+        unchanged = service.get("tenant-claude", queued.job_id)
+        assert unchanged.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert unchanged.audit_count == 0
+        assert unchanged.landable is False
+
+        # Invariant 3/4: rework is allowed and resumes the same session.
+        backend.ok = True
+        backend.provider_failure_code = ""
+        service.audit(
+            "tenant-claude", queued.job_id, blocked.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK, (_blocker(),),
+        )
+        reworked = _wait(service, "tenant-claude", queued.job_id)
+        assert reworked.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert reworked.job_id == blocked.job_id
+        assert reworked.implementation_session_id == "sdk-session-1"
+        assert backend.requests[1].sdk_session_id == "sdk-session-1"
+        # Invariant 4: the blocker is cleared, and the audited revision moves
+        # even though this round only re-touched part of the change set — the
+        # revision stays bound to the cumulative implementation files.
+        assert reworked.implementation_blockers == ()
+        assert reworked.result.files_changed == ["notes.txt"]
+        assert reworked.implementation_revision_sha256 != (
+            blocked.implementation_revision_sha256
+        )
+
+        accepted = service.audit(
+            "tenant-claude", queued.job_id, reworked.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert accepted.landable is True
+        assert accepted.implementation_blockers == ()
+    finally:
+        service.close()
+
+
+def test_a_failed_required_check_with_real_changes_is_auditable_not_terminal(
+    tmp_path: Path,
+) -> None:
+    """Invariants 2-3: host checks failing is rework, not a dead end."""
+
+    workspace = _claude_workspace(tmp_path, check="fail")
+    backend = FakeClaudeBackend(workspace)
+    service = _claude_service(tmp_path, workspace, backend, require_codex_audit=True)
+    try:
+        queued = service.submit("tenant-claude", "claude-checkfail", _request(workspace))
+        blocked = _wait(service, "tenant-claude", queued.job_id)
+
+        assert blocked.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert blocked.landable is False
+        assert blocked.implementation_session_id == "sdk-session-1"
+        assert blocked.failure_code == "verification_failed"
+        # The failing check names itself, so the auditor knows what to order.
+        assert set(blocked.implementation_blockers) == {
+            "verification_failed", "check.real_claude_check",
+        }
+        assert blocked.result.checks[0].passed is False
+
+        with pytest.raises(AuditBlockersUnresolved):
+            service.audit(
+                "tenant-claude", queued.job_id,
+                blocked.implementation_revision_sha256,
+                CodingAuditVerdict.ACCEPT, (),
+            )
+        # Rework remains available on the exact session.
+        reworked = service.audit(
+            "tenant-claude", queued.job_id, blocked.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK, (_blocker(),),
+        )
+        assert reworked.state in {
+            CodingJobState.REWORK_QUEUED, CodingJobState.REWORK_RUNNING,
+        }
+        assert reworked.implementation_session_id == "sdk-session-1"
+        _wait(service, "tenant-claude", queued.job_id)
+        assert backend.requests[1].sdk_session_id == "sdk-session-1"
+    finally:
+        service.close()
+
+
+def test_an_unknown_provider_failure_stays_terminal_despite_real_changes(
+    tmp_path: Path,
+) -> None:
+    """Invariant 5 / closed vocabulary: only recognized failures are resumable.
+
+    This backend is byte-for-byte the blocked one except for its failure
+    classification: same valid session, same real writes, same passing checks.
+    An unrecognized code is something the host cannot reason about, so it never
+    holds the job open.
+    """
+
+    workspace = _claude_workspace(tmp_path)
+    backend = FakeClaudeBackend(workspace, ok=False)
+    service = _claude_service(tmp_path, workspace, backend, require_codex_audit=True)
+    try:
+        queued = service.submit("tenant-claude", "claude-unknown", _request(workspace))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "provider_failed"
+        assert failed.landable is False
+        assert failed.implementation_blockers == ()
+        # The round really ran and really wrote; that alone is never enough.
+        assert failed.implementer_started is True
+        assert failed.result.files_changed == ["notes.txt", "result.txt"]
+        assert (workspace / "notes.txt").exists()
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(("check", "writes", "sandbox", "requires", "code"), [
+    # No attributable change, so no revision an auditor could bind.
+    ("trivial", False, SandboxMode.WORKSPACE_WRITE, True, "no_changes"),
+    # A failure about the workspace boundary, never about quality.
+    ("pass", True, SandboxMode.READ_ONLY, False, "unexpected_workspace_change"),
+])
+def test_failures_without_an_auditable_change_stay_terminal(
+    tmp_path: Path,
+    check: str,
+    writes: bool,
+    sandbox: SandboxMode,
+    requires: bool,
+    code: str,
+) -> None:
+    """Invariant 5: only a real attributable change can hold a job open."""
+
+    workspace = _claude_workspace(tmp_path, check=check)
+    backend = FakeClaudeBackend(workspace, writes=writes)
+    service = _claude_service(
+        tmp_path, workspace, backend, require_codex_audit=True, sandbox_mode=sandbox,
+    )
+    try:
+        queued = service.submit("tenant-claude", "claude-" + code, CodingTaskRequest(
+            message="do the work", working_dir=str(workspace), require_changes=requires,
+        ))
+        failed = _wait(service, "tenant-claude", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == code
+        assert failed.landable is False
+        assert failed.implementation_blockers == ()
     finally:
         service.close()
 

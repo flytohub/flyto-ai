@@ -39,6 +39,7 @@ _AUDIT_STATUS = {
     "revision_mismatch": 409,
     "revision_unavailable": 409,
     "audit_state_conflict": 409,
+    "audit_blockers_unresolved": 409,
     "rework_limit_reached": 409,
     "rework_not_resumable": 409,
     "session_binding_failed": 409,

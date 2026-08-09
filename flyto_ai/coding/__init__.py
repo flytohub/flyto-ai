@@ -47,6 +47,7 @@ from flyto_ai.coding.contracts import (
 # itself raises them; job submission internals stay unexported.
 from flyto_ai.coding.service import (
     AbandonStateConflict,
+    AuditBlockersUnresolved,
     AuditNotEnabled,
     AuditStateConflict,
     CodingJobNotFound,
@@ -115,6 +116,7 @@ __all__ = [
     "AUDIT_BOUND_CODING_JOB_STATES",
     "AUDITED_CODING_JOB_STATES",
     "AbandonStateConflict",
+    "AuditBlockersUnresolved",
     "AuditNotEnabled",
     "AuditStateConflict",
     "CapabilityManager",

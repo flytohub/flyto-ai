@@ -952,6 +952,53 @@ def test_core_lane_never_executes_a_module_or_recipe(tmp_path):
 # ── negative controls ─────────────────────────────────────────────────
 
 
+def test_only_the_implementation_result_makes_a_failed_route_reworkable():
+    """A failed lane is reworkable only when it refused the round's own result.
+
+    Everything else — a lane that could not run, could not be trusted, or could
+    not prove its evidence — is an infrastructure or safety refusal and must
+    stay terminal. Nothing here is ever a passed route.
+    """
+    from flyto_ai.coding.service import route_blocks_implementation
+
+    def _failed(lane, code, *, strict=True):
+        return CodingRouteReceipt(
+            strict=strict, ok=False, failure_code=code,
+            lanes=(RouteLaneReceipt(
+                lane=lane, required=True, status=RouteLaneStatus.FAILED,
+                reason_code=code,
+            ),),
+        )
+
+    for code in ("implementation_not_successful", "required_checks_failed"):
+        assert route_blocks_implementation(_failed("indexer_post", code)) is True
+
+    for lane, code in (
+        # Post-work refusals that are about the lane's own proof, not the change.
+        ("indexer_post", "required_checks_missing"),
+        ("indexer_post", "validation_failed"),
+        ("indexer_post", "gate_not_satisfied"),
+        ("indexer_post", "index_stale"),
+        ("indexer_post", "malformed_evidence"),
+        # Every other lane, at any code.
+        ("indexer_pre", "capability_unavailable"),
+        ("indexer_pre", "required_checks_failed"),
+        ("blueprint", "domain_failure"),
+        ("core", "domain_failure"),
+    ):
+        assert route_blocks_implementation(_failed(lane, code)) is False
+
+    # A non-strict route carries no lane guarantees to reason from, a passed
+    # route is not blocked at all, and a missing receipt proves nothing.
+    assert route_blocks_implementation(
+        _failed("indexer_post", "required_checks_failed", strict=False),
+    ) is False
+    assert route_blocks_implementation(
+        CodingRouteReceipt(strict=True, ok=True, lanes=_canonical_lanes()),
+    ) is False
+    assert route_blocks_implementation(None) is False
+
+
 def test_a_failed_route_can_never_produce_a_landable_receipt():
     failed = CodingRouteReceipt(
         strict=True, ok=False, failure_code="gate_not_satisfied",
@@ -1382,6 +1429,146 @@ def test_service_route_completes_rework_and_audit_with_real_processes(tmp_path):
         )
         assert accepted.state is CodingJobState.CODEX_ACCEPTED
         assert accepted.landable is True
+    finally:
+        service.close()
+
+
+class BlockedServiceImplementer(ServiceImplementer):
+    """Edits the workspace for real, then reports a failed round.
+
+    `recover_at` is the round from which it starts succeeding, which is how a
+    rework round proves it cleared what the previous round was blocked on.
+    """
+
+    def __init__(self, store, failure_code="turn_limit_exceeded", session="sdk-route-1"):
+        super().__init__(store, session=session)
+        self.failure_code = failure_code
+        self.recover_at = None
+
+    async def run(self, request):
+        import dataclasses
+
+        result = await super().run(request)
+        if self.recover_at is not None and self.rounds >= self.recover_at:
+            return result
+        return dataclasses.replace(
+            result,
+            ok=False,
+            status="failed",
+            failure_code=self.failure_code,
+            checks=[_green_check(passed=self.failure_code != "verification_failed")],
+        )
+
+
+@pytest.mark.parametrize("failure_code", ["turn_limit_exceeded", "verification_failed"])
+def test_strict_route_holds_a_blocked_implementation_open_for_rework(
+    tmp_path, failure_code,
+):
+    """End to end: a strict route really fails at `indexer_post`, and the job
+    still reaches `awaiting_codex_audit` bound to its exact session, files, and
+    revision. Accept is refused, rework resumes that session, and a successful
+    rework clears the blockers and can then be accepted.
+    """
+    from flyto_ai.coding.contracts import CodingAuditFinding, CodingAuditVerdict
+    from flyto_ai.coding.service import AuditBlockersUnresolved
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    box = {"agent": None}
+    service = _route_service(tmp_path, workspace, box)
+    # The factory builds a plain ServiceImplementer on first use, so the
+    # blocked one is installed before any round runs.
+    box["agent"] = BlockedServiceImplementer(None, failure_code=failure_code)
+    try:
+        queued = service.submit("tenant-route", "route-blocked", _request(workspace))
+        blocked = _wait_route(service, "tenant-route", queued.job_id)
+
+        # The route really failed, at the post-work lane, on this round's own
+        # result — and the receipt says so rather than claiming a pass.
+        route = blocked.route_receipt
+        assert route["strict"] is True and route["ok"] is False
+        lanes = {item["lane"]: item for item in route["lanes"]}
+        assert [item["lane"] for item in route["lanes"]] == [
+            "indexer_pre", "blueprint", "core", "indexer_post",
+        ]
+        assert lanes["indexer_post"]["status"] == "failed"
+        assert route["failure_code"] == "implementation_not_successful"
+
+        # Yet the job is auditable, bound exactly.
+        assert blocked.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert blocked.landable is False
+        assert blocked.implementation_session_id == "sdk-route-1"
+        assert len(blocked.implementation_revision_sha256) == 64
+        assert blocked.implementer_started is True
+        assert blocked.result.files_changed == ["notes.txt"]
+        assert failure_code in blocked.implementation_blockers
+        assert "route.implementation_not_successful" in blocked.implementation_blockers
+
+        # Reading it back revalidates the failed route and still succeeds,
+        # because the record proves it is blocked rather than passed.
+        assert service.get("tenant-route", queued.job_id).state is (
+            CodingJobState.AWAITING_CODEX_AUDIT
+        )
+
+        with pytest.raises(AuditBlockersUnresolved):
+            service.audit(
+                "tenant-route", queued.job_id,
+                blocked.implementation_revision_sha256,
+                CodingAuditVerdict.ACCEPT, (),
+            )
+        assert service.get("tenant-route", queued.job_id).audit_count == 0
+
+        box["agent"].recover_at = 2
+        service.audit(
+            "tenant-route", queued.job_id, blocked.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK,
+            (CodingAuditFinding("finish_the_round", "blocker", "complete the change"),),
+        )
+        reworked = _wait_route(service, "tenant-route", queued.job_id)
+
+        assert reworked.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert reworked.implementation_session_id == "sdk-route-1"
+        assert box["agent"].rounds == 2
+        assert reworked.route_receipt["ok"] is True
+        assert reworked.implementation_blockers == ()
+        assert reworked.implementation_revision_sha256 != (
+            blocked.implementation_revision_sha256
+        )
+
+        accepted = service.audit(
+            "tenant-route", queued.job_id, reworked.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert accepted.landable is True
+        assert accepted.implementation_blockers == ()
+    finally:
+        service.close()
+
+
+def test_strict_route_keeps_an_unknown_provider_failure_terminal(tmp_path):
+    """An unrecognized failure is terminal even with a session and real edits.
+
+    Same route, same implementer, same attributable write — only the failure
+    classification differs. The host cannot reason about it, so it never
+    becomes resumable.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    box = {"agent": None}
+    service = _route_service(tmp_path, workspace, box, state_dir="route-unknown")
+    box["agent"] = BlockedServiceImplementer(None, failure_code="provider_failed")
+    try:
+        queued = service.submit("tenant-route", "route-unknown", _request(workspace))
+        failed = _wait_route(service, "tenant-route", queued.job_id)
+
+        assert failed.state is CodingJobState.FAILED
+        assert failed.landable is False
+        assert failed.implementation_blockers == ()
+        # The round really ran and really edited the tree; that is not enough.
+        assert failed.implementer_started is True
+        assert failed.result.files_changed == ["notes.txt"]
+        assert failed.route_receipt["ok"] is False
     finally:
         service.close()
 

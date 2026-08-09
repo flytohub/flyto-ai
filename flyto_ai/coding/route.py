@@ -1734,5 +1734,13 @@ class CodingRouteOrchestrator:
             rounds_used=int(getattr(result, "rounds_used", 0) or 0),
             evidence_path="",
             failure_code="route_{}".format(exc.code)[:64],
+            # `failure_code` above names the lane that refused this round. The
+            # implementer's own classification is a different fact and the only
+            # one that says what the round actually did, so it is carried
+            # forward instead of being overwritten. A pre-implementer failure
+            # has no such fact and leaves this empty.
+            implementation_failure_code=str(
+                getattr(result, "failure_code", "") or "",
+            )[:64],
         )
         return failed, receipt

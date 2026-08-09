@@ -62,6 +62,39 @@ PROVIDER_FAILURE_MARKERS = (
     ("error_max_turns", "turn_limit_exceeded"),
     ("reached maximum number of turns", "turn_limit_exceeded"),
 )
+#: The recognized conditions that stop a round *after* the conversation already
+#: exists. They bound how much work one round may do; they say nothing about
+#: whether the work so far is valid. A round that ends this way keeps its exact
+#: session so the control plane can resume it, and never reports success.
+#: Anything unrecognized stays terminal.
+RESUMABLE_PROVIDER_FAILURE_CODES = frozenset({"turn_limit_exceeded"})
+#: Recognized stops that, by definition, consumed the whole host-configured
+#: round budget. No `ResultMessage` arrives for these, so the count the host
+#: itself set is the only truthful one available — and it is a host fact, not
+#: something read out of the provider's error.
+TURN_BUDGET_EXHAUSTED_CODES = frozenset({"turn_limit_exceeded"})
+#: How much of a provider exception is ever examined, in memory, before it is
+#: dropped. Nothing derived from the text itself is kept.
+MAX_PROVIDER_ERROR_SCAN_CHARS = 2000
+
+
+def provider_failure_code(exc: BaseException) -> str:
+    """Name the bounded provider conditions the host can classify safely.
+
+    The SDK raises a bare ``Exception`` whose text is the only signal for a
+    turn limit, so the text is matched in memory against a fixed marker list
+    and then discarded. It is never stored, logged, or returned, and anything
+    unrecognized stays the conservative ``provider_failed``.
+    """
+
+    try:
+        text = str(exc)[:MAX_PROVIDER_ERROR_SCAN_CHARS].lower()
+    except Exception:  # noqa: BLE001 - a hostile __str__ is not a category
+        return "provider_failed"
+    for marker, code in PROVIDER_FAILURE_MARKERS:
+        if marker in text:
+            return code
+    return "provider_failed"
 
 
 class ClaudeCodeAgent:
@@ -180,6 +213,29 @@ class ClaudeCodeAgent:
                 "duration_ms": sdk_result.get("duration_ms", 0),
             })
             self._emit(on_stream, "phase_end", {"phase": "coding", "attempt": attempt})
+
+            incomplete = str(sdk_result.get("incomplete_code") or "")
+            if incomplete:
+                # A recognized bounded stop, with the exact session preserved.
+                # This is never reported as a success and never verified as one;
+                # it is a real, attributable, resumable round that did not
+                # finish. The message is host-composed from a fixed vocabulary.
+                await self._save_evidence(evidence, service_mode)
+                return CodeTaskResponse(
+                    ok=False,
+                    message="Claude implementation round stopped: {}.".format(incomplete),
+                    session_id=session_id,
+                    attempts=attempt,
+                    verification_results=verification_results,
+                    evidence=evidence.to_list(),
+                    files_changed=evidence.files_changed,
+                    total_cost_usd=total_cost,
+                    claude_session_id=sdk_session_id,
+                    claude_num_turns=total_turns,
+                    claude_duration_ms=total_duration_ms,
+                    claude_usage=last_usage,
+                    provider_failure_code=incomplete,
+                )
 
             # Phase 3: Verification
             if not request.verification_recipe:
@@ -376,26 +432,53 @@ class ClaudeCodeAgent:
         num_turns = 0
         duration_ms = 0
         usage = None
+        incomplete = ""
 
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, SystemMessage):
-                if getattr(message, "subtype", "") == "init":
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, SystemMessage):
+                    if getattr(message, "subtype", "") == "init":
+                        final_session_id = getattr(message, "session_id", final_session_id)
+                elif isinstance(message, AssistantMessage):
+                    for block in getattr(message, "content", []):
+                        if isinstance(block, TextBlock):
+                            result_msg += block.text
+                            self._emit(on_stream, "token", {"content": block.text})
+                elif isinstance(message, ResultMessage):
+                    # ResultMessage.result contains the final text
+                    result_text = getattr(message, "result", "")
+                    if result_text and not result_msg:
+                        result_msg = result_text
                     final_session_id = getattr(message, "session_id", final_session_id)
-            elif isinstance(message, AssistantMessage):
-                for block in getattr(message, "content", []):
-                    if isinstance(block, TextBlock):
-                        result_msg += block.text
-                        self._emit(on_stream, "token", {"content": block.text})
-            elif isinstance(message, ResultMessage):
-                # ResultMessage.result contains the final text
-                result_text = getattr(message, "result", "")
-                if result_text and not result_msg:
-                    result_msg = result_text
-                final_session_id = getattr(message, "session_id", final_session_id)
-                cost = getattr(message, "total_cost_usd", 0.0) or 0.0
-                num_turns = getattr(message, "num_turns", 0) or 0
-                duration_ms = getattr(message, "duration_ms", 0) or 0
-                usage = getattr(message, "usage", None)
+                    cost = getattr(message, "total_cost_usd", 0.0) or 0.0
+                    num_turns = getattr(message, "num_turns", 0) or 0
+                    duration_ms = getattr(message, "duration_ms", 0) or 0
+                    usage = getattr(message, "usage", None)
+        except Exception as exc:  # noqa: BLE001 - the SDK raises a bare Exception
+            # The init message already bound this conversation's identity, and
+            # the model has been editing the real workspace through host-owned
+            # hooks the whole time. Losing that identity because the round hit a
+            # bounded stop condition is what strands real work as unauditable.
+            #
+            # The exception is classified in memory and dropped right here: no
+            # provider text, argument, or traceback reaches evidence, a
+            # receipt, a log, or the caller. Only a recognized resumable code
+            # with a safe captured session is recoverable; everything else
+            # propagates and stays terminal.
+            code = provider_failure_code(exc)
+            if code not in RESUMABLE_PROVIDER_FAILURE_CODES or not is_safe_sdk_session_id(
+                final_session_id,
+            ):
+                raise
+            incomplete = code
+            if code in TURN_BUDGET_EXHAUSTED_CODES:
+                # Reaching this stop *is* the proof that the configured bound
+                # was consumed, for a fresh and a resumed invocation alike.
+                # Reporting 0 here is what made a real round look like it never
+                # happened. The value is the host's own ceiling; nothing is
+                # parsed out of the provider's message.
+                num_turns = max(num_turns, max_turns)
+            evidence.record("coding", "provider_incomplete", {"failure_code": code})
 
         return {
             "session_id": final_session_id,
@@ -404,6 +487,9 @@ class ClaudeCodeAgent:
             "num_turns": num_turns,
             "duration_ms": duration_ms,
             "usage": usage,
+            # Empty for a round that ran to completion, so the caller's ordinary
+            # path is unchanged.
+            "incomplete_code": incomplete,
         }
 
     def _option_kwargs(
@@ -642,7 +728,7 @@ class ClaudeCodingAgent:
         ok = bool(response.ok) and verified and changed_ok
         failure_code = None
         if not response.ok:
-            failure_code = "provider_failed"
+            failure_code = self._response_failure_code(response)
         elif not verified:
             failure_code = "verification_failed"
         elif not changed_ok:
@@ -773,23 +859,23 @@ class ClaudeCodingAgent:
             return supplied
         return "{}{}".format(HOST_THREAD_PREFIX, uuid.uuid4().hex[:20])
 
-    @classmethod
-    def _provider_failure_code(cls, exc: BaseException) -> str:
-        """Name the bounded provider conditions the host can classify safely.
+    @staticmethod
+    def _provider_failure_code(exc: BaseException) -> str:
+        """Classify one provider exception; see `provider_failure_code`."""
 
-        The SDK raises a bare ``Exception`` whose text is the only signal for a
-        turn limit, so the text is matched in memory against a fixed marker
-        list and then discarded. It is never stored, logged, or returned, and
-        anything unrecognized stays the conservative ``provider_failed``.
+        return provider_failure_code(exc)
+
+    @staticmethod
+    def _response_failure_code(response: Any) -> str:
+        """Name a recognized bounded provider stop, else the conservative code.
+
+        Only the fixed vocabulary above is honoured, so a backend that invents
+        its own code cannot widen what the control plane treats as resumable.
         """
 
-        try:
-            text = str(exc)[: cls.MAX_MESSAGE_CHARS].lower()
-        except Exception:  # noqa: BLE001 - a hostile __str__ is not a category
-            return "provider_failed"
-        for marker, code in PROVIDER_FAILURE_MARKERS:
-            if marker in text:
-                return code
+        code = getattr(response, "provider_failure_code", "") or ""
+        if isinstance(code, str) and code in RESUMABLE_PROVIDER_FAILURE_CODES:
+            return code
         return "provider_failed"
 
     def _note_provider_error(

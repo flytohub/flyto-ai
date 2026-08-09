@@ -91,3 +91,7 @@ class CodeTaskResponse:
     claude_num_turns: int = 0
     claude_duration_ms: int = 0
     claude_usage: Optional[Dict[str, Any]] = None
+    #: Stable host classification of a recognized bounded provider stop, from a
+    #: fixed vocabulary. Empty for every ordinary round, so existing callers are
+    #: unaffected. Raw provider exception text is never carried here.
+    provider_failure_code: str = ""

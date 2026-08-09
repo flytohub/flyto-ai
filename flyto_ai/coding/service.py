@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Protocol, S
 
 from flyto_ai.coding.contracts import (
     MAX_AUDIT_ROUNDS,
+    MAX_IMPLEMENTATION_BLOCKERS,
     ApprovalPolicy,
     CapabilityStatus,
     CheckResult,
@@ -100,6 +101,35 @@ MAX_REWORK_MESSAGE_CHARS = 180_000
 #: `HOST_THREAD_PREFIX`. Neither is a resumable implementation session, so
 #: neither may ever be recorded as one. A test binds this to both sources.
 PROVISIONAL_THREAD_PREFIXES = (ROUTE_THREAD_PREFIX, "host-")
+#: The post-work lane is the only place a host lane refuses a round *because of
+#: the implementation itself* rather than because a lane could not be trusted.
+#: These two codes mean exactly "the implementer's own round did not close its
+#: source-controlled checks" — real, attributable work that needs another
+#: round. Every other lane failure is an infrastructure or safety refusal and
+#: stays terminal. This is deliberately a closed two-item set: widening it
+#: would let a lane that could not prove its own evidence look reworkable.
+IMPLEMENTATION_BLOCKER_LANE = "indexer_post"
+IMPLEMENTATION_BLOCKER_ROUTE_CODES = frozenset({
+    "implementation_not_successful", "required_checks_failed",
+})
+#: The only implementation outcomes a host will hold a job open for, and a
+#: deliberately closed set. Both are statements about *this round's own work*:
+#: a recognized resumable provider stop that consumed its round budget, and a
+#: required host verification that really ran and really failed. Everything
+#: else — an unrecognized provider error, a session that would not bind, a
+#: workspace boundary violation, an unreadable config, any safety or
+#: infrastructure refusal — stays terminal, even when a buggy backend also
+#: reports changed files. Widening this set is how an unknown failure would
+#: quietly become resumable, so it is enumerated rather than inferred.
+AUDITABLE_IMPLEMENTATION_FAILURE_CODES = frozenset({
+    "turn_limit_exceeded", "verification_failed",
+})
+#: Stable classification for a failed round the host cannot name more precisely.
+#: A blocker list is never empty, so a reader can always tell "blocked" from
+#: "clean", even when nothing more specific survived the bounds.
+GENERIC_IMPLEMENTATION_BLOCKER = "implementation_incomplete"
+#: Blocker codes share the audit finding vocabulary: short, stable, opaque.
+_BLOCKER_CODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{1,63}$")
 #: How one round was executed. Persisted before the implementer is invoked, so
 #: an in-flight or crashed overflow round is never read back as strict.
 EXECUTION_MODE_STRICT = "strict"
@@ -240,6 +270,17 @@ class RouteEvidenceMissing(CodingServiceError):
     code = "route_evidence_missing"
 
 
+class AuditBlockersUnresolved(CodingServiceError):
+    """An auditable revision still carries host blockers, so it cannot land.
+
+    This is deliberately not `audit_state_conflict`: the job *is* auditable and
+    the auditor *is* authorized. Only `accept` is refused, and only while the
+    blockers stand. `rework` remains available and is the way through.
+    """
+
+    code = "audit_blockers_unresolved"
+
+
 class EmergencyAuthorityMissing(CodingServiceError):
     """An emergency-bound job cannot be served without its authority contract."""
 
@@ -269,6 +310,35 @@ _INTERRUPTED_JOB_STATES = frozenset({
 _CLAIM_OWNED_STATES = _INTERRUPTED_JOB_STATES | {
     CodingJobState.AWAITING_CODEX_AUDIT.value,
 }
+
+
+def route_blocks_implementation(route: "CodingRouteReceipt") -> bool:
+    """Whether a failed route stopped only on the implementation's own result.
+
+    Every host lane ran and was trusted; the post-work lane simply refused to
+    certify a round whose own required checks did not pass. That is a statement
+    about the change, not about the route, so the round stays auditable for
+    rework. It is never a passed route and never makes anything landable.
+    """
+
+    if not isinstance(route, CodingRouteReceipt) or route.ok or not route.strict:
+        return False
+    lane, _action, code = route_failure_point(route)
+    return lane == IMPLEMENTATION_BLOCKER_LANE and code in IMPLEMENTATION_BLOCKER_ROUTE_CODES
+
+
+def recorded_blockers(record: Mapping[str, Any]) -> Tuple[str, ...]:
+    """Read one record's blocker list, dropping anything outside the bounds."""
+
+    stored = record.get("implementation_blockers")
+    if not isinstance(stored, (list, tuple)):
+        return ()
+    return tuple(
+        item for item in stored
+        if isinstance(item, str)
+        and not isinstance(item, bool)
+        and _BLOCKER_CODE_RE.fullmatch(item)
+    )[:MAX_IMPLEMENTATION_BLOCKERS]
 
 
 class _RoundProgress:
@@ -568,6 +638,7 @@ class CodingService:
                 "rework_count": 0,
                 "audit_findings_sha256": "",
                 "landable": False,
+                "implementation_blockers": [],
             }
             try:
                 # Exclusive worktree ownership is taken here, once an
@@ -732,6 +803,17 @@ class CodingService:
             if self._stored_revision(record) != stored:
                 raise RevisionMismatch("the implementation revision changed since it was submitted")
             self._require_execution_authority(record)
+            blockers = recorded_blockers(record)
+            if blockers and verdict is CodingAuditVerdict.ACCEPT:
+                # The host already observed why this revision is not landable.
+                # An auditor may disagree about quality, but cannot overrule a
+                # recorded host fact by accepting around it. Rework is still
+                # available and is the only way these blockers clear. Refused
+                # before the audit round is counted, so a mistaken accept costs
+                # the job nothing.
+                raise AuditBlockersUnresolved(
+                    "this implementation still carries unresolved host blockers",
+                )
             digest = audit_findings_sha256(findings)
             audit_count = int(record.get("audit_count", 0)) + 1
             if audit_count > MAX_AUDIT_ROUNDS:
@@ -1400,13 +1482,20 @@ class CodingService:
         }
         if started and self.require_codex_audit:
             outcome["implementation_backend"] = self.implementation_backend
+        blockers: Tuple[str, ...] = ()
         if not result.ok:
-            self._discard_resume(tenant_ref, job_id)
-            self._update_record(
-                path, state=CodingJobState.FAILED.value, landable=False,
-                **self._failed_round_proof(request, result, started, outcome),
-            )
-            return
+            if not self._auditable_failure(result, route, authority, started):
+                self._discard_resume(tenant_ref, job_id)
+                self._update_record(
+                    path, state=CodingJobState.FAILED.value, landable=False,
+                    **self._failed_round_proof(request, result, started, outcome),
+                )
+                return
+            # A real, attributable, resumable implementation that is not
+            # landable. It falls through to the same auditable tail as a
+            # successful round, which still fails closed on its own if the
+            # session, change set, or revision cannot be bound exactly.
+            blockers = self._implementation_blockers(result, route)
         if not self.require_codex_audit:
             self._discard_resume(tenant_ref, job_id)
             self._update_record(path, state=CodingJobState.COMPLETED.value, **outcome)
@@ -1414,6 +1503,14 @@ class CodingService:
         session = str(result.thread_id or "")
         if not session:
             raise SessionBindingFailed("the implementation session id is missing")
+        if blockers and session.startswith(PROVISIONAL_THREAD_PREFIXES):
+            # A provisional host thread proves nothing about an implementation
+            # session and can never be resumed, so a round that would need
+            # rework to continue has nothing to continue. Fail closed rather
+            # than mint an unusable audit loop.
+            raise SessionBindingFailed(
+                "a blocked round has no resumable implementation session",
+            )
         files = {str(item) for item in result.files_changed}
         if rework:
             record = self._read_json(path)
@@ -1463,8 +1560,118 @@ class CodingService:
             implementation_files=files,
             working_dir=request.working_dir,
             landable=False,
+            # A round that closed cleanly clears whatever the previous round
+            # was blocked on, so a successful rework becomes acceptable without
+            # any separate operator action.
+            implementation_blockers=list(blockers),
             **outcome,
         )
+
+    def _auditable_failure(
+        self,
+        result: CodingTaskResult,
+        route: Optional["CodingRouteReceipt"],
+        authority: Optional[EmergencyAuthorityReceipt],
+        started: bool,
+    ) -> bool:
+        """Whether a failed round is real work awaiting rework, not a dead end.
+
+        This is the whole difference between "the implementer never produced
+        anything an auditor could read" and "the implementer produced a real,
+        attributable, resumable change that is not good enough yet". Every
+        condition here is a precondition for the *weaker* of the two outcomes:
+        the round still cannot land, cannot be accepted, and cannot skip an
+        audit. It can only be sent back to its own session.
+
+        Provider-neutral by construction: nothing here names a backend, a
+        model, a stop reason, or a check. It reads the host's own snapshots,
+        the host's own lane receipt, and nothing else.
+        """
+
+        if not self.require_codex_audit or not started:
+            # Without an audit loop there is no rework path to hold the job
+            # open for, and a round that never invoked an implementer has
+            # produced nothing to rework.
+            return False
+        if self._implementation_failure_code(result) not in (
+            AUDITABLE_IMPLEMENTATION_FAILURE_CODES
+        ):
+            # The closed vocabulary decides this, not the shape of the result.
+            # A backend that reports an unrecognized failure *and* changed
+            # files is describing something the host cannot reason about, and
+            # an unreasonable failure is never resumable.
+            return False
+        if authority is not None:
+            # The emergency lane is deliberately all-or-nothing: its authority
+            # is only honoured when the required checks really passed. A
+            # partial overflow round stays terminal rather than inventing a
+            # rework loop on already-degraded authority.
+            return False
+        files = tuple(str(item) for item in (getattr(result, "files_changed", ()) or ()))
+        if not files or len(files) > MAX_ATTRIBUTABLE_FILES:
+            # No attributable change, or more than the revision bound can
+            # describe, means no exact revision an auditor could bind.
+            return False
+        session = str(getattr(result, "thread_id", "") or "")
+        if not session or session.startswith(PROVISIONAL_THREAD_PREFIXES):
+            # Rework must resume this exact conversation. A host-minted
+            # provisional id cannot, so there is nothing to reopen.
+            return False
+        if route is None:
+            # No strict route wrapped this round, so the implementer's own
+            # result is the only evidence and it reported a real change.
+            return True
+        # A strict route that failed anywhere except on the implementation's
+        # own result is an infrastructure or safety refusal, and stays terminal.
+        return route_blocks_implementation(route)
+
+    @staticmethod
+    def _implementation_failure_code(result: CodingTaskResult) -> str:
+        """Return what the implementer said, never what a lane said about it.
+
+        A host lane that refuses a round rewrites `failure_code` to name itself
+        and carries the implementer's own classification alongside. Reading the
+        lane's code here would classify every wrapped round identically, which
+        is exactly how an unknown provider failure would look reworkable.
+        """
+
+        wrapped = str(getattr(result, "implementation_failure_code", "") or "")
+        return wrapped or str(getattr(result, "failure_code", "") or "")
+
+    @classmethod
+    def _implementation_blockers(
+        cls, result: CodingTaskResult, route: Optional["CodingRouteReceipt"],
+    ) -> Tuple[str, ...]:
+        """Derive the bounded, stable reasons this revision cannot be accepted.
+
+        Every code comes from a host-owned fact: the implementer's own failure
+        classification, the names of required checks the host ran and watched
+        fail, and the route's own lane failure code. Model prose, provider
+        exception text, command output, and paths have no representation here.
+        """
+
+        codes = set()
+        # Both facts, when both exist: what the implementer reported, and what
+        # the lane that refused the round reported about it.
+        for failure in (
+            str(getattr(result, "implementation_failure_code", "") or ""),
+            str(getattr(result, "failure_code", "") or ""),
+        ):
+            if _BLOCKER_CODE_RE.fullmatch(failure):
+                codes.add(failure)
+        for check in getattr(result, "checks", ()) or ():
+            if not getattr(check, "required", False) or getattr(check, "passed", False):
+                continue
+            name = "check.{}".format(getattr(check, "name", ""))[:64]
+            if _BLOCKER_CODE_RE.fullmatch(name):
+                codes.add(name)
+        if route is not None and not route.ok:
+            lane_code = "route.{}".format(route.failure_code)[:64]
+            if _BLOCKER_CODE_RE.fullmatch(lane_code):
+                codes.add(lane_code)
+        if not codes:
+            codes.add(GENERIC_IMPLEMENTATION_BLOCKER)
+        return tuple(sorted(codes))[:MAX_IMPLEMENTATION_BLOCKERS]
 
     def _failed_round_proof(
         self,
@@ -1667,7 +1874,20 @@ class CodingService:
             route = CodingRouteReceipt.from_mapping(route_stored)
         except ValueError as exc:
             raise RouteEvidenceMissing("coding route evidence is invalid") from exc
-        if not route.strict or not route.ok:
+        if not route.strict:
+            raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
+        if not route.ok and not (
+            # The single exception, and it grants strictly less than a pass: a
+            # strict route whose every lane ran and was trusted, which stopped
+            # only because the implementation it wrapped did not close its own
+            # required checks, and whose record still says so. Such a job may
+            # be read and reworked. It may never be landable or accepted, and
+            # the accept path refuses it independently of this check.
+            route_blocks_implementation(route)
+            and recorded_blockers(record)
+            and record.get("landable") is not True
+            and str(record.get("state")) != CodingJobState.CODEX_ACCEPTED.value
+        ):
             raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
         if record.get("implementer_started") is not True:
             raise RouteEvidenceMissing("this round never started an implementer")
@@ -2475,6 +2695,7 @@ class CodingService:
             audit_findings_sha256=str(record.get("audit_findings_sha256") or ""),
             landable=record.get("landable") is True,
             implementer_started=record.get("implementer_started") is True,
+            implementation_blockers=recorded_blockers(record),
             route_receipt=(
                 record["route_receipt"]
                 if isinstance(record.get("route_receipt"), dict) else None

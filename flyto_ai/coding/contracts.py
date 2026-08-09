@@ -35,6 +35,7 @@ MAX_AUDIT_MESSAGE_CHARS = 2000
 MAX_AUDIT_EVIDENCE_REF_CHARS = 256
 MAX_IMPLEMENTATION_SESSION_ID_CHARS = 128
 MAX_AUDIT_ROUNDS = 100
+MAX_IMPLEMENTATION_BLOCKERS = 16
 
 
 def require_revision_sha256(value: Any, field_name: str) -> str:
@@ -539,6 +540,11 @@ class CodingTaskResult:
     evidence_path: str = ""
     failure_code: Optional[str] = None
     command_sandbox: str = ""
+    #: When a host lane rewrites this result, the failure code the implementer
+    #: itself reported. `failure_code` then names the lane that refused the
+    #: round, which is a different fact. Empty for an unwrapped result, so a
+    #: caller that never saw a lane is unaffected.
+    implementation_failure_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -571,6 +577,11 @@ class CodingJobReceipt:
     #: Recorded by the host immediately before the call, so a round that failed
     #: in a pre-implementer lane reports `False` truthfully.
     implementer_started: bool = False
+    #: Stable host-derived reasons this implementation is real, attributable,
+    #: and still not landable. A non-empty list means "audited rework is the
+    #: only way forward": the auditor may order rework, but may not accept.
+    #: Empty for every ordinary round, so a pre-blocker caller is unaffected.
+    implementation_blockers: Tuple[str, ...] = ()
     #: Secret-free proof of which host-owned lanes ran around the round.
     #: Absent for a legacy direct-library service that has no strict route.
     route_receipt: Optional[Dict[str, Any]] = None
@@ -635,6 +646,32 @@ class CodingJobReceipt:
             raise ValueError("only a Codex-accepted receipt may be landable")
         if self.state is CodingJobState.CODEX_ACCEPTED and not self.landable:
             raise ValueError("a Codex-accepted receipt must be landable")
+        blockers = self.implementation_blockers
+        if isinstance(blockers, (str, bytes)) or not isinstance(blockers, Sequence):
+            raise ValueError("implementation_blockers must be a JSON array")
+        blockers = tuple(blockers)
+        if len(blockers) > MAX_IMPLEMENTATION_BLOCKERS:
+            raise ValueError(
+                "implementation_blockers cannot exceed {} items".format(
+                    MAX_IMPLEMENTATION_BLOCKERS,
+                ),
+            )
+        if any(
+            isinstance(item, bool)
+            or not isinstance(item, str)
+            or not _AUDIT_CODE_RE.fullmatch(item)
+            for item in blockers
+        ):
+            raise ValueError("implementation_blockers must be stable safe identifiers")
+        if len(set(blockers)) != len(blockers):
+            raise ValueError("implementation_blockers contains duplicates")
+        object.__setattr__(self, "implementation_blockers", blockers)
+        # An unresolved blocker and an accepted, landable revision are directly
+        # contradictory claims. A serialized receipt cannot make both.
+        if blockers and (self.landable or self.state is CodingJobState.CODEX_ACCEPTED):
+            raise ValueError(
+                "an accepted receipt cannot carry unresolved implementation blockers",
+            )
         if self.route_receipt is not None:
             if not isinstance(self.route_receipt, Mapping):
                 raise ValueError("route_receipt must be a JSON object")

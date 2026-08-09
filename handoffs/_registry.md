@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-08-09 | Route repair, runtime status, emergency overflow | 2026-08-09-route-repair-status-emergency.md |
 | 2026-08-09 | Multi-process coding state root | 2026-08-09-multi-process-coding-state.md |
 | 2026-08-08 | Mission Stations judge-card interpretation | 2026-08-08-mission-stations-interpretation.md |
 | 2026-07-26 | Blueprint evidence authority boundary | 2026-07-26-blueprint-evidence-boundary.md |

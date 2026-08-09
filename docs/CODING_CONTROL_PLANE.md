@@ -415,6 +415,175 @@ if the implementer did not succeed or a required source-controlled check
 failed, then runs `task(action="validate", run_tests=false)`,
 `task(action="gate", next_phase="verify")`, and `verify(strict=true)`.
 
+Every search this host issues — initial discovery, gate remediation, and a
+translated plan step — carries the workspace project. The Indexer's smart
+search otherwise fans out across every indexed project and enriches each hit,
+which on a multi-project machine exceeded the 30-second capability bound and
+failed the mandatory pre-work lane before the implementer could start. The
+bound itself is unchanged; the query was narrowed. A plan step that names its
+own project keeps it.
+
+### Failure evidence
+
+A lane that stops halfway is not a lane that did nothing. Each lane records a
+bounded call trace, so a failed lane receipt keeps every completed call plus
+one failed call naming the exact action the host derived:
+
+```json
+{"lane": "indexer_pre", "required": true, "status": "failed",
+ "reason_code": "capability_timeout",
+ "calls": [{"lane": "indexer_pre", "action": "structure", "ok": true,
+            "detail_code": "context"},
+           {"lane": "indexer_pre", "action": "search", "ok": false,
+            "detail_code": "capability_timeout"}]}
+```
+
+Actions are host-derived and semantic (`task.plan`, `task.gate.<phase>`,
+`task.validate`, `verify.strict`), never raw tool arguments. A transport
+timeout is classified `capability_timeout` from a closed machine code the
+capability adapter reports, not by parsing an error message, so it stays
+distinguishable from `domain_failure` — an Indexer that answered and refused.
+A contract failure that dispatched nothing records no call rather than an
+invented action. The trace stays inside the configured `max_calls_per_lane`,
+and any edit to it breaks the receipt digest.
+
+### Emergency overflow lane
+
+`flyto.coding-emergency.v1` (`flyto_ai/coding/emergency.py`) exists for one
+situation: the route infrastructure itself is unreachable, so every job fails
+before the implementer runs and the control plane would strand all coding.
+
+It is startup authority, disabled unless an operator passes the flag:
+
+```bash
+flyto-ai code-mcp \
+  --tenant acme --workspace-root /ABSOLUTE/PATH \
+  --implementation-backend claude \
+  --emergency-overflow-backend claude \
+  --emergency-overflow-threshold 1
+```
+
+`--emergency-overflow-backend` must equal `--implementation-backend`, so
+granting overflow can never redirect work to an implementer the operator did
+not choose. There is no environment variable, job field, or model-reachable
+switch. The default threshold is 1 because each Codex conversation runs its
+own stdio process and many see only a single job; a higher per-process count
+would still strand every one of them. Counters are per instance and are never
+shared between processes or builds.
+
+The lane opens only when *all* of these hold, checked before invocation:
+
+- the strict route failed with `capability_unavailable` or `capability_timeout`
+- in `indexer_pre` or `blueprint` — a lane that runs before the implementer
+- the implementer was never invoked, in memory *and* in the durable record
+- no attributable workspace change exists
+- this process's breaker has reached its threshold
+
+Everything else stays fail-closed: a domain refusal, blocked gate, stale index
+needing remediation, malformed evidence, failed check, failed implementation,
+Core validation failure, Indexer post failure, audit rejection, and rework
+exhaustion never open it.
+
+An emergency round calls the same startup-selected backend directly, keeps the
+required source-controlled checks, binds the same exact revision, and still
+ends at `awaiting_codex_audit` for an independent Codex verdict. It never
+commits, pushes, or publishes. Before the model is called the host persists
+`execution_mode=emergency` with the trigger lane, action, and stable code, so
+a round that is still running — or that died mid-flight — is never read back
+as an ordinary strict round.
+
+Acceptance requires a separate authority contract. The round records **no**
+`route_receipt`; instead it carries a digest-validated
+`EmergencyAuthorityReceipt`:
+
+```json
+{"contract_version": "flyto.coding-emergency.v1", "mode": "emergency",
+ "circuit_state": "open", "trigger_lane": "indexer_pre",
+ "trigger_action": "search", "trigger_code": "capability_timeout",
+ "implementer_backend": "claude", "instance_id": "...", "build_id": "...",
+ "job_id": "job_...", "request_sha256": "...", "session_id": "...",
+ "revision_sha256": "...", "implementer_started": true,
+ "checks_enforced": true, "audit_required": true, "digest": "..."}
+```
+
+One verifier accepts exactly one authority: a digest-valid passed strict
+receipt, or a digest-valid emergency receipt this service is configured to
+honour, sealed to this job, request, session, and revision, whose required
+checks really passed. Missing, mixed, transplanted, tampered, disabled,
+wrong-backend, failed-check, and ordinary failed-route evidence all fail
+closed. `CodingRouteReceipt(strict=True)` is untouched — a failed strict route
+never becomes landable.
+
+Rework after an emergency round stays on the same authority and the same
+implementation session. It is legal only for a rework the service itself
+scheduled for that same job, and an initial round carrying any pre-existing
+authority fails closed before anything runs.
+
+Recovery is a new process. The breaker is monotonic inside one process, so it
+cannot oscillate between the strict route and the overflow lane while the
+infrastructure flaps. A repaired build starts with a closed circuit and a new
+build id; older instances stay visibly old in the status index.
+
+### Runtime status
+
+`flyto.coding-route-status.v1` (`flyto_ai/coding/route_status.py`) answers two
+questions a restarted Codex cannot otherwise answer: where the round stopped,
+and whether the implementer really started.
+
+```text
+<state root>/status/index.json              bounded instance index
+<state root>/status/instance-<id>.json      one instance's latest status
+```
+
+Many Codex conversations share one state root, each with its own long-lived
+`code-mcp` process, so a single latest-writer file would let an old process
+overwrite a newer one. Each instance owns a file named by its own opaque
+instance id and updates only its own row in the shared index, under the same
+cross-process state guard, written atomically at mode 0600.
+
+Every record carries the instance id, an immutable build digest over the
+loaded `flyto_ai/coding/*.py` sources, the package version, process id, start
+time, and `lifecycle` (`active` / `closed`). A graceful shutdown changes only
+the lifecycle and timestamp, preserving the last job id, state, lane, action,
+failure code, implementer-start, session, and revision. A crashed instance
+keeps its last `active` row, which is why readers also consult the recorded
+pid and the retention window.
+
+The schema is closed and bounded. It contains no task message, error text,
+working directory, file list, source content, environment, command line, or
+credential; an unrecognised value degrades to empty rather than persisting.
+The index is read back through the same closed schema under a byte bound, so a
+malformed, oversized, duplicated, or unknown-field row is discarded and never
+republished. Retention is deterministic: at most 32 instances, and an instance
+silent for more than seven days is collected along with its file.
+
+`implementer_started` is written to the durable job record immediately before
+every real implementer invocation, never because a job entered `running`, and
+it is exposed on the public `CodingJobReceipt` alongside `emergency_authority`
+so `flyto_coding_get` and the HTTP receipt show the same truth. A round that
+failed *after* implementation keeps its session id, attributable files, and
+revision digest as proof that the model ran, while staying terminal,
+non-landable, and non-auditable.
+
+Publishing status is deliberately non-fatal to a real job, but a broken
+recorder is not silent: failures are counted with a stable code
+(`status_write_failed`, `status_validation_failed`), reported through
+`CodingService.status_health()`, included in the next successful status
+record, and announced once on stderr.
+
+Inspect it read-only, without starting a service:
+
+```bash
+flyto-ai code-status --state-dir /ABSOLUTE/PATH/TO/STATE --json
+```
+
+It validates every row, annotates staleness and best-effort pid liveness, and
+reports the reader's own build id. One limitation is unavoidable and is stated
+in the output: a `code-mcp` process started before this schema existed keeps
+running its previously loaded code and publishes no row, so it cannot appear
+retroactively. New and old instances coexist safely; restart a process to
+register it.
+
 ### Route receipt
 
 Every routed round carries an additive, secret-free `route_receipt` on the

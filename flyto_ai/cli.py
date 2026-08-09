@@ -178,6 +178,20 @@ def main():
             help="Override the Blueprint MCP argv for read-only reuse discovery "
                  "(the lane is always attached on the strict public route)",
         )
+        # Emergency overflow is startup authority and nothing else. There is
+        # deliberately no environment default and no per-job field: an operator
+        # must type this flag on the process that will use it.
+        service_parser.add_argument(
+            "--emergency-overflow-backend", choices=CODING_BACKENDS, default=None,
+            help="Grant host-owned emergency overflow authority to this exact "
+                 "implementer for classified route-infrastructure failures "
+                 "(must equal --implementation-backend; omitted means disabled)",
+        )
+        service_parser.add_argument(
+            "--emergency-overflow-threshold", type=int, default=1,
+            help="Classified pre-edit infrastructure failures in one process "
+                 "before its breaker opens (default: 1)",
+        )
 
     code_serve_p = sub.add_parser(
         "code-serve", help="Start the detachable authenticated coding HTTP service",
@@ -194,6 +208,16 @@ def main():
         "code-mcp", help="Start the detachable tenant-bound coding MCP stdio service",
     )
     _add_coding_service_args(code_mcp_p)
+
+    code_status_p = sub.add_parser(
+        "code-status",
+        help="Inspect the bounded runtime status of coding service instances",
+    )
+    code_status_p.add_argument(
+        "--state-dir", default="~/.flyto/coding-service",
+        help="Durable service state root to inspect (read-only)",
+    )
+    code_status_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
@@ -216,6 +240,8 @@ def main():
         _cmd_code_serve(args)
     elif args.command == "code-mcp":
         _cmd_code_mcp(args)
+    elif args.command == "code-status":
+        _cmd_code_status(args)
     elif args.command == "chat":
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
@@ -536,6 +562,32 @@ def _build_coding_service(args):
         # The public route is one entry: host-owned lanes always surround
         # whichever implementer was selected above.
         route_policy=_build_coding_route_policy(args),
+        emergency_policy=_build_emergency_policy(args, backend),
+    )
+
+
+def _build_emergency_policy(args, backend):
+    """Build the startup-only emergency overflow authority, or none at all.
+
+    Absent flag means absent authority. When present, the named target must be
+    the implementer this process already selected, so granting overflow can
+    never redirect work to a backend the operator did not choose. No
+    environment variable, job payload, or model output reaches this decision.
+    """
+    from flyto_ai.coding.emergency import EmergencyOverflowPolicy
+
+    target = getattr(args, "emergency_overflow_backend", None)
+    if not target:
+        return EmergencyOverflowPolicy()
+    if target != backend:
+        raise ValueError(
+            "--emergency-overflow-backend must match --implementation-backend "
+            "(selected: {})".format(backend),
+        )
+    return EmergencyOverflowPolicy(
+        enabled=True,
+        backend=target,
+        failure_threshold=getattr(args, "emergency_overflow_threshold", 1),
     )
 
 
@@ -591,6 +643,59 @@ def _cmd_code_mcp(args):
         serve_stdio(CodingMCPServer(service, args.tenant))
     finally:
         service.close()
+
+
+def _cmd_code_status(args):
+    """Report the bounded runtime status of coding service instances.
+
+    Read-only by construction: it opens the status index, revalidates every row
+    through the closed schema, and annotates liveness. It starts no service,
+    touches no job record, and prints no prompt, path, or error prose.
+    """
+    from flyto_ai.coding.route_status import RouteStatusPublisher, service_build_id
+
+    state_root = _os.path.abspath(_os.path.expanduser(args.state_dir))
+    reader = RouteStatusPublisher(
+        # A reader needs a well-formed instance id to satisfy the contract, but
+        # it never publishes, so this identity is local to the inspection.
+        state_root, instance_id="0" * 24,
+    )
+    instances = [
+        {key: value for key, value in row.items() if key != "current"}
+        for row in reader.inspect()
+    ]
+    report = {
+        "state_dir": state_root,
+        "reader_build_id": service_build_id(),
+        "instances": instances,
+        # Say the unavoidable thing out loud: a process started before this
+        # schema existed keeps running its old code and never publishes a row.
+        "note": (
+            "Instances started before the runtime-status schema publish no row "
+            "and cannot appear here retroactively; restart them to register."
+        ),
+    }
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print("coding status: {}".format(state_root))
+    if not instances:
+        print("  no instances have published runtime status")
+    for row in instances:
+        alive = row.get("alive")
+        print(
+            "  {} build={} v{} pid={} {} job={} state={} mode={} "
+            "lane={} action={} started={} stale={} alive={}".format(
+                row.get("instance_id", ""), row.get("build_id", "")[:12],
+                row.get("service_version", ""), row.get("process_id", 0),
+                row.get("lifecycle", ""), row.get("job_id", "") or "-",
+                row.get("state", "") or "-", row.get("mode", ""),
+                row.get("lane", "") or "-", row.get("action", "") or "-",
+                row.get("implementer_started"), row.get("stale"),
+                "unknown" if alive is None else alive,
+            ),
+        )
+    print("  {}".format(report["note"]))
 
 
 def _cmd_code_claude_sdk(args):

@@ -873,6 +873,174 @@ def test_a_failed_route_can_never_produce_a_landable_receipt():
     assert kept.landable is False
 
 
+def _timeout_envelope():
+    """Reproduce exactly what CapabilityManager returns for a timed-out call."""
+    return {
+        "ok": False, "error": "capability request timed out",
+        "capability_failed": True, "capability_code": "timeout",
+    }
+
+
+def test_every_host_owned_search_is_scoped_to_the_current_project(tmp_path):
+    """An unscoped smart search fans out over every index and times out."""
+    blocked = {"pass": False, "decision": "blocked",
+               "required_actions": ["tests_reviewed"],
+               "required_state": {"tests_reviewed": True}}
+    passed = {"pass": True, "decision": "pass",
+              "required_actions": [], "required_state": {}}
+    indexer = IndexerDouble(gate_script=[blocked, passed])
+    result, _ = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    assert result.ok is True
+    project = Path(_request(tmp_path).working_dir).name
+    searches = [args for tool, args in indexer.calls if tool == "search"]
+    # Initial discovery plus the gate's search remediation.
+    assert len(searches) >= 2
+    assert all(args.get("project") == project for args in searches), searches
+    assert indexer.violations == []
+
+
+def test_a_capability_timeout_is_classified_and_keeps_its_completed_calls(tmp_path):
+    """The reproduced incident: `indexer_pre.search` exceeds its bound."""
+    indexer = IndexerDouble(overrides={"search": _timeout_envelope()})
+    implement = Implementer()
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer), _request(tmp_path), implement,
+    )
+    assert result.ok is False
+    assert implement.rounds == 0
+    assert receipt.failure_code == "capability_timeout"
+    assert result.failure_code == "route_capability_timeout"
+    lane = {item.lane: item for item in receipt.lanes}["indexer_pre"]
+    assert lane.status is RouteLaneStatus.FAILED
+    # The completed call before the failure survives, and the failed call
+    # names the exact action rather than an empty lane.
+    assert [(call.action, call.ok) for call in lane.calls] == [
+        ("structure", True), ("search", False),
+    ]
+    assert lane.calls[-1].detail_code == "capability_timeout"
+    # The receipt still validates its own digest after a round trip.
+    assert CodingRouteReceipt.from_mapping(receipt.to_mapping()).digest == receipt.digest
+
+
+def test_a_domain_failure_stays_distinguishable_from_a_timeout(tmp_path):
+    """An answered refusal must never be reported as transport exhaustion."""
+    indexer = IndexerDouble(overrides={"search": {"ok": False, "error": "refused"}})
+    _, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    assert receipt.failure_code == "domain_failure"
+    lane = {item.lane: item for item in receipt.lanes}["indexer_pre"]
+    assert lane.calls[-1].detail_code == "domain_failure"
+    assert lane.calls[-1].action == "search"
+
+
+@pytest.mark.parametrize(("stage", "override", "action", "code"), [
+    ("plan", {"task.plan": _timeout_envelope()}, "task.plan", "capability_timeout"),
+    ("gate", {"task.gate": _timeout_envelope()}, "task.gate.assess", "capability_timeout"),
+])
+def test_a_failed_task_call_records_its_semantic_action(tmp_path, stage, override, action, code):
+    """`task` failures name the semantic action, never the bare tool."""
+    indexer = IndexerDouble(overrides=override)
+    _, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    lane = {item.lane: item for item in receipt.lanes}["indexer_pre"]
+    failed = [call for call in lane.calls if not call.ok]
+    assert failed and failed[-1].action == action
+    assert failed[-1].detail_code == code
+    assert receipt.failure_code == code
+
+
+def test_a_post_lane_timeout_keeps_the_whole_completed_pre_lane(tmp_path):
+    """A failure after implementation still shows what really ran."""
+    indexer = IndexerDouble(overrides={"task.validate": _timeout_envelope()})
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    assert result.ok is False
+    lanes = {item.lane: item for item in receipt.lanes}
+    assert lanes["indexer_pre"].status is RouteLaneStatus.APPLIED
+    post = lanes["indexer_post"]
+    assert post.status is RouteLaneStatus.FAILED
+    assert [(call.action, call.ok) for call in post.calls] == [("task.validate", False)]
+    assert post.calls[0].detail_code == "capability_timeout"
+
+
+def test_a_non_call_contract_failure_records_no_fabricated_action(tmp_path):
+    """Nothing dispatched means nothing recorded; no invented action."""
+    indexer = IndexerDouble(overrides={"task.plan": _envelope({"summary": "no contract"})})
+    _, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    assert receipt.failure_code == "plan_contract_missing"
+    lane = {item.lane: item for item in receipt.lanes}["indexer_pre"]
+    assert all(call.ok for call in lane.calls)
+    assert [call.action for call in lane.calls] == ["structure", "search", "task.plan"]
+
+
+def test_a_failed_lane_trace_stays_inside_the_configured_call_bound(tmp_path):
+    """The failed call is evidence, but it never grows a receipt without bound."""
+    from flyto_ai.coding.route import (
+        MAX_LANE_CALL_RECORDS,
+        CodingRouteOrchestrator,
+        RouteLane,
+    )
+
+    limits = RouteLimits(max_calls_per_lane=2, max_plan_steps=4)
+    indexer = IndexerDouble(
+        plan=[
+            {"id": "s1", "tool": "impact", "args": {"target": "a"}, "depends_on": []},
+            {"id": "s2", "tool": "impact", "args": {"target": "b"}, "depends_on": ["s1"]},
+            {"id": "s3", "tool": "impact", "args": {"target": "c"}, "depends_on": ["s2"]},
+        ],
+    )
+    _, receipt = _run(
+        _policy(limits=limits), RouteDouble(indexer), _request(tmp_path),
+    )
+    lane = {item.lane: item for item in receipt.lanes}["indexer_pre"]
+    assert receipt.failure_code == "call_bound_exceeded"
+    # Completed calls survive, and the receipt stays inside its hard ceiling.
+    assert [call.action for call in lane.calls][:2] == ["structure", "search"]
+    assert len(lane.calls) <= MAX_LANE_CALL_RECORDS
+    assert CodingRouteReceipt.from_mapping(receipt.to_mapping()).ok is False
+
+    # A saturated lane records no further calls: the failure still closes the
+    # round through the lane reason code, which never needs a call record.
+    orchestrator = CodingRouteOrchestrator(_policy(limits=limits))
+    trace = orchestrator._begin_lane(RouteLane.INDEXER_PRE)
+    for index in range(MAX_LANE_CALL_RECORDS + 8):
+        orchestrator._failed_call("domain_failure", RouteLane.INDEXER_PRE, "search")
+        assert len(trace) <= limits.max_calls_per_lane + 1, index
+    assert RouteLaneReceipt(
+        lane="indexer_pre", required=True, status=RouteLaneStatus.FAILED,
+        reason_code="domain_failure", calls=tuple(trace),
+    ).calls
+
+
+def test_a_tampered_failed_trace_fails_closed(tmp_path):
+    """Editing a failed lane's calls invalidates the receipt digest."""
+    indexer = IndexerDouble(overrides={"search": _timeout_envelope()})
+    _, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    forged = receipt.to_mapping()
+    for lane in forged["lanes"]:
+        for call in lane["calls"]:
+            call["ok"] = True
+    with pytest.raises(ValueError, match="digest does not match"):
+        CodingRouteReceipt.from_mapping(forged)
+
+    dropped = receipt.to_mapping()
+    dropped["lanes"][0]["calls"] = []
+    with pytest.raises(ValueError, match="digest does not match"):
+        CodingRouteReceipt.from_mapping(dropped)
+
+
+def test_route_failure_point_names_where_the_round_stopped(tmp_path):
+    from flyto_ai.coding.route import route_failure_point
+
+    indexer = IndexerDouble(overrides={"search": _timeout_envelope()})
+    _, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    assert route_failure_point(receipt) == (
+        "indexer_pre", "search", "capability_timeout",
+    )
+
+    indexer = IndexerDouble()
+    _, passed = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+    lane, action, code = route_failure_point(passed)
+    assert lane == "indexer_post" and code == "" and action
+
+
 def test_route_evidence_is_secret_free_and_path_free(tmp_path):
     indexer = IndexerDouble(overrides={"structure": _envelope({
         "root": str(tmp_path), "token": "sk-must-not-appear",
@@ -1327,7 +1495,9 @@ def test_real_installed_indexer_negotiates_the_allowlisted_public_surface():
     # live schemas rather than against a fixture's opinion.
     emitted = {
         "structure": {"project"},
-        "search": {"query"},
+        # Every host-owned search is project-scoped; an unscoped smart search
+        # fans out across every index and exceeds the capability deadline.
+        "search": {"query", "project"},
         "impact": {"target", "project"},
         "task": {"action", "description", "targets", "intent", "project"},
         "verify": {"path", "strict"},
@@ -1360,7 +1530,12 @@ def test_plan_operation_names_are_translated_to_exact_public_calls(tmp_path):
     assert indexer.violations == []
     emitted = [(tool, args) for tool, args in indexer.calls]
     assert ("impact", {"target": "p:app.py:function:main"}) in emitted
-    assert ("search", {"query": "tests covering app.py"}) in emitted
+    # A translated plan step is host-owned discovery too, so it carries the
+    # workspace project exactly like the initial search does.
+    project = Path(_request(tmp_path).working_dir).name
+    assert (
+        "search", {"query": "tests covering app.py", "project": project},
+    ) in emitted
     assert ("structure", {"focus": "dependencies", "path": "app.py"}) in emitted
     # The plan's own gate step became a real gate carrying the exact contract.
     gates = [a for t, a in emitted if t == "task" and a.get("action") == "gate"]
@@ -1410,6 +1585,56 @@ def test_leading_json_is_decoded_when_the_server_appends_prose(tmp_path):
 # ── live route against the real installed runtime ─────────────────────
 
 VENV_PYTHON = Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"
+
+
+def test_the_real_indexer_answers_a_project_scoped_search_inside_its_bound():
+    """The reproduced incident, regressed against the installed server.
+
+    The same long query without a project scope made the real smart search fan
+    out over every indexed project and exceed the 30-second capability bound.
+    Bounded on purpose: one session, one dispatch, one assertion.
+    """
+    import time
+
+    from flyto_ai.coding.capabilities import CapabilityManager
+    from flyto_ai.coding.route import CodingRouteOrchestrator
+
+    if not VENV_PYTHON.exists():
+        pytest.skip("the project .venv interpreter is required for the live regression")
+    repository = Path(__file__).resolve().parents[1]
+    spec = _indexer_spec(
+        argv=(str(VENV_PYTHON), "-m", "flyto_indexer.mcp_server"),
+        timeout_seconds=30,
+    )
+    project = repository.name
+    arguments = CodingRouteOrchestrator._search_args(
+        "repair the strict coding route so ordinary Flyto tasks reliably reach "
+        "the configured Claude implementer and add a bounded durable runtime "
+        "status that records where a job stopped",
+        project,
+    )
+    assert arguments["project"] == project
+
+    async def probe():
+        manager = CapabilityManager(str(repository), "workspace_write")
+        try:
+            statuses = await manager.start((spec,))
+            if not all(status.available for status in statuses):
+                pytest.skip("the installed flyto-indexer capability is unavailable")
+            from flyto_ai.coding.mcp_catalog import provider_tool_name
+
+            started = time.monotonic()
+            result = await manager.dispatch(
+                provider_tool_name(spec.name, "search"), dict(arguments),
+            )
+            return result, time.monotonic() - started
+        finally:
+            await manager.close()
+
+    result, elapsed = asyncio.run(probe())
+    assert result.get("capability_code") != "timeout", result.get("error")
+    assert result.get("ok") is True, result.get("error")
+    assert elapsed < spec.timeout_seconds, elapsed
 
 
 def _live_workspace(root: Path) -> Path:

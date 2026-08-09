@@ -567,9 +567,17 @@ class CodingJobReceipt:
     rework_count: int = 0
     audit_findings_sha256: str = ""
     landable: bool = False
+    #: Whether the selected implementer was actually invoked for this job.
+    #: Recorded by the host immediately before the call, so a round that failed
+    #: in a pre-implementer lane reports `False` truthfully.
+    implementer_started: bool = False
     #: Secret-free proof of which host-owned lanes ran around the round.
     #: Absent for a legacy direct-library service that has no strict route.
     route_receipt: Optional[Dict[str, Any]] = None
+    #: Digest-validated proof that this round ran on the host-owned emergency
+    #: overflow lane instead of the strict route. Present only for a job the
+    #: breaker actually diverted; never a substitute for a strict receipt.
+    emergency_authority: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state", CodingJobState(self.state))
@@ -619,6 +627,8 @@ class CodingJobReceipt:
             raise ValueError("{} requires at least one recorded audit".format(self.state.value))
         if not isinstance(self.landable, bool):
             raise ValueError("landable must be a boolean")
+        if not isinstance(self.implementer_started, bool):
+            raise ValueError("implementer_started must be a boolean")
         # Acceptance and landability are the same public fact seen from two
         # sides. Neither is an action: nothing here stages, commits, or pushes.
         if self.landable and self.state is not CodingJobState.CODEX_ACCEPTED:
@@ -640,3 +650,53 @@ class CodingJobReceipt:
                     "a landable receipt requires strict coding route evidence",
                 )
             object.__setattr__(self, "route_receipt", route.to_mapping())
+        if self.emergency_authority is not None:
+            if not isinstance(self.emergency_authority, Mapping):
+                raise ValueError("emergency_authority must be a JSON object")
+            # The two authorities are alternatives, never a blend. A round that
+            # claimed both would let a failed strict route borrow emergency
+            # landability, or the reverse.
+            if self.route_receipt is not None:
+                raise ValueError(
+                    "a receipt cannot carry both route and emergency authority",
+                )
+            from flyto_ai.coding.emergency import EmergencyAuthorityReceipt
+
+            authority = EmergencyAuthorityReceipt.from_mapping(self.emergency_authority)
+            if self.landable and not authority.sealed:
+                raise ValueError(
+                    "a landable emergency receipt must bind its exact round",
+                )
+            if self.landable and not authority.checks_enforced:
+                raise ValueError(
+                    "a landable emergency receipt requires passed required checks",
+                )
+            # A sealed authority must describe *this* receipt. Comparing the
+            # binding to the public fields keeps a serialized receipt internally
+            # consistent even outside the service that produced it.
+            for bound, public, label in (
+                (authority.job_id, self.job_id, "job"),
+                (
+                    authority.session_id, self.implementation_session_id,
+                    "implementation session",
+                ),
+                (
+                    authority.revision_sha256, self.implementation_revision_sha256,
+                    "implementation revision",
+                ),
+            ):
+                if bound and bound != public:
+                    raise ValueError(
+                        "emergency authority does not bind this receipt's {}".format(
+                            label,
+                        ),
+                    )
+            if (
+                authority.implementer_backend
+                and self.implementation_backend
+                and authority.implementer_backend != self.implementation_backend
+            ):
+                raise ValueError(
+                    "emergency authority names a different implementation backend",
+                )
+            object.__setattr__(self, "emergency_authority", authority.to_mapping())

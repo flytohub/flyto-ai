@@ -1,5 +1,67 @@
 # Decisions
 
+## 2026-08-09: Project-scoped route searches, exact failure evidence, and a startup-only emergency overflow lane
+
+Against the real installed Indexer, the production route policy failed every
+ordinary task: `indexer_pre.search` timed out at 30.002 s because the host sent
+only `{query}` while the Indexer's smart search fanned out across every indexed
+project. The persisted result collapsed this to `route_domain_failure` with an
+empty call list, so no reader could tell where the round stopped or that the
+implementer had never started.
+
+- Every host-owned Indexer search carries the workspace project. The same query
+  with `project` completed in about a second. The 30-second capability bound is
+  deliberately unchanged: the query was over-broad, not the deadline too short.
+- A lane keeps a bounded call trace, so a failed lane receipt retains its
+  completed calls plus one failed call naming the exact host-derived semantic
+  action. Transport exhaustion is classified `capability_timeout` from a closed
+  machine code the capability adapter reports; the route never parses provider
+  prose. Digest validation and fail-closed reads are unchanged.
+- `implementer_started` is durable and written immediately before invocation.
+  A pre-lane failure reports `false` truthfully; a post-implementation failure
+  keeps bounded session/revision proof while remaining non-landable.
+- `flyto.coding-route-status.v1` adds per-instance status files plus a bounded
+  validated index under the state root. A single latest-writer file was
+  rejected because many Codex conversations share one state root and an old
+  process would overwrite a newer one's diagnostics. Records are closed,
+  bounded, and secret-free; per-job JSON remains the only authority.
+
+Separately, the owner requires that a broken route infrastructure must not
+permanently strand all coding. `flyto.coding-emergency.v1` adds a host-owned
+circuit breaker and an overflow lane to the *already selected* implementer.
+
+- It is startup authority only (`--emergency-overflow-backend`, which must
+  equal `--implementation-backend`). No environment variable, job payload, or
+  model output can enable it, and it is disabled unless the flag is present.
+- It opens only for a positively classified `capability_unavailable` or
+  `capability_timeout` failure in a pre-implementer lane, with no attributable
+  edit and no durably recorded implementer start. Every other failure category
+  stays fail-closed, including domain refusals, gate denials, stale indexes,
+  malformed evidence, failed checks, failed implementations, Core failures,
+  Indexer post failures, audit rejections, and rework exhaustion.
+- Emergency rounds keep the source-controlled checks, the exact-revision
+  binding, and the independent Codex audit, and they never commit or push.
+  Acceptance requires a separate digest-validated `EmergencyAuthorityReceipt`
+  sealed to that job, request, session, and revision, so a receipt cannot be
+  transplanted. `CodingRouteReceipt(strict=True)` is untouched and a failed
+  strict route never becomes landable.
+- The breaker is monotonic within one process so it cannot oscillate; the
+  default threshold is 1 because each Codex conversation is a separate process
+  that may only ever see one job. Recovery is a new process: a repaired build
+  starts closed and publishes a new build id.
+
+Codex validated this decision live rather than only by test: a real `code-mcp`
+process with a deliberately missing Indexer overflowed one job to the pinned
+`claude-opus-5` implementer, was sent back once by an independent hidden-case
+rework finding despite green repository checks, resumed the same session under
+a re-sealed `emergency_rework` authority, and was accepted on that exact second
+revision. `STATE.md` records the job, session, revision digests, and counters.
+
+Rollback is configuration: omit `--emergency-overflow-backend` to remove the
+lane entirely, which restores the previous fail-closed behavior. Do not make
+the overflow lane implicit, do not widen its classified trigger set without a
+new dated entry, and do not let it skip the audit.
+
 ## 2026-08-09: Coding state roots support multiple MCP processes
 
 Codex starts one stdio MCP process per conversation. Treating the durable state

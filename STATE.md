@@ -87,6 +87,39 @@ eligibility evidence for the caller, not an action the service performs.
   landable receipt. A strict service revalidates persisted evidence when it
   reads an audit-ready, reworking, or accepted job back, so removed or edited
   proof fails closed rather than reading as landable.
+- Project-scoped host searches: initial discovery, gate remediation, and
+  translated plan steps all carry the workspace project. This repairs the
+  production failure where an unscoped smart search exceeded the 30-second
+  capability bound and failed the mandatory pre-work lane before the
+  implementer started. Regressed against the real installed Indexer.
+- Exact failure evidence: a failed lane keeps its completed calls plus one
+  failed call naming the host-derived semantic action, within the configured
+  per-lane call bound. A transport timeout is classified `capability_timeout`
+  from a closed capability code, distinct from `domain_failure`; a launch
+  failure names the lane whose provider was actually unavailable.
+- Durable `implementer_started`, written immediately before every implementer
+  invocation and exposed additively on the public receipt. A post-implementation
+  failure keeps bounded session/revision proof while staying non-landable.
+- `flyto.coding-route-status.v1`: per-instance status files plus a bounded,
+  schema-validated shared index under the state root, written atomically at
+  mode 0600 under the existing cross-process guard. Records carry instance id,
+  immutable build digest, pid, start time, lifecycle, job state, lane/action,
+  stable failure code, implementer-start, and bounded session/revision ids, and
+  no message, path, error text, file list, environment, or credential.
+  Retention and stale collection are deterministic and bounded.
+- `flyto-ai code-status --state-dir <dir> [--json]`: read-only inspection of
+  coexisting instances with build id, liveness, and staleness. It starts no
+  service and states that pre-schema processes cannot appear retroactively.
+- `flyto.coding-emergency.v1`: a startup-only overflow lane for a provably
+  unreachable route infrastructure, enabled by `--emergency-overflow-backend`
+  (which must equal `--implementation-backend`). It opens only for a classified
+  `capability_unavailable` / `capability_timeout` failure in a pre-implementer
+  lane with no attributable edit and no durably recorded implementer start;
+  every other failure category stays fail-closed. Emergency rounds keep the
+  required checks, the exact-revision binding, and the independent Codex audit
+  under a separate digest-validated authority receipt sealed to that job,
+  request, session, and revision. Rework stays on the same authority and
+  session; the breaker is monotonic per process and recovers by restart.
 
 ### Not yet proved / current gaps
 
@@ -102,8 +135,22 @@ eligibility evidence for the caller, not an action the service performs.
 - The loopback HTTP socket tests, a SOCKS-proxy provider test, and the
   telegram SQLite tests cannot run in the restricted implementation sandbox.
   They pass in the independent unrestricted environment.
-- A deployment must still supply a reachable `--indexer-command`. An
-  unreachable Indexer fails every public job closed rather than degrading.
+- A deployment must still supply a reachable `--indexer-command`. Without the
+  explicit `--emergency-overflow-backend` flag, an unreachable Indexer fails
+  every public job closed rather than degrading.
+- `code-mcp` processes started before `flyto.coding-route-status.v1` keep
+  running their previously loaded code. They publish no status row and cannot
+  appear in `code-status` retroactively; only a restart registers them. New
+  and old instances coexist safely, and each new instance identifies its build.
+- The parent workspace `.codex/config.toml` now passes
+  `--implementation-backend claude`, `--emergency-overflow-backend claude`, and
+  `--emergency-overflow-threshold 1` (SHA-256
+  `43273321e87e435669e169d6b97c40fccfc42c8f8a3f3eb727a3b8b7b35c870a`), so a
+  newly started Codex MCP process receives the explicit Claude overflow
+  authority. That file is outside this repository. Sessions whose `code-mcp`
+  process was already running keep their previously loaded code and
+  configuration; they must be restarted or reopened before the authority
+  applies to them.
 
 ### Verified evidence (2026-08-09)
 
@@ -146,6 +193,61 @@ hardening, 2026-08-09: `tests/test_coding_route.py` 139 passed;
 `tests/test_coding_service.py` 119 passed with only the sandbox-forbidden
 loopback socket case deselected. These are focused checks by the worker, never
 a substitute for the independent unrestricted run recorded above.
+
+Implementation-worker focused evidence for the route repair, runtime status,
+and emergency overflow lane, 2026-08-09: `tests/test_coding_route.py`,
+`tests/test_coding_emergency.py`, `tests/test_coding_service.py`,
+`tests/test_coding_control.py`, and `tests/test_cli.py` pass except the two
+loopback-socket cases the sandbox forbids (`socket.bind` returns
+`PermissionError`, reproduced with a bare socket outside pytest). The route
+suite previously hung for 120 s per case on four service tests; it now
+completes in about 11 s. A bounded live regression proves the real installed
+`flyto-indexer` answers the project-scoped pre-work search well inside the
+30-second capability bound. These are focused worker checks, never a substitute
+for the independent runs recorded below.
+
+### Independent Codex live emergency proof (2026-08-09)
+
+Codex ran the emergency overflow lane end to end against a real service
+process. These facts are owned by the independent auditor, not by the
+implementation worker.
+
+A fresh real `flyto-ai code-mcp` process used startup backend `claude`, which
+this adapter pins to `claude-opus-5`. It was launched with an intentionally
+missing Indexer command, an explicit `--emergency-overflow-backend claude`, and
+threshold 1.
+
+- Job `job_3169dfad6918444abfeb9fe9` first failed before implementation at
+  `indexer_pre` with `capability_unavailable`. Runtime status then showed
+  `circuit_state=open`, `mode=emergency`, `implementer_started=true`, and one
+  emergency activation.
+- Claude produced session `cda281f0-d3de-4617-9a3e-4045cc1ea928` and first
+  revision
+  `77f81f543a9a525356af96ccd56191be5f4261326df6f2c7f0b1831e69b4776e`. The
+  required source-controlled checks passed, but Codex's independent hidden case
+  found `slugify("Alpha___Beta") == "alphabeta"`, so Codex submitted one typed
+  `major` rework finding against that exact revision. Passing repository checks
+  did not substitute for the independent audit.
+- The service resumed the same Claude session and produced revision
+  `2118b92f675d698d8adeb7d9aa7466832c3ec8aa5d690a10f240a0fd478087c8`. The
+  emergency authority was re-sealed with `mode=emergency_rework` to the same
+  job, request, and session and to the new revision. Codex independently
+  observed 3 tests pass, `git diff --check` pass, and a five-case hidden slug
+  matrix pass.
+- Codex accepted that exact second revision. The final receipt and status were
+  `state=codex_accepted`, `landable=true`, `audit_count=2`, `rework_count=1`,
+  `emergency_activations=2`. After graceful EOF the per-instance status kept
+  those diagnostic facts with `lifecycle=closed` and `alive=false`.
+- The status index simultaneously retained a separate earlier closed process
+  row under a different instance id. That is direct multi-instance evidence: no
+  latest-writer clobber occurred.
+
+Independent Codex verification on the final `flyto-ai` diff: focused route,
+emergency/status, and CLI suites **297 passed**; unrestricted complete suite
+**2001 passed, 17 skipped**; Ruff passed; 23 generated references current;
+`git diff --check` passed. A full Indexer rebuild covered 238 files, 3665
+symbols, and 21818 dependencies with 0 errors, and strict verify was 18 pass,
+0 warn, 0 fail.
 
 ## Historical
 

@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Repaired the strict coding route for ordinary tasks. Every host-owned
+  Indexer search — initial discovery, gate remediation, and translated plan
+  steps — is now scoped to the workspace project. An unscoped smart search
+  fanned out over every indexed project and exceeded the 30-second capability
+  bound, so the mandatory pre-work lane failed before the configured
+  implementer ever started. The capability bound is unchanged.
+- Failed route lanes keep their evidence. A failed lane receipt now retains
+  every completed call plus one failed call naming the exact host-derived
+  action (`structure`, `search`, `task.plan`, `task.gate.<phase>`,
+  `task.validate`, `verify.strict`), bounded by the configured per-lane call
+  limit. A transport timeout is classified `capability_timeout` from a closed
+  machine code rather than collapsed into a generic `domain_failure`, and a
+  capability that fails to launch names the lane whose provider was actually
+  unavailable instead of always blaming `indexer_pre`.
+- Added `flyto.coding-route-status.v1`: bounded durable runtime status under
+  the service state root. Each service instance owns
+  `status/instance-<id>.json` and shares a validated, byte-bounded
+  `status/index.json`, so concurrent `code-mcp` processes never overwrite one
+  another. Records carry an opaque instance id, an immutable build digest of
+  the loaded coding sources, process id, start time, lifecycle, job state,
+  route lane/action, stable failure code, implementer-start truth, and bounded
+  session/revision ids — and no message, path, error text, file list,
+  environment, or credential. Retention is bounded and stale instances are
+  collected deterministically.
+- Added `flyto-ai code-status --state-dir <dir> [--json]`, a read-only
+  inspection command that lists coexisting service instances with their build
+  ids, liveness, and staleness. It states explicitly that processes started
+  before this schema publish no row and cannot appear retroactively.
+- `implementer_started` is now recorded in the durable job record immediately
+  before every real implementer invocation, never inferred from `running`, and
+  is exposed additively on the public job receipt. A round that fails after
+  implementation keeps its session id, attributable files, and revision digest
+  as proof the model ran, while staying terminal and non-landable.
+- Added the startup-only `flyto.coding-emergency.v1` overflow lane for a
+  provably unreachable route infrastructure, enabled with
+  `--emergency-overflow-backend` (which must equal `--implementation-backend`)
+  and `--emergency-overflow-threshold` on `code-mcp` and `code-serve`. It
+  triggers only for a positively classified `capability_unavailable` /
+  `capability_timeout` failure in a pre-implementer lane with no recorded
+  implementer start and no attributable edit; a domain refusal, gate denial,
+  stale index, malformed evidence, failed check, failed implementation, Core
+  failure, Indexer post failure, audit rejection, or rework exhaustion never
+  opens it. Emergency rounds call the same startup-selected implementer, keep
+  the required source-controlled checks and exact-revision binding, and still
+  require an independent Codex audit through a separate digest-validated
+  authority receipt sealed to that job, request, session, and revision.
+  `CodingRouteReceipt(strict=True)` is unchanged and a failed strict route
+  never becomes landable.
+
 - `code-mcp` processes may now share one durable coding state root, so Codex
   can create or resume multiple conversations without the second MCP process
   exiting during `initialize`. Short cross-process state guards preserve

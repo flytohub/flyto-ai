@@ -7,6 +7,8 @@ import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+import pytest
+
 from flyto_ai.cli import main, _post_webhook
 
 
@@ -412,3 +414,156 @@ def test_claude_route_reads_no_native_provider_configuration(tmp_path, monkeypat
         assert options["model"] == "claude-opus-5"
     finally:
         service.close()
+
+
+# ── emergency overflow: startup-only authority ────────────────────────
+
+
+def _parse_with_shipped_parser(argv):
+    """Run the shipped parser without executing any command handler."""
+    import flyto_ai.cli as cli
+
+    captured = {}
+
+    def capture(args):
+        captured["args"] = args
+
+    saved_argv, sys.argv = sys.argv, argv
+    saved = {}
+    for name in ("_cmd_code_serve", "_cmd_code_mcp", "_cmd_code_status"):
+        saved[name] = getattr(cli, name)
+        setattr(cli, name, capture)
+    try:
+        cli.main()
+    finally:
+        sys.argv = saved_argv
+        for name, handler in saved.items():
+            setattr(cli, name, handler)
+    return captured["args"]
+
+
+def test_both_public_service_commands_expose_the_emergency_flags():
+    for command in ("code-serve", "code-mcp"):
+        args = _parse_with_shipped_parser([
+            "flyto-ai", command, "--tenant", "t", "--workspace-root", ".",
+        ])
+        # Absent flag means absent authority.
+        assert args.emergency_overflow_backend is None
+        assert args.emergency_overflow_threshold == 1
+
+        args = _parse_with_shipped_parser([
+            "flyto-ai", command, "--tenant", "t", "--workspace-root", ".",
+            "--implementation-backend", "claude",
+            "--emergency-overflow-backend", "claude",
+            "--emergency-overflow-threshold", "2",
+        ])
+        assert args.emergency_overflow_backend == "claude"
+        assert args.emergency_overflow_threshold == 2
+
+
+def test_the_emergency_target_must_match_the_selected_implementer(tmp_path, monkeypatch):
+    import flyto_ai.cli as cli
+
+    monkeypatch.setattr(
+        cli, "_create_native_coding_provider", lambda args: _StubProvider(),
+    )
+    with pytest.raises(ValueError, match="must match --implementation-backend"):
+        cli._build_coding_service(_service_args(
+            tmp_path,
+            implementation_backend="native",
+            emergency_overflow_backend="claude",
+        ))
+
+
+def test_emergency_authority_is_off_unless_the_startup_flag_is_present(
+    tmp_path, monkeypatch,
+):
+    import flyto_ai.cli as cli
+
+    monkeypatch.setattr(
+        cli, "_create_native_coding_provider", lambda args: _StubProvider(),
+    )
+    # No environment variable may grant this authority.
+    monkeypatch.setenv("FLYTO_AI_CODING_EMERGENCY", "claude")
+    monkeypatch.setenv("FLYTO_AI_EMERGENCY_OVERFLOW", "1")
+    service = cli._build_coding_service(_service_args(tmp_path))
+    try:
+        assert service.emergency_policy.enabled is False
+        assert service.emergency_policy.applies_to("native") is False
+        assert service._breaker.state == "closed"
+    finally:
+        service.close()
+
+    granted = cli._build_coding_service(_service_args(
+        tmp_path,
+        state_dir=str(tmp_path / "granted-state"),
+        emergency_overflow_backend="native",
+    ))
+    try:
+        assert granted.emergency_policy.enabled is True
+        assert granted.emergency_policy.backend == "native"
+        assert granted.emergency_policy.failure_threshold == 1
+        assert granted._breaker.state == "closed"
+    finally:
+        granted.close()
+
+
+def test_code_status_reports_instances_without_starting_a_service(
+    tmp_path, monkeypatch, capsys,
+):
+    import flyto_ai.cli as cli
+    from flyto_ai.coding.route_status import RouteStatusPublisher
+
+    state_dir = tmp_path / "status-state"
+    publisher = RouteStatusPublisher(
+        state_dir, instance_id="1" * 24, build_id="b" * 24, version="9.9.9",
+    )
+    import time
+
+    from flyto_ai.coding.route_status import CodingRouteStatus
+
+    now = time.time()
+    publisher.publish(CodingRouteStatus(
+        instance_id="1" * 24, build_id="b" * 24, service_version="9.9.9",
+        process_id=os.getpid(), started_at=now - 5, updated_at=now,
+        implementation_backend="claude", job_id="job_" + "a" * 24,
+        state="failed", mode="emergency", lane="indexer_pre", action="search",
+        failure_code="route_capability_timeout",
+    ))
+
+    monkeypatch.setattr(
+        cli, "_build_coding_service",
+        lambda args: pytest.fail("code-status must never start a service"),
+    )
+    sys.argv = ["flyto-ai", "code-status", "--state-dir", str(state_dir), "--json"]
+    cli.main()
+    report = json.loads(capsys.readouterr().out)
+    assert len(report["instances"]) == 1
+    row = report["instances"][0]
+    assert row["instance_id"] == "1" * 24
+    assert row["build_id"] == "b" * 24
+    assert row["mode"] == "emergency"
+    assert row["lane"] == "indexer_pre" and row["action"] == "search"
+    assert row["stale"] is False
+    assert "retroactively" in report["note"]
+    # No prompt, path, or error prose escapes into the report.
+    serialized = json.dumps(report["instances"])
+    assert "improve the workspace" not in serialized
+    assert str(tmp_path) not in serialized
+
+    sys.argv = ["flyto-ai", "code-status", "--state-dir", str(state_dir)]
+    cli.main()
+    text = capsys.readouterr().out
+    assert "1" * 24 in text and "mode=emergency" in text
+
+
+def test_code_status_on_an_empty_state_root_is_quiet_and_safe(tmp_path, capsys):
+    import flyto_ai.cli as cli
+
+    sys.argv = [
+        "flyto-ai", "code-status", "--state-dir", str(tmp_path / "nothing"), "--json",
+    ]
+    cli.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["instances"] == []
+    assert not (tmp_path / "nothing" / "status").exists()

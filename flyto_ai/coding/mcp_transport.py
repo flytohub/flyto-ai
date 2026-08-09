@@ -18,6 +18,28 @@ MAX_MCP_MESSAGE_BYTES = 1024 * 1024
 MAX_MCP_INFLIGHT_REQUESTS = 32
 
 
+class CapabilityTimeout(RuntimeError):
+    """One bounded capability request exceeded its configured deadline.
+
+    The exception *type* is the classification. A caller must never parse the
+    message text to learn that a call timed out: the host maps this exact type
+    to one stable machine code, so route evidence can distinguish transport
+    exhaustion from a real domain refusal.
+    """
+
+
+def capability_failure_code(exc: BaseException) -> str:
+    """Classify one dispatch failure into a closed, stable machine code.
+
+    An unrecognised failure returns an empty string on purpose. A code is
+    evidence, and inventing one for an unclassified error would be a claim the
+    transport cannot support.
+    """
+    if isinstance(exc, CapabilityTimeout):
+        return "timeout"
+    return ""
+
+
 def encode_mcp_message(payload: Dict[str, Any]) -> bytes:
     """Encode one newline-delimited JSON-RPC message under the byte limit."""
     encoded = json.dumps(
@@ -166,7 +188,7 @@ class McpJsonRpcTransport:
                     )
                 except asyncio.TimeoutError as exc:
                     await self._notify_cancelled(request_id, "request timed out")
-                    raise RuntimeError("capability request timed out") from exc
+                    raise CapabilityTimeout("capability request timed out") from exc
                 except asyncio.CancelledError:
                     await self._notify_cancelled(request_id, "caller cancelled")
                     raise

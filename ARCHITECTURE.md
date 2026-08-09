@@ -279,6 +279,49 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
   -> durable CodingJobReceipt + secret-free CodingRouteReceipt
 ```
 
+Every host-owned Indexer search in this chain is scoped to the workspace
+project. An unscoped smart search fans out across every indexed project and
+exceeded the 30-second capability bound, failing the mandatory pre-work lane
+before any implementer could start. Lane evidence also survives a partial
+lane: a failed lane receipt keeps every completed call plus one failed call
+naming the exact host-derived action (`structure`, `search`, `task.plan`,
+`task.gate.<phase>`, `task.validate`, `verify.strict`), and a transport
+timeout is classified `capability_timeout` instead of collapsing into
+`domain_failure`.
+
+Optional emergency overflow (`flyto.coding-emergency.v1`, startup-only):
+
+```text
+strict route fails before the implementer, with a positively classified
+route-infrastructure code (capability_unavailable | capability_timeout)
+in a pre-implementer lane, no attributable edit, no recorded start
+  -> host-owned circuit breaker (per process, monotonic, opens once)
+  -> the same startup-selected implementer, called directly
+     + the same required source-controlled checks
+     + the same exact-revision binding
+  -> awaiting_codex_audit under a separate digest-validated
+     EmergencyAuthorityReceipt, never under CodingRouteReceipt(strict=True)
+  -> the same independent Codex audit; still never commits or pushes
+```
+
+The overflow lane is authority, not a fallback. It is granted per process by
+an explicit startup flag naming the exact implementer; it never triggers for a
+domain refusal, gate denial, stale index, malformed evidence, failed check,
+failed implementation, Core failure, Indexer post failure, audit rejection, or
+rework exhaustion; and it never runs a second implementation for a job whose
+durable record already recorded a start. Recovery is a new process: a repaired
+build starts with a closed circuit and publishes a new build id.
+
+`flyto.coding-route-status.v1` adds bounded durable runtime status under the
+state root. Each service instance owns `status/instance-<id>.json` and shares
+`status/index.json`, so concurrent `code-mcp` processes never overwrite one
+another's diagnostics. A record carries an opaque instance id, an immutable
+build digest of the loaded coding sources, process id, start time, lifecycle,
+job state, route lane/action, stable failure code, implementer-start truth,
+and bounded session/revision ids — never a message, path, error text, file
+list, environment, or credential. Per-job JSON stays authoritative; this is a
+pointer for a Codex that restarted, read by `flyto-ai code-status`.
+
 The lanes are host-owned, not a prompt convention. `flyto_ai.coding.route`
 owns the typed policy, the allowlists, the bounded loops, and the evidence.
 The implementer receives no audit tool and cannot assert that a lane ran: a

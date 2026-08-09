@@ -112,6 +112,14 @@ CORE_ALLOWED_TOOLS = (
     "list_modules", "search_modules", "get_module_info", "get_module_examples",
     "validate_params", "list_recipes", "get_core_capability_manifest",
 )
+#: Stable host-side classification for a transport-level capability failure.
+#: The route never parses provider prose: the capability adapter reports one
+#: closed machine code and only these values map to a distinct lane reason.
+#: Anything unclassified stays `domain_failure`, which is the conservative
+#: reading of "the call did not succeed".
+CAPABILITY_FAILURE_REASONS = {
+    "timeout": "capability_timeout",
+}
 #: Paths whose change makes the Core contract relevant to this round.
 CORE_RELEVANT_MARKERS = (
     "flyto-core", "flyto_core", "core_tools", "execute_module", "validate_params",
@@ -129,6 +137,10 @@ class RouteLane(str, Enum):
     INDEXER_POST = "indexer_post"
 
 
+#: Hard ceiling on the calls one lane receipt may carry, independent of the
+#: configured per-lane bound. It keeps a receipt bounded even if a policy
+#: raises `max_calls_per_lane`.
+MAX_LANE_CALL_RECORDS = 256
 #: Canonical lane order for a strict successful receipt.
 CANONICAL_ROUTE_LANE_NAMES = ("indexer_pre", "blueprint", "core", "indexer_post")
 #: Evidence a mandatory lane must actually carry, keyed by detail code.
@@ -305,7 +317,7 @@ class RouteLaneReceipt:
         object.__setattr__(self, "calls", tuple(self.calls))
         if any(not isinstance(item, RouteCallRecord) for item in self.calls):
             raise ValueError("route lane calls must be RouteCallRecord values")
-        if len(self.calls) > 256:
+        if len(self.calls) > MAX_LANE_CALL_RECORDS:
             raise ValueError("route lane calls exceed the bound")
         for name in ("gates_passed", "gates_failed"):
             values = tuple(getattr(self, name))
@@ -604,8 +616,43 @@ def route_thread_id(supplied: Any) -> str:
     )
 
 
+def route_failure_point(receipt: "CodingRouteReceipt") -> Tuple[str, str, str]:
+    """Return `(lane, action, failure_code)` for one receipt.
+
+    A reader should not have to re-derive where a round stopped. For a failed
+    receipt this is the failed lane, the exact action of its failed call, and
+    the stable failure code. For a successful one it is the last lane and its
+    last recorded action. Missing evidence yields empty strings rather than a
+    guess.
+    """
+    if not isinstance(receipt, CodingRouteReceipt) or not receipt.lanes:
+        return "", "", getattr(receipt, "failure_code", "") or ""
+    failed = [lane for lane in receipt.lanes if lane.status is RouteLaneStatus.FAILED]
+    lane = failed[-1] if failed else receipt.lanes[-1]
+    if failed:
+        unsuccessful = [call for call in lane.calls if not call.ok]
+        action = unsuccessful[-1].action if unsuccessful else ""
+    else:
+        action = lane.calls[-1].action if lane.calls else ""
+    return lane.lane, action, receipt.failure_code
+
+
 LaneDispatch = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
 Implement = Callable[[CodingTaskRequest, str], Awaitable[CodingTaskResult]]
+
+
+@dataclass
+class _LaneTrace:
+    """Mutable bounded evidence for the lane that is currently running.
+
+    A lane receipt used to be built only after the lane finished, so a lane
+    that failed halfway published `calls=[]` and lost every completed call
+    plus the identity of the call that actually failed. The trace keeps that
+    evidence available to the fail-closed path.
+    """
+
+    lane: RouteLane
+    calls: list = field(default_factory=list)
 
 
 class CodingRouteOrchestrator:
@@ -623,6 +670,7 @@ class CodingRouteOrchestrator:
         self._capability_dispatch = capability_dispatch
         self._core_dispatch = core_dispatch
         self._lanes: list[RouteLaneReceipt] = []
+        self._trace: Optional[_LaneTrace] = None
 
     def _lane_required(self, lane: RouteLane) -> bool:
         """On a strict route all four lanes are mandatory, never detachable."""
@@ -632,23 +680,65 @@ class CodingRouteOrchestrator:
 
     # ---- lane primitives -------------------------------------------------
 
-    async def _call(self, lane: RouteLane, tool: str, arguments: Dict[str, Any]) -> Any:
+    def _begin_lane(self, lane: RouteLane) -> list:
+        """Open one lane's call trace and return the list it records into."""
+        self._trace = _LaneTrace(lane)
+        return self._trace.calls
+
+    def _failed_call(self, code: str, lane: RouteLane, action: str) -> CodingRouteError:
+        """Record the exact call that failed, then return the closing error.
+
+        The action is derived host-side and the detail code is a stable
+        classification. No argument, prompt, prose, path, or exception text
+        reaches the receipt. The record still has to fit inside the configured
+        per-lane bound, so an already-saturated lane keeps its completed calls
+        and reports the failure through the lane reason code alone.
+        """
+        trace = self._trace
+        bound = min(self.limits.max_calls_per_lane, MAX_LANE_CALL_RECORDS - 1)
+        if (
+            trace is not None
+            and trace.lane is lane
+            and len(trace.calls) <= bound
+            and _ACTION_RE.fullmatch(action)
+        ):
+            trace.calls.append(RouteCallRecord(lane.value, action, False, code))
+        return CodingRouteError(code, lane)
+
+    @staticmethod
+    def _capability_reason(raw: Mapping[str, Any]) -> str:
+        """Map a closed capability failure classification to a lane reason."""
+        code = raw.get("capability_code")
+        if not isinstance(code, str):
+            return "domain_failure"
+        return CAPABILITY_FAILURE_REASONS.get(code, "domain_failure")
+
+    async def _call(
+        self,
+        lane: RouteLane,
+        tool: str,
+        arguments: Dict[str, Any],
+        *,
+        action: str = "",
+    ) -> Any:
         """Dispatch one allowlisted call and validate its shape, not its prose."""
+        recorded = action or tool
         if self._capability_dispatch is None:
-            raise CodingRouteError("capability_unavailable", lane)
+            raise self._failed_call("capability_unavailable", lane, recorded)
         raw = await self._capability_dispatch(tool, arguments)
         if not isinstance(raw, Mapping):
-            raise CodingRouteError("malformed_evidence", lane)
+            raise self._failed_call("malformed_evidence", lane, recorded)
         try:
             bounded_payload(raw, self.limits)
         except ValueError as exc:
-            raise CodingRouteError("response_bound_exceeded", lane) from exc
+            raise self._failed_call("response_bound_exceeded", lane, recorded) from exc
         if raw.get("ok") is not True:
-            raise CodingRouteError("domain_failure", lane)
-        return self._domain_payload(raw, lane)
+            raise self._failed_call(self._capability_reason(raw), lane, recorded)
+        return self._domain_payload(raw, lane, recorded)
 
-    @staticmethod
-    def _domain_payload(raw: Mapping[str, Any], lane: RouteLane) -> Any:
+    def _domain_payload(
+        self, raw: Mapping[str, Any], lane: RouteLane, action: str = "",
+    ) -> Any:
         """Unwrap the negotiated MCP envelope down to its domain result.
 
         The Indexer returns its domain dict as `structuredContent` carrying a
@@ -656,11 +746,12 @@ class CodingRouteOrchestrator:
         success is not domain success: `isError`, a nested `ok: false`, and a
         domain `error` key all fail the lane.
         """
+        recorded = action or "unknown"
         payload = raw.get("result", raw)
         if not isinstance(payload, Mapping):
             return payload
         if payload.get("isError") is True:
-            raise CodingRouteError("domain_failure", lane)
+            raise self._failed_call("domain_failure", lane, recorded)
         inner = payload.get("structuredContent")
         if inner is None and isinstance(payload.get("content"), (list, tuple)):
             for block in payload["content"]:
@@ -674,19 +765,21 @@ class CodingRouteOrchestrator:
                     except (TypeError, ValueError) as exc:
                         # A text block that should carry JSON but does not is
                         # malformed evidence, never an empty success.
-                        raise CodingRouteError("malformed_evidence", lane) from exc
+                        raise self._failed_call(
+                            "malformed_evidence", lane, recorded,
+                        ) from exc
                     break
         if inner is None:
             return payload
         if not isinstance(inner, Mapping):
-            raise CodingRouteError("malformed_evidence", lane)
+            raise self._failed_call("malformed_evidence", lane, recorded)
         if inner.get("ok") is False or inner.get("error"):
-            raise CodingRouteError("domain_failure", lane)
+            raise self._failed_call("domain_failure", lane, recorded)
         runtime = inner.get("_runtime")
         if isinstance(runtime, Mapping):
             freshness = str(runtime.get("index_freshness", "")).lower()
             if "stale" in freshness or "missing" in freshness:
-                raise CodingRouteError("index_stale", lane)
+                raise self._failed_call("index_stale", lane, recorded)
         domain = {key: value for key, value in inner.items() if key != "_runtime"}
         # A legacy scalar result is wrapped by the server under `result`.
         if set(domain) == {"result"}:
@@ -714,7 +807,7 @@ class CodingRouteOrchestrator:
         `args`. Every required gate must pass before the implementer may edit.
         """
         lane = RouteLane.INDEXER_PRE
-        calls: list = []
+        calls = self._begin_lane(lane)
         allowed = self._indexer_catalog(lane)
         for required in ("task", "verify"):
             if required not in allowed:
@@ -722,9 +815,11 @@ class CodingRouteOrchestrator:
 
         project = Path(request.working_dir).name
         # Bounded host discovery. Its only job is to derive plan targets.
-        await self._call(lane, "structure", {"project": project})
+        await self._call(lane, "structure", {"project": project}, action="structure")
         calls.append(RouteCallRecord(lane.value, "structure", True, "context"))
-        found = await self._call(lane, "search", {"query": request.message[:500]})
+        found = await self._call(
+            lane, "search", self._search_args(request.message, project), action="search",
+        )
         calls.append(RouteCallRecord(lane.value, "search", True, "context"))
         targets = self._derive_targets(found)
 
@@ -734,7 +829,7 @@ class CodingRouteOrchestrator:
             "targets": targets,
             "intent": self.infer_intent(request.message),
             "project": project,
-        })
+        }, action="task.plan")
         calls.append(RouteCallRecord(lane.value, "task.plan", True, "plan"))
         if not isinstance(plan_result, Mapping):
             raise CodingRouteError("malformed_evidence", lane)
@@ -769,13 +864,13 @@ class CodingRouteOrchestrator:
                 if marker not in gates_passed:
                     gates_passed.append(marker)
             else:
-                translated = self._translate_step(tool, args, allowed)
+                translated = self._translate_step(tool, args, allowed, project)
                 if translated is None:
                     # Nothing ran, so nothing is recorded. An operation this
                     # host cannot execute is refused, required or not.
                     raise CodingRouteError("plan_step_not_allowlisted", lane)
                 public_tool, public_args = translated
-                await self._call(lane, public_tool, public_args)
+                await self._call(lane, public_tool, public_args, action=public_tool)
                 calls.append(RouteCallRecord(lane.value, public_tool, True, "plan_step"))
             if len(calls) > self.limits.max_calls_per_lane:
                 raise CodingRouteError("call_bound_exceeded", lane)
@@ -807,7 +902,7 @@ class CodingRouteOrchestrator:
     ) -> RouteLaneReceipt:
         """Validate the real final workspace, then run the strict verify gate."""
         lane = RouteLane.INDEXER_POST
-        calls: list = []
+        calls = self._begin_lane(lane)
         allowed = self._indexer_catalog(lane)
         for required in ("task", "verify"):
             if required not in allowed:
@@ -834,7 +929,7 @@ class CodingRouteOrchestrator:
             "task_contract": dict(contract),
             "project": project,
             "run_tests": False,
-        })
+        }, action="task.validate")
         calls.append(RouteCallRecord(lane.value, "task.validate", True, "validate"))
         if not self._validation_passed(validated):
             # Absence of a positive result is not success.
@@ -856,7 +951,7 @@ class CodingRouteOrchestrator:
 
         verified = await self._call(lane, "verify", {
             "path": request.working_dir, "strict": True,
-        })
+        }, action="verify.strict")
         calls.append(RouteCallRecord(lane.value, "verify.strict", True, "strict_verify"))
         if not isinstance(verified, Mapping):
             raise CodingRouteError("malformed_evidence", lane)
@@ -869,7 +964,22 @@ class CodingRouteOrchestrator:
         )
 
     @staticmethod
-    def _translate_step(tool, args, allowed):
+    def _search_args(query: str, project: str) -> Dict[str, Any]:
+        """Scope one host-owned search to the project this round is editing.
+
+        The Indexer's smart search fans out across every indexed project and
+        enriches each hit, which routinely exceeds the capability deadline on a
+        multi-project machine. The project is already derived from the
+        workspace, so every search this host issues carries it. This is a
+        narrowing of an over-broad query, not a relaxed bound.
+        """
+        arguments: Dict[str, Any] = {"query": str(query or "")[:500]}
+        if project:
+            arguments["project"] = project
+        return arguments
+
+    @classmethod
+    def _translate_step(cls, tool, args, allowed, project=""):
         """Map one plan operation to an exact allowlisted public call.
 
         The canonical runtime returns public tool names directly. Older
@@ -883,13 +993,20 @@ class CodingRouteOrchestrator:
         if public_tool not in INDEXER_PLAN_STEP_TOOLS or public_tool not in allowed:
             return None
         if rename is None:
-            return public_tool, dict(args)
+            arguments = dict(args)
+            if public_tool == "search" and project and "project" not in arguments:
+                # A plan that names its own project keeps it; one that does not
+                # is scoped to the workspace rather than to every index.
+                arguments["project"] = project
+            return public_tool, arguments
         source, target = rename
         value = args.get(source)
         if not isinstance(value, str) or not value:
             return None
         if public_tool == "search":
-            return public_tool, {"query": "tests covering {}".format(value)[:200]}
+            return public_tool, cls._search_args(
+                "tests covering {}".format(value)[:200], project,
+            )
         if public_tool == "structure":
             return public_tool, {"focus": "dependencies", "path": value}
         return public_tool, {target: value}
@@ -1060,6 +1177,7 @@ class CodingRouteOrchestrator:
         after the matching real call completed; a key needing human or
         external authority fails closed instead of being asserted.
         """
+        marker = "task.gate.{}".format(phase)
         for attempt in range(self.limits.max_gate_remediations + 1):
             result = await self._call(lane, "task", {
                 "action": "gate",
@@ -1067,7 +1185,7 @@ class CodingRouteOrchestrator:
                 "next_phase": phase,
                 "current_state": dict(state),
                 "project": project,
-            })
+            }, action=marker if _ACTION_RE.fullmatch(marker) else "task.gate")
             if not isinstance(result, Mapping):
                 raise CodingRouteError("malformed_evidence", lane)
             passed = result.get("pass")
@@ -1095,7 +1213,10 @@ class CodingRouteOrchestrator:
                 tool = INDEXER_REMEDIATION.get(name)
                 if tool is None:
                     raise CodingRouteError("gate_not_remediable", lane)
-                await self._call(lane, tool, self._remediation_args(tool, project, targets))
+                await self._call(
+                    lane, tool, self._remediation_args(tool, project, targets),
+                    action=tool,
+                )
                 calls.append(RouteCallRecord(lane.value, tool, True, "remediation"))
                 # Only now, with completed evidence, may the exact key be set.
                 state[name] = True
@@ -1106,14 +1227,20 @@ class CodingRouteOrchestrator:
                 raise CodingRouteError("gate_not_remediable", lane)
         raise CodingRouteError("gate_not_satisfied", lane)
 
-    @staticmethod
-    def _remediation_args(tool: str, project: str, targets: Sequence[str]) -> Dict[str, Any]:
+    @classmethod
+    def _remediation_args(
+        cls, tool: str, project: str, targets: Sequence[str],
+    ) -> Dict[str, Any]:
         if tool == "impact":
             if targets:
                 return {"target": str(targets[0]), "project": project}
             return {"mode": "unstaged", "project": project}
         if tool == "search":
-            return {"query": "tests for {}".format(targets[0] if targets else project)[:200]}
+            # Remediation is host-owned discovery too, so it carries the same
+            # project scope as the initial search.
+            return cls._search_args(
+                "tests for {}".format(targets[0] if targets else project)[:200], project,
+            )
         return {"project": project}
 
     # ---- Blueprint -------------------------------------------------------
@@ -1121,6 +1248,7 @@ class CodingRouteOrchestrator:
     async def _blueprint(self, request: CodingTaskRequest) -> Tuple[RouteLaneReceipt, str]:
         """Bounded read-only reuse discovery. Never execution authority."""
         lane = RouteLane.BLUEPRINT
+        calls = self._begin_lane(lane)
         if self.policy.blueprint is None:
             return RouteLaneReceipt(
                 lane=lane.value, required=self._lane_required(lane),
@@ -1134,8 +1262,10 @@ class CodingRouteOrchestrator:
             (name for name in BLUEPRINT_ALLOWED_TOOLS if name in allowed),
             sorted(allowed)[0],
         )
-        result = await self._call(lane, search, {"query": request.message[:500]})
-        calls = [RouteCallRecord(lane.value, search, True, "completed")]
+        result = await self._call(
+            lane, search, {"query": request.message[:500]}, action=search,
+        )
+        calls.append(RouteCallRecord(lane.value, search, True, "completed"))
         matches = self._lane_projection(result, ("blueprints", "matches", "results"))
         if not isinstance(matches, (list, tuple)) or not matches:
             return RouteLaneReceipt(
@@ -1248,16 +1378,16 @@ class CodingRouteOrchestrator:
         """Dispatch one allowlisted Core call through the supported adapter."""
         lane = RouteLane.CORE
         if tool not in CORE_ALLOWED_TOOLS:
-            raise CodingRouteError("action_not_allowlisted", lane)
+            raise self._failed_call("action_not_allowlisted", lane, tool)
         if self._core_dispatch is None:
-            raise CodingRouteError("core_proof_unavailable", lane)
+            raise self._failed_call("core_proof_unavailable", lane, tool)
         raw = await self._core_dispatch(tool, dict(arguments))
         if not isinstance(raw, Mapping):
-            raise CodingRouteError("malformed_evidence", lane)
+            raise self._failed_call("malformed_evidence", lane, tool)
         try:
             bounded_payload(raw, self.limits)
         except ValueError as exc:
-            raise CodingRouteError("response_bound_exceeded", lane) from exc
+            raise self._failed_call("response_bound_exceeded", lane, tool) from exc
         return raw
 
     async def _core(
@@ -1265,6 +1395,7 @@ class CodingRouteOrchestrator:
     ) -> RouteLaneReceipt:
         """Prove the changed Core contract, or fail closed. Never assume."""
         lane = RouteLane.CORE
+        calls = self._begin_lane(lane)
         if not self.policy.core_enabled:
             return RouteLaneReceipt(
                 lane=lane.value, required=self._lane_required(lane),
@@ -1282,7 +1413,6 @@ class CodingRouteOrchestrator:
         if self._core_dispatch is None:
             raise CodingRouteError("core_proof_unavailable", lane)
 
-        calls: list = []
         # Step 1: identify a concrete changed module. Discovery alone is never
         # the proof; it only supplies the subject of the proof.
         module_id = ""
@@ -1435,11 +1565,20 @@ class CodingRouteOrchestrator:
     ) -> Tuple[CodingTaskResult, CodingRouteReceipt]:
         """Force a non-auditable failed round with stable, secret-free codes."""
         lanes = list(lanes)
+        trace = self._trace
+        # Every call this lane completed before the failure, plus the one call
+        # that failed, stay in the receipt. A lane that stopped halfway is not
+        # a lane that did nothing.
+        calls = (
+            tuple(trace.calls)
+            if trace is not None and trace.lane is exc.lane else ()
+        )
         lanes.append(RouteLaneReceipt(
             lane=exc.lane.value,
             required=self._lane_required(exc.lane),
             status=RouteLaneStatus.FAILED,
             reason_code=exc.code,
+            calls=calls,
         ))
         receipt = CodingRouteReceipt(
             strict=self.policy.strict, ok=False,

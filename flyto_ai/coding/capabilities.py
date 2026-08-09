@@ -21,7 +21,11 @@ from flyto_ai.coding.execution_trace import (
     TraceNormalizer,
 )
 from flyto_ai.coding.mcp_session import McpStdioSession
-from flyto_ai.coding.mcp_transport import MAX_MCP_MESSAGE_BYTES
+from flyto_ai.coding.mcp_transport import (
+    MAX_MCP_MESSAGE_BYTES,
+    CapabilityTimeout,
+    capability_failure_code,
+)
 from flyto_ai.coding.permissions import (
     CapabilityPermissionGate,
     PermissionRiskResolver,
@@ -32,6 +36,7 @@ from flyto_ai.permissions import PermissionLevel
 
 __all__ = [
     "CapabilityManager",
+    "CapabilityTimeout",
     "MAX_MCP_MESSAGE_BYTES",
     "McpStdioSession",
 ]
@@ -235,6 +240,12 @@ class CapabilityManager:
                 "error": str(exc)[:1000],
                 "capability_failed": True,
             }
+            code = capability_failure_code(exc)
+            if code:
+                # A stable machine classification travels beside the prose so
+                # a caller never has to parse an error message to learn that
+                # the transport, not the domain, refused the call.
+                result["capability_code"] = code
 
         completion = await asyncio.shield(
             admission.finish(result.get("ok") is True, result),

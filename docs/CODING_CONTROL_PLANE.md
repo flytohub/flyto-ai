@@ -519,6 +519,15 @@ and `Idempotency-Key`; the built-in server binds only to loopback because public
 TLS, identity, quota, and organization policy belong at the Flyto2 Cloud edge.
 MCP stdio receives its tenant from process configuration.
 
+The state root may be shared by multiple `code-mcp` processes. This is required
+because Codex starts a separate stdio MCP server for each conversation. The
+service coordinates them with three bounded lock scopes: a short state guard
+for idempotency and audit transitions, a per-job execution lease released by
+the operating system after a crash, and a hashed per-workspace lock held only
+while an implementation round can edit files. Starting a new MCP process never
+fails merely because another conversation is live, and restart reconciliation
+skips every job whose lease is still owned.
+
 Start either transport without putting a credential on the command line:
 
 ```bash
@@ -547,11 +556,13 @@ workspace, thread/resume, attempt/round bounds, and whether an attributable
 change is required. Checks and capabilities come only from the repo config that
 the service loads before the provider round starts.
 
-Jobs are serialized per workspace and bounded across the service. Repeating the
-same idempotency key and request returns the original job; reusing the key for a
+Jobs are serialized per workspace across service processes and bounded within
+each process. Repeating the same idempotency key and request returns the
+original job even through a different MCP process; reusing the key for a
 different request fails. Tenant directories use one-way tenant references, and
-a lookup never scans another tenant. An interrupted queued/running job becomes
-`service_restarted` on restart instead of being reported as successful.
+a lookup never scans another tenant. An unleased interrupted queued/running job
+becomes `service_restarted` on startup instead of being reported as successful;
+a live leased job is left untouched.
 
 ## Security boundary
 

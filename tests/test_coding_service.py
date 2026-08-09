@@ -261,6 +261,61 @@ def test_service_serializes_jobs_that_share_a_workspace(tmp_path: Path) -> None:
         service.close()
 
 
+def test_services_share_one_state_root_without_reconciling_live_jobs(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    RealToolProvider.active = 0
+    RealToolProvider.max_active = 0
+    first = _service(tmp_path, workspace, delay=0.15)
+    second = None
+    try:
+        request = _request(workspace, message="shared", require_changes=False)
+        queued = first.submit("tenant-a", "shared-001", request)
+
+        # A second MCP process constructs another service over the same durable
+        # root. It must not fail startup or mark the live first job interrupted.
+        second = _service(tmp_path, workspace, delay=0.15)
+        duplicate = second.submit("tenant-a", "shared-001", request)
+        assert duplicate.job_id == queued.job_id
+        assert duplicate.state in {CodingJobState.QUEUED, CodingJobState.RUNNING}
+
+        completed = _wait(second, "tenant-a", queued.job_id)
+        assert completed.state is CodingJobState.COMPLETED
+        assert RealToolProvider.max_active == 1
+    finally:
+        if second is not None:
+            second.close()
+        first.close()
+
+
+def test_services_serialize_distinct_jobs_for_one_workspace_across_instances(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    RealToolProvider.active = 0
+    RealToolProvider.max_active = 0
+    first = _service(tmp_path, workspace, delay=0.1)
+    second = _service(tmp_path, workspace, delay=0.1)
+    try:
+        one = first.submit(
+            "tenant-a", "shared-parallel-001",
+            _request(workspace, message="one", require_changes=False),
+        )
+        two = second.submit(
+            "tenant-a", "shared-parallel-002",
+            _request(workspace, message="two", require_changes=False),
+        )
+        assert _wait(first, "tenant-a", one.job_id).state is CodingJobState.COMPLETED
+        assert _wait(second, "tenant-a", two.job_id).state is CodingJobState.COMPLETED
+        assert RealToolProvider.max_active == 1
+    finally:
+        second.close()
+        first.close()
+
+
 def test_http_server_requires_auth_rejects_provider_fields_and_runs_job(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

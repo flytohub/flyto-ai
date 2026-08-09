@@ -1,5 +1,29 @@
 # Decisions
 
+## 2026-08-09: Coding state roots support multiple MCP processes
+
+Codex starts one stdio MCP process per conversation. Treating the durable state
+root as a process-lifetime exclusive lease made the second conversation exit
+before its MCP `initialize` response with `coding state root is already served`.
+The state root is now explicitly a shared coordination boundary.
+
+- `.service.lock` is held only around short read/modify/write decisions, not
+  for the lifetime of a server process.
+- Every queued/running execution round owns a crash-released per-job lease.
+  A second service may reconcile an interrupted state only when that lease is
+  unowned, preventing both duplicate execution and false `service_restarted`.
+- Workspace edits remain serialized by a hashed cross-process workspace lock,
+  while atomic replacement remains the durable JSON record boundary.
+- Tenant hashing, idempotency, exact-revision audit, same-session rework,
+  route gates, backend selection, and the rule that only Codex may accept and
+  commit are unchanged. This is an operational concurrency correction, not a
+  new route, topology edge, fallback, or authority path.
+
+Rollback is to stop additional MCP processes and run one service instance; do
+not restore the root-lifetime lock because that reintroduces thread creation
+failure. If lease evidence cannot be acquired or validated, keep the affected
+job non-landable and fail closed.
+
 ## 2026-08-08: Physical judge cards are immutable model input
 
 - The competition judge physically draws one Zone card and one Objective card.

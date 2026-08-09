@@ -14,9 +14,10 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Protocol, Sequence, Tuple
 
 from flyto_ai.coding.contracts import (
     MAX_AUDIT_ROUNDS,
@@ -247,7 +248,9 @@ class CodingService:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*", self.sandbox_image):
             raise ValueError("sandbox_image is invalid")
         self._lock = threading.RLock()
+        self._state_lock_depth = 0
         self._workspace_locks: Dict[str, threading.Lock] = {}
+        self._job_leases: Dict[str, int] = {}
         # Resume context is process-local on purpose: the task prompt is not
         # persisted, so a restart cannot silently start a new session.
         self._resume: Dict[Tuple[str, str], CodingTaskRequest] = {}
@@ -262,15 +265,15 @@ class CodingService:
             # Never leave worker threads behind when construction fails.
             self._executor.shutdown(wait=False, cancel_futures=True)
             raise
-        if fcntl is not None:
-            try:
-                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:
-                os.close(self._lock_fd)
-                self._executor.shutdown(wait=False, cancel_futures=True)
-                raise CodingServiceBusy("coding state root is already served") from exc
         try:
-            self._reconcile_interrupted_jobs()
+            (self.state_root / "locks" / "jobs").mkdir(
+                parents=True, exist_ok=True, mode=0o700,
+            )
+            (self.state_root / "locks" / "workspaces").mkdir(
+                parents=True, exist_ok=True, mode=0o700,
+            )
+            with self._state_guard():
+                self._reconcile_interrupted_jobs()
         except BaseException:
             self.close(wait=False)
             raise
@@ -299,18 +302,25 @@ class CodingService:
         request_digest = self._request_digest(request)
         tenant_dir = self._tenant_dir(tenant_ref)
         idempotency_path = tenant_dir / "idempotency" / (hashlib.sha256(idempotency_key.encode()).hexdigest() + ".json")
-        with self._lock:
+        with self._state_guard():
             if self._closed:
                 raise CodingServiceError("coding service is closed")
             if idempotency_path.exists():
                 reference = self._read_json(idempotency_path)
                 if reference.get("request_sha256") != request_digest:
                     raise IdempotencyConflict("idempotency key was already used for another request")
-                return self.get(tenant_id, str(reference.get("job_id", "")))
+                referenced = str(reference.get("job_id", ""))
+                if not _JOB_ID.fullmatch(referenced):
+                    raise CodingServiceError("idempotency record is invalid")
+                return self._receipt(
+                    self._read_json(tenant_dir / "jobs" / (referenced + ".json")),
+                )
             if len(self._pending) >= self.max_queued:
                 raise CodingServiceBusy("coding job queue is full")
             now = time.time()
             job_id = "job_{}".format(uuid.uuid4().hex[:24])
+            if not self._acquire_job_lease(job_id):
+                raise CodingServiceBusy("coding job lease is already held")
             record = {
                 "job_id": job_id,
                 "state": CodingJobState.QUEUED.value,
@@ -332,12 +342,21 @@ class CodingService:
                 "audit_findings_sha256": "",
                 "landable": False,
             }
-            self._write_json(tenant_dir / "jobs" / (job_id + ".json"), record)
-            self._write_json(idempotency_path, {"job_id": job_id, "request_sha256": request_digest})
-            self._resume[(tenant_ref, job_id)] = request
-            future = self._executor.submit(self._run_job, tenant_ref, job_id, request)
+            try:
+                self._write_json(tenant_dir / "jobs" / (job_id + ".json"), record)
+                self._write_json(
+                    idempotency_path,
+                    {"job_id": job_id, "request_sha256": request_digest},
+                )
+                self._resume[(tenant_ref, job_id)] = request
+                future = self._executor.submit(self._run_job, tenant_ref, job_id, request)
+            except BaseException:
+                self._release_job_lease(job_id)
+                raise
             self._pending.add(future)
-            future.add_done_callback(self._forget_future)
+            future.add_done_callback(
+                lambda completed, claimed=job_id: self._forget_future(completed, claimed),
+            )
             return self._receipt(record)
 
     def get(self, tenant_id: str, job_id: str) -> CodingJobReceipt:
@@ -346,16 +365,20 @@ class CodingService:
         if not _JOB_ID.fullmatch(job_id):
             raise CodingJobNotFound("coding job does not exist")
         path = self._tenant_dir(self._tenant_ref(tenant_id), create=False) / "jobs" / (job_id + ".json")
-        try:
-            record = self._read_json(path)
-        except FileNotFoundError as exc:
-            raise CodingJobNotFound("coding job does not exist") from exc
-        # Reading an audit-ready, accepted, or landable record on a strict
-        # service revalidates its route evidence, so a job whose persisted
-        # proof was removed or edited can never read back as landable.
-        if str(record.get("state")) in _ROUTE_EVIDENCE_STATES or record.get("landable") is True:
-            self._require_route_evidence(record)
-        return self._receipt(record)
+        with self._state_guard():
+            try:
+                record = self._read_json(path)
+            except FileNotFoundError as exc:
+                raise CodingJobNotFound("coding job does not exist") from exc
+            # Reading an audit-ready, accepted, or landable record on a strict
+            # service revalidates its route evidence, so a job whose persisted
+            # proof was removed or edited can never read back as landable.
+            if (
+                str(record.get("state")) in _ROUTE_EVIDENCE_STATES
+                or record.get("landable") is True
+            ):
+                self._require_route_evidence(record)
+            return self._receipt(record)
 
     def audit(
         self,
@@ -381,7 +404,7 @@ class CodingService:
         if not self.require_codex_audit:
             raise AuditNotEnabled("this coding service does not require an audit")
         path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
-        with self._lock:
+        with self._state_guard():
             if self._closed:
                 raise CodingServiceError("coding service is closed")
             try:
@@ -403,7 +426,7 @@ class CodingService:
             if audit_count > MAX_AUDIT_ROUNDS:
                 raise ReworkLimitReached("coding job exhausted its audit rounds")
             if verdict is CodingAuditVerdict.ACCEPT:
-                self._update_record(
+                self._update_record_locked(
                     path,
                     state=CodingJobState.CODEX_ACCEPTED.value,
                     audit_count=audit_count,
@@ -425,8 +448,9 @@ class CodingService:
         # The state-root lease must outlive active worker writes. `wait=False`
         # cancels jobs that have not started but still drains running jobs.
         self._executor.shutdown(wait=True, cancel_futures=not wait)
-        if fcntl is not None:
-            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        with self._lock:
+            for job_id in tuple(self._job_leases):
+                self._release_job_lease(job_id)
         os.close(self._lock_fd)
 
     def _schedule_rework(
@@ -458,7 +482,9 @@ class CodingService:
             raise CodingServiceBusy("coding job queue is full")
         # Claim the job before queueing. A concurrent audit then observes a
         # non-awaiting state and cannot schedule a duplicate rework round.
-        self._update_record(
+        if not self._acquire_job_lease(job_id):
+            raise CodingServiceBusy("coding job is already being executed")
+        self._update_record_locked(
             path,
             state=CodingJobState.REWORK_QUEUED.value,
             audit_count=audit_count,
@@ -470,14 +496,17 @@ class CodingService:
         try:
             future = self._executor.submit(self._run_job, tenant_ref, job_id, request, rework=True)
         except RuntimeError as exc:
-            self._update_record(
+            self._update_record_locked(
                 path,
                 state=CodingJobState.FAILED.value,
                 failure_code="service_rework_not_scheduled",
             )
+            self._release_job_lease(job_id)
             raise CodingServiceError("coding rework could not be scheduled") from exc
         self._pending.add(future)
-        future.add_done_callback(self._forget_future)
+        future.add_done_callback(
+            lambda completed, claimed=job_id: self._forget_future(completed, claimed),
+        )
         return self._receipt(self._read_json(path))
 
     @staticmethod
@@ -870,18 +899,80 @@ class CodingService:
             raise RevisionUnavailable("an attributable path escapes the workspace")
         return target
 
-    def _forget_future(self, future: Future[Any]) -> None:
+    def _forget_future(self, future: Future[Any], job_id: str = "") -> None:
         with self._lock:
             self._pending.discard(future)
+            if job_id:
+                self._release_job_lease(job_id)
 
     def _assert_workspace(self, workspace: str) -> None:
         target = Path(workspace).resolve()
         if not any(target == root or root in target.parents for root in self.workspace_roots):
             raise WorkspaceDenied("working_dir is outside the configured workspace roots")
 
-    def _workspace_lock(self, workspace: str) -> threading.Lock:
+    @contextmanager
+    def _workspace_lock(self, workspace: str) -> Iterator[None]:
+        """Serialize edits to one workspace across threads and MCP processes."""
+
+        resolved = str(Path(workspace).resolve())
         with self._lock:
-            return self._workspace_locks.setdefault(str(Path(workspace).resolve()), threading.Lock())
+            local = self._workspace_locks.setdefault(resolved, threading.Lock())
+        digest = hashlib.sha256(resolved.encode()).hexdigest()
+        path = self.state_root / "locks" / "workspaces" / (digest + ".lock")
+        with local:
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+    @contextmanager
+    def _state_guard(self) -> Iterator[None]:
+        """Protect short state mutations without owning the root for process life."""
+
+        with self._lock:
+            outermost = self._state_lock_depth == 0
+            if outermost and fcntl is not None:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
+            self._state_lock_depth += 1
+            try:
+                yield
+            finally:
+                self._state_lock_depth -= 1
+                if outermost and fcntl is not None:
+                    fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+
+    def _job_lease_path(self, job_id: str) -> Path:
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingServiceError("coding job lease id is invalid")
+        return self.state_root / "locks" / "jobs" / (job_id + ".lock")
+
+    def _acquire_job_lease(self, job_id: str) -> bool:
+        """Claim one execution round; leases are released automatically on crash."""
+
+        if job_id in self._job_leases:
+            return False
+        fd = os.open(self._job_lease_path(job_id), os.O_CREAT | os.O_RDWR, 0o600)
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                return False
+        self._job_leases[job_id] = fd
+        return True
+
+    def _release_job_lease(self, job_id: str) -> None:
+        fd = self._job_leases.pop(job_id, None)
+        if fd is None:
+            return
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
     @staticmethod
     def _tenant_ref(tenant_id: str) -> str:
@@ -931,11 +1022,21 @@ class CodingService:
             raise
 
     def _update_record(self, path: Path, **changes: Any) -> None:
-        with self._lock:
-            record = self._read_json(path)
-            record.update(changes)
-            record["updated_at"] = time.time()
-            self._write_json(path, record)
+        with self._state_guard():
+            self._update_record_locked(path, **changes)
+
+    def _update_record_locked(self, path: Path, **changes: Any) -> None:
+        """Update one record while the caller owns the cross-process guard."""
+
+        record = self._read_json(path)
+        record.update(changes)
+        record["updated_at"] = time.time()
+        self._write_json(path, record)
+        # Publish the settled record before releasing its execution lease.
+        # A second process therefore cannot observe an auditable/terminal
+        # state while the previous round still appears to own the job.
+        if str(record.get("state")) not in _INTERRUPTED_JOB_STATES:
+            self._release_job_lease(str(record.get("job_id") or ""))
 
     @staticmethod
     def _decode_result(value: Any) -> Optional[CodingTaskResult]:
@@ -984,14 +1085,20 @@ class CodingService:
             try:
                 record = self._read_json(path)
                 # An awaiting-audit job survives a restart; in-flight work does
-                # not, because its implementation session no longer exists.
+                # not, but another live MCP process may still own its job lease.
                 if record.get("state") in _INTERRUPTED_JOB_STATES:
-                    record.update({
-                        "state": CodingJobState.FAILED.value,
-                        "updated_at": time.time(),
-                        "landable": False,
-                        "failure_code": "service_restarted",
-                    })
-                    self._write_json(path, record)
+                    job_id = str(record.get("job_id") or "")
+                    if not self._acquire_job_lease(job_id):
+                        continue
+                    try:
+                        record.update({
+                            "state": CodingJobState.FAILED.value,
+                            "updated_at": time.time(),
+                            "landable": False,
+                            "failure_code": "service_restarted",
+                        })
+                        self._write_json(path, record)
+                    finally:
+                        self._release_job_lease(job_id)
             except (OSError, ValueError, json.JSONDecodeError):
                 continue

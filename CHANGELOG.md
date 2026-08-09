@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `code-mcp` processes may now share one durable coding state root, so Codex
+  can create or resume multiple conversations without the second MCP process
+  exiting during `initialize`. Short cross-process state guards preserve
+  idempotent submission and atomic records; per-job crash-released leases stop
+  duplicate execution and prevent a new process from misclassifying another
+  live process's job as interrupted; per-workspace locks still serialize edits.
 - The public `code-mcp` / `code-serve` coding service is now a true single
   entry: the new `flyto.coding-route.v1` contract runs host-owned lanes around
   whichever implementer startup selected. The Indexer gate is mandatory before

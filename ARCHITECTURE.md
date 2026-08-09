@@ -298,6 +298,16 @@ startup dependencies. None is accepted from a job payload. This makes Cloud,
 Engine, Robotics, Core, and Indexer consumers replaceable at the process
 contract instead of coupling their source trees to `flyto-ai`.
 
+The state root is a shared durable namespace, not a process-lifetime singleton.
+Multiple `code-mcp` processes may attach to it concurrently. Short exclusive
+state guards cover cross-record decisions such as idempotency and audit state;
+crash-released per-job leases prove which process owns an execution round; and
+hashed per-workspace locks serialize filesystem edits across processes. A new
+process reconciles an interrupted job only when it can acquire that job's
+lease, so it never marks another live conversation's work `service_restarted`.
+Atomic JSON replacement remains the persistence boundary. None of these locks
+changes tenant scoping, route gates, audit authority, or implementer selection.
+
 The native implementer is the default and `claude` is its peer, selected once
 with `--implementation-backend` or the bounded `FLYTO_AI_CODING_BACKEND`
 default. There is no per-job selection and no fallback between them. The

@@ -62,6 +62,12 @@ eligibility evidence for the caller, not an action the service performs.
   `POST /v1/coding/jobs/{job_id}/audit`.
 - Coding MCP `initialize` advertises server version `2` and bounded
   instructions describing the host-owned loop; it negotiates only `2025-06-18`.
+- Shared-state multi-process MCP startup: more than one `code-mcp` process can
+  attach to the same durable state root and complete `initialize`. Cross-process
+  state guards keep idempotency/audit transitions atomic, job leases prevent
+  duplicate execution and false restart reconciliation, and workspace locks
+  serialize edits across service instances. Focused service tests and a real
+  two-process initialize probe cover the original failure.
 - Fail-closed behavior for stale or mutated revisions, wrong state, wrong
   tenant, missing or changed session identity, unsafe attributable paths,
   read-only or approval-gated authority, and restart of in-flight work.

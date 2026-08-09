@@ -350,6 +350,49 @@ startup dependencies. None is accepted from a job payload. This makes Cloud,
 Engine, Robotics, Core, and Indexer consumers replaceable at the process
 contract instead of coupling their source trees to `flyto-ai`.
 
+### Domain neutrality of the shared control plane
+
+`flyto-ai -> LLM -> flyto-blueprint -> flyto-core -> modules -> flyto-indexer
+-> flyto-engine` records extensible responsibility and data flow. It is not a
+mandatory synchronous call chain that every task must traverse.
+
+The neutrality invariant binds the **shared composition, routing, and control-plane
+core**: it must not branch on a profile or domain name, and must not inject a
+fixed task list, provider, or repository-shaped flow. A domain it has never seen
+must compose and negotiate exactly like one it has.
+
+Bounded **domain adapters are expected to be domain-specific**, and that is not a
+violation. An adapter may add its own safety, permission, planner, verifier, and
+evidence rules, and may branch freely on them inside its own boundary — a
+robotics profile enforcing motion-safety limits, an authorized security profile
+constraining engagement scope, or the coding profile requiring an exact-revision
+worktree audit are all legitimate. What an adapter may not do is push those rules
+back down into the shared layer, or make the shared layer aware of which domain
+is calling it. Domain-specific authority lives in the adapter and its declared
+contracts; the core stays name-agnostic.
+
+- Blueprint stores and reuses portable task/workflow knowledge across domains.
+- Core remains the registry, policy, and execution authority.
+- Indexer observes and indexes declared capabilities and feeds Engine. It is
+  not assumed to be invoked by every non-code task.
+
+A profile is an arbitrary bounded identifier, and so are its capability names,
+tool names, and contract versions. Software development, penetration testing,
+red-team exercises, robotics, workflows, and ordinary tasks are *examples of
+inputs*, never an enum, switch, component map, provider rule, or sanctioned
+list. Anything the identifier grammar accepts must compose and negotiate
+identically; `tests/test_agent_stack.py` proves this with profile, capability,
+tool, and contract identifiers generated from a digest rather than chosen.
+
+`flyto_coding` and its `flyto_coding_*` MCP tools are **one Codex-facing
+adapter/profile over this shared layer**, not the universal core and not the
+only future entry point. The audit-required route, the durable workspace claim,
+and same-session rework described below are scoped to that adapter, because
+they answer a question only a repository-editing domain asks: who exclusively
+owns a worktree between an implementation and its exact-revision audit. They
+are deliberately not a general-purpose distributed scheduler, and no other
+domain is required to adopt them.
+
 The state root is a shared durable namespace, not a process-lifetime singleton.
 Multiple `code-mcp` processes may attach to it concurrently. Short exclusive
 state guards cover cross-record decisions such as idempotency and audit state;
@@ -359,6 +402,43 @@ process reconciles an interrupted job only when it can acquire that job's
 lease, so it never marks another live conversation's work `service_restarted`.
 Atomic JSON replacement remains the persistence boundary. None of these locks
 changes tenant scoping, route gates, audit authority, or implementer selection.
+
+Those three scopes bound one execution round each. An audited job also needs
+ownership that outlives a round, because the interval between "the implementer
+finished" and "an auditor read the tree" is exactly when a competing Codex
+frontend could edit the same worktree and invalidate a revision that was never
+wrong. A fourth scope covers it: a durable **workspace claim** under
+`locks/workspaces/<digest>.owner.json`, held for the whole job across
+`queued`, `running`, `awaiting_codex_audit`, `rework_queued`, and
+`rework_running`, and released only on `completed`, `codex_accepted`, a
+terminal failure, or an explicit host abandon. Rework re-asserts the claim it
+already holds rather than re-acquiring it, so a job never queues behind itself.
+
+The claim file is an index; the job record is the authority. A claim resolves
+to `held` only while its owning record sits in a claim-owned state, and to
+`free` only when that record proves the job settled. Anything else — corrupt
+JSON, an unknown version or shape, an unreadable file, a claim naming a job
+this state root has no record of — resolves to `unresolved` and refuses the
+edit with `workspace_claim_unresolved`. An unresolved claim is never deleted
+automatically, including by startup reconciliation: discarding it would convert
+"ownership cannot be evaluated" into "nobody owns this tree", which is the
+concurrent-edit hazard the claim exists to prevent. Only the host-owned
+`flyto-ai code-release` command clears one.
+
+Because the claim protects the audit gap, only an audit-required job takes one.
+A legacy direct-library service takes no claim and keeps its per-round
+serialization, but it still honours a claim another job holds, so it can never
+edit a worktree mid-audit.
+
+Same-session rework is likewise no longer tied to one process. A bounded,
+redacted **resume envelope** under `tenants/<ref>/resume/<job>.json` persists
+only the public request fields plus the job, request-digest, and session
+bindings. It is loadable exactly when its `session_bound` equals the record's
+`implementation_session_id`, is always rebuilt with `resume=true` against that
+same session, and can therefore continue a session but never start one.
+Startup authority — approval policy, sandbox mode, config path, sandbox image,
+checks, capabilities — is never persisted and is re-imposed from the running
+process, so a stored request cannot outlive or widen the policy it ran under.
 
 The native implementer is the default and `claude` is its peer, selected once
 with `--implementation-backend` or the bounded `FLYTO_AI_CODING_BACKEND`

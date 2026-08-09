@@ -2141,26 +2141,82 @@ def test_revision_hashing_rejects_unreadable_and_dangling_paths(tmp_path: Path) 
     assert CodingService._revision_digest(str(workspace), ["run.sh"]) != plain
 
 
-def test_restart_preserves_awaiting_audit_and_fails_closed_on_rework(tmp_path: Path) -> None:
+def test_restart_preserves_awaiting_audit_and_reworks_the_same_session(
+    tmp_path: Path,
+) -> None:
+    """A restarted worker continues the exact session; it never opens a new one.
+
+    The durable resume envelope replaced the process-local prompt cache, so an
+    audit that lands on a worker which never implemented the job — a restart
+    here, a different Codex frontend in practice — can still send rework. What
+    must not change is the session: the envelope is bound to one
+    `implementation_session_id` and can only ever continue it.
+    """
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    service = _audited_service(tmp_path, workspace)
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-restart", workspace)
     finally:
         service.close()
 
-    restarted = _audited_service(tmp_path, workspace)
+    # A fresh provider restarts its own round counter, so offset it to keep the
+    # replacement worker's writes distinct from the bytes already on disk.
+    successor = ReworkingProvider()
+    successor.rounds = 10
+    restarted = _audited_service(tmp_path, workspace, provider=successor)
     try:
         persisted = restarted.get("tenant-audit", awaiting.job_id)
         assert persisted.state is CodingJobState.AWAITING_CODEX_AUDIT
         assert persisted.implementation_session_id == awaiting.implementation_session_id
-        # The task prompt is not persisted, so a new session is never started.
+
+        queued = restarted.audit(
+            "tenant-audit", awaiting.job_id, persisted.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK, (_blocker(),),
+        )
+        assert queued.state is CodingJobState.REWORK_QUEUED
+        reworked = _wait(restarted, "tenant-audit", awaiting.job_id)
+        assert reworked.state is CodingJobState.AWAITING_CODEX_AUDIT
+        # The same session, continued. A fresh session would be a different id.
+        assert reworked.implementation_session_id == awaiting.implementation_session_id
+        assert reworked.thread_id == awaiting.thread_id
+        assert reworked.audit_count == 1 and reworked.rework_count == 1
+        assert successor.rounds == 11
+
+        accepted = restarted.audit(
+            "tenant-audit", awaiting.job_id, reworked.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert accepted.landable is True
+    finally:
+        restarted.close()
+
+
+def test_rework_fails_closed_when_the_resume_envelope_is_gone(tmp_path: Path) -> None:
+    """Without a session-bound envelope the loop refuses rather than guesses."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    try:
+        awaiting = _awaiting(service, "tenant-audit", "audit-noenv", workspace)
+    finally:
+        service.close()
+
+    restarted = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    try:
+        tenant_ref = restarted._tenant_ref("tenant-audit")
+        restarted._resume_path(tenant_ref, awaiting.job_id).unlink()
+        persisted = restarted.get("tenant-audit", awaiting.job_id)
+
         with pytest.raises(ReworkNotResumable):
             restarted.audit(
                 "tenant-audit", awaiting.job_id, persisted.implementation_revision_sha256,
                 CodingAuditVerdict.REWORK, (_blocker(),),
             )
+        # A refused rework consumes no audit round and leaves the job auditable.
         assert restarted.get("tenant-audit", awaiting.job_id).audit_count == 0
         accepted = restarted.audit(
             "tenant-audit", awaiting.job_id, persisted.implementation_revision_sha256,

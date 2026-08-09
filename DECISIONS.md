@@ -1,5 +1,102 @@
 # Decisions
 
+## 2026-08-09: The capability control plane is domain-neutral; coding is an adapter
+
+The downstream chain is a statement of responsibility and data flow, not a
+mandatory synchronous path every task walks. Domains named in requirements —
+software development, penetration testing, red-team exercises, robotics,
+workflows, ordinary tasks — are **example inputs only**. Encoding them as an
+enum, switch, component map, provider rule, or fixed list would make the next
+unlisted domain a code change, which is precisely what this layer exists to
+avoid.
+
+- Profiles, capabilities, tools, and contract versions are arbitrary bounded
+  identifiers validated by grammar, with explicit permissions and contracts.
+- The regression that protects this generates its identifiers from a digest
+  rather than choosing them, so passing cannot depend on a blessed name. A
+  source-text grep test was rejected: it is brittle and would itself become the
+  sanctioned list it is meant to prevent.
+- The generic negotiation path injects no default component, coding phase, or
+  provider, so no domain is forced through a repository-shaped flow.
+- Indexer is not assumed to run for every non-code task.
+
+`flyto_coding` and its three MCP tools remain one Codex-facing adapter over this
+layer. The audit-required route, durable workspace claim, and same-session
+rework stay inside it, because they answer a repository-specific question about
+exclusive worktree ownership across an audit gap. The package is deliberately
+*not* renamed: public compatibility is worth more than removing the word
+"coding" from a module path. This is explicitly not a universal distributed
+scheduler, and that limitation is recorded rather than papered over.
+
+## 2026-08-09: Job-lifetime worktree ownership and session-bound cross-worker rework
+
+The owner runs many Codex conversations at once, each starting its own
+`code-mcp` worker against one shared state root. Two failures followed from
+that topology and are closed here.
+
+- **Ownership must outlive a round, not match one.** The workspace lock was
+  released when an implementation round ended, but the job stayed at
+  `awaiting_codex_audit` until a human verdict. That interval is exactly when a
+  competing frontend could edit the same tree, after which the first job's
+  exact-revision audit failed live recomputation and its work was stranded. A
+  durable claim now spans the whole job. It is keyed by workspace digest, so
+  different repositories keep running in parallel — cross-repo parallelism was a
+  requirement, not a side effect.
+- **A distributed design was chosen over a shared broker.** A broker would have
+  reintroduced the single-owner failure rolled back in
+  `handoffs/2026-08-09-multi-process-coding-state.md` ("coding state root is
+  already served"), added a daemon with its own crash/auth/reload story, and
+  become one wedge point for every repository. It also buys nothing for
+  same-session rework: the Claude session lives in the Agent SDK's own on-disk
+  store, not in the Python process, so any live worker can resume it given the
+  session id. Only the original request was missing.
+- **The claim file is an index; the job record is the authority.** Liveness is
+  derived from the owning record's state rather than a TTL or heartbeat, which
+  removes clock guesswork and makes crash recovery a consequence of reading the
+  record rather than a separate mechanism.
+- **Unevaluable ownership fails closed and is never auto-cleared.** A corrupt,
+  unknown-shape, unreadable, or orphaned claim resolves to `unresolved`, not
+  `free`. Deleting it would convert "ownership cannot be evaluated" into
+  "nobody owns this tree" — the precise hazard the claim prevents — and startup
+  is when a half-written state root is most likely. Only the host operator
+  clears one. This is deliberately a distinct code from `workspace_busy`: busy
+  names a live owner and resolves itself, unresolved never will.
+- **Only audited jobs take a claim.** The claim exists to protect the audit
+  gap, and a legacy direct-library service has none. It therefore keeps its
+  per-round serialization rather than gaining a new fail-fast rejection, but it
+  still honours a claim another job holds, so it can never edit a tree
+  mid-audit.
+- **The resume envelope may continue a session but never start one.** It
+  persists only the public request fields plus job, request-digest, and session
+  bindings, loads only when `session_bound` equals the record's
+  `implementation_session_id`, and always rebuilds with `resume=true` against
+  that id. The stored digest is compared rather than recomputed, because
+  redaction rewrites credential-shaped prose and a recomputed hash would never
+  match — that would have silently disabled rework instead of failing loudly.
+  Startup authority is never persisted and is re-imposed from the running
+  process, so a stored request cannot outlive or widen its policy. This
+  preserves the original intent of the process-local cache ("a restart must not
+  silently start a new session") while removing its process affinity.
+- **A missed supervisor deadline terminates rather than retries.** Thirty
+  seconds is the bound because submit, get, and audit only schedule or inspect
+  background work; a longer wait is a wedged worker, not a slow one, and that
+  worker still holds shared state-root locks. The request is never resent: its
+  delivery is uncertain and the job may already exist, so recovery belongs to
+  the caller replaying an idempotency key. A reader thread and queue were chosen
+  over pipe selectors so the deadline behaves identically on every supported
+  platform.
+- **Active-job tracking reads durable records.** A process-local set could not
+  distinguish "the client stopped polling" from "the job is still running", so
+  one abandoned entry pinned `service_reload_pending` for the life of a
+  frontend. Reconciling each tracked id against its own bounded record fixes
+  that without a status index, which is a latest-writer view and cannot answer
+  for several concurrent jobs.
+- **The release valve is a CLI command, not a fourth MCP tool.** Adding a tool
+  would widen the audited public surface and put job retirement within reach of
+  a model. `code-release` is strictly subtractive — it can only move
+  `awaiting_codex_audit` to `failed`, never accept or land — so it is always
+  worse for a caller than auditing and cannot become an audit bypass.
+
 ## 2026-08-09: Project-scoped route searches, exact failure evidence, and a startup-only emergency overflow lane
 
 Against the real installed Indexer, the production route policy failed every

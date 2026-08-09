@@ -133,4 +133,11 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code-status` | `command` | Inspect the bounded runtime status of coding service instances | [`flyto_ai/cli.py:218`](../../flyto_ai/cli.py#L218) |
 | `code-status` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:222`](../../flyto_ai/cli.py#L222) |
 | `code-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:226`](../../flyto_ai/cli.py#L226) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:229`](../../flyto_ai/cli.py#L229) |
+| `code-release` | `command` | Fail an orphaned audit-ready coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:232`](../../flyto_ai/cli.py#L232) |
+| `code-release` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:236`](../../flyto_ai/cli.py#L236) |
+| `code-release` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:237`](../../flyto_ai/cli.py#L237) |
+| `code-release` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:241`](../../flyto_ai/cli.py#L241) |
+| `release_target` | `--abandon-job` | Move one awaiting_codex_audit job to failed/job_abandoned | [`flyto_ai/cli.py:246`](../../flyto_ai/cli.py#L246) |
+| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:250`](../../flyto_ai/cli.py#L250) |
+| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:254`](../../flyto_ai/cli.py#L254) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:257`](../../flyto_ai/cli.py#L257) |

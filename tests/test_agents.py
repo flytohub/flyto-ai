@@ -816,6 +816,7 @@ class TestClaudeSdkOptions:
         _, options = self._options(tmp_path)
         assert "Bash" in options["allowed_tools"]
         assert options["permission_mode"] == "default"
+        assert options["strict_mcp_config"] is False
         assert options["system_prompt"] == "system"
         assert "resume" not in options
 
@@ -852,6 +853,25 @@ class TestClaudeSdkOptions:
         assert options["resume"] == "sdk-1"
         assert "system_prompt" not in options
         assert options["model"] == "claude-opus-5"
+        assert options["strict_mcp_config"] is True
+
+    def test_service_mode_uses_only_host_declared_mcp_servers(self, tmp_path):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+
+        request = CodeTaskRequest(
+            message="task", working_dir=str(tmp_path), service_mode=True,
+        )
+        options = ClaudeCodeAgent()._option_kwargs(
+            request,
+            session_id=None,
+            system_prompt="system",
+            max_turns=7,
+            max_budget=1.25,
+            mcp_servers={"flyto-indexer": {"command": "indexer", "args": []}},
+        )
+
+        assert options["strict_mcp_config"] is True
+        assert set(options["mcp_servers"]) == {"flyto-indexer"}
 
 
 class TestClaudeCodeConfigModel:
@@ -949,18 +969,18 @@ class TestServiceEditAuthority:
         from flyto_ai.agents.claude_code import SERVICE_READONLY_TOOLS
         options = self._options(tmp_path, edit_authority=False)
         assert set(options["allowed_tools"]) == set(SERVICE_READONLY_TOOLS)
-        assert set(options["allowed_tools"]) == {"Read", "Glob"}
+        assert set(options["allowed_tools"]) == {"Read", "Glob", "Grep"}
         assert options["permission_mode"] == "default"
         assert options["model"] == "claude-opus-5"
 
-    def test_no_service_catalog_exposes_content_search_or_bash(self, tmp_path):
+    def test_service_catalog_exposes_file_scoped_search_but_not_bash(self, tmp_path):
         from flyto_ai.agents.claude_code import ClaudeCodeAgent
         for authority in (True, False):
             catalog = set(self._options(tmp_path, edit_authority=authority)["allowed_tools"])
-            assert "Grep" not in catalog
+            assert "Grep" in catalog
             assert "Bash" not in catalog
         assert set(self._options(tmp_path, edit_authority=True)["allowed_tools"]) == {
-            "Read", "Edit", "Write", "Glob",
+            "Read", "Edit", "Write", "Glob", "Grep",
         }
         # The legacy direct catalog is unchanged and still configurable.
         agent = ClaudeCodeAgent()
@@ -970,24 +990,32 @@ class TestServiceEditAuthority:
         )
         assert set(legacy["allowed_tools"]) >= {"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
 
-    def test_service_mode_denies_content_search_even_inside_the_workspace(
+    def test_service_mode_limits_content_search_to_one_explicit_safe_file(
         self, event_loop, tmp_path,
     ):
         (tmp_path / ".env").write_text("API_TOKEN=s3cr3t\n")
-        for arguments in (
-            {"pattern": "API_TOKEN", "path": "."},
-            {"pattern": "API_TOKEN"},
-            {"pattern": "API_TOKEN", "path": str(tmp_path)},
-        ):
+        (tmp_path / "app.py").write_text("value = 1\n")
+        assert event_loop.run_until_complete(guardian_pre_hook(
+            "Grep", {"pattern": "value", "path": "app.py"}, "id",
+            workspace=str(tmp_path), service_mode=True,
+        )) == {}
+
+        for arguments in ({"pattern": "value"}, {"pattern": "value", "path": "."}):
             with pytest.raises(GuardianBlocked) as blocked:
                 event_loop.run_until_complete(guardian_pre_hook(
                     "Grep", arguments, "id",
                     workspace=str(tmp_path), service_mode=True,
                 ))
             message = str(blocked.value)
-            assert "content search is not available" in message
-            for fragment in ("API_TOKEN", "s3cr3t", str(tmp_path), "."):
-                assert fragment not in message.replace("service mode.", "service mode")
+            assert "requires one" in message
+            for fragment in ("value", str(tmp_path)):
+                assert fragment not in message
+
+        with pytest.raises(GuardianBlocked, match="sensitive"):
+            event_loop.run_until_complete(guardian_pre_hook(
+                "Grep", {"pattern": "API_TOKEN", "path": ".env"}, "id",
+                workspace=str(tmp_path), service_mode=True,
+            ))
 
         # Names-only search stays available inside the workspace.
         assert event_loop.run_until_complete(guardian_pre_hook(

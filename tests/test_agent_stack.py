@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 
@@ -200,22 +201,59 @@ def _write_profile_mcp_server(path, tool_name="plan_motion"):
     path.write_text(source.replace("__TOOL__", tool_name))
 
 
-def test_manifest_loads_and_attests_arbitrary_profile(tmp_path):
+def _unseen_profile_identity(seed: str) -> tuple:
+    """Derive a profile/capability/tool/contract quadruple this repo never names.
+
+    The identifiers are generated from a digest rather than chosen, so the test
+    cannot quietly become a sanctioned list of blessed domains. Anything the
+    bounded identifier grammar accepts must compose and negotiate identically.
+    """
+
+    token = hashlib.sha256(seed.encode()).hexdigest()[:12]
+    return (
+        "profile-{}".format(token),
+        "capability-{}".format(token),
+        "act_{}".format(token),
+        "example.{}.v1".format(token),
+    )
+
+
+@pytest.mark.parametrize(
+    "seed",
+    [
+        # Named domains stand in only as inputs; none of them is special to the
+        # shared layer, and the generated ones prove that directly.
+        "software-development", "penetration-testing", "red-team",
+        "robotics", "workflow-automation", "ordinary-errand",
+        "a-domain-nobody-has-invented-yet",
+    ],
+)
+def test_manifest_loads_and_attests_any_unseen_profile(tmp_path, seed):
+    """An arbitrary, previously unseen domain composes and negotiates the same.
+
+    This drives the whole generic path — manifest parse, fingerprint, capability
+    composition, and a real MCP `initialize`/`tools/list` handshake against a
+    subprocess — with identifiers the shared layer has never seen. Nothing in
+    that path may branch on which domain the profile happens to describe.
+    """
+
+    profile, capability, tool, contract = _unseen_profile_identity(seed)
     server = tmp_path / "profile_server.py"
     manifest_path = tmp_path / "agent-stack.yaml"
-    _write_profile_mcp_server(server)
+    _write_profile_mcp_server(server, tool_name=tool)
     _write_manifest(manifest_path, [{
-        "name": "robot-planner",
+        "name": capability,
         "argv": [sys.executable, str(server)],
         "required": True,
-        "contract_version": "example.robotics.v1",
-        "required_tools": ["plan_motion"],
-        "allowed_tools": ["plan_motion"],
-    }])
+        "contract_version": contract,
+        "required_tools": [tool],
+        "allowed_tools": [tool],
+    }], profile=profile)
 
     manifest = load_agent_stack_manifest(str(tmp_path), "agent-stack.yaml")
-    assert manifest.profile == "robotics-lab"
-    assert manifest.capabilities[0].name == "robot-planner"
+    assert manifest.profile == profile
+    assert manifest.capabilities[0].name == capability
+    assert manifest.capabilities[0].contract_version == contract
     assert len(manifest.manifest_fingerprint) == 64
 
     import asyncio
@@ -226,9 +264,17 @@ def test_manifest_loads_and_attests_arbitrary_profile(tmp_path):
         manifest_fingerprint=manifest.manifest_fingerprint,
     ))
     assert result["ok"] is True
-    assert result["profile"] == "robotics-lab"
+    assert result["profile"] == profile
     assert result["manifest_fingerprint"] == manifest.manifest_fingerprint
-    assert result["components"][0]["tools"] == ("plan_motion",)
+    assert result["components"][0]["tools"] == (tool,)
+    # The negotiated stack is exactly what the manifest declared. No default
+    # component, coding phase, or provider is injected to make a generic
+    # profile succeed, so nothing forces an unrelated domain through the
+    # repository-shaped path.
+    assert [item["name"] for item in result["components"]] == [capability]
+    assert not set(DEFAULT_COMPONENTS) & {
+        item["name"] for item in result["components"]
+    }
 
 
 def test_manifest_fails_closed_on_scope_schema_and_path_escape(tmp_path):

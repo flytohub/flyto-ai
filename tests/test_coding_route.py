@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -520,6 +521,57 @@ def test_compound_subtask_plans_run_in_declared_order(tmp_path):
     assert {"focus": "apis"} in [args for tool, args in steps if tool == "structure"]
 
 
+def test_compound_subtasks_may_reuse_their_local_step_ids(tmp_path):
+    """The real Indexer compiles each sub-task independently from step 01."""
+    indexer = IndexerDouble(sub_tasks=[
+        {"execution_plan": [
+            {"id": "step_01_find_test", "tool": "search",
+             "args": {"query": "tests for first.py"}, "depends_on": []},
+            {"id": "step_02_impact", "tool": "impact",
+             "args": {"target": "p:first.py:file:first"},
+             "depends_on": ["step_01_find_test"]},
+        ]},
+        {"execution_plan": [
+            {"id": "step_01_find_test", "tool": "search",
+             "args": {"query": "tests for second.py"}, "depends_on": []},
+            {"id": "step_02_impact", "tool": "impact",
+             "args": {"target": "p:second.py:file:second"},
+             "depends_on": ["step_01_find_test"]},
+        ]},
+    ])
+
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+
+    assert result.ok is True and receipt.ok is True
+    emitted = [(tool, args) for tool, args in indexer.calls]
+    first_search = emitted.index((
+        "search", {"query": "tests for first.py", "project": tmp_path.name},
+    ))
+    first_impact = emitted.index((
+        "impact", {"target": "p:first.py:file:first"},
+    ))
+    second_search = emitted.index((
+        "search", {"query": "tests for second.py", "project": tmp_path.name},
+    ))
+    second_impact = emitted.index((
+        "impact", {"target": "p:second.py:file:second"},
+    ))
+    assert first_search < first_impact
+    assert second_search < second_impact
+
+
+def test_a_duplicate_id_inside_one_compound_subtask_is_still_refused(tmp_path):
+    indexer = IndexerDouble(sub_tasks=[{"execution_plan": [
+        {"id": "step_01", "tool": "search", "args": {"query": "first"}},
+        {"id": "step_01", "tool": "search", "args": {"query": "second"}},
+    ]}])
+
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+
+    assert result.ok is False
+    assert receipt.failure_code == "plan_step_id_duplicated"
+
+
 def test_a_plan_step_outside_the_public_allowlist_fails_before_editing(tmp_path):
     implement = Implementer()
     for tool in ("execute_module", "task", "verify"):
@@ -645,6 +697,43 @@ def test_post_lane_validates_the_final_workspace_with_strict_verify(tmp_path):
     assert result.ok is False and receipt.failure_code == "validation_failed"
 
 
+def test_post_validation_receipt_preserves_one_bounded_reason_code(tmp_path):
+    domain = {
+        "pass": False,
+        "reason_codes": ["INTENT_LEDGER_NONCONFORMANT", "UNSAFE / raw detail"],
+        "required_actions": ["path-bearing prose must not enter the receipt"],
+    }
+    indexer = IndexerDouble(overrides={"task.validate": _envelope(domain)})
+
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+
+    assert result.ok is False and receipt.failure_code == "validation_failed"
+    post = next(lane for lane in receipt.lanes if lane.lane == "indexer_post")
+    assert post.calls[-1].detail_code == "validation_intent_ledger_nonconformant"
+    encoded = json.dumps(receipt.to_mapping())
+    assert "path-bearing prose" not in encoded
+    assert "UNSAFE / raw detail" not in encoded
+
+
+def test_post_validation_is_scoped_to_the_host_attributable_change_set(tmp_path):
+    indexer = IndexerDouble()
+    implementer = Implementer(changed=("scripts/verify-lima-gazebo.sh",))
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer), _request(tmp_path), implementer,
+    )
+
+    assert result.ok is True and receipt.ok is True
+    validate_calls = [
+        args for tool, args in indexer.calls
+        if tool == "task" and args.get("action") == "validate"
+    ]
+    assert len(validate_calls) == 1
+    assert validate_calls[0]["current_state"] == {
+        "changed_paths": ["scripts/verify-lima-gazebo.sh"],
+    }
+
+
 def test_a_green_source_check_cannot_substitute_for_the_post_gate(tmp_path):
     from flyto_ai.coding.contracts import CheckResult
 
@@ -765,6 +854,22 @@ def test_core_lane_is_not_applicable_for_unrelated_work(tmp_path):
     assert entry.status is RouteLaneStatus.NOT_APPLICABLE
     assert entry.reason_code == "no_core_surface_changed"
     assert core.calls == []
+
+
+def test_core_lane_ignores_core_terms_when_changed_paths_are_unrelated(tmp_path):
+    """Negative boundary prose is not post-work Core change evidence."""
+    _, receipt = _run(
+        _policy(), RouteDouble(IndexerDouble()),
+        _request(
+            tmp_path,
+            "document the module boundary; do not change flyto-core or its registry",
+        ),
+        Implementer(changed=("README.md", ".github/workflows/verify.yml")),
+        core=None,
+    )
+    entry = {item.lane: item for item in receipt.lanes}["core"]
+    assert entry.status is RouteLaneStatus.NOT_APPLICABLE
+    assert entry.reason_code == "no_core_surface_changed"
 
 
 def test_core_lane_proves_the_changed_module_contract(tmp_path):
@@ -2294,6 +2399,50 @@ def test_public_cli_policy_marks_blueprint_required(tmp_path):
     assert policy.core_enabled is True
 
 
+def test_public_cli_policy_prefers_the_workspace_indexer_checkout(tmp_path):
+    from argparse import Namespace
+
+    import flyto_ai.cli as cli
+
+    source_server = tmp_path / "flyto-indexer" / "src" / "mcp_server.py"
+    source_server.parent.mkdir(parents=True)
+    source_server.write_text("# local source server\n", encoding="utf-8")
+
+    policy = cli._build_coding_route_policy(Namespace(
+        workspace_root=[str(tmp_path)],
+        indexer_command=None,
+        blueprint_command=None,
+    ))
+
+    assert policy.indexer.argv == (
+        shutil.which("env"),
+        "PYTHONPATH={}".format(tmp_path / "flyto-indexer"),
+        sys.executable,
+        "-m",
+        "src.mcp_server",
+    )
+
+
+def test_explicit_indexer_command_overrides_the_workspace_checkout(tmp_path):
+    from argparse import Namespace
+
+    import flyto_ai.cli as cli
+
+    source_server = tmp_path / "flyto-indexer" / "src" / "mcp_server.py"
+    source_server.parent.mkdir(parents=True)
+    source_server.write_text("# local source server\n", encoding="utf-8")
+
+    policy = cli._build_coding_route_policy(Namespace(
+        workspace_root=[str(tmp_path)],
+        indexer_command="custom-python -m custom_indexer",
+        blueprint_command=None,
+    ))
+
+    assert policy.indexer.argv == (
+        "custom-python", "-m", "custom_indexer",
+    )
+
+
 def test_strict_success_requires_every_canonical_lane_to_be_required():
     for index, name in enumerate(("indexer_pre", "blueprint", "core", "indexer_post")):
         lanes = list(_canonical_lanes())
@@ -2486,6 +2635,143 @@ def test_plan_targets_prefer_the_repository_path_over_a_symbol_id(tmp_path):
         tool == "task" and args.get("action") == "validate"
         for tool, args in indexer.calls
     )
+
+
+def test_an_explicit_existing_request_path_wins_over_a_fuzzy_search_hit(tmp_path):
+    script = tmp_path / "scripts" / "verify-lima-gazebo.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    indexer = IndexerDouble(search_results=[
+        {"path": "tests/test_lima_gazebo_contract.py", "name": "test_lima"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(
+            tmp_path,
+            "Fix `scripts/verify-lima-gazebo.sh`: require ground truth.",
+        ),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["scripts/verify-lima-gazebo.sh"]
+
+
+def test_multiple_explicit_existing_paths_form_one_bounded_plan_scope(tmp_path):
+    paths = [
+        "src/components/Widget.tsx",
+        "src/utils/widget.ts",
+        "src/components/__tests__/widget.test.ts",
+    ]
+    for relative in paths:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("export {}\n", encoding="utf-8")
+    indexer = IndexerDouble(search_results=[
+        {"path": "unrelated.py", "name": "unrelated"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(tmp_path, "Update {} together.".format(", ".join(paths))),
+        Implementer(changed=tuple(paths)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == paths
+
+
+def test_explicit_scope_includes_root_files_and_more_than_five_targets(tmp_path):
+    paths = [
+        ".gitignore",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        ".github/workflows/publish.yml",
+        "docs/documentation-manifest.json",
+    ]
+    for relative in paths:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("scope\n", encoding="utf-8")
+    indexer = IndexerDouble(search_results=[
+        {"path": "unrelated.py", "name": "unrelated"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(tmp_path, "Update {} together.".format(", ".join(paths))),
+        Implementer(changed=tuple(paths)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == paths
+
+
+def test_default_route_bound_accepts_a_realistic_compound_plan(tmp_path):
+    """Three-file compound plans currently contain fifteen bounded steps."""
+    plan = [
+        {
+            "id": "step_{:02d}".format(index),
+            "tool": "impact",
+            "args": {"target": "proj:app.py:function:main"},
+            "purpose": "inspect_{:02d}".format(index),
+            "required": True,
+            "depends_on": [],
+        }
+        for index in range(1, 16)
+    ]
+    indexer = IndexerDouble(plan=plan)
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer), _request(tmp_path), Implementer(),
+    )
+
+    assert RouteLimits().max_plan_steps == 32
+    assert result.ok is True and receipt.ok is True
+
+
+def test_an_explicit_path_before_sentence_punctuation_stays_authoritative(tmp_path):
+    script = tmp_path / "scripts" / "verify-lima-gazebo.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    indexer = IndexerDouble(search_results=[
+        {"path": "tests/test_lima_gazebo_contract.py", "name": "test_lima"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(
+            tmp_path,
+            "Edit only scripts/verify-lima-gazebo.sh. Keep the change narrow.",
+        ),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["scripts/verify-lima-gazebo.sh"]
+
+
+@pytest.mark.parametrize("spelling", [
+    "/scripts/verify.sh",
+    "../scripts/verify.sh",
+    "C:/scripts/verify.sh",
+    "scripts\\verify.sh",
+    "missing/verify.sh",
+])
+def test_an_unsafe_or_missing_explicit_request_path_is_not_authority(
+    tmp_path, spelling,
+):
+    script = tmp_path / "scripts" / "verify.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert CodingRouteOrchestrator._explicit_request_target(
+        "Fix {} now".format(spelling), str(tmp_path),
+    ) == ""
 
 
 @pytest.mark.parametrize("item, expected", [

@@ -68,6 +68,56 @@ eligibility evidence for the caller, not an action the service performs.
   duplicate execution and false restart reconciliation, and workspace locks
   serialize edits across service instances. Focused service tests and a real
   two-process initialize probe cover the original failure.
+- The shared capability control plane stays domain-neutral: profile,
+  capability, tool, and contract identifiers are arbitrary bounded strings with
+  explicit permissions, and no shared code branches on a task domain. Verified
+  by `tests/test_agent_stack.py::test_manifest_loads_and_attests_any_unseen_profile`,
+  which drives manifest parse, fingerprint, composition, and a real MCP
+  handshake using identifiers derived from a digest so the test can never
+  become a sanctioned list of domains. `flyto_coding` is one Codex-facing
+  adapter over that layer, not the universal core.
+- Scope limitation: durable workspace claims and same-session rework exist only
+  in `flyto_coding`. This is not a platform-wide distributed scheduler, and no
+  other domain profile currently has or requires one.
+- Job-lifetime worktree ownership for the audited route
+  (`flyto.coding-workspace-claim.v1`). An audit-required job claims its
+  worktree at submit — after an idempotent replay is ruled out — and holds it
+  through `awaiting_codex_audit` and every rework round, releasing only on
+  `completed`, `codex_accepted`, terminal failure, or explicit host abandon.
+  A second frontend on the same worktree fails fast with `workspace_busy` and
+  the owning job id in bounded MCP structured error details. Claims are keyed
+  by workspace digest, so different repositories still run in parallel.
+  Verified by `tests/test_coding_workspace_ownership.py` (21 tests) against two
+  real `CodingService` instances sharing one state root.
+- Unevaluable claims fail closed. A corrupt, unknown-version, unknown-shape, or
+  unreadable claim, or one naming a job with no record, resolves to
+  `workspace_claim_unresolved` and is never deleted automatically — including
+  by startup reconciliation. Only `flyto-ai code-release --repair-workspace`
+  clears one. The sweep removes a claim only when its owning record proves the
+  job settled.
+- Cross-worker rework on the exact prior session
+  (`flyto.coding-resume-envelope.v1`). A bounded, redacted, mode-0600 envelope
+  persists only the public request fields plus job, request-digest, and session
+  bindings; it loads only when `session_bound` equals the record's
+  `implementation_session_id` and always rebuilds with `resume=true` against
+  that same id, so it can continue a Claude session but never start one.
+  Startup authority is never persisted and is re-imposed from the running
+  process. A missing or mis-bound envelope still fails closed with
+  `rework_not_resumable`, consuming no audit round.
+- Bounded supervisor recovery. Every `code-mcp-supervisor` request and
+  handshake read is deadlined at 30 seconds using a portable reader
+  thread/queue. A missed deadline returns JSON-RPC `-32603`, terminates the
+  wedged worker so its state-root locks are released, and never retries the
+  request; recovery is the caller replaying the same idempotency key.
+- Self-healing hot-reload tracking. Active-job state is reconciled from durable
+  per-job records for every tracked job id, not from a process-local set or a
+  latest-writer status index, so a client that stops polling cannot pin
+  `service_reload_pending`. A genuinely non-terminal job still preserves its
+  worker and refuses only new submissions.
+- Host-owned release valve `flyto-ai code-release`. `--abandon-job` moves only
+  `awaiting_codex_audit` to `failed`/`job_abandoned` with `landable: false`;
+  `--repair-workspace` refuses while a live job owns the tree. Neither is an
+  MCP tool: the public inventory remains exactly the three tools above.
 - Fail-closed behavior for stale or mutated revisions, wrong state, wrong
   tenant, missing or changed session identity, unsafe attributable paths,
   read-only or approval-gated authority, and restart of in-flight work.

@@ -44,6 +44,15 @@ _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _ACTION_RE = re.compile(r"^[a-z][a-z0-9_.:-]{1,63}$")
 #: A leading drive letter spells a Windows path, never a repository-relative one.
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+#: A conservative repository-relative path explicitly written in task prose.
+#: Absolute, drive, UNC, traversal, whitespace, and control-containing forms
+#: are deliberately outside this grammar and still face filesystem checks.
+_EXPLICIT_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:/\\-])"
+    r"((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+)"
+    r"(?![A-Za-z0-9_./\\-])"
+)
+_MAX_EXPLICIT_REQUEST_TARGETS = 12
 
 #: The real public Indexer surface. These names and their argument schemas come
 #: from the installed sibling server; nothing here invents a tool.
@@ -174,7 +183,10 @@ class CodingRouteError(RuntimeError):
 class RouteLimits:
     """Bounds every loop, payload, and remediation attempt in the route."""
 
-    max_plan_steps: int = 12
+    # Compound plans for three explicitly bounded files currently compile to
+    # fifteen host-owned analysis/gate steps. Keep headroom for that safe
+    # shape while retaining the independent per-lane call ceiling.
+    max_plan_steps: int = 32
     max_gate_remediations: int = 2
     max_response_bytes: int = 256 * 1024
     max_response_depth: int = 12
@@ -821,7 +833,10 @@ class CodingRouteOrchestrator:
             lane, "search", self._search_args(request.message, project), action="search",
         )
         calls.append(RouteCallRecord(lane.value, "search", True, "context"))
-        targets = self._derive_targets(found)
+        explicit_targets = self._explicit_request_targets(
+            request.message, request.working_dir,
+        )
+        targets = explicit_targets or self._derive_targets(found)
 
         plan_result = await self._call(lane, "task", {
             "action": "plan",
@@ -929,9 +944,23 @@ class CodingRouteOrchestrator:
             "task_contract": dict(contract),
             "project": project,
             "run_tests": False,
+            # The implementer result is derived from host snapshots taken
+            # immediately around this round.  Validate that attributable
+            # change set instead of unrelated dirt that pre-dated the job.
+            "current_state": {
+                "changed_paths": list(
+                    getattr(result, "files_changed", ()) or ()
+                ),
+            },
         }, action="task.validate")
-        calls.append(RouteCallRecord(lane.value, "task.validate", True, "validate"))
-        if not self._validation_passed(validated):
+        validation_passed = self._validation_passed(validated)
+        calls.append(RouteCallRecord(
+            lane.value,
+            "task.validate",
+            True,
+            "validate" if validation_passed else self._validation_failure_detail(validated),
+        ))
+        if not validation_passed:
             # Absence of a positive result is not success.
             raise CodingRouteError("validation_failed", lane)
 
@@ -1022,6 +1051,26 @@ class CodingRouteOrchestrator:
             return False
         return _primary_boolean(validated, "pass", "passed")
 
+    @staticmethod
+    def _validation_failure_detail(validated: Any) -> str:
+        """Project one bounded Indexer reason into the route receipt.
+
+        The full validation payload can contain paths and prose that do not
+        belong in durable route status.  Preserve only the first stable reason
+        code, normalized to the receipt grammar, so a failed closed gate is
+        actionable without turning the receipt into an unbounded log channel.
+        """
+        if isinstance(validated, Mapping):
+            reason_codes = validated.get("reason_codes")
+            if isinstance(reason_codes, (list, tuple)) and reason_codes:
+                reason = reason_codes[0]
+                if isinstance(reason, str):
+                    normalized = re.sub(r"[^a-z0-9_]+", "_", reason.lower()).strip("_")
+                    detail = "validation_{}".format(normalized)[:64].rstrip("_")
+                    if _CODE_RE.fullmatch(detail):
+                        return detail
+        return "validation_failed"
+
     def _indexer_catalog(self, lane: RouteLane) -> set:
         allowed = set(
             self.policy.indexer.allowed_tools or self.policy.indexer.required_tools,
@@ -1101,11 +1150,71 @@ class CodingRouteOrchestrator:
                     break
         return targets
 
+    @classmethod
+    def _explicit_request_target(cls, message: str, working_dir: str) -> str:
+        """Return the first safe existing repo file explicitly named by a task.
+
+        A user's exact repository-relative path is stronger targeting evidence
+        than a fuzzy search hit that merely references that file.  The path is
+        still accepted only when its spelling is canonical, it resolves to a
+        regular file inside the workspace, and it fits the route target bound.
+        Unsafe or missing candidates are ignored rather than normalized.
+        """
+
+        targets = cls._explicit_request_targets(message, working_dir)
+        return targets[0] if targets else ""
+
+    @classmethod
+    def _explicit_request_targets(cls, message: str, working_dir: str) -> list:
+        """Return a bounded set of exact existing repo files named by the task.
+
+        Multiple files, including repository-root files such as ``README.md``,
+        are accepted only when each path is explicit user evidence and passes
+        the same canonical spelling, containment, and regular-file checks as
+        the singular helper. Fuzzy search discovery remains single-target; it
+        cannot broaden edit authority.
+        """
+
+        try:
+            root = Path(working_dir).resolve(strict=True)
+        except (OSError, RuntimeError):
+            return []
+        targets = []
+        for match in _EXPLICIT_PATH_RE.finditer(str(message or "")):
+            raw = match.group(1)
+            # A period is legal in a POSIX filename and is also ordinary
+            # sentence punctuation.  Prefer the exact spelling when it exists;
+            # only then try the punctuation-free spelling through the same
+            # canonical-path and filesystem boundary checks.
+            for value in dict.fromkeys((raw, raw.rstrip("."))):
+                if not value:
+                    continue
+                if len(value) > 200 or cls._relative_path({"path": value}) != value:
+                    continue
+                try:
+                    candidate = (root / PurePosixPath(value)).resolve(strict=True)
+                    candidate.relative_to(root)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                if candidate.is_file() and value not in targets:
+                    targets.append(value)
+                    break
+            if len(targets) >= _MAX_EXPLICIT_REQUEST_TARGETS:
+                break
+        return targets
+
     def _plan_steps(self, plan_result: Mapping[str, Any], lane: RouteLane) -> list:
-        """Flatten ordinary and compound plans, preserving order and bounds."""
+        """Flatten ordinary and compound plans, preserving order and bounds.
+
+        Indexer step ids are unique within one execution plan.  A compound
+        contract contains several independently compiled execution plans, so
+        each sub-task legitimately starts again at ids such as ``step_01_*``.
+        Namespace only the host-local ordering ids and dependencies while
+        keeping the exact contract and every tool argument unchanged.
+        """
         steps: list = []
 
-        def extend(value: Any) -> None:
+        def extend(value: Any, namespace: str = "") -> None:
             if value is None:
                 return
             if not isinstance(value, (list, tuple)):
@@ -1114,17 +1223,31 @@ class CodingRouteOrchestrator:
                 # A non-object step is malformed, never something to skip.
                 if not isinstance(item, Mapping):
                     raise CodingRouteError("malformed_evidence", lane)
-                steps.append(item)
+                if not namespace:
+                    steps.append(item)
+                    continue
+                scoped = dict(item)
+                identifier = item.get("id")
+                if isinstance(identifier, str):
+                    scoped["id"] = "{}:{}".format(namespace, identifier)
+                depends = item.get("depends_on")
+                if isinstance(depends, (list, tuple)):
+                    scoped["depends_on"] = [
+                        "{}:{}".format(namespace, dependency)
+                        if isinstance(dependency, str) else dependency
+                        for dependency in depends
+                    ]
+                steps.append(scoped)
 
         extend(plan_result.get("execution_plan"))
         sub_tasks = plan_result.get("sub_tasks")
         if sub_tasks is not None:
             if not isinstance(sub_tasks, (list, tuple)):
                 raise CodingRouteError("malformed_evidence", lane)
-            for sub_task in sub_tasks:
+            for index, sub_task in enumerate(sub_tasks, 1):
                 if not isinstance(sub_task, Mapping):
                     raise CodingRouteError("malformed_evidence", lane)
-                extend(sub_task.get("execution_plan"))
+                extend(sub_task.get("execution_plan"), "subtask_{}".format(index))
         if len(steps) > self.limits.max_plan_steps:
             raise CodingRouteError("plan_bound_exceeded", lane)
         return self._ordered_steps(steps, lane)
@@ -1356,10 +1479,15 @@ class CodingRouteOrchestrator:
 
     @staticmethod
     def core_relevant(request: CodingTaskRequest, changed: Sequence[str]) -> bool:
-        """Deterministic relevance from the request and attributable changes."""
-        haystack = " ".join(
-            [request.message.lower(), *(str(item).lower() for item in changed)],
-        )
+        """Derive post-work Core relevance from attributable changed paths.
+
+        Request prose is planning context, not evidence of the surface that the
+        implementer actually changed.  It routinely mentions Core boundaries in
+        negative constraints (for example, ``do not change flyto-core``), which
+        must not force an unrelated documentation or CI round into a Core proof.
+        """
+        del request  # Kept in the signature for the route policy interface.
+        haystack = " ".join(str(item).lower() for item in changed)
         return any(marker in haystack for marker in CORE_RELEVANT_MARKERS)
 
     @staticmethod

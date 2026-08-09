@@ -262,13 +262,32 @@ async def guardian_pre_hook(
 
     if tool_name in _SEARCH_TOOLS:
         if service_mode and tool_name in _CONTENT_SEARCH_TOOLS:
-            # The hook can authorize a search root but not every result path,
-            # so content search would return bytes `Read` must refuse.
-            raise GuardianBlocked(
-                "{} blocked: content search is not available in service mode".format(
-                    tool_name,
-                ),
-            )
+            # Directory-wide Grep can return bytes from a protected result
+            # path even when its root is safe. Limit service-mode content
+            # search to one explicit regular file, which is the same boundary
+            # `Read` can authorize independently.
+            root = tool_input.get("path", "")
+            if not isinstance(root, str):
+                raise GuardianBlocked(
+                    "{} blocked: search path must be a string".format(tool_name),
+                )
+            if not workspace or not root:
+                raise GuardianBlocked(
+                    "{} blocked: service content search requires one explicit file".format(
+                        tool_name,
+                    ),
+                )
+            _resolve_workspace_path(tool_name, root, workspace)
+            candidate = Path(os.path.expanduser(root))
+            if not candidate.is_absolute():
+                candidate = Path(workspace) / candidate
+            resolved = Path(os.path.realpath(candidate))
+            if not resolved.is_file():
+                raise GuardianBlocked(
+                    "{} blocked: service content search requires one regular file".format(
+                        tool_name,
+                    ),
+                )
         # An omitted search root means the SDK cwd, which is already confined.
         root = tool_input.get("path", "")
         if not isinstance(root, str):

@@ -21,6 +21,7 @@ from flyto_ai.coding.service import (
     CodingJobNotFound,
     CodingService,
     CodingServiceError,
+    error_details,
     request_from_mapping,
     receipt_to_mapping,
 )
@@ -116,10 +117,17 @@ class CodingMCPServer:
             return self._error(request_id, -32601, "method not found")
         except (ValueError, CodingServiceError) as exc:
             code = exc.code if isinstance(exc, CodingServiceError) else "invalid_request"
+            payload: Dict[str, Any] = {"ok": False, "error": code}
+            # A subclass may attach bounded, closed-schema context. This stays
+            # additive: `ok` and `error` keep their exact shape, and a caller
+            # that ignores `details` behaves exactly as it did before.
+            details = error_details(exc)
+            if details:
+                payload["details"] = details
             return self._result(request_id, {
-                "content": [{"type": "text", "text": json.dumps({"ok": False, "error": code})}],
+                "content": [{"type": "text", "text": json.dumps(payload)}],
                 "isError": True,
-                "structuredContent": {"ok": False, "error": code},
+                "structuredContent": payload,
             })
 
     def _call(self, params: Mapping[str, Any]) -> Dict[str, Any]:

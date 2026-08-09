@@ -21,6 +21,7 @@ from flyto_ai.coding.service import (
     CodingJobNotFound,
     CodingService,
     CodingServiceError,
+    error_details,
     request_from_mapping,
     receipt_to_mapping,
 )
@@ -29,9 +30,12 @@ from flyto_ai.coding.service import (
 MAX_REQUEST_BYTES = 256 * 1024
 _JOB_ID_RE = re.compile(r"^job_[a-f0-9]{24}$")
 _AUDIT_FIELDS = frozenset({"implementation_revision_sha256", "verdict", "findings"})
-#: Stale revisions, wrong state, and exhausted rework are conflicts; missing
-#: startup authority is a policy denial. Unlisted codes stay 403.
+#: Stale revisions, wrong state, exhausted rework, and a worktree owned by
+#: another live job are conflicts; missing startup authority is a policy
+#: denial. Unlisted codes stay 403.
 _AUDIT_STATUS = {
+    "workspace_busy": 409,
+    "abandon_state_conflict": 409,
     "revision_mismatch": 409,
     "revision_unavailable": 409,
     "audit_state_conflict": 409,
@@ -107,8 +111,14 @@ class CodingHTTPHandler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": "invalid_request", "message": str(exc)[:500]})
             return
         except CodingServiceError as exc:
-            status = 409 if exc.code == "idempotency_conflict" else 429 if exc.code == "service_busy" else 403
-            self._json(status, {"ok": False, "error": exc.code})
+            status = _AUDIT_STATUS.get(exc.code, 403)
+            payload = {"ok": False, "error": exc.code}
+            # Same bounded projection the MCP facade applies, so a caller sees
+            # the owning job of a busy worktree over either transport.
+            details = error_details(exc)
+            if details:
+                payload["details"] = details
+            self._json(status, payload)
             return
         self._json(202, {"ok": True, "job": receipt_to_mapping(receipt)})
 

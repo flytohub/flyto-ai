@@ -41,13 +41,13 @@ DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: Service mode inspects and edits; host-owned checks run afterward. Process
 #: execution is not delegated to the model.
-#: Content search is absent on purpose. A pre-hook can authorize the search
-#: root but not every result path, so `Grep` could return bytes from `.env`,
-#: `.ssh`, or a credentials file that `Read` would have refused. `Glob` exposes
-#: names only and keeps its canonical root confinement.
-SERVICE_ALLOWED_TOOLS = ("Read", "Edit", "Write", "Glob")
+#: Service-mode content search is limited by the guardian to one explicit,
+#: regular, non-sensitive file. That gives large-file repair rounds the same
+#: bytes `Read` could return without allowing a directory-wide search to cross
+#: a protected result path. Process execution remains host-owned.
+SERVICE_ALLOWED_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 #: Catalog for a run whose startup authority does not permit model edits.
-SERVICE_READONLY_TOOLS = ("Read", "Glob")
+SERVICE_READONLY_TOOLS = ("Read", "Glob", "Grep")
 #: Prefix for a provisional host thread id used when a service round fails
 #: before any Claude session exists. It can never be mistaken for, or resumed
 #: as, an SDK session.
@@ -432,6 +432,13 @@ class ClaudeCodeAgent:
             "max_budget_usd": max_budget,
             "cwd": request.working_dir,
             "allowed_tools": service_tools if service_mode else self._cc.allowed_tools,
+            # An audited service round must start from the host-declared MCP
+            # set only. Without strict mode the bundled CLI also loads user
+            # and project MCP settings, which can launch unrelated servers,
+            # add startup latency, and make the effective route differ from
+            # the control plane receipt. Legacy direct runs retain the CLI's
+            # normal settings behavior.
+            "strict_mcp_config": service_mode,
             # Never disable the SDK permission system implicitly.  The
             # guardian hook is an additional policy boundary, not a reason to
             # bypass the SDK's own approval prompts.  Service mode accepts

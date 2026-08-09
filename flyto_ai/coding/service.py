@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -72,6 +73,12 @@ except ImportError:  # pragma: no cover
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _JOB_ID = re.compile(r"^job_[a-f0-9]{24}$")
+_TENANT_REF = re.compile(r"^[a-f0-9]{64}$")
+#: Structured error context is a closed vocabulary of short opaque tokens.
+#: Paths, prose, and anything unbounded fail these patterns and are dropped.
+_DETAIL_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
+_DETAIL_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_MAX_ERROR_DETAIL_FIELDS = 8
 _BACKEND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ALLOWED_REQUEST_FIELDS = frozenset({
     "message", "working_dir", "thread_id", "resume", "max_attempts",
@@ -97,12 +104,39 @@ PROVISIONAL_THREAD_PREFIXES = (ROUTE_THREAD_PREFIX, "host-")
 #: an in-flight or crashed overflow round is never read back as strict.
 EXECUTION_MODE_STRICT = "strict"
 EXECUTION_MODE_EMERGENCY = "emergency"
+#: Closed schema tokens for the two durable records this module owns beside the
+#: job record. A file that does not name its exact version is not read.
+WORKSPACE_CLAIM_VERSION = "flyto.coding-workspace-claim.v1"
+RESUME_ENVELOPE_VERSION = "flyto.coding-resume-envelope.v1"
+#: Exactly the keys a workspace claim may contain. The raw worktree path is
+#: deliberately absent: the claim is keyed by its digest, and the owning job
+#: record already holds the path under the same 0600 state root.
+_WORKSPACE_CLAIM_FIELDS = frozenset({
+    "claim_version", "job_id", "tenant_ref", "workspace_sha256", "state",
+    "instance_id", "process_id", "claimed_at", "updated_at",
+})
+#: Exactly the keys a resume envelope may contain: the bounded public request
+#: fields plus the bindings that make it usable for one job's rework and for
+#: nothing else. Startup authority fields are never among them.
+_RESUME_ENVELOPE_FIELDS = frozenset(_ALLOWED_REQUEST_FIELDS) | {
+    "envelope_version", "job_id", "request_sha256", "session_bound", "created_at",
+}
 
 
 class CodingServiceError(RuntimeError):
     """Base error with a stable, non-sensitive service code."""
 
     code = "service_error"
+
+    @property
+    def details(self) -> Dict[str, Any]:
+        """Bounded, closed-schema context a facade may publish beside `code`.
+
+        The default is deliberately empty: an error is a stable code first, and
+        only a subclass that has something safe and actionable to add may fill
+        this in. Paths, prose, and credentials never appear here.
+        """
+        return {}
 
 
 class CodingServiceBusy(CodingServiceError):
@@ -125,6 +159,53 @@ class IdempotencyConflict(CodingServiceError):
 
 class WorkspaceDenied(CodingServiceError):
     code = "workspace_denied"
+
+
+class WorkspaceBusy(CodingServiceError):
+    """Another job owns this worktree until its audit loop closes.
+
+    Ownership spans the whole job, not one implementation round, so a second
+    Codex frontend cannot edit a tree between an implementation and the exact
+    revision audit that binds it. The owning job id is safe to publish: it is
+    an opaque host-minted token, never a path or a prompt.
+    """
+
+    code = "workspace_busy"
+
+    def __init__(self, message: str, owner_job_id: str = "") -> None:
+        super().__init__(message)
+        self.owner_job_id = str(owner_job_id or "")
+
+    @property
+    def details(self) -> Dict[str, Any]:
+        return {"owner_job_id": self.owner_job_id} if self.owner_job_id else {}
+
+
+class WorkspaceClaimUnresolved(CodingServiceError):
+    """A worktree carries a claim whose authority cannot be evaluated.
+
+    This is deliberately distinct from `workspace_busy`. Busy means "a named
+    live job owns this tree"; unresolved means "something claims this tree and
+    the service cannot prove otherwise". Both refuse the edit, but only the
+    second needs a host operator to look at the state root, because no job
+    transition will ever clear it on its own.
+    """
+
+    code = "workspace_claim_unresolved"
+
+    def __init__(self, message: str, owner_job_id: str = "") -> None:
+        super().__init__(message)
+        self.owner_job_id = str(owner_job_id or "")
+
+    @property
+    def details(self) -> Dict[str, Any]:
+        return {"owner_job_id": self.owner_job_id} if self.owner_job_id else {}
+
+
+class AbandonStateConflict(CodingServiceError):
+    """Only an audit-ready job may be abandoned, and only into a failure."""
+
+    code = "abandon_state_conflict"
 
 
 class AuditNotEnabled(CodingServiceError):
@@ -179,6 +260,15 @@ _INTERRUPTED_JOB_STATES = frozenset({
     CodingJobState.REWORK_QUEUED.value,
     CodingJobState.REWORK_RUNNING.value,
 })
+
+#: States during which one job owns its worktree exclusively. This is a strict
+#: superset of `_INTERRUPTED_JOB_STATES`: it also covers the audit gap, where
+#: no round is executing but the recorded revision must still describe the
+#: files an auditor will read. Releasing at the end of a round is exactly what
+#: let a competing job invalidate an audit before it happened.
+_CLAIM_OWNED_STATES = _INTERRUPTED_JOB_STATES | {
+    CodingJobState.AWAITING_CODEX_AUDIT.value,
+}
 
 
 class _RoundProgress:
@@ -237,6 +327,29 @@ def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:
         max_rounds=int(value.get("max_rounds", 30)),
         require_changes=bool(value.get("require_changes", True)),
     )
+
+
+def error_details(exc: BaseException) -> Dict[str, Any]:
+    """Project one error's structured context, or nothing at all.
+
+    Only short, closed-vocabulary scalars cross this boundary, so a facade can
+    publish "which job owns that worktree" without turning a tool result or an
+    HTTP body into an unbounded log channel. Prose, paths, floats, and nested
+    payloads are dropped rather than truncated.
+    """
+
+    details = getattr(exc, "details", None)
+    if not isinstance(details, Mapping):
+        return {}
+    projected: Dict[str, Any] = {}
+    for key, value in sorted(details.items())[:_MAX_ERROR_DETAIL_FIELDS]:
+        if not isinstance(key, str) or not _DETAIL_KEY_RE.fullmatch(key):
+            continue
+        if isinstance(value, bool) or isinstance(value, int):
+            projected[key] = value
+        elif isinstance(value, str) and _DETAIL_VALUE_RE.fullmatch(value):
+            projected[key] = value
+    return projected
 
 
 def receipt_to_mapping(receipt: CodingJobReceipt) -> Dict[str, Any]:
@@ -348,8 +461,11 @@ class CodingService:
         self._state_lock_depth = 0
         self._workspace_locks: Dict[str, threading.Lock] = {}
         self._job_leases: Dict[str, int] = {}
-        # Resume context is process-local on purpose: the task prompt is not
-        # persisted, so a restart cannot silently start a new session.
+        # In-memory resume context is only the fast path. The durable, redacted
+        # envelope beside each job record is what makes rework possible from a
+        # worker that never implemented it, and it is bound to one exact
+        # implementation session so it can continue that session but never
+        # start a new one.
         self._resume: Dict[Tuple[str, str], CodingTaskRequest] = {}
         self._pending: set[Future[Any]] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="flyto-coding")
@@ -395,15 +511,7 @@ class CodingService:
         if not _SAFE_ID.fullmatch(idempotency_key):
             raise ValueError("idempotency_key must be a safe identifier")
         self._assert_workspace(request.working_dir)
-        request = dataclasses.replace(
-            request,
-            approval_policy=self.approval_policy,
-            sandbox_mode=self.sandbox_mode,
-            checks=(),
-            capabilities=(),
-            config_path=self.config_path,
-            command_sandbox_image=self.sandbox_image,
-        )
+        request = self._with_startup_authority(request)
         request_digest = self._request_digest(request)
         tenant_dir = self._tenant_dir(tenant_ref)
         idempotency_path = tenant_dir / "idempotency" / (hashlib.sha256(idempotency_key.encode()).hexdigest() + ".json")
@@ -462,6 +570,24 @@ class CodingService:
                 "landable": False,
             }
             try:
+                # Exclusive worktree ownership is taken here, once an
+                # idempotent replay has already been ruled out, and it is held
+                # for the whole job rather than for one round. Everything after
+                # this point can therefore assume no competing job will edit
+                # the tree before this one is audited.
+                #
+                # Only an audited job takes a claim, because only an audited
+                # job has a gap between "the implementer finished" and "an
+                # auditor read the tree" to protect. A legacy direct-library
+                # service still honours a claim someone else holds; its own
+                # rounds remain serialized by the per-round workspace lock,
+                # which is the behaviour that flow has always had.
+                if self.require_codex_audit:
+                    self._create_workspace_claim(
+                        tenant_ref, job_id, request.working_dir, record["state"],
+                    )
+                else:
+                    self._assert_workspace_available(job_id, request.working_dir)
                 self._write_json(tenant_dir / "jobs" / (job_id + ".json"), record)
                 self._publish_status(record)
                 self._write_json(
@@ -469,8 +595,13 @@ class CodingService:
                     {"job_id": job_id, "request_sha256": request_digest},
                 )
                 self._resume[(tenant_ref, job_id)] = request
+                self._write_resume_envelope(
+                    tenant_ref, job_id, request, request_digest,
+                )
                 future = self._executor.submit(self._run_job, tenant_ref, job_id, request)
             except BaseException:
+                self._release_workspace_claim(job_id, request.working_dir)
+                self._discard_resume(tenant_ref, job_id)
                 self._release_job_lease(job_id)
                 raise
             self._pending.add(future)
@@ -478,6 +609,50 @@ class CodingService:
                 lambda completed, claimed=job_id: self._forget_future(completed, claimed),
             )
             return self._receipt(record)
+
+    def _reassert_audit_claim(
+        self, tenant_ref: str, record: Mapping[str, Any],
+    ) -> None:
+        """Prove the awaiting job still owns its worktree; the caller holds the guard.
+
+        Raises `WorkspaceBusy` or `WorkspaceClaimUnresolved` without touching
+        the record, the audit count, or the offending claim, so a refused audit
+        leaves the job exactly as auditable as it was.
+        """
+
+        if not self.require_codex_audit:
+            return
+        workspace = str(record.get("working_dir") or "")
+        job_id = str(record.get("job_id") or "")
+        if not _JOB_ID.fullmatch(job_id) or not workspace:
+            # A record that cannot even name its own job or worktree cannot
+            # prove ownership of one. Returning here would let an unidentified
+            # record be audited without any claim at all.
+            raise WorkspaceClaimUnresolved(
+                "the coding job record cannot identify its own workspace claim",
+            )
+        self._reassert_workspace_claim(
+            tenant_ref, job_id, workspace, str(record.get("state")),
+        )
+
+    def _with_startup_authority(self, request: CodingTaskRequest) -> CodingTaskRequest:
+        """Overwrite every authority field from this process's startup config.
+
+        Applied to a submitted request and again to a rework request rebuilt
+        from a durable envelope. Authority is never carried by a payload and
+        never restored from disk, so a stored request cannot outlive, widen, or
+        contradict the policy the running service was started with.
+        """
+
+        return dataclasses.replace(
+            request,
+            approval_policy=self.approval_policy,
+            sandbox_mode=self.sandbox_mode,
+            checks=(),
+            capabilities=(),
+            config_path=self.config_path,
+            command_sandbox_image=self.sandbox_image,
+        )
 
     def get(self, tenant_id: str, job_id: str) -> CodingJobReceipt:
         """Read a job only from the authenticated tenant namespace."""
@@ -536,6 +711,22 @@ class CodingService:
             stored = str(record.get("implementation_revision_sha256") or "")
             if stored != claimed:
                 raise RevisionMismatch("audit does not bind the recorded implementation revision")
+            # Prove this job still owns its worktree before reading the tree or
+            # deciding anything. A verdict is a statement about files only this
+            # job was allowed to touch, so both `accept` and `rework` require
+            # the exact existing, fully bound tenant+job+workspace claim — a
+            # foreign or unevaluable one stops either verdict, or a landable
+            # record could coexist with someone else's ownership.
+            #
+            # An absent claim is `workspace_claim_unresolved`, never reacquired.
+            # Only the original submit may create a claim from `free`. For a job
+            # that is already awaiting audit, `free` proves nothing: during the
+            # unobservable gap another job could have taken this worktree,
+            # edited files outside this job's attributable set, settled, and
+            # released. Reacquiring here would manufacture continuity that was
+            # never established, and the revision recomputed below would not
+            # detect it. The host spillway is abandon or repair.
+            self._reassert_audit_claim(tenant_ref, record)
             # Recompute from the live workspace so an edit landed after the
             # implementation cannot inherit an earlier audit decision.
             if self._stored_revision(record) != stored:
@@ -554,11 +745,74 @@ class CodingService:
                     landable=True,
                     failure_code=None,
                 )
-                self._resume.pop((tenant_ref, job_id), None)
+                self._discard_resume(tenant_ref, job_id)
                 return self._receipt(self._read_json(path))
             return self._schedule_rework(
                 path, tenant_ref, job_id, record, findings, digest, audit_count,
             )
+
+    def abandon(self, tenant_id: str, job_id: str) -> CodingJobReceipt:
+        """Fail one audit-ready job closed so its worktree can be reused.
+
+        This is the operator's only release valve for a job whose auditor went
+        away, and it is deliberately the weakest operation in the service: it
+        can move `awaiting_codex_audit` to `failed` and nothing else. It never
+        accepts, never lands, never stages or commits, and never lets a round
+        skip an audit — abandoning is strictly worse for the caller than
+        auditing, so it can never be used to route around the audit gate.
+        """
+
+        tenant_ref = self._tenant_ref(tenant_id)
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingJobNotFound("coding job does not exist")
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        with self._state_guard():
+            try:
+                record = self._read_json(path)
+            except FileNotFoundError as exc:
+                raise CodingJobNotFound("coding job does not exist") from exc
+            if str(record.get("state")) != CodingJobState.AWAITING_CODEX_AUDIT.value:
+                raise AbandonStateConflict("only an audit-ready coding job can be abandoned")
+            # The lease proves no live round is mid-flight. Abandoning under a
+            # running implementer would release a worktree that is still being
+            # written, which is exactly the race this change exists to close.
+            if not self._acquire_job_lease(job_id):
+                raise CodingServiceBusy("coding job is already being executed")
+            try:
+                self._update_record_locked(
+                    path,
+                    state=CodingJobState.FAILED.value,
+                    failure_code="job_abandoned",
+                    landable=False,
+                )
+            finally:
+                self._release_job_lease(job_id)
+            self._discard_resume(tenant_ref, job_id)
+            self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
+            return self._receipt(self._read_json(path))
+
+    def repair_workspace_claim(self, workspace: str) -> Dict[str, Any]:
+        """Clear an unevaluable workspace claim on explicit host authority.
+
+        This is the only way an `unresolved` claim is ever removed, and it is
+        deliberately manual: the service refuses to guess, so a human decides
+        that no audit is pending on that tree. A claim held by a live job is
+        never touched here — that job must be audited or abandoned, which keeps
+        the release valve from becoming a way to edit a tree mid-audit.
+        """
+
+        self._assert_workspace(workspace)
+        with self._state_guard():
+            status, owner_job_id = self._workspace_authority(workspace)
+            if status == "held":
+                raise WorkspaceBusy(
+                    "a live coding job owns this workspace; audit or abandon it first",
+                    owner_job_id,
+                )
+            if status == "free":
+                return {"repaired": False, "status": status, "owner_job_id": owner_job_id}
+            self._discard_path(self._workspace_claim_path(workspace))
+            return {"repaired": True, "status": status, "owner_job_id": owner_job_id}
 
     def close(self, *, wait: bool = True) -> None:
         with self._lock:
@@ -597,30 +851,45 @@ class CodingService:
         if rework_count > self.max_rework_rounds:
             raise ReworkLimitReached("coding job exhausted its rework rounds")
         session = str(record.get("implementation_session_id") or "")
+        # An audit may legitimately arrive at a different worker than the one
+        # that implemented the job: every Codex frontend runs its own stdio
+        # process against the same state root. The in-memory context is a fast
+        # path; the durable envelope is what makes the loop closeable from any
+        # live worker, and it can only ever continue this job's exact session.
         original = self._resume.get((tenant_ref, job_id))
+        if original is None:
+            original = self._read_resume_envelope(tenant_ref, job_id, record)
         if not session or original is None:
             raise ReworkNotResumable("the implementation session cannot be resumed")
-        request = dataclasses.replace(
+        request = self._with_startup_authority(dataclasses.replace(
             original,
             message=self._rework_message(original.message, findings),
             thread_id=session,
             resume=True,
-        )
+        ))
         if len(self._pending) >= self.max_queued:
             raise CodingServiceBusy("coding job queue is full")
         # Claim the job before queueing. A concurrent audit then observes a
         # non-awaiting state and cannot schedule a duplicate rework round.
         if not self._acquire_job_lease(job_id):
             raise CodingServiceBusy("coding job is already being executed")
-        self._update_record_locked(
-            path,
-            state=CodingJobState.REWORK_QUEUED.value,
-            audit_count=audit_count,
-            rework_count=rework_count,
-            audit_findings_sha256=digest,
-            landable=False,
-            failure_code=None,
-        )
+        try:
+            self._update_record_locked(
+                path,
+                state=CodingJobState.REWORK_QUEUED.value,
+                audit_count=audit_count,
+                rework_count=rework_count,
+                audit_findings_sha256=digest,
+                landable=False,
+                failure_code=None,
+            )
+        except BaseException:
+            # The transition was refused — most often because this job can no
+            # longer prove it owns the worktree. Hand back the lease so the job
+            # stays exactly as auditable as it was, rather than looking busy to
+            # every later caller.
+            self._release_job_lease(job_id)
+            raise
         try:
             future = self._executor.submit(self._run_job, tenant_ref, job_id, request, rework=True)
         except RuntimeError as exc:
@@ -1132,14 +1401,14 @@ class CodingService:
         if started and self.require_codex_audit:
             outcome["implementation_backend"] = self.implementation_backend
         if not result.ok:
-            self._resume.pop((tenant_ref, job_id), None)
+            self._discard_resume(tenant_ref, job_id)
             self._update_record(
                 path, state=CodingJobState.FAILED.value, landable=False,
                 **self._failed_round_proof(request, result, started, outcome),
             )
             return
         if not self.require_codex_audit:
-            self._resume.pop((tenant_ref, job_id), None)
+            self._discard_resume(tenant_ref, job_id)
             self._update_record(path, state=CodingJobState.COMPLETED.value, **outcome)
             return
         session = str(result.thread_id or "")
@@ -1175,6 +1444,17 @@ class CodingService:
         # in-memory progress object survived the round.
         outcome["implementation_backend"] = self.implementation_backend
         outcome["implementer_started"] = True
+        # Seal the resume envelope to the session this round actually produced,
+        # before the job becomes auditable. Only now can another worker prove
+        # that replaying it continues this session instead of starting one.
+        with self._state_guard():
+            self._seal_resume_envelope(
+                tenant_ref,
+                job_id,
+                request,
+                str(self._read_json(path).get("request_sha256") or ""),
+                session,
+            )
         self._update_record(
             path,
             state=CodingJobState.AWAITING_CODEX_AUDIT.value,
@@ -1236,7 +1516,7 @@ class CodingService:
     ) -> None:
         """Force one terminal fail-closed record for any worker exit."""
 
-        self._resume.pop((tenant_ref, job_id), None)
+        self._discard_resume(tenant_ref, job_id)
         changes: Dict[str, Any] = {
             "state": CodingJobState.FAILED.value,
             "failure_code": code,
@@ -1590,6 +1870,445 @@ class CodingService:
                     fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
 
+    @staticmethod
+    def _workspace_digest(workspace: str) -> str:
+        return hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()
+
+    def _workspace_claim_path(self, workspace: str) -> Path:
+        return self.state_root / "locks" / "workspaces" / (
+            self._workspace_digest(workspace) + ".owner.json"
+        )
+
+    def _workspace_authority(self, workspace: str) -> Tuple[str, str]:
+        """Decide who may edit one worktree: `(status, owner_job_id)`.
+
+        There are exactly three answers, and the third is the reason this
+        method exists:
+
+        - `free`: no claim, or a claim whose owning record proves the job has
+          settled. Editing is safe.
+        - `held`: a claim whose owning record is still in a claim-owned state.
+          Only that job may edit.
+        - `unresolved`: a claim exists but its authority cannot be evaluated —
+          corrupt JSON, an unknown version or shape, an unreadable file, or an
+          owning record that cannot be read. Absence of authority is *not*
+          proven, so this must never be treated as `free`.
+
+        Deleting an unresolved claim would convert "I cannot tell whether a job
+        owns this tree" into "nobody owns this tree", which is precisely the
+        concurrent-edit hazard the claim exists to prevent. Such a claim is
+        left in place and only a host operator can clear it.
+        """
+
+        path = self._workspace_claim_path(workspace)
+        if not path.exists():
+            return ("free", "")
+        try:
+            claim = self._read_json(path)
+        except FileNotFoundError:
+            # Swept between the check and the read; nothing owns the tree.
+            return ("free", "")
+        except (OSError, ValueError, json.JSONDecodeError):
+            return ("unresolved", "")
+        digest = self._workspace_digest(workspace)
+        if not self._claim_is_well_formed(claim, digest):
+            return ("unresolved", "")
+        job_id = str(claim["job_id"])
+        tenant_ref = str(claim["tenant_ref"])
+        owner = self.state_root / "tenants" / tenant_ref / "jobs" / (job_id + ".json")
+        try:
+            record = self._read_json(owner)
+        except FileNotFoundError:
+            # The claim names a job this state root has no record of. That is
+            # unresolved, not free: a record can be missing because a tenant
+            # directory was moved or partially restored, and guessing "free"
+            # would hand the tree to a competing job.
+            return ("unresolved", job_id)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return ("unresolved", job_id)
+        # The record must bind back to this exact claim and this exact
+        # worktree. Without that, a well-formed claim could name an unrelated
+        # settled job and read as `free`, which would release a tree whose
+        # ownership was never actually evaluated.
+        if not self._record_binds_claim(record, job_id, digest):
+            return ("unresolved", job_id)
+        # A record only settles ownership by naming a state this service
+        # actually defines. A missing, unknown, or wrong-typed state is not
+        # evidence that the job finished — treating "not claim-owned" as free
+        # would release a worktree on the strength of an unreadable field.
+        state = record.get("state")
+        if isinstance(state, bool) or not isinstance(state, str):
+            return ("unresolved", job_id)
+        try:
+            CodingJobState(state)
+        except ValueError:
+            return ("unresolved", job_id)
+        if state in _CLAIM_OWNED_STATES:
+            return ("held", job_id)
+        return ("free", job_id)
+
+    @staticmethod
+    def _claim_is_well_formed(claim: Mapping[str, Any], digest: str) -> bool:
+        """Require the exact claim shape, bounded values, and this worktree.
+
+        Missing keys are rejected as firmly as unknown ones: a partially
+        written claim proves nothing about ownership, and treating it as
+        absent would be exactly the fail-open this guards against.
+        """
+
+        if set(claim) != _WORKSPACE_CLAIM_FIELDS:
+            return False
+        if claim.get("claim_version") != WORKSPACE_CLAIM_VERSION:
+            return False
+        if not _JOB_ID.fullmatch(str(claim.get("job_id") or "")):
+            return False
+        if not _TENANT_REF.fullmatch(str(claim.get("tenant_ref") or "")):
+            return False
+        # A claim is keyed by workspace digest, so a claim whose recorded
+        # digest disagrees with the tree being queried is not about this tree.
+        if str(claim.get("workspace_sha256") or "") != digest:
+            return False
+        if str(claim.get("state") or "") not in _CLAIM_OWNED_STATES:
+            return False
+        if not _SAFE_ID.fullmatch(str(claim.get("instance_id") or "")):
+            return False
+        process_id = claim.get("process_id")
+        if isinstance(process_id, bool) or not isinstance(process_id, int) or process_id < 0:
+            return False
+        for name in ("claimed_at", "updated_at"):
+            value = claim.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            # "Bounded" has to mean finite. `NaN` fails every comparison and
+            # `Infinity` passes them all, so neither is a usable timestamp.
+            if not math.isfinite(value) or value < 0:
+                return False
+        return True
+
+    def _record_binds_claim(
+        self, record: Mapping[str, Any], job_id: str, digest: str,
+    ) -> bool:
+        """Require the owner record to name this job and this exact worktree."""
+
+        if str(record.get("job_id") or "") != job_id:
+            return False
+        if str(record.get("workspace_sha256") or "") != hashlib.sha256(
+            str(record.get("working_dir") or "").encode(),
+        ).hexdigest():
+            # The record's own two spellings of its workspace must agree before
+            # either is trusted to answer for a claim.
+            return False
+        working_dir = str(record.get("working_dir") or "")
+        if not working_dir:
+            return False
+        try:
+            return self._workspace_digest(working_dir) == digest
+        except (OSError, ValueError, RuntimeError):
+            return False
+
+    def _assert_workspace_available(self, job_id: str, workspace: str) -> str:
+        """Refuse a worktree owned by another job or by an unevaluable claim.
+
+        Every job runs this check, including a legacy service that takes no
+        claim of its own. Honouring a claim is what protects an audit gap;
+        taking one is only needed by a job that will have such a gap.
+        """
+
+        status, owner_job_id = self._workspace_authority(workspace)
+        if status == "unresolved":
+            raise WorkspaceClaimUnresolved(
+                "a coding workspace claim cannot be evaluated and needs host repair",
+                owner_job_id,
+            )
+        if status == "held" and owner_job_id != job_id:
+            raise WorkspaceBusy(
+                "another coding job owns this workspace until its audit closes",
+                owner_job_id,
+            )
+        return status
+
+    def _create_workspace_claim(
+        self, tenant_ref: str, job_id: str, workspace: str, state: str,
+    ) -> None:
+        """Take a first hold for a job that does not exist yet.
+
+        This is the only path that may turn `free` into ownership, and it runs
+        exactly once per job: inside `submit`, under the state guard, before
+        the job record is published. At that moment `free` genuinely means "no
+        job owns this tree", because this job has no history to be continuous
+        with.
+        """
+
+        self._assert_workspace_available(job_id, workspace)
+        now = time.time()
+        self._write_claim(tenant_ref, job_id, workspace, state, claimed_at=now, now=now)
+
+    def _reassert_workspace_claim(
+        self, tenant_ref: str, job_id: str, workspace: str, state: str,
+    ) -> None:
+        """Require an existing hold this exact job already owns, and restate it.
+
+        A live job may never recreate a claim from `free`. If the claim for an
+        existing queued, running, awaiting, or rework job has disappeared, the
+        service cannot prove that no other Codex acquired this worktree, edited
+        unrelated files, settled, and released in the gap. Recomputing only
+        *this* job's attributable files would not detect that, so reacquiring
+        here would manufacture continuity that was never established.
+
+        Missing is therefore `unresolved`, exactly like corrupt: it needs a
+        host decision (`code-release --abandon-job` or `--repair-workspace`),
+        not an automatic repair.
+        """
+
+        claim = self._require_owned_claim(tenant_ref, job_id, workspace)
+        self._write_claim(
+            tenant_ref, job_id, workspace, state,
+            claimed_at=float(claim["claimed_at"]), now=time.time(),
+        )
+
+    def _require_owned_claim(
+        self, tenant_ref: str, job_id: str, workspace: str,
+    ) -> Mapping[str, Any]:
+        """Return the live, fully bound claim this exact tenant+job owns."""
+
+        status, owner_job_id = self._workspace_authority(workspace)
+        if status == "unresolved":
+            raise WorkspaceClaimUnresolved(
+                "a coding workspace claim cannot be evaluated and needs host repair",
+                owner_job_id,
+            )
+        if status == "free":
+            raise WorkspaceClaimUnresolved(
+                "this coding job no longer holds a workspace claim it can prove",
+                job_id,
+            )
+        if owner_job_id != job_id:
+            raise WorkspaceBusy(
+                "another coding job owns this workspace until its audit closes",
+                owner_job_id,
+            )
+        claim = self._read_json(self._workspace_claim_path(workspace))
+        if str(claim.get("tenant_ref") or "") != tenant_ref:
+            # Same job id, different tenant namespace. Never overwrite that as
+            # this tenant's hold, and do not confirm the other tenant's job.
+            raise WorkspaceClaimUnresolved(
+                "a coding workspace claim belongs to another tenant namespace",
+            )
+        return claim
+
+    def _write_claim(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        workspace: str,
+        state: str,
+        *,
+        claimed_at: float,
+        now: float,
+    ) -> None:
+        self._write_json(self._workspace_claim_path(workspace), {
+            "claim_version": WORKSPACE_CLAIM_VERSION,
+            "job_id": job_id,
+            "tenant_ref": tenant_ref,
+            "workspace_sha256": self._workspace_digest(workspace),
+            "state": str(state),
+            "instance_id": self.instance_id,
+            "process_id": os.getpid(),
+            "claimed_at": claimed_at,
+            "updated_at": now,
+        })
+
+    def _release_workspace_claim(self, job_id: str, workspace: str) -> None:
+        """Drop this job's hold, never another job's and never an unreadable one."""
+
+        if not workspace:
+            return
+        path = self._workspace_claim_path(workspace)
+        try:
+            claim = self._read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
+        # A malformed or foreign claim is somebody else's problem to repair.
+        # Releasing one here would let a settling job clear ownership it never
+        # actually held.
+        if not self._claim_is_well_formed(claim, self._workspace_digest(workspace)):
+            return
+        if str(claim["job_id"]) == job_id:
+            self._discard_path(path)
+
+    def _sweep_workspace_claims(self) -> None:
+        """Drop only the claims whose owning record proves the job has settled.
+
+        A claim that cannot be evaluated survives the sweep on purpose. Startup
+        is exactly when a half-written state root is most likely, and clearing
+        an unreadable claim here would silently reopen a worktree whose audit
+        may still be pending.
+        """
+
+        directory = self.state_root / "locks" / "workspaces"
+        if not directory.is_dir():
+            return
+        for path in directory.glob("*.owner.json"):
+            try:
+                claim = self._read_json(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            digest = str(claim.get("workspace_sha256") or "") if isinstance(
+                claim, Mapping,
+            ) else ""
+            # The sweep answers the same question as `_workspace_authority`, so
+            # it must apply the same bindings. A claim it cannot fully evaluate
+            # is left exactly where it is.
+            if not self._claim_is_well_formed(claim, digest):
+                continue
+            if path.name != digest + ".owner.json":
+                # The filename is the lookup key, so a claim stored under a
+                # different digest than it declares is not evaluable here.
+                continue
+            job_id = str(claim["job_id"])
+            owner = (
+                self.state_root / "tenants" / str(claim["tenant_ref"])
+                / "jobs" / (job_id + ".json")
+            )
+            try:
+                record = self._read_json(owner)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not self._record_binds_claim(record, job_id, digest):
+                continue
+            if str(record.get("state")) not in _CLAIM_OWNED_STATES:
+                self._discard_path(path)
+
+    def _resume_path(self, tenant_ref: str, job_id: str) -> Path:
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingServiceError("coding resume envelope id is invalid")
+        return self.state_root / "tenants" / tenant_ref / "resume" / (job_id + ".json")
+
+    def _write_resume_envelope(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        request: CodingTaskRequest,
+        request_sha256: str,
+        session_bound: str = "",
+    ) -> None:
+        """Persist only what one job's rework may replay, and nothing more.
+
+        Startup authority — approval policy, sandbox mode, config path, sandbox
+        image, checks, capabilities — is deliberately absent. A rework round
+        re-imposes those from the running service, so a stale envelope can never
+        widen the authority a later process grants an implementer.
+        """
+
+        payload: Dict[str, Any] = {
+            "envelope_version": RESUME_ENVELOPE_VERSION,
+            "job_id": job_id,
+            "request_sha256": request_sha256,
+            "session_bound": str(session_bound or ""),
+            "created_at": time.time(),
+        }
+        for field in sorted(_ALLOWED_REQUEST_FIELDS):
+            payload[field] = getattr(request, field)
+        # `thread_id` stays exactly `None` when absent rather than becoming an
+        # empty string: the request contract accepts a safe identifier or
+        # nothing at all, and `""` is neither.
+        payload["thread_id"] = request.thread_id or None
+        self._write_json(self._resume_path(tenant_ref, job_id), payload)
+
+    def _load_resume_request(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        request_sha256: str,
+        session_bound: Optional[str] = None,
+    ) -> Optional[CodingTaskRequest]:
+        """Rebuild one job's original request from its durable envelope.
+
+        Two bindings always hold: the envelope names this job, and it carries
+        the digest the job record already recorded. The stored digest is
+        compared rather than recomputed, because the persisted prose has passed
+        through redaction and no longer hashes to the original. `session_bound`
+        adds the third binding when a caller demands one exact session; passing
+        `None` reads the envelope for resealing, never for execution.
+        """
+
+        try:
+            envelope = self._read_json(self._resume_path(tenant_ref, job_id))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        if (
+            envelope.get("envelope_version") != RESUME_ENVELOPE_VERSION
+            or set(envelope) - _RESUME_ENVELOPE_FIELDS
+            or str(envelope.get("job_id") or "") != job_id
+            or str(envelope.get("request_sha256") or "") != str(request_sha256 or "")
+            or (
+                session_bound is not None
+                and str(envelope.get("session_bound") or "") != session_bound
+            )
+        ):
+            return None
+        try:
+            return request_from_mapping({
+                field: envelope[field]
+                for field in _ALLOWED_REQUEST_FIELDS
+                if field in envelope
+            })
+        except (ValueError, TypeError):
+            return None
+
+    def _read_resume_envelope(
+        self, tenant_ref: str, job_id: str, record: Mapping[str, Any],
+    ) -> Optional[CodingTaskRequest]:
+        """Return the request a rework may replay into this job's exact session."""
+
+        session = str(record.get("implementation_session_id") or "")
+        if not session:
+            return None
+        return self._load_resume_request(
+            tenant_ref,
+            job_id,
+            str(record.get("request_sha256") or ""),
+            session_bound=session,
+        )
+
+    def _seal_resume_envelope(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        request: CodingTaskRequest,
+        request_sha256: str,
+        session: str,
+    ) -> None:
+        """Bind the stored request to the session this round actually produced.
+
+        The stored request wins over the caller's, because a rework round's
+        request carries audit feedback prepended to the task. Resealing it
+        would compound that feedback on every round; the envelope must keep
+        describing the original task for the life of the job.
+        """
+
+        stored = self._load_resume_request(tenant_ref, job_id, request_sha256)
+        self._write_resume_envelope(
+            tenant_ref, job_id, stored or request, request_sha256,
+            session_bound=session,
+        )
+
+    def _discard_resume(self, tenant_ref: str, job_id: str) -> None:
+        """Forget one job's resume context in memory and on disk together."""
+
+        self._resume.pop((tenant_ref, job_id), None)
+        try:
+            self._discard_path(self._resume_path(tenant_ref, job_id))
+        except CodingServiceError:
+            return
+
+    @staticmethod
+    def _discard_path(path: Path) -> None:
+        try:
+            path.unlink()
+        except OSError:
+            return
+
     @contextmanager
     def _state_guard(self) -> Iterator[None]:
         """Protect short state mutations without owning the root for process life."""
@@ -1691,13 +2410,36 @@ class CodingService:
         record = self._read_json(path)
         record.update(changes)
         record["updated_at"] = time.time()
+        job_id = str(record.get("job_id") or "")
+        state = str(record.get("state"))
+        workspace = str(record.get("working_dir") or "")
+        claims = bool(job_id and workspace and self.require_codex_audit)
+        # Ownership is asserted *before* the record is published, inside the
+        # guard the caller already holds. A claim-owned state is a promise that
+        # this job exclusively owns the worktree, so a transition that cannot
+        # prove that promise must fail rather than become visible. Logging it
+        # and continuing would let a round reach `awaiting_codex_audit` with no
+        # valid claim, which is the concurrent-edit window this exists to shut.
+        if claims and state in _CLAIM_OWNED_STATES:
+            # `.../tenants/<tenant_ref>/jobs/<job_id>.json`. This is a
+            # reassertion, never a creation: only `submit` may claim a free
+            # worktree, so a live job whose claim vanished fails closed instead
+            # of silently taking the tree back.
+            self._reassert_workspace_claim(
+                path.parent.parent.name, job_id, workspace, state,
+            )
         self._write_json(path, record)
         self._publish_status(record)
+        # A settled record publishes first, then releases. Release only ever
+        # removes this job's own valid claim; a foreign or unresolved one is
+        # left for a host operator.
+        if claims and state not in _CLAIM_OWNED_STATES:
+            self._release_workspace_claim(job_id, workspace)
         # Publish the settled record before releasing its execution lease.
         # A second process therefore cannot observe an auditable/terminal
         # state while the previous round still appears to own the job.
-        if str(record.get("state")) not in _INTERRUPTED_JOB_STATES:
-            self._release_job_lease(str(record.get("job_id") or ""))
+        if state not in _INTERRUPTED_JOB_STATES:
+            self._release_job_lease(job_id)
 
     @staticmethod
     def _decode_result(value: Any) -> Optional[CodingTaskResult]:
@@ -1745,27 +2487,40 @@ class CodingService:
 
     def _reconcile_interrupted_jobs(self) -> None:
         tenants = self.state_root / "tenants"
-        if not tenants.is_dir():
-            return
-        for path in tenants.glob("*/jobs/job_*.json"):
-            try:
-                record = self._read_json(path)
-                # An awaiting-audit job survives a restart; in-flight work does
-                # not, but another live MCP process may still own its job lease.
-                if record.get("state") in _INTERRUPTED_JOB_STATES:
-                    job_id = str(record.get("job_id") or "")
-                    if not self._acquire_job_lease(job_id):
-                        continue
-                    try:
-                        record.update({
-                            "state": CodingJobState.FAILED.value,
-                            "updated_at": time.time(),
-                            "landable": False,
-                            "failure_code": "service_restarted",
-                        })
-                        self._write_json(path, record)
-                        self._publish_status(record)
-                    finally:
-                        self._release_job_lease(job_id)
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
+        if tenants.is_dir():
+            for path in tenants.glob("*/jobs/job_*.json"):
+                try:
+                    record = self._read_json(path)
+                    # An awaiting-audit job survives a restart; in-flight work
+                    # does not, but another live MCP process may still own its
+                    # job lease.
+                    if record.get("state") in _INTERRUPTED_JOB_STATES:
+                        job_id = str(record.get("job_id") or "")
+                        if not self._acquire_job_lease(job_id):
+                            continue
+                        try:
+                            record.update({
+                                "state": CodingJobState.FAILED.value,
+                                "updated_at": time.time(),
+                                "landable": False,
+                                "failure_code": "service_restarted",
+                            })
+                            self._write_json(path, record)
+                            self._publish_status(record)
+                            # `.../tenants/<tenant_ref>/jobs/<job_id>.json`
+                            self._discard_resume(path.parent.parent.name, job_id)
+                        finally:
+                            self._release_job_lease(job_id)
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+        # Claims outlive the process that took them on purpose, so a crash
+        # cannot expose a worktree whose audit has not happened yet. Sweeping
+        # afterwards keeps that from becoming a permanent pin, but only for
+        # ownership this pass can actually evaluate: a claim is dropped only
+        # when it is well formed, bound to its own worktree, and its owning
+        # record binds back and proves the job settled — including the records
+        # this pass just failed closed. A missing, unreadable, unbound, or
+        # otherwise unresolved claim is deliberately preserved for a host
+        # operator, because discarding it would reopen a worktree whose audit
+        # may still be pending.
+        self._sweep_workspace_claims()

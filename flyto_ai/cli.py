@@ -225,6 +225,34 @@ def main():
     )
     code_status_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    # The host's only release valve for a worktree an audit never closed. It is
+    # deliberately a local operator command rather than a fourth MCP tool: the
+    # audited route keeps exactly three tools, and nothing reachable by a model
+    # may retire a job or clear a claim.
+    code_release_p = sub.add_parser(
+        "code-release",
+        help="Fail an orphaned audit-ready coding job closed, or repair a stuck claim",
+    )
+    code_release_p.add_argument("--tenant", required=True, help="Startup-bound tenant identifier")
+    code_release_p.add_argument(
+        "--workspace-root", action="append", required=True,
+        help="Allowed workspace root (repeatable)",
+    )
+    code_release_p.add_argument(
+        "--state-dir", default="~/.flyto/coding-service",
+        help="Durable service state root",
+    )
+    release_target = code_release_p.add_mutually_exclusive_group(required=True)
+    release_target.add_argument(
+        "--abandon-job",
+        help="Move one awaiting_codex_audit job to failed/job_abandoned",
+    )
+    release_target.add_argument(
+        "--repair-workspace",
+        help="Clear a workspace claim whose authority cannot be evaluated",
+    )
+    code_release_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # flyto-ai (interactive mode, no subcommand)
     sub.add_parser("interactive", help="Start interactive chat (default when no args)")
 
@@ -250,6 +278,8 @@ def main():
         _cmd_code_mcp_supervisor(args)
     elif args.command == "code-status":
         _cmd_code_status(args)
+    elif args.command == "code-release":
+        _cmd_code_release(args)
     elif args.command == "chat":
         _cmd_chat(args)
     elif args.command == "interactive" or (args.command is None and sys.stdin.isatty()):
@@ -405,11 +435,33 @@ def _build_coding_route_policy(args):
             raise ValueError("capability command must not be empty")
         return parsed
 
+    def default_indexer_argv():
+        """Prefer the workspace checkout over an unrelated installed wheel."""
+        roots = getattr(args, "workspace_root", ()) or ()
+        if isinstance(roots, str):
+            roots = (roots,)
+        for root in roots:
+            checkout = _os.path.join(str(root), "flyto-indexer")
+            source_server = _os.path.join(checkout, "src", "mcp_server.py")
+            if _os.path.isfile(source_server):
+                env_command = _shutil.which("env")
+                if env_command:
+                    # Run the checkout as a package: direct script execution
+                    # breaks lazy relative imports used by strict verification.
+                    return (
+                        env_command,
+                        "PYTHONPATH={}".format(checkout),
+                        sys.executable,
+                        "-m",
+                        "src.mcp_server",
+                    )
+        return (sys.executable, "-m", "flyto_indexer.mcp_server")
+
     indexer = CapabilitySpec(
         name="flyto-indexer",
         argv=argv_for(
             getattr(args, "indexer_command", None),
-            (sys.executable, "-m", "flyto_indexer.mcp_server"),
+            default_indexer_argv(),
         ),
         required=True,
         contract_version="flyto-indexer.mcp.v1",
@@ -712,6 +764,66 @@ def _cmd_code_status(args):
             ),
         )
     print("  {}".format(report["note"]))
+
+
+def _cmd_code_release(args):
+    """Release a worktree an audit never closed, on explicit host authority.
+
+    Both operations are strictly subtractive. `--abandon-job` can only move an
+    `awaiting_codex_audit` job to `failed`/`job_abandoned`; it cannot accept,
+    make anything landable, or let a round skip its audit. `--repair-workspace`
+    only clears a claim the service could not evaluate, and refuses outright
+    while a live job still owns the tree. Neither is reachable over MCP.
+    """
+    from flyto_ai.coding.service import CodingService, CodingServiceError
+
+    def agent_factory(store):
+        # No implementer is ever constructed: this command reads and retires
+        # durable state and must never be able to start a coding round.
+        raise RuntimeError("code-release never runs a coding round")
+
+    try:
+        service = CodingService(
+            agent_factory,
+            state_root=_os.path.abspath(_os.path.expanduser(args.state_dir)),
+            workspace_roots=tuple(
+                _os.path.abspath(_os.path.expanduser(path))
+                for path in args.workspace_root
+            ),
+            require_codex_audit=True,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+    try:
+        if args.abandon_job:
+            receipt = service.abandon(args.tenant, args.abandon_job)
+            report = {
+                "operation": "abandon_job",
+                "job_id": receipt.job_id,
+                "state": receipt.state.value,
+                "failure_code": receipt.failure_code,
+                "landable": receipt.landable,
+            }
+        else:
+            workspace = _os.path.abspath(_os.path.expanduser(args.repair_workspace))
+            report = {"operation": "repair_workspace"}
+            report.update(service.repair_workspace_claim(workspace))
+    except CodingServiceError as exc:
+        print("\033[31mError:\033[0m {}".format(exc.code), file=sys.stderr)
+        sys.exit(2)
+    except (ValueError, TypeError) as exc:
+        # Operator input that the contract rejects — an unsafe tenant id, a
+        # malformed path — is a bounded usage error, not a crash.
+        print("\033[31mError:\033[0m invalid_request: {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+    finally:
+        service.close()
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    for key in sorted(report):
+        print("{}: {}".format(key, report[key]))
 
 
 def _cmd_code_claude_sdk(args):

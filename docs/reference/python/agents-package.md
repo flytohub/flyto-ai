@@ -22,34 +22,34 @@ Detachable compatibility backend: indexer → Claude → verify → feedback.
 | `async run(request: CodeTaskRequest, on_stream: StreamCallback = None) -> CodeTaskResponse` | public | Execute the full code → verify → fix loop. | [`flyto_ai/agents/claude_code.py:83`](../../../flyto_ai/agents/claude_code.py#L83) |
 | `async _run_claude_code(request: CodeTaskRequest, indexer_context: str, feedback: str, session_id: Optional[str], max_budget: float, max_turns: int, evidence: EvidenceCollector, on_stream: StreamCallback) -> Dict[str, Any]` | internal | Spawn or resume a Claude Code session via Agent SDK. | [`flyto_ai/agents/claude_code.py:268`](../../../flyto_ai/agents/claude_code.py#L268) |
 | `_option_kwargs(request: CodeTaskRequest, *, session_id: Optional[str], system_prompt: str, max_turns: int, max_budget: float, mcp_servers: Optional[Dict[str, Any]] = None) -> Dict[str, Any]` | internal | Build SDK options without importing or calling the SDK. | [`flyto_ai/agents/claude_code.py:409`](../../../flyto_ai/agents/claude_code.py#L409) |
-| `resolve_model(claude_config: Any) -> str` | public | Return the validated configured model or the pinned default. | [`flyto_ai/agents/claude_code.py:461`](../../../flyto_ai/agents/claude_code.py#L461) |
-| `async _save_evidence(evidence: EvidenceCollector, service_mode: bool) -> None` | internal | Service mode records bounded metadata in the ThreadStore instead. | [`flyto_ai/agents/claude_code.py:470`](../../../flyto_ai/agents/claude_code.py#L470) |
-| `_find_indexer_command() -> Optional[List[str]]` | internal | Find the flyto-indexer MCP server command. | [`flyto_ai/agents/claude_code.py:477`](../../../flyto_ai/agents/claude_code.py#L477) |
-| `_build_feedback(vr: VerificationResult) -> str` | internal | Construct feedback message from a failed verification. | [`flyto_ai/agents/claude_code.py:489`](../../../flyto_ai/agents/claude_code.py#L489) |
-| `_emit(on_stream: StreamCallback, event_type: str, data: Dict[str, Any]) -> None` | internal | Fire a stream event if callback is set. | [`flyto_ai/agents/claude_code.py:505`](../../../flyto_ai/agents/claude_code.py#L505) |
+| `resolve_model(claude_config: Any) -> str` | public | Return the validated configured model or the pinned default. | [`flyto_ai/agents/claude_code.py:468`](../../../flyto_ai/agents/claude_code.py#L468) |
+| `async _save_evidence(evidence: EvidenceCollector, service_mode: bool) -> None` | internal | Service mode records bounded metadata in the ThreadStore instead. | [`flyto_ai/agents/claude_code.py:477`](../../../flyto_ai/agents/claude_code.py#L477) |
+| `_find_indexer_command() -> Optional[List[str]]` | internal | Find the flyto-indexer MCP server command. | [`flyto_ai/agents/claude_code.py:484`](../../../flyto_ai/agents/claude_code.py#L484) |
+| `_build_feedback(vr: VerificationResult) -> str` | internal | Construct feedback message from a failed verification. | [`flyto_ai/agents/claude_code.py:496`](../../../flyto_ai/agents/claude_code.py#L496) |
+| `_emit(on_stream: StreamCallback, event_type: str, data: Dict[str, Any]) -> None` | internal | Fire a stream event if callback is set. | [`flyto_ai/agents/claude_code.py:512`](../../../flyto_ai/agents/claude_code.py#L512) |
 
 ### `ClaudeCodingAgent` (public)
 
 `class ClaudeCodingAgent`
 
-Source: [`flyto_ai/agents/claude_code.py:515`](../../../flyto_ai/agents/claude_code.py#L515)
+Source: [`flyto_ai/agents/claude_code.py:522`](../../../flyto_ai/agents/claude_code.py#L522)
 
 CodingService-compatible adapter over the optional Claude SDK backend.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(store: Any, *, config: Any = None, agent: Optional[ClaudeCodeAgent] = None) -> None` | internal | Internal `__init__` implementation on `ClaudeCodingAgent`; the linked source is authoritative. | [`flyto_ai/agents/claude_code.py:533`](../../../flyto_ai/agents/claude_code.py#L533) |
-| `async run(request: Any) -> Any` | public | Run one bounded implementation round for the coding service. | [`flyto_ai/agents/claude_code.py:543`](../../../flyto_ai/agents/claude_code.py#L543) |
-| `_edit_authority(request: Any) -> 'tuple[bool, str]'` | internal | Resolve write authority from the startup sandbox and approval policy. | [`flyto_ai/agents/claude_code.py:664`](../../../flyto_ai/agents/claude_code.py#L664) |
-| `_bind_thread(session: str, workspace: str) -> None` | internal | Create or resume the durable thread under the exact SDK session id. | [`flyto_ai/agents/claude_code.py:683`](../../../flyto_ai/agents/claude_code.py#L683) |
-| `_attributable(tools: Any, before: Dict[str, str], after: Dict[str, str]) -> List[str]` | internal | Derive changed files from snapshots, never from model prose. | [`flyto_ai/agents/claude_code.py:691`](../../../flyto_ai/agents/claude_code.py#L691) |
-| `_public_message(response: Any, workspace: str) -> str` | internal | Bound the model message and keep host paths out of the receipt. | [`flyto_ai/agents/claude_code.py:705`](../../../flyto_ai/agents/claude_code.py#L705) |
-| `_workspace_variants(workspace: str) -> List[str]` | internal | Every canonical spelling of this run's workspace, longest first. | [`flyto_ai/agents/claude_code.py:717`](../../../flyto_ai/agents/claude_code.py#L717) |
-| `_bounded_usage(usage: Any) -> Dict[str, int]` | internal | Convert only bounded integer counters; drop everything else. | [`flyto_ai/agents/claude_code.py:738`](../../../flyto_ai/agents/claude_code.py#L738) |
-| `host_thread_id(supplied: Any) -> str` | public | Return a durable host thread id for any round, including failures. | [`flyto_ai/agents/claude_code.py:756`](../../../flyto_ai/agents/claude_code.py#L756) |
-| `_provider_failure_code(exc: BaseException) -> str` | internal | Name the bounded provider conditions the host can classify safely. | [`flyto_ai/agents/claude_code.py:770`](../../../flyto_ai/agents/claude_code.py#L770) |
-| `_note_provider_error(thread_id: str, workspace: str, exc: BaseException, code: str) -> None` | internal | Durably record the sanitized category of a failed provider start. | [`flyto_ai/agents/claude_code.py:788`](../../../flyto_ai/agents/claude_code.py#L788) |
-| `_failed(thread_id: str, code: str) -> Any` | internal | Return a stable failed result without leaking host material. | [`flyto_ai/agents/claude_code.py:815`](../../../flyto_ai/agents/claude_code.py#L815) |
+| `__init__(store: Any, *, config: Any = None, agent: Optional[ClaudeCodeAgent] = None) -> None` | internal | Internal `__init__` implementation on `ClaudeCodingAgent`; the linked source is authoritative. | [`flyto_ai/agents/claude_code.py:540`](../../../flyto_ai/agents/claude_code.py#L540) |
+| `async run(request: Any) -> Any` | public | Run one bounded implementation round for the coding service. | [`flyto_ai/agents/claude_code.py:550`](../../../flyto_ai/agents/claude_code.py#L550) |
+| `_edit_authority(request: Any) -> 'tuple[bool, str]'` | internal | Resolve write authority from the startup sandbox and approval policy. | [`flyto_ai/agents/claude_code.py:671`](../../../flyto_ai/agents/claude_code.py#L671) |
+| `_bind_thread(session: str, workspace: str) -> None` | internal | Create or resume the durable thread under the exact SDK session id. | [`flyto_ai/agents/claude_code.py:690`](../../../flyto_ai/agents/claude_code.py#L690) |
+| `_attributable(tools: Any, before: Dict[str, str], after: Dict[str, str]) -> List[str]` | internal | Derive changed files from snapshots, never from model prose. | [`flyto_ai/agents/claude_code.py:698`](../../../flyto_ai/agents/claude_code.py#L698) |
+| `_public_message(response: Any, workspace: str) -> str` | internal | Bound the model message and keep host paths out of the receipt. | [`flyto_ai/agents/claude_code.py:712`](../../../flyto_ai/agents/claude_code.py#L712) |
+| `_workspace_variants(workspace: str) -> List[str]` | internal | Every canonical spelling of this run's workspace, longest first. | [`flyto_ai/agents/claude_code.py:724`](../../../flyto_ai/agents/claude_code.py#L724) |
+| `_bounded_usage(usage: Any) -> Dict[str, int]` | internal | Convert only bounded integer counters; drop everything else. | [`flyto_ai/agents/claude_code.py:745`](../../../flyto_ai/agents/claude_code.py#L745) |
+| `host_thread_id(supplied: Any) -> str` | public | Return a durable host thread id for any round, including failures. | [`flyto_ai/agents/claude_code.py:763`](../../../flyto_ai/agents/claude_code.py#L763) |
+| `_provider_failure_code(exc: BaseException) -> str` | internal | Name the bounded provider conditions the host can classify safely. | [`flyto_ai/agents/claude_code.py:777`](../../../flyto_ai/agents/claude_code.py#L777) |
+| `_note_provider_error(thread_id: str, workspace: str, exc: BaseException, code: str) -> None` | internal | Durably record the sanitized category of a failed provider start. | [`flyto_ai/agents/claude_code.py:795`](../../../flyto_ai/agents/claude_code.py#L795) |
+| `_failed(thread_id: str, code: str) -> Any` | internal | Return a stable failed result without leaking host material. | [`flyto_ai/agents/claude_code.py:822`](../../../flyto_ai/agents/claude_code.py#L822) |
 
 ## `flyto_ai.agents.evidence`
 

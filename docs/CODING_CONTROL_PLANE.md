@@ -707,6 +707,133 @@ while an implementation round can edit files. Starting a new MCP process never
 fails merely because another conversation is live, and restart reconciliation
 skips every job whose lease is still owned.
 
+### Scope of this document
+
+Everything below describes the `flyto_coding` adapter: one Codex-facing profile
+over the shared, domain-neutral capability control plane. It is not the
+universal core. Profiles for other domains compose arbitrary capability,
+tool, and contract identifiers through the same generic contract without
+inheriting any of the mechanisms here — no audit-required route, no worktree
+claim, no session continuity — because those answer a question specific to
+editing a repository. The shared layer never branches on which domain a
+profile describes.
+
+### Job-lifetime worktree ownership
+
+Those three scopes each bound one round. An audited job needs one more, because
+between "the implementer finished" and "the auditor read the tree" no round is
+running and nothing else stops a second Codex frontend from editing the same
+worktree — which would invalidate a revision that was never wrong.
+
+An audit-required job therefore takes a durable **workspace claim** at submit,
+after an idempotent replay has been ruled out, and holds it across `queued`,
+`running`, `awaiting_codex_audit`, `rework_queued`, and `rework_running`. It is
+released on `completed`, `codex_accepted`, a terminal failure, or an explicit
+host abandon. Rework re-asserts the claim it already holds, so a job never
+deadlocks behind itself.
+
+A claim answers only when it is fully bound: the exact field set with valid
+bounded values, a `workspace_sha256` equal to the digest of the tree being
+queried, and an owner record that names the same job and resolves to the same
+canonical worktree. Anything less is `unresolved` — missing keys fail closed
+exactly like unknown ones, because a half-written claim proves nothing.
+
+| Situation | Result |
+| --- | --- |
+| No claim, or a fully bound claim whose owner record proves the job settled | `free` — edit proceeds |
+| Fully bound claim whose owner record is in a claim-owned state | `held` — `workspace_busy` |
+| Corrupt, unknown version, missing/extra/invalid fields, digest mismatch, unreadable, unknown owner, or an owner record that does not bind back to this job and worktree | `unresolved` — `workspace_claim_unresolved` |
+
+Ownership is asserted *before* a claim-owned state is published, inside the
+same cross-process state guard. A transition that cannot prove exclusive
+ownership fails rather than becoming visible, so a round can never reach
+`awaiting_codex_audit` without a valid claim; the job settles `failed` instead.
+Release only ever removes this job's own fully bound claim.
+
+Only `submit` may create a claim from `free`, once, before its job record is
+published. Every later transition — and every audit, on **both** verdicts —
+*reasserts* an existing claim this exact tenant, job, and worktree already
+hold. A claim that has vanished for a live job is `unresolved`, not
+reacquirable: during the missing interval another Codex could have taken the
+worktree, edited files outside this job's attributable set, settled, and
+released, and recomputing only this job's files would not detect it.
+Reacquiring would manufacture continuity that was never established. A claim
+carrying the same job id under a different tenant is never taken over. The way
+out is the host spillway below, never an automatic repair.
+
+`workspace_busy` names the owning job in bounded MCP structured error details
+(`{"ok": false, "error": "workspace_busy", "details": {"owner_job_id": "..."}}`),
+so an operator knows which job to audit. Only the opaque job id is published;
+paths and prompts never are.
+
+An `unresolved` claim is never cleared automatically, including by startup
+reconciliation. Deleting a claim the service cannot evaluate would turn
+"ownership is unknown" into "nobody owns this tree", which is precisely the
+hazard the claim prevents. It requires an explicit host decision.
+
+Different worktrees are unaffected: claims are keyed by workspace digest, so
+parallel jobs across repositories keep running concurrently. A legacy
+non-audited service takes no claim (it has no audit gap) but still honours one,
+so it can never edit a worktree mid-audit.
+
+### Cross-worker rework
+
+An audit may arrive at a worker that never implemented the job — a different
+Codex frontend, or a restarted one. A bounded, redacted **resume envelope**
+under `tenants/<ref>/resume/<job>.json` (mode 0600) makes that closeable. It
+stores only the public request fields plus job, request-digest, and session
+bindings, and is loadable only when its `session_bound` equals the record's
+`implementation_session_id`. The rebuilt request always carries `resume=true`
+and that same session id, so the envelope can continue a Claude session but
+never start one. The stored digest is compared rather than recomputed, because
+redaction rewrites prose and a recomputed hash would never match.
+
+Startup authority is never persisted. Approval policy, sandbox mode, config
+path, sandbox image, checks, and capabilities are re-imposed from the running
+process, so a stored request cannot outlive or widen the policy it ran under.
+
+### The host-owned release valve
+
+`flyto-ai code-release` is the only way to retire an orphaned audit or clear an
+unresolved claim. It is deliberately not a fourth MCP tool: the audited route
+keeps exactly `flyto_coding_submit`, `flyto_coding_get`, and
+`flyto_coding_audit`, and nothing reachable by a model may retire a job.
+
+```bash
+# Fail an orphaned audit-ready job closed and release its worktree.
+flyto-ai code-release --tenant acme --workspace-root /srv/workspaces/acme \
+  --abandon-job job_0123456789abcdef01234567
+
+# Clear a claim whose authority cannot be evaluated.
+flyto-ai code-release --tenant acme --workspace-root /srv/workspaces/acme \
+  --repair-workspace /srv/workspaces/acme/repo
+```
+
+Both operations are strictly subtractive. `--abandon-job` moves only
+`awaiting_codex_audit` to `failed` with `job_abandoned` and `landable: false`;
+it cannot accept, land, or let a round skip its audit, so it is always worse
+for the caller than auditing and can never be a bypass. `--repair-workspace`
+refuses while a live job owns the tree.
+
+### Bounded supervisor reads
+
+`code-mcp-supervisor` deadlines every worker read at 30 seconds, for both
+requests and the replayed handshake. Submit, get, and audit only schedule or
+inspect background work, so a longer wait is a wedged worker, not a slow one. A
+missed deadline returns a bounded JSON-RPC `-32603` and terminates the worker
+so the state-root locks it held are released; the request is never retried,
+because its delivery is uncertain and the job may already exist. A caller
+recovers by replaying the same idempotency key, which the supervisor must never
+do on their behalf. The next request starts a fresh worker, whose startup
+reconciliation reports any interrupted job truthfully.
+
+Hot-reload tracking is self-healing from durable job records rather than from a
+process-local set alone: a client that stops polling cannot pin
+`service_reload_pending` forever. While a tracked job is genuinely non-terminal
+the worker is preserved and only new submissions are refused; once every
+tracked job reads terminal on disk, the worker is replaced and the handshake
+replayed without restarting Codex.
+
 Start either transport without putting a credential on the command line:
 
 ```bash

@@ -152,7 +152,16 @@ architecture-invariant rule in [`../AGENTS.md`](../AGENTS.md).
 - `flyto_ai/mcp_server.py` and `flyto_ai/mcp_client.py`: MCP-compatible server
   and client entry points for external tool/runtime integration.
 - `flyto_ai/coding/mcp_supervisor.py`: stable local coding-MCP host edge with a
-  build-aware, safely replaceable `code-mcp` worker.
+  build-aware, safely replaceable `code-mcp` worker. Every worker read is
+  deadlined at 30 seconds; a missed deadline terminates the wedged worker
+  without retrying the request, and hot-reload tracking self-heals from durable
+  job records so a client that stops polling cannot pin reloads.
+- `flyto_ai/coding/service.py`: durable job state for the audited route,
+  including job-lifetime workspace claims that keep one worktree exclusive
+  across the Codex audit gap and every rework round, and the session-bound
+  resume envelope that lets any live worker continue — never restart — the
+  original implementation session. Claims are keyed by workspace digest, so
+  parallel jobs in different repositories are unaffected.
 - `docs/`, `workflows/`, and `handoffs/`: project memory, release process, and
   handoff evidence.
 

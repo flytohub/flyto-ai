@@ -2,6 +2,97 @@
 
 ## Unreleased
 
+- One worktree is now owned by one audited coding job for the whole job, not
+  for one implementation round. Previously the cross-process workspace lock was
+  released when a round finished, so between `awaiting_codex_audit` and the
+  Codex verdict another concurrent Codex frontend could edit the same tree; the
+  first job's exact-revision audit then failed live recomputation and its work
+  was stranded, non-landable and unreworkable. An audit-required job now takes a
+  durable `flyto.coding-workspace-claim.v1` claim at submit and holds it across
+  `awaiting_codex_audit` and every rework round. A second frontend targeting the
+  same worktree fails fast with `workspace_busy` plus the owning job id in
+  bounded MCP structured error details, instead of silently invalidating an
+  audit. Claims are keyed by workspace digest, so jobs in different repositories
+  still run in parallel.
+- A workspace claim that cannot be evaluated now fails closed. Corrupt JSON, an
+  unknown version, a missing or extra or out-of-range field, a
+  `workspace_sha256` that does not match the tree being queried, an unreadable
+  file, a claim naming a job with no record, or an owner record that does not
+  bind back to that same job and canonical worktree all report
+  `workspace_claim_unresolved`. Missing fields fail closed exactly like unknown
+  ones: a half-written claim proves nothing about ownership. None of these are
+  ever removed automatically, including by startup reconciliation — discarding
+  them would turn "ownership is unknown" into "nobody owns this tree". Startup
+  sweeps remove a claim only when it is fully bound and its owning record
+  proves the job settled.
+- Only `submit` may create a workspace claim, and only once, before its job
+  record is published. Every later claim-owned transition and both audit
+  verdicts reassert a claim this exact tenant, job, and worktree already hold;
+  a vanished claim for a live job is `workspace_claim_unresolved` rather than
+  something to reacquire. Absence is not proof of uninterrupted ownership —
+  another Codex could have taken the worktree during the gap, edited files
+  outside this job's attributable set, settled, and released, and recomputing
+  only this job's files would never see it. A claim carrying the same job id
+  under a different tenant is never taken over. `code-release --abandon-job`
+  and `--repair-workspace` remain the only ways out, and neither is an MCP
+  tool.
+- Claim-owned state transitions are now a gate rather than a log line.
+  Ownership is asserted before the record is published, inside the same
+  cross-process state guard, so a round can no longer enter `running` or
+  `awaiting_codex_audit` without a valid exclusive claim — a claim that was
+  stolen, corrupted, or could not be written settles the job `failed` instead
+  of opening an unclaimed audit gap. A refused rework hands its execution lease
+  back, leaving the job exactly as auditable as before. Release still removes
+  only this job's own fully bound claim.
+- The supervisor now releases a worker on any unrecoverable exchange, not only
+  on a deadline. A broken pipe, malformed frame, or oversized response leaves a
+  desynchronized stream whose next read could answer the wrong caller, so the
+  worker is terminated and the uncertain request is still never retried. The
+  post-kill reap is bounded like every other wait, and pipe cleanup no longer
+  leaves a reader thread alive if its first bounded join times out.
+- `code-mcp-supervisor` now falls back to the documented `--state-dir` default
+  when the flag is omitted. It previously read the absent flag as an empty
+  string and silently disabled durable active-job reconciliation.
+- Rework can now be sent from any live worker and still continues the exact
+  prior Claude session. Resume context was process-local, so an audit arriving
+  at a different `code-mcp` process — the normal case when each Codex
+  conversation runs its own stdio worker — could never rework. A bounded,
+  redacted, mode-0600 `flyto.coding-resume-envelope.v1` record stores only the
+  public request fields plus job, request-digest, and session bindings. It
+  loads only when its `session_bound` equals the record's
+  `implementation_session_id`, and always rebuilds the request with
+  `resume=true` against that same id, so it can continue a session but never
+  start a fresh one. Startup authority — approval policy, sandbox mode, config
+  path, sandbox image, checks, capabilities — is never persisted and is
+  re-imposed from the running process. A missing or mis-bound envelope still
+  fails closed with `rework_not_resumable` and consumes no audit round.
+- `code-mcp-supervisor` can no longer hang a Codex frontend. Every request and
+  replayed-handshake read is deadlined at 30 seconds through a portable reader
+  thread and queue rather than an unbounded `readline`. A missed deadline
+  returns a bounded JSON-RPC `-32603`, terminates the wedged worker so the
+  state-root locks it held are released, and never retries the request, whose
+  delivery is uncertain; the caller recovers by replaying the same idempotency
+  key and the next request starts a fresh worker that reconciles interrupted
+  jobs truthfully.
+- Hot-reload tracking self-heals from durable job records. A client that stopped
+  polling used to leave a stale in-memory entry that blocked every later
+  submission with `service_reload_pending` for the life of the frontend. Tracked
+  job ids are now reconciled against their bounded per-job records, so a
+  genuinely non-terminal job still preserves its worker and refuses only new
+  submissions, while a settled one releases the reload without restarting Codex.
+- Added the host-owned `flyto-ai code-release` command. `--abandon-job` moves
+  only an `awaiting_codex_audit` job to `failed`/`job_abandoned` with
+  `landable: false`; `--repair-workspace` clears an unresolved claim and refuses
+  while a live job owns the tree. Both are strictly subtractive and neither is
+  an MCP tool — the public audited inventory remains exactly
+  `flyto_coding_submit`, `flyto_coding_get`, and `flyto_coding_audit`, and the
+  implementer still never receives the audit tool. Implementer selection is
+  unchanged: Claude remains pinned to `claude-opus-5` with no fallback.
+- A legacy non-audited coding service keeps its previous behaviour. It has no
+  audit gap, so it takes no job-lifetime claim and its rounds remain serialized
+  by the per-round workspace lock — but it now honours a claim held by an
+  audited job, so it can never edit a worktree mid-audit.
+
 - Repaired the strict coding route for ordinary tasks. Every host-owned
   Indexer search — initial discovery, gate remediation, and translated plan
   steps — is now scoped to the workspace project. An unscoped smart search

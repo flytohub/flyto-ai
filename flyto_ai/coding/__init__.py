@@ -46,6 +46,7 @@ from flyto_ai.coding.contracts import (
 # `CodingJobNotFound` and `WorkspaceDenied` are included because `audit()`
 # itself raises them; job submission internals stay unexported.
 from flyto_ai.coding.service import (
+    AbandonStateConflict,
     AuditNotEnabled,
     AuditStateConflict,
     CodingJobNotFound,
@@ -56,6 +57,8 @@ from flyto_ai.coding.service import (
     ReworkLimitReached,
     ReworkNotResumable,
     SessionBindingFailed,
+    WorkspaceBusy,
+    WorkspaceClaimUnresolved,
     WorkspaceDenied,
     receipt_to_mapping,
 )
@@ -111,6 +114,7 @@ __all__ = [
     "AgentStackManifest",
     "AUDIT_BOUND_CODING_JOB_STATES",
     "AUDITED_CODING_JOB_STATES",
+    "AbandonStateConflict",
     "AuditNotEnabled",
     "AuditStateConflict",
     "CapabilityManager",
@@ -157,6 +161,8 @@ __all__ = [
     "TERMINAL_CODING_JOB_STATES",
     "ThreadStore",
     "TOOL_PERMISSION_LEVELS",
+    "WorkspaceBusy",
+    "WorkspaceClaimUnresolved",
     "WorkspaceDenied",
     "WorkspaceTools",
     "WorkspaceViolation",

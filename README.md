@@ -431,8 +431,11 @@ The two failures remain in the evidence. See
 ## Audited coding service
 
 `flyto-ai code-serve` and `flyto-ai code-mcp` are two transports over one
-audit-required coding service. The operator selects the implementer once at
-startup — `--implementation-backend native|claude`, default `native`, with an
+audit-required coding service. For long-lived local Codex tasks,
+`flyto-ai code-mcp-supervisor` keeps the client connection stable and replaces
+only the inner `code-mcp` worker when its source build changes. The operator
+selects the implementer once at startup —
+`--implementation-backend native|claude`, default `native`, with an
 optional bounded `FLYTO_AI_CODING_BACKEND` default. There is no per-job
 selection and no fallback between implementers. The `claude` route needs the
 optional `flyto-ai[claude-sdk]` extra and is pinned to `claude-opus-5`.

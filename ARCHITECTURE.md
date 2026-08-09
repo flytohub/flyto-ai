@@ -260,6 +260,7 @@ Optional service composition:
 
 ```text
 loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
+  -> optional stable code-mcp-supervisor -> replaceable code-mcp worker
   -> flyto.coding-service.v2
   -> tenant namespace + workspace allowlist + bounded queue
   -> per-workspace serialization
@@ -321,6 +322,14 @@ job state, route lane/action, stable failure code, implementer-start truth,
 and bounded session/revision ids — never a message, path, error text, file
 list, environment, or credential. Per-job JSON stays authoritative; this is a
 pointer for a Codex that restarted, read by `flyto-ai code-status`.
+
+For a long-lived local MCP host, `code-mcp-supervisor` owns the stable stdio
+edge shown above. It compares the current coding-source digest at request
+boundaries, replaces only a terminal/idle worker, and replays initialization.
+A known non-terminal job keeps its worker and exact implementation session;
+only a competing new submission is denied until that job terminates. A direct
+worker also compares its immutable startup build with disk before accepting a
+new job, so source drift cannot silently run stale implementation logic.
 
 The lanes are host-owned, not a prompt convention. `flyto_ai.coding.route`
 owns the typed policy, the allowlists, the bounded loops, and the evidence.

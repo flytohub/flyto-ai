@@ -209,6 +209,12 @@ def main():
     )
     _add_coding_service_args(code_mcp_p)
 
+    code_mcp_supervisor_p = sub.add_parser(
+        "code-mcp-supervisor",
+        help="Start a stable coding MCP facade that hot-reloads its worker",
+    )
+    _add_coding_service_args(code_mcp_supervisor_p)
+
     code_status_p = sub.add_parser(
         "code-status",
         help="Inspect the bounded runtime status of coding service instances",
@@ -240,6 +246,8 @@ def main():
         _cmd_code_serve(args)
     elif args.command == "code-mcp":
         _cmd_code_mcp(args)
+    elif args.command == "code-mcp-supervisor":
+        _cmd_code_mcp_supervisor(args)
     elif args.command == "code-status":
         _cmd_code_status(args)
     elif args.command == "chat":
@@ -645,6 +653,15 @@ def _cmd_code_mcp(args):
         service.close()
 
 
+def _cmd_code_mcp_supervisor(args):
+    """Keep client stdio stable while replacing stale coding workers."""
+
+    del args  # Authority remains encoded in the exact original CLI arguments.
+    from flyto_ai.coding.mcp_supervisor import serve_supervised_stdio
+
+    serve_supervised_stdio(sys.argv)
+
+
 def _cmd_code_status(args):
     """Report the bounded runtime status of coding service instances.
 
@@ -668,11 +685,10 @@ def _cmd_code_status(args):
         "state_dir": state_root,
         "reader_build_id": service_build_id(),
         "instances": instances,
-        # Say the unavoidable thing out loud: a process started before this
-        # schema existed keeps running its old code and never publishes a row.
         "note": (
-            "Instances started before the runtime-status schema publish no row "
-            "and cannot appear here retroactively; restart them to register."
+            "Build-stale supervised workers reload automatically at a safe job "
+            "boundary. Pre-schema or unsupervised instances cannot register "
+            "retroactively and require the host MCP reload operation."
         ),
     }
     if args.json:

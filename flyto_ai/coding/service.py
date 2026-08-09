@@ -55,6 +55,7 @@ from flyto_ai.coding.route_status import (
     STATUS_FAILURE_CODES,
     CodingRouteStatus,
     RouteStatusPublisher,
+    current_service_build_id,
     route_mode,
     route_progress,
     service_build_id,
@@ -106,6 +107,12 @@ class CodingServiceError(RuntimeError):
 
 class CodingServiceBusy(CodingServiceError):
     code = "service_busy"
+
+
+class CodingServiceReloadRequired(CodingServiceError):
+    """The source tree changed after this long-lived service imported it."""
+
+    code = "service_reload_required"
 
 
 class CodingJobNotFound(CodingServiceError):
@@ -412,6 +419,14 @@ class CodingService:
                     raise CodingServiceError("idempotency record is invalid")
                 return self._receipt(
                     self._read_json(tenant_dir / "jobs" / (referenced + ".json")),
+                )
+            if current_service_build_id() != self.build_id:
+                # Never begin a fresh job with modules imported from a
+                # different build than the files an auditor will inspect.
+                # An idempotent retry above remains readable, and existing jobs
+                # may still be polled/audited so their exact session can close.
+                raise CodingServiceReloadRequired(
+                    "coding service source changed; reload the MCP worker",
                 )
             if len(self._pending) >= self.max_queued:
                 raise CodingServiceBusy("coding job queue is full")

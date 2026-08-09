@@ -512,11 +512,12 @@ def test_code_status_reports_instances_without_starting_a_service(
     tmp_path, monkeypatch, capsys,
 ):
     import flyto_ai.cli as cli
-    from flyto_ai.coding.route_status import RouteStatusPublisher
+    from flyto_ai.coding.route_status import RouteStatusPublisher, service_build_id
 
     state_dir = tmp_path / "status-state"
     publisher = RouteStatusPublisher(
-        state_dir, instance_id="1" * 24, build_id="b" * 24, version="9.9.9",
+        state_dir, instance_id="1" * 24,
+        build_id=service_build_id(), version="9.9.9",
     )
     import time
 
@@ -524,7 +525,7 @@ def test_code_status_reports_instances_without_starting_a_service(
 
     now = time.time()
     publisher.publish(CodingRouteStatus(
-        instance_id="1" * 24, build_id="b" * 24, service_version="9.9.9",
+        instance_id="1" * 24, build_id=service_build_id(), service_version="9.9.9",
         process_id=os.getpid(), started_at=now - 5, updated_at=now,
         implementation_backend="claude", job_id="job_" + "a" * 24,
         state="failed", mode="emergency", lane="indexer_pre", action="search",
@@ -541,10 +542,12 @@ def test_code_status_reports_instances_without_starting_a_service(
     assert len(report["instances"]) == 1
     row = report["instances"][0]
     assert row["instance_id"] == "1" * 24
-    assert row["build_id"] == "b" * 24
+    assert row["build_id"] == service_build_id()
     assert row["mode"] == "emergency"
     assert row["lane"] == "indexer_pre" and row["action"] == "search"
     assert row["stale"] is False
+    assert row["build_stale"] is False
+    assert row["reload_required"] is False
     assert "retroactively" in report["note"]
     # No prompt, path, or error prose escapes into the report.
     serialized = json.dumps(report["instances"])

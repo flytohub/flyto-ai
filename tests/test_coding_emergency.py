@@ -369,6 +369,9 @@ def test_two_live_instances_coexist_and_identify_their_builds(tmp_path):
     assert rows["1" * 24]["build_id"] == "0" * 24
     assert rows["2" * 24]["build_id"] == "9" * 24
     assert rows["2" * 24]["current"] is True and rows["1" * 24]["current"] is False
+    assert rows["1" * 24]["build_stale"] is True
+    assert rows["1" * 24]["reload_required"] is True
+    assert rows["2" * 24]["build_stale"] is False
     # An older instance's own file is untouched by the newer publisher.
     assert json.loads(old.instance_path().read_text())["service_version"] == "1.0.0"
 
@@ -461,6 +464,8 @@ def test_liveness_and_staleness_are_annotated_for_local_inspection(tmp_path):
     publisher.publish(_status(instance_id="1" * 24, updated_at=now))
     live = publisher.inspect()[0]
     assert live["stale"] is False
+    assert live["age_stale"] is False and live["build_stale"] is False
+    assert live["reload_required"] is False
     assert live["alive"] is True
     assert live["lane"] == "indexer_pre" and live["action"] == "search"
 
@@ -495,6 +500,54 @@ def test_route_mode_reads_the_durable_execution_mode_first():
 def test_the_build_id_is_stable_within_one_process():
     assert service_build_id() == service_build_id()
     assert len(service_build_id()) == 32
+
+
+def test_a_changed_source_build_blocks_new_jobs_before_mutation(
+    tmp_path, monkeypatch,
+):
+    import flyto_ai.coding.service as service_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    box: dict = {}
+    service = _emergency_service(tmp_path, workspace, box, enabled=False)
+    try:
+        monkeypatch.setattr(
+            service_module,
+            "current_service_build_id",
+            lambda: "f" * 32 if service.build_id != "f" * 32 else "e" * 32,
+        )
+        with pytest.raises(
+            service_module.CodingServiceReloadRequired,
+            match="reload the MCP worker",
+        ) as caught:
+            service.submit("t", "source-drift", _request(workspace))
+        assert caught.value.code == "service_reload_required"
+        assert not list((service.state_root / "tenants").rglob("job_*.json"))
+    finally:
+        service.close()
+
+
+def test_a_changed_source_build_still_returns_an_idempotent_existing_job(
+    tmp_path, monkeypatch,
+):
+    import flyto_ai.coding.service as service_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    box: dict = {}
+    service = _emergency_service(tmp_path, workspace, box, enabled=False)
+    try:
+        first = service.submit("t", "existing-job", _request(workspace))
+        monkeypatch.setattr(
+            service_module,
+            "current_service_build_id",
+            lambda: "f" * 32 if service.build_id != "f" * 32 else "e" * 32,
+        )
+        repeated = service.submit("t", "existing-job", _request(workspace))
+        assert repeated.job_id == first.job_id
+    finally:
+        service.close()
 
 
 # ── service integration ───────────────────────────────────────────────

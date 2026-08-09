@@ -111,7 +111,26 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code-mcp` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
 | `code-mcp` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:184`](../../flyto_ai/cli.py#L184) |
 | `code-mcp` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:190`](../../flyto_ai/cli.py#L190) |
-| `code-status` | `command` | Inspect the bounded runtime status of coding service instances | [`flyto_ai/cli.py:212`](../../flyto_ai/cli.py#L212) |
-| `code-status` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:216`](../../flyto_ai/cli.py#L216) |
-| `code-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:220`](../../flyto_ai/cli.py#L220) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:223`](../../flyto_ai/cli.py#L223) |
+| `code-mcp-supervisor` | `command` | Start a stable coding MCP facade that hot-reloads its worker | [`flyto_ai/cli.py:212`](../../flyto_ai/cli.py#L212) |
+| `code-mcp-supervisor` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
+| `code-mcp-supervisor` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
+| `code-mcp-supervisor` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
+| `code-mcp-supervisor` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
+| `code-mcp-supervisor` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
+| `code-mcp-supervisor` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
+| `code-mcp-supervisor` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
+| `code-mcp-supervisor` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:145`](../../flyto_ai/cli.py#L145) |
+| `code-mcp-supervisor` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
+| `code-mcp-supervisor` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
+| `code-mcp-supervisor` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
+| `code-mcp-supervisor` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
+| `code-mcp-supervisor` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
+| `code-mcp-supervisor` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
+| `code-mcp-supervisor` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
+| `code-mcp-supervisor` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
+| `code-mcp-supervisor` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:184`](../../flyto_ai/cli.py#L184) |
+| `code-mcp-supervisor` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:190`](../../flyto_ai/cli.py#L190) |
+| `code-status` | `command` | Inspect the bounded runtime status of coding service instances | [`flyto_ai/cli.py:218`](../../flyto_ai/cli.py#L218) |
+| `code-status` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:222`](../../flyto_ai/cli.py#L222) |
+| `code-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:226`](../../flyto_ai/cli.py#L226) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:229`](../../flyto_ai/cli.py#L229) |

@@ -541,8 +541,9 @@ overwrite a newer one. Each instance owns a file named by its own opaque
 instance id and updates only its own row in the shared index, under the same
 cross-process state guard, written atomically at mode 0600.
 
-Every record carries the instance id, an immutable build digest over the
-loaded `flyto_ai/coding/*.py` sources, the package version, process id, start
+Every record carries the instance id, an immutable startup build digest over
+the coding package and its bounded CLI/config/provider adapter dependencies,
+the package version, process id, start
 time, and `lifecycle` (`active` / `closed`). A graceful shutdown changes only
 the lifecycle and timestamp, preserving the last job id, state, lane, action,
 failure code, implementer-start, session, and revision. A crashed instance
@@ -577,12 +578,21 @@ Inspect it read-only, without starting a service:
 flyto-ai code-status --state-dir /ABSOLUTE/PATH/TO/STATE --json
 ```
 
-It validates every row, annotates staleness and best-effort pid liveness, and
-reports the reader's own build id. One limitation is unavoidable and is stated
-in the output: a `code-mcp` process started before this schema existed keeps
-running its previously loaded code and publishes no row, so it cannot appear
-retroactively. New and old instances coexist safely; restart a process to
-register it.
+It validates every row, annotates age and build staleness, reports whether a
+live instance requires reload, probes pid liveness best-effort, and reports the
+reader's own build id. A direct `code-mcp` whose startup build no longer matches
+disk refuses new jobs with `service_reload_required` before mutation.
+
+For long-lived Codex tasks, use `code-mcp-supervisor`. It owns the stable host
+stdio connection and runs `code-mcp` as a replaceable child. With no active job,
+a source-build change replaces only that child and replays the MCP handshake.
+With a known non-terminal job, it preserves the worker and exact implementation
+session, continues status/audit calls, and rejects only a new submission with
+`service_reload_pending`; the next request after the job becomes terminal
+performs the replacement. It never retries a request whose delivery is
+uncertain. A pre-schema process still cannot publish a status row
+retroactively; use the host's MCP reload operation once to migrate that old
+connection to the supervisor.
 
 ### Route receipt
 
@@ -688,7 +698,7 @@ and `Idempotency-Key`; the built-in server binds only to loopback because public
 TLS, identity, quota, and organization policy belong at the Flyto2 Cloud edge.
 MCP stdio receives its tenant from process configuration.
 
-The state root may be shared by multiple `code-mcp` processes. This is required
+The state root may be shared by multiple `code-mcp` workers. This is required
 because Codex starts a separate stdio MCP server for each conversation. The
 service coordinates them with three bounded lock scopes: a short state guard
 for idempotency and audit transitions, a per-job execution lease released by
@@ -768,9 +778,11 @@ whole coding process in a dedicated container or VM for untrusted repositories.
 ## Connecting an auditing host over MCP
 
 An orchestrator such as Codex reaches this service as a local STDIO MCP server.
-Project-scoped Codex configuration lives in `.codex/config.toml`, applies only
-in projects you trust, and needs a Codex restart to take effect. The example
-below is documentation: it uses placeholders and contains no credential value.
+Project-scoped Codex configuration lives in `.codex/config.toml` and applies
+only in projects you trust. Ask the host to reload MCP configuration after the
+initial command change; subsequent coding-source repairs are handled inside the
+supervisor without restarting the whole host. The example below is
+documentation: it uses placeholders and contains no credential value.
 
 ```toml
 # .codex/config.toml — project-scoped; trusted projects only.
@@ -779,7 +791,7 @@ below is documentation: it uses placeholders and contains no credential value.
 # for example /absolute/path/to/.venv/bin/flyto-ai.
 command = "/ABSOLUTE/PATH/TO/.venv/bin/flyto-ai"
 args = [
-  "code-mcp",
+  "code-mcp-supervisor",
   "--tenant", "REPLACE_WITH_TENANT",
   "--workspace-root", "/ABSOLUTE/PATH/TO/WORKSPACE",
   "--state-dir", "/ABSOLUTE/PATH/TO/STATE",
@@ -799,7 +811,7 @@ bounded environment default before Codex starts the server:
 
 ```toml
 args = [
-  "code-mcp",
+  "code-mcp-supervisor",
   "--tenant", "REPLACE_WITH_TENANT",
   "--workspace-root", "/ABSOLUTE/PATH/TO/WORKSPACE",
   "--implementation-backend", "native",

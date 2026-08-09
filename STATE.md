@@ -108,8 +108,15 @@ eligibility evidence for the caller, not an action the service performs.
   no message, path, error text, file list, environment, or credential.
   Retention and stale collection are deterministic and bounded.
 - `flyto-ai code-status --state-dir <dir> [--json]`: read-only inspection of
-  coexisting instances with build id, liveness, and staleness. It starts no
-  service and states that pre-schema processes cannot appear retroactively.
+  coexisting instances with build id, liveness, age/build staleness, and an
+  explicit reload-required flag. It starts no service and states that
+  pre-schema processes cannot appear retroactively.
+- `flyto-ai code-mcp-supervisor`: stable host stdio with a replaceable
+  `code-mcp` child. A source change reloads the child at a terminal job
+  boundary and replays the MCP handshake; an active exact-session job is kept
+  intact, while only additional submissions fail closed as
+  `service_reload_pending`. A direct stale worker refuses new jobs before
+  mutation as `service_reload_required`.
 - `flyto.coding-emergency.v1`: a startup-only overflow lane for a provably
   unreachable route infrastructure, enabled by `--emergency-overflow-backend`
   (which must equal `--implementation-backend`). It opens only for a classified
@@ -138,10 +145,10 @@ eligibility evidence for the caller, not an action the service performs.
 - A deployment must still supply a reachable `--indexer-command`. Without the
   explicit `--emergency-overflow-backend` flag, an unreachable Indexer fails
   every public job closed rather than degrading.
-- `code-mcp` processes started before `flyto.coding-route-status.v1` keep
-  running their previously loaded code. They publish no status row and cannot
-  appear in `code-status` retroactively; only a restart registers them. New
-  and old instances coexist safely, and each new instance identifies its build.
+- Processes started before `flyto.coding-route-status.v1` publish no status row
+  and cannot appear in `code-status` retroactively. One host MCP reload is
+  still required to migrate such a connection to `code-mcp-supervisor`; after
+  that migration, coding-source build changes replace only the inner worker.
 - The parent workspace `.codex/config.toml` now passes
   `--implementation-backend claude`, `--emergency-overflow-backend claude`, and
   `--emergency-overflow-threshold 1` (SHA-256

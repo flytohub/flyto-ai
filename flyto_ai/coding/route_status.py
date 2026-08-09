@@ -79,19 +79,31 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _BUILD_ID: Optional[str] = None
 
 
-def service_build_id() -> str:
-    """Return an immutable digest of this installed coding control plane.
+def _service_source_paths() -> Tuple[Path, ...]:
+    """Return the bounded source set imported by a coding worker."""
 
-    The digest covers the bytes of `flyto_ai/coding/*.py`, so a repaired build
-    publishes a different id than the build a still-running old process
-    loaded. When the sources cannot be read the package version alone is used;
-    the result is still stable, just coarser, and is never fabricated per run.
+    package_root = Path(__file__).resolve().parents[1]
+    candidates = list((package_root / "coding").glob("*.py"))
+    candidates.extend((package_root / "providers").glob("*.py"))
+    candidates.extend((
+        package_root / "cli.py",
+        package_root / "config.py",
+        package_root / "agents" / "claude_code.py",
+        package_root / "tools" / "core_tools.py",
+    ))
+    return tuple(sorted(path for path in candidates if path.is_file()))
+
+
+def current_service_build_id() -> str:
+    """Compute the coding control plane digest from the files on disk now.
+
+    Unlike :func:`service_build_id`, this value is intentionally not cached.
+    Long-lived MCP processes use it at request boundaries to detect that their
+    already-imported Python modules no longer match the repaired source tree.
     """
-    global _BUILD_ID
-    if _BUILD_ID is not None:
-        return _BUILD_ID
+
     digest = hashlib.sha256()
-    digest.update(b"flyto.coding-build.v1\n")
+    digest.update(b"flyto.coding-build.v2\n")
     try:
         from flyto_ai.package_metadata import package_version
 
@@ -99,13 +111,29 @@ def service_build_id() -> str:
     except Exception:  # pragma: no cover - metadata is best effort only
         digest.update(b"0+unknown")
     try:
-        for path in sorted(Path(__file__).resolve().parent.glob("*.py")):
-            digest.update(path.name.encode("utf-8"))
+        package_root = Path(__file__).resolve().parents[1]
+        for path in _service_source_paths():
+            digest.update(str(path.relative_to(package_root)).encode("utf-8"))
             digest.update(b"\0")
             digest.update(hashlib.sha256(path.read_bytes()).digest())
     except OSError:  # pragma: no cover - unreadable source tree
         pass
-    _BUILD_ID = digest.hexdigest()[:32]
+    return digest.hexdigest()[:32]
+
+
+def service_build_id() -> str:
+    """Return the immutable startup digest of this coding control plane.
+
+    The digest covers the coding package and its bounded startup adapter/config
+    dependencies, so a repaired build publishes a different id than the build
+    a still-running old process loaded. When the sources cannot be read the
+    package version alone is used; the result is still stable, just coarser,
+    and is never fabricated per run.
+    """
+    global _BUILD_ID
+    if _BUILD_ID is not None:
+        return _BUILD_ID
+    _BUILD_ID = current_service_build_id()
     return _BUILD_ID
 
 
@@ -526,10 +554,11 @@ class RouteStatusPublisher:
 
         The compact index supplies the inventory; each instance's own file
         supplies the richer bounded facts when it is still readable. `stale` is
-        deterministic and derives only from the retention window. `alive` is a
-        best-effort pid probe and may be `None`. A process started before this
-        schema existed publishes no row at all, so an inventory here describes
-        the instances that speak this schema and nothing else.
+        true when either the retention window elapsed or the instance build no
+        longer matches this reader's on-disk build. `alive` is a best-effort pid
+        probe and may be `None`. A process started before this schema existed
+        publishes no row at all, so an inventory here describes the instances
+        that speak this schema and nothing else.
         """
         moment = time.time() if now is None else now
         annotated = []
@@ -538,10 +567,20 @@ class RouteStatusPublisher:
             detailed = self.read_instance(str(row.get("instance_id", "")))
             if detailed is not None:
                 entry.update(detailed.to_mapping())
-            entry["stale"] = (
+            age_stale = (
                 moment - _row_timestamp(row) > STATUS_INSTANCE_TTL_SECONDS
             )
-            entry["alive"] = process_alive(entry.get("process_id", 0))
+            build_stale = entry.get("build_id") != self.build_id
+            alive = process_alive(entry.get("process_id", 0))
+            entry["age_stale"] = age_stale
+            entry["build_stale"] = build_stale
+            entry["stale"] = age_stale or build_stale
+            entry["reload_required"] = (
+                build_stale
+                and entry.get("lifecycle") == "active"
+                and alive is not False
+            )
+            entry["alive"] = alive
             entry["current"] = row.get("instance_id") == self.instance_id
             annotated.append(entry)
         return annotated

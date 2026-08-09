@@ -13,7 +13,9 @@ lists every command and option.
   is direct legacy/library use; it sits outside the audited service route below
   and cannot produce an accepted, landable receipt.
 - `flyto-ai code-serve` and `flyto-ai code-mcp`: the two transports of the one
-  audit-required coding service. See [Audited coding service](#audited-coding-service).
+  audit-required coding service. `flyto-ai code-mcp-supervisor` is the stable
+  local MCP facade that safely hot-reloads its inner worker. See
+  [Audited coding service](#audited-coding-service).
 - `flyto-ai blueprints`: list or export learned workflows.
 - `flyto-ai prompt-lab eval|evolve|cases|report`: evaluate and evolve prompts
   without automatically promoting results.
@@ -39,6 +41,14 @@ integration as implemented in `flyto_ai.cli`.
 (configured-tenant MCP stdio) are two transports over one `CodingService`. Both
 are audit-required unconditionally; there is no flag or environment variable
 that disables the requirement.
+
+Codex tasks can keep stdio MCP processes alive after the source tree changes.
+Configure `code-mcp-supervisor` for that host: it fingerprints the coding source
+at each request boundary, preserves any known non-terminal job and its exact
+session, rejects only additional submissions with `service_reload_pending`, and
+replaces the inner worker automatically once the active job is terminal. A
+direct stale `code-mcp` worker independently rejects a new submission with
+`service_reload_required` before it creates a job record.
 
 The operator selects the implementer once at startup with
 `--implementation-backend native|claude` (default `native`, optional bounded

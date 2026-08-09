@@ -2566,11 +2566,15 @@ def test_an_unsafe_path_spelling_is_never_projected_or_normalized(path):
     assert CodingRouteOrchestrator._derive_targets({"results": [{"path": path}]}) == []
 
 
-def test_target_projection_keeps_its_count_and_length_bounds():
+def test_target_projection_keeps_only_the_strongest_unique_search_hit():
     many = {"results": [{"path": "f{}.py".format(index)} for index in range(9)]}
-    assert CodingRouteOrchestrator._derive_targets(many) == [
-        "f0.py", "f1.py", "f2.py", "f3.py", "f4.py",
-    ]
+    assert CodingRouteOrchestrator._derive_targets(many) == ["f0.py"]
+    duplicates = {"results": [
+        {"path": "hero.tsx", "type": "file"},
+        {"path": "hero.tsx", "type": "component"},
+        {"path": "adjacent.tsx", "type": "component"},
+    ]}
+    assert CodingRouteOrchestrator._derive_targets(duplicates) == ["hero.tsx"]
     long_path = "d/" * 300 + "x.py"
     projected = CodingRouteOrchestrator._derive_targets({"results": [{"path": long_path}]})
     assert projected == [long_path[:200]]

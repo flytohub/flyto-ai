@@ -1089,10 +1089,17 @@ class CodingRouteOrchestrator:
                             or item.get("name")
                         )
                         if isinstance(value, str) and value:
-                            targets.append(value[:200])
+                            bounded = value[:200]
+                            targets.append(bounded)
+                            # Search ranking is discovery evidence, not
+                            # authority to turn adjacent fuzzy hits into
+                            # extra edit targets. Planning the strongest hit
+                            # keeps the route bounded and lets the post-work
+                            # gate reject any wider diff.
+                            return targets
                 if targets:
                     break
-        return targets[:5]
+        return targets
 
     def _plan_steps(self, plan_result: Mapping[str, Any], lane: RouteLane) -> list:
         """Flatten ordinary and compound plans, preserving order and bounds."""

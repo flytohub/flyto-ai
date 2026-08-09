@@ -109,12 +109,17 @@ has been proven perfect.
 ## Quickstart
 
 ```bash
-pip install flyto-ai
+pip install flyto-ai[full]   # base install is light; browser automation needs flyto-core[browser]
 playwright install chromium
 export OPENAI_API_KEY=<your-openai-key>   # or ANTHROPIC_API_KEY
 
 flyto-ai "open https://example.com and extract the h1 text"
 ```
+
+Only need an OpenAI-backed provider without browser automation (e.g.
+embedding `OpenAIProvider` in another service)? `pip install flyto-ai`
+stays free of Playwright, `flyto-core`, `flyto-pro-core`, `flyto-blueprint`,
+and the `anthropic` SDK — see [Optional extras](#optional-extras).
 
 Run `flyto-ai` with no prompt for an interactive session.
 
@@ -134,6 +139,24 @@ Official links: [flyto2.com](https://flyto2.com) ·
 [PyPI](https://pypi.org/project/flyto-ai/) ·
 [flyto-core](https://github.com/flytohub/flyto-core) ·
 [flyto-blueprint](https://github.com/flytohub/flyto-blueprint)
+
+## Optional extras
+
+The base install (`pip install flyto-ai`) is deliberately light: `pyyaml`,
+`pydantic`, `openai`, `langdetect`, `aiosqlite`, `rich`, `cryptography`.
+Everything that talks to browser automation, the Blueprint pattern engine,
+flyto-pro's contract/cost layer, or the Anthropic SDK is an extra, so a
+consumer that only needs e.g. `OpenAIProvider` never pays for Playwright + a
+Chrome download.
+
+| Extra | Adds | Use it for |
+|---|---|---|
+| `browser` | `flyto-core[browser]` (incl. Playwright) | Browser automation tools (`open`, `click`, `extract`, …) |
+| `pro` | `flyto-pro-core` | Contract validation, multi-resource cost control |
+| `blueprint` | `flyto-blueprint` | Self-learning Blueprint pattern matching |
+| `anthropic` | `anthropic` SDK | `AnthropicProvider` / Claude models |
+| `full` | all four above | Everything the CLI's browser-automation mode needs — `pip install flyto-ai[full]` |
+| `agent` / `claude-sdk` | `claude-agent-sdk` | The detachable Claude Code coding backend (see below) — independent of `full` |
 
 ## From prompt to checked workflow
 

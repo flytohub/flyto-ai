@@ -36,6 +36,28 @@
   validation, deterministic provider fallback, and content-addressed
   attestation. Flyto2 AI does not draw cards, bind resources, authorize motion,
   or decide Task completion.
+- Split `flyto-core[browser]`, `flyto-pro-core`, `flyto-blueprint`, and
+  `anthropic` out of the unconditional base `dependencies` into `browser`,
+  `pro`, `blueprint`, and `anthropic` extras (`full` restores all four
+  together). None of them was ever imported at module import time — every
+  call site already lazily imports and try/excepts `ImportError` around
+  them — so the split changes nothing at runtime for a caller that already
+  has them installed. What it fixes is install-time: `flyto-core[browser]`
+  alone pulls Playwright plus a Chrome download, which made `pip install
+  flyto-ai` impossible inside a slim image that only needs e.g.
+  `OpenAIProvider`. Released as 0.16.0, not a patch, because this changes
+  what a bare `pip install flyto-ai` gives you: existing consumers of the
+  full agent stack (flyto-cloud's worker, the desktop build) must move to
+  `flyto-ai[full]` to keep the same install shape.
+
+- `OpenAIProvider.complete_json_schema` drives OpenAI strict structured
+  outputs, so a caller that needs a shape gets it enforced upstream rather
+  than parsing whatever came back; refusals and truncated replies are
+  reported as such instead of being returned as content that fails to parse.
+  Released as 0.15.0 rather than a patch because consumers branch on the
+  method's presence: flyto-cloud's space planner calls it and checks for it
+  by name, since an adapter without it degrades silently to rule-based
+  planning, which still produces a plan and therefore looks healthy.
 - Added atomic capability execution policy, redacted content-addressed trace,
   fixed-snapshot authority-bounded replay/Blueprint feedback, reusable
   evidence-bound adapter conformance, and a bounded domain-neutral scenario

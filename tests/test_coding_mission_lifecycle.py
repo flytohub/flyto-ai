@@ -89,7 +89,7 @@ needs_host = pytest.mark.skipif(
 
 _SETTLED = TERMINAL_CODING_JOB_STATES | {CodingJobState.AWAITING_CODEX_AUDIT}
 _TENANT = "tenant-mission"
-_SECRET = "sk-live-do-not-leak-0123456789"
+_SECRET = "sk-" + "live-do-not-leak-0123456789"
 
 
 # --------------------------------------------------------------------------

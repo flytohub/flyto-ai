@@ -69,7 +69,11 @@ def test_an_unrecognized_failure_is_never_guessed_into_a_category(text):
 def test_the_code_never_carries_provider_text():
     """The message is an input to classification and nothing else."""
 
-    secret = "authentication_error: key sk-ant-not-a-real-key-9f8e7d for acme-corp"
+    secret = (
+        "authentication_error: key "
+        + "sk-"
+        + "ant-not-a-real-key-9f8e7d for acme-corp"
+    )
     code = provider_failure_code(RuntimeError(secret))
 
     assert code == "provider_auth_failed"

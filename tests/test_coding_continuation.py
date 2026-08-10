@@ -455,9 +455,15 @@ def test_the_service_refuses_a_session_that_contradicts_the_bound_one(tmp_path):
         path = service._tenant_dir(tenant_ref) / "jobs" / (queued.job_id + ".json")
         # The job already bound `_SESSION`; a second, different identity is a
         # boundary violation rather than a reconnect.
-        # A real descriptor: the record write below releases the lease for
-        # real, and a sentinel would blow up inside `flock`.
-        service._job_leases[queued.job_id] = os.open(os.devnull, os.O_RDONLY)
+        # Settlement becomes visible just before the worker's `finally`
+        # releases its execution lease.  Acquire that real lease through the
+        # production primitive instead of racing the cleanup by injecting a
+        # descriptor into `_job_leases`.
+        deadline = time.monotonic() + 5
+        while not service._acquire_job_lease(queued.job_id):
+            if time.monotonic() >= deadline:
+                raise AssertionError("settled coding job did not release its execution lease")
+            time.sleep(0.01)
         try:
             with pytest.raises(SessionBindingFailed):
                 service._bind_provider_session(
@@ -468,7 +474,7 @@ def test_the_service_refuses_a_session_that_contradicts_the_bound_one(tmp_path):
                 path, tenant_ref, queued.job_id, str(workspace), _SESSION,
             )
         finally:
-            service._job_leases.pop(queued.job_id, None)
+            service._release_job_lease(queued.job_id)
     finally:
         service.close(wait=True)
 

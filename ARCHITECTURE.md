@@ -571,6 +571,94 @@ Flyto2 Robotics routed request
   authenticated service. It suppresses prompt-bearing access logs and bounds
   request, response, timeout, and error detail sizes.
 
+## Coding mission and state-root authority boundary
+
+Every coding job serves a **mission** in the workload-neutral kernel
+(`flyto_ai.orchestration.mission_control`). The coding adapter
+(`flyto_ai.coding.mission_runtime`) owns the whole coding vocabulary: when a
+caller names no mission, it synthesizes one whose objective is the caller's own
+immutable request message, whose desired result is an attributable verified
+revision accepted by independent Codex audit, and whose criteria name the
+implementation revision, the checks pinned at admission, and that audit. The
+kernel learns none of this. It is the authority for cross-process queue order,
+repair-lane preference, dependency readiness, resource exclusion and fencing;
+the canonical worktree is claimed as a resource **by digest, never by path**.
+
+Two leases carry execution, and they mean different things.
+
+*The job lease covers execution, never admission.* Once a job's record,
+idempotency record, resume envelope, round envelope and mission work item are
+durable, the admitting service releases the lease **before** any pump exists.
+Any compatible worker may then execute the store-selected round from durable
+state alone. Holding it from admission until the submitting instance's own pump
+happened to reach the job made the global queue offer that item to other
+services, which had to refuse and requeue it - burning a dispatch attempt and a
+fencing token per refusal.
+
+*The state-root authority lease binds one semantic authority to one root.* The
+coding route is startup-fixed: implementer, audit requirement, contract path,
+sandbox, approval policy, host lane policies and rework ceiling are decided
+before a job exists. Every compatible live service holds a **shared** `flock` on
+`<state_root>/.authority.lock` for its whole life; a newcomer first attempts the
+**exclusive** lock, and only that proof of "nobody else is alive here" permits
+writing the bounded, secret-free marker in `<state_root>/authority.json`.
+Rotation therefore needs both no live holder *and* every job terminal. A
+mismatch is refused before status reconciliation, the workspace-claim sweep and
+any pump, so an incompatible service never consumes an attempt and never sweeps
+another authority's audit-gap claim. Liveness is the kernel's answer: a crashed
+service releases its share when its descriptor closes, so recovery needs no TTL
+and no heartbeat, and a paused service is never declared dead. Lock order is
+authority-lease -> state-guard, always.
+
+*Validation precedes every write.* Marker validation, active-job validation and
+any pre-fingerprint settlement all run under the state guard while the caller
+holds the exclusive lock, and the marker is written only after all of them pass.
+A refused start-up therefore leaves a present marker byte-identical and never
+creates one - otherwise a stranger could replace a lost marker, then fail on an
+open job, and lock out the worker that was actually correct. `None` from the
+marker reader means one thing only: no file exists. A marker that is a link, is
+not a regular file, exceeds its small byte bound, does not decode, or does not
+match its exact schema is a refusal. Neither the lease file nor the marker is
+ever opened by name twice: each is opened once with `O_NOFOLLOW` (and
+`O_CLOEXEC` for the marker), and every later question - regular file, size,
+contents - is asked of that same descriptor, so a name replaced after a check
+cannot be the file that is then read. An unreadable or state-less job record is
+likewise a refusal rather than an assumption that the job finished.
+
+Teardown mirrors this. The whole of `close` after the service marks itself
+closed sits inside one `finally` that releases the state-guard descriptor and
+then the authority lease, so a failure draining the executor, releasing job
+leases or writing the closing status row can never leave a stopped service
+holding the root against its successor.
+
+Where the host has no inter-process lock the service refuses to start at all
+(`CodingAuthorityUnavailable`, `execution_authority_unavailable`) rather than
+degrading: advertising multi-process isolation a host cannot keep is worse than
+declining the host.
+
+The authority fingerprint is a recursive canonical digest of the *whole*
+validated startup policy, including nested Indexer, Blueprint, Core and
+`RouteLimits` semantics, and including every string exactly as configured -
+capability argv and executable paths among them, because two lanes invoking
+different binaries are different route semantics and a state root is host-local
+anyway. Only the digest is persisted; no raw path reaches `authority.json`, a
+record, a receipt or a log. It deliberately excludes `build_id`, which a hot reload
+changes without changing what would execute; build identity is still enforced
+where it belongs, at admission. Records predating the fingerprint are adopted only on proof and never on
+absence. Queued pre-execution work - `implementer_started` false, a flag written
+*before* the provider call - is migrated and runs normally. An executing record
+is never adopted, because `implementation_backend` is recorded on *outcome*, so
+an empty backend may mean a provider round is in flight: if its job lease is
+held the service refuses to start beside it, and if the lease is provably free
+the job is terminalized with its mission item and worktree claim accounted. Only
+an unfingerprinted *awaiting-audit* job is accept-but-not-rework: a verdict
+describes a revision the host already hashed, but a new round would adopt this
+service's route policy on behalf of a job that never named one.
+
+This boundary changes no product topology: `flyto-cloud` remains parallel to the
+combined `flyto-code` / `flyto-engine` column. See `DECISIONS.md` (2026-08-10)
+for the rationale and operator semantics.
+
 ## Coding continuation boundary
 
 A bounded provider stop keeps its session; carrying it into a second job is an

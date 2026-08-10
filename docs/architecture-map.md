@@ -243,3 +243,40 @@ control-plane runtime state, because only that route's mandatory Indexer pre/pos
 gates revalidate that tree and record the result in the route receipt.
 
 See `ARCHITECTURE.md`, `docs/CODING_CONTROL_PLANE.md` and `DECISIONS.md` (2026-08-10).
+
+## Coding control plane: mission scheduling and state-root authority
+
+Runtime note only. No product ownership, repository boundary or integration arrow
+changes here, and `flyto-cloud` remains parallel to - and level with - the combined
+`flyto-code` / `flyto-engine` column.
+
+Every coding job serves a mission in `flyto_ai.orchestration.mission_control`,
+which stays workload-neutral: the coding vocabulary - synthesized objective,
+attributable verified revision, pinned checks, Codex audit - lives only in
+`flyto_ai.coding.mission_runtime`. The kernel decides queue order, repair-lane
+preference, dependency readiness, worktree exclusion by resource digest, and
+fencing. The service dispatches whatever the store selected and reconstructs the
+owning private request from durable envelopes, so per-submit executor timing
+cannot reorder the queue.
+
+Two leases, two meanings. The **job lease** covers execution only and is released
+once a job's durable artifacts exist, before any pump can dispatch - so queued
+work survives its submitter and any compatible worker may run it. The
+**state-root authority lease** is a shared `flock` on `<state_root>/.authority.lock`
+held by every compatible live service, with a bounded secret-free marker in
+`<state_root>/authority.json`; the exclusive lock is required to write that
+marker, so rotation needs no live holder *and* every job terminal. An
+incompatible service fails construction before status reconciliation, the
+workspace-claim sweep, or any pump. Lock order is authority-lease -> admission ->
+state guard. Crash recovery is `flock` release, never a TTL.
+
+Every validation precedes every write: the marker, the active-job scan and any
+pre-fingerprint settlement are checked under the state guard while the caller
+holds the exclusive lock, and the marker is written last, so a refused start-up
+leaves a present marker byte-identical and never creates a missing one. Damaged,
+symlinked or non-regular markers and unreadable job records are refusals, not
+absences. A host without an inter-process lock refuses to start
+(`execution_authority_unavailable`) rather than degrading the isolation to a
+no-op.
+
+See `ARCHITECTURE.md` and `DECISIONS.md` (2026-08-10).

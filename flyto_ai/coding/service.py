@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import errno
 import hashlib
 import json
 import math
@@ -415,6 +416,51 @@ class CapabilityUnavailable(VerificationRequired):
     code = "capability_unavailable"
 
 
+class CodingAuthorityConflict(CodingServiceError):
+    """This state root's active work belongs to a different startup authority.
+
+    The coding route is startup-fixed by design: the implementer, the audit
+    requirement, the contract path, the sandbox, the approval policy and the
+    host lane policies are all decided before a job exists and no payload can
+    reach them. A second service that would decide any of them differently is
+    therefore not a peer worker on this queue - it is a different route sharing
+    a directory.
+
+    Refusing it at construction, rather than letting it start and then declining
+    each item, is the difference between one bounded error and an unbounded one:
+    a running incompatible service is offered every ready item forever, and each
+    refusal costs a dispatch attempt and a fencing token. It is also what keeps
+    such a service away from the workspace-claim sweep, which it has no standing
+    to run against another authority's audit gap.
+
+    Rotation is allowed - just not while work is live. Once every job under the
+    old authority is terminal, the next service binds the root to its own.
+    """
+
+    code = "execution_authority_conflict"
+    failure_phase = "startup"
+    retryable = False
+
+
+class CodingAuthorityUnavailable(CodingServiceError):
+    """This host cannot bind a state root to one startup authority at all.
+
+    Distinct from a conflict, because the two are fixed by different people
+    doing different things: a conflict means "another authority owns this root",
+    and this means "the primitive that would answer that question is missing".
+
+    It is a refusal rather than a degradation on purpose. Without an
+    inter-process lock there is no way to know whether another service is alive
+    here, so continuing would advertise multi-process isolation this host cannot
+    keep - two services would both start, both believe they owned the root, and
+    both dispatch against it.
+    """
+
+    code = "execution_authority_unavailable"
+    failure_phase = "startup"
+    retryable = False
+
+
 class CodingServiceReloadRequired(CodingServiceError):
     """The source tree changed after this long-lived service imported it."""
 
@@ -709,6 +755,10 @@ _PUMP_POLL_CEILING = 0.2
 #: leased before concluding that process owns it. Requeueing is free; retrying
 #: forever would burn a fencing token per attempt for nothing.
 _PUMP_MAX_FOREIGN = 3
+#: How many consecutive "ready work, nothing running, took nothing" readings a
+#: pump needs before believing them. One is a race with a claim released between
+#: the dispatch attempt and the metrics read; two cannot be.
+_PUMP_MAX_IDLE = 2
 
 #: What one dispatch attempt did. A pump treats all three differently, so they
 #: are named rather than encoded as a bare boolean.
@@ -729,6 +779,57 @@ _INTERRUPTED_JOB_STATES = frozenset({
     CodingJobState.REWORK_QUEUED.value,
     CodingJobState.REWORK_RUNNING.value,
 })
+
+#: The only states a restart may fail closed. A round in one of these was
+#: *executing*: a provider call was in flight, a worktree was being written, and
+#: nothing durable can say how far it got. Everything else that looks unfinished
+#: is merely waiting, and waiting survives a process.
+_EXECUTING_JOB_STATES = frozenset({
+    CodingJobState.RUNNING.value,
+    CodingJobState.REWORK_RUNNING.value,
+})
+
+#: Durably queued work that outlives whoever admitted it. A record in one of
+#: these states carries everything a compatible worker needs - the job record,
+#: the resume envelope, the round envelope and a placed mission work item - so
+#: it is pumped, never failed, when a service starts or the submitter exits.
+_PUMPABLE_JOB_STATES = frozenset({
+    CodingJobState.QUEUED.value,
+    CodingJobState.REWORK_QUEUED.value,
+})
+
+#: Closed schema token for the bounded fingerprint of the startup authority a
+#: job was admitted under. Two services may share a state root and a durable
+#: queue; only one that would construct the *same* implementer, under the same
+#: audit requirement, contract path, sandbox and approval policy, may execute
+#: work the other admitted. No secret, no credential and no absolute path is
+#: part of it.
+EXECUTION_AUTHORITY_VERSION = "flyto.coding-execution-authority.v1"
+#: How deep the recursive policy canonicalization walks before truncating. A
+#: startup policy is a bounded contract, not a graph.
+_POLICY_MAX_DEPTH = 8
+#: Stable machine code for a record whose executing authority cannot be
+#: established. Terminal, so such a record is accounted once rather than
+#: circling the shared queue forever.
+EXECUTION_AUTHORITY_UNBOUND = "execution_authority_unbound"
+#: The durable authority lease for one coding state root. Every live service
+#: compatible with the root holds a *shared* `flock` on this file for its whole
+#: life; rotation needs the *exclusive* one, which is unobtainable while any of
+#: them is alive. The kernel releases it when a process dies, so recovery needs
+#: no TTL, no heartbeat and no guess about liveness.
+AUTHORITY_LOCK_NAME = ".authority.lock"
+#: The marker naming which authority currently owns this root. Bounded, exact
+#: schema, and secret-free: it carries the same fingerprint a job record does.
+AUTHORITY_MARKER_NAME = "authority.json"
+AUTHORITY_MARKER_VERSION = "flyto.coding-state-root-authority.v1"
+_AUTHORITY_MARKER_FIELDS = frozenset({"marker_version", "authority"})
+#: The marker is a handful of bounded tokens and one small mapping. Anything
+#: larger is not one, and is refused rather than parsed - a reader that will
+#: accept an arbitrary body is a reader that can be made to do arbitrary work.
+MAX_AUTHORITY_MARKER_BYTES = 8192
+#: What a kernel reports when `O_NOFOLLOW` refuses the final component. Both
+#: spellings appear across POSIX platforms, so both mean "this is a link".
+_NOFOLLOW_ERRNOS = frozenset({errno.ELOOP, getattr(errno, "EMLINK", errno.ELOOP)})
 
 #: States during which one job owns its worktree exclusively. This is a strict
 #: superset of `_INTERRUPTED_JOB_STATES`: it also covers the audit gap, where
@@ -1131,6 +1232,14 @@ class CodingService:
         self._pending: set[Future[Any]] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="flyto-coding")
         self._closed = False
+        #: The state-root authority lease. `-1` until taken, so every failure
+        #: path - including one before it is taken - can close it uniformly.
+        self._authority_fd = -1
+        #: Set once the publisher exists. A constructor that fails at the
+        #: authority lease is torn down through the same `close()` as any other,
+        #: and that teardown must not raise over a recorder that was never
+        #: built - an `AttributeError` there would replace the real refusal.
+        self._status: Optional[RouteStatusPublisher] = None
         # The durable, cross-process mission queue. Constructing it creates
         # nothing, so an unsupported host is discovered by asking rather than by
         # leaving half a store behind; admission is where the refusal lands.
@@ -1156,6 +1265,10 @@ class CodingService:
             (self.state_root / "locks" / "workspaces").mkdir(
                 parents=True, exist_ok=True, mode=0o700,
             )
+            # First durable act of a new service, and deliberately before the
+            # status publisher exists: an incompatible service must fail before
+            # it reconciles status, sweeps a workspace claim, or pumps.
+            self._acquire_state_root_authority()
             self._status = RouteStatusPublisher(
                 self.state_root,
                 instance_id=self.instance_id,
@@ -1555,6 +1668,11 @@ class CodingService:
                 # Bounded, secret-safe mission coordinates. Filled in below,
                 # from the work item admission actually placed.
                 "mission": None,
+                # Which startup authority this job may be executed under. The
+                # durable queue is shared; the authority is not, so a worker
+                # that would build a different implementer leaves this work for
+                # one that would build the same.
+                "execution_authority": self._execution_authority(),
             }
             try:
                 # Every job gets a mission. A caller that named one has its
@@ -1603,12 +1721,6 @@ class CodingService:
                 self._write_round_envelope(
                     tenant_ref, job_id, admission.work_item_id, rework=False,
                 )
-                # Not `self._run_job`. The store decides which work item runs
-                # next, across every process sharing this state root, so what is
-                # queued here is a pump: it asks the store, and runs whatever the
-                # store chose. Per-submit executor timing therefore cannot
-                # reorder the queue.
-                future = self._executor.submit(self._pump_dispatch)
             except BaseException:
                 self._release_workspace_claim(job_id, request.working_dir)
                 self._discard_resume(tenant_ref, job_id)
@@ -1619,12 +1731,25 @@ class CodingService:
                 self._revert_continuation_claim(tenant_ref, granted, job_id)
                 self._release_job_lease(job_id)
                 raise
-            self._pending.add(future)
-            # The lease is deliberately *not* released by this callback any
-            # more. A pump may run a different job than the one whose submit
-            # queued it, so the round that actually executes a job is the only
-            # thing that may hand back that job's lease.
-            future.add_done_callback(self._forget_future)
+            # Admission is over, and with it this instance's exclusive hold.
+            #
+            # Holding the lease from here until *this* instance's pump happened
+            # to reach this job was the thundering herd: the queue is global, so
+            # the store would offer the item to whichever compatible service
+            # asked next, that service could not take the lease, and it requeued
+            # the item - burning an attempt and a fencing token every time. The
+            # job record, the idempotency record, the resume envelope, the round
+            # envelope and the mission work item are all durable now, so any
+            # compatible worker can execute this round from durable state alone.
+            # The lease goes back to meaning exactly one thing: a round of this
+            # job is executing right now.
+            #
+            # Release happens-before the pump exists. Submitting the pump first
+            # let this instance's own worker dispatch this very item while the
+            # lease was still held here, refuse it as foreign, and requeue it -
+            # burning an attempt on its own job. There is no such window now.
+            self._release_job_lease(job_id)
+            self._schedule_pump()
             return self._public_receipt(tenant_ref, record)
 
     def _require_verifiable_repository(self, workspace: str) -> str:
@@ -2191,21 +2316,42 @@ class CodingService:
             if self._closed:
                 return
             self._closed = True
-        # The state-root lease must outlive active worker writes. `wait=False`
-        # cancels jobs that have not started but still drains running jobs.
-        self._executor.shutdown(wait=True, cancel_futures=not wait)
-        with self._lock:
-            for job_id in tuple(self._job_leases):
-                self._release_job_lease(job_id)
+        # One outer `finally` over the *whole* teardown. Draining the executor
+        # and handing back job leases can both raise, and either one leaving
+        # the root descriptors open would keep a service that has already
+        # stopped serving holding this state root against every later one - a
+        # lock-out no operator could diagnose from the failure they saw.
         try:
-            with self._state_guard():
-                # A graceful shutdown says so, keeping every fact it already
-                # published. A crashed instance keeps its last `active` row,
-                # which is why a reader also consults the pid and timestamp.
-                self._close_status()
-        except OSError:
-            pass
-        os.close(self._lock_fd)
+            # The state-root lease must outlive active worker writes.
+            # `wait=False` cancels jobs that have not started but still drains
+            # running jobs.
+            self._executor.shutdown(wait=True, cancel_futures=not wait)
+            with self._lock:
+                for job_id in tuple(self._job_leases):
+                    self._release_job_lease(job_id)
+            try:
+                with self._state_guard():
+                    # A graceful shutdown says so, keeping every fact it
+                    # already published. A crashed instance keeps its last
+                    # `active` row, which is why a reader also consults the pid
+                    # and timestamp.
+                    self._close_status()
+            except Exception:
+                # A diagnostic write is never allowed to keep this root bound.
+                # Deliberately `Exception` and not `BaseException`: a broken
+                # status recorder is swallowed, but a `KeyboardInterrupt` or a
+                # `SystemExit` still propagates - and still runs the release
+                # below on its way out.
+                pass
+        finally:
+            try:
+                os.close(self._lock_fd)
+            except OSError:
+                pass
+            # Last, and after every other descriptor: while this is held,
+            # another authority may not rotate this root, so it must outlive
+            # every write above.
+            self._release_state_root_authority()
 
     def _schedule_rework(
         self,
@@ -2219,6 +2365,18 @@ class CodingService:
     ) -> CodingJobReceipt:
         """Queue one same-session repair round; the caller holds the lock."""
 
+        # A v0 record carries no executing authority, and a rework is a *new*
+        # implementation round: running it here would adopt this service's route
+        # policy, lane configuration and emergency authority on behalf of a job
+        # that never named any of them. Accepting such a record is fine - a
+        # verdict describes a revision the host already hashed - but reworking
+        # it is not, so it settles under the same stable code instead.
+        if not isinstance(record.get("execution_authority"), Mapping):
+            self._terminalize_unbound(path, tenant_ref, job_id, record)
+            raise CodingAuthorityConflict(
+                "this coding job predates the executing authority record and"
+                " cannot be reworked under an unproven route policy",
+            )
         rework_count = int(record.get("rework_count", 0)) + 1
         if rework_count > self.max_rework_rounds:
             # The ceiling is a settlement, not a bounce. Leaving the job in
@@ -2285,6 +2443,12 @@ class CodingService:
                 landable=False,
                 failure_code=None,
                 mission=repair.projection.to_mapping(),
+                # An awaiting-audit record admitted before the fingerprint
+                # existed would otherwise produce a repair child no worker could
+                # prove it may run, and the child would sit queued forever. The
+                # audit is happening *here*, under this authority, so this is
+                # the point at which the record can honestly name it.
+                execution_authority=self._execution_authority(),
             )
         except BaseException:
             # The transition was refused — most often because this job can no
@@ -2293,18 +2457,14 @@ class CodingService:
             # every later caller.
             self._release_job_lease(job_id)
             raise
-        try:
-            future = self._executor.submit(self._pump_dispatch)
-        except RuntimeError as exc:
-            self._update_record_locked(
-                path,
-                state=CodingJobState.FAILED.value,
-                failure_code="service_rework_not_scheduled",
-            )
-            self._release_job_lease(job_id)
-            raise CodingServiceError("coding rework could not be scheduled") from exc
-        self._pending.add(future)
-        future.add_done_callback(self._forget_future)
+        # Same rule and same order as admission: the repair child, its round
+        # envelope and the `rework_queued` record are all durable, so any
+        # compatible worker may run this round, and the lease goes back before
+        # a pump can exist to race it. A scheduling failure is not a job
+        # failure - the round is recoverable from durable state - so it is no
+        # longer terminalized here.
+        self._release_job_lease(job_id)
+        self._schedule_pump()
         return self._public_receipt(tenant_ref, self._read_json(path))
 
     def _settle_at_rework_limit(
@@ -2549,6 +2709,7 @@ class CodingService:
         deadline = time.monotonic() + _PUMP_WAIT_SECONDS
         delay = _PUMP_POLL_SECONDS
         foreign = 0
+        idle = 0
         while not self._closed:
             outcome = self._dispatch_once()
             if outcome == _DISPATCH_RAN:
@@ -2557,46 +2718,63 @@ class CodingService:
                 # rather than after a poll tick.
                 self._prime_pump()
                 return
-            # Whether this instance still holds an admission lease of its own.
-            # It is the difference between "somebody else's queue is busy" and
-            # "my own job has not had its turn yet", and only the second is a
-            # reason for this pump to keep waiting.
-            owed = self._owns_queued_work()
             if outcome == _DISPATCH_FOREIGN:
-                # The store offered work whose job another process has leased.
-                # It was requeued untouched - never stolen, never run twice -
-                # and that process has its own pump for it. Hammering it would
-                # burn a fencing token per attempt for nothing, so back off to
-                # the ceiling; and when this instance owes no round of its own,
-                # give the worker back rather than shadowing another process.
+                # The store offered work this instance may not execute: either a
+                # round of it is genuinely in flight, or the job was admitted
+                # under a startup authority this service does not share. Either
+                # way it was requeued untouched - never stolen, never run twice -
+                # and a worker that may run it will. Retrying costs a fencing
+                # token per attempt and buys nothing, so back off to the ceiling
+                # and give the worker back.
                 delay = _PUMP_POLL_CEILING
-                if not owed:
-                    foreign += 1
-                    if foreign >= _PUMP_MAX_FOREIGN:
-                        return
+                foreign += 1
+                if foreign >= _PUMP_MAX_FOREIGN:
+                    return
             ready, dispatched = self._mission.queue_state()
             if not ready or time.monotonic() >= deadline:
                 return
-            if not dispatched and not owed:
-                # Ready work nobody is running that this pump could not take,
-                # and nothing of this instance's own waiting behind it. Nothing
-                # here is going to release anything, so waiting would be waiting
-                # on an event that cannot happen.
-                return
+            if dispatched:
+                # Something is running somewhere, so a release is coming and
+                # this pump waits for it.
+                idle = 0
+            else:
+                # Ready work, nothing running, and this pump could not take it.
+                # That reading used to retire the worker immediately - and it
+                # was wrong exactly once per race: a claim released between the
+                # dispatch attempt and this metrics read looks identical to
+                # "nothing will ever release anything". So confirm it with a
+                # second dispatch attempt before believing it. Two consecutive
+                # idle observations with nothing running cannot both fall inside
+                # the same release window, and two is still bounded, so a
+                # synchronous pump never waits out the deadline for work that
+                # genuinely is not coming.
+                idle += 1
+                if idle >= _PUMP_MAX_IDLE:
+                    return
             time.sleep(delay)
             delay = min(_PUMP_POLL_CEILING, delay * 2)
 
-    def _owns_queued_work(self) -> bool:
-        """Whether this instance still holds a lease for a round it admitted.
+    def _schedule_pump(self) -> None:
+        """Queue one pump for work that is already durable and recoverable.
 
-        Admission takes the job lease and the round that runs the job hands it
-        back, so a non-empty lease table means this instance has work of its own
-        that has not had its turn. That is the one thing that justifies a pump
-        waiting behind another process's running round: its own job is next.
+        Scheduling is best effort *on purpose*. By the time this runs the job
+        record, its envelopes and its mission work item are all durable, so a
+        service that is shutting down - or an executor that refuses the task -
+        leaves queued work a compatible worker will pick up, at start-up or on
+        its next pump. Raising here would falsely terminalize a job nothing is
+        wrong with, and rolling back would delete work already published to the
+        shared queue.
         """
 
         with self._lock:
-            return bool(self._job_leases)
+            if self._closed:
+                return
+            try:
+                future = self._executor.submit(self._pump_dispatch)
+            except RuntimeError:
+                return
+            self._pending.add(future)
+        future.add_done_callback(self._forget_future)
 
     def _prime_pump(self) -> None:
         """Queue one more pump when the shared queue still holds ready work."""
@@ -2662,14 +2840,34 @@ class CodingService:
         ):
             self._account_unrunnable(work, "job_not_runnable")
             return _DISPATCH_RAN
+        if not isinstance(record.get("execution_authority"), Mapping):
+            # A record with no provable executing authority. `_bind_startup_
+            # authority` settles these at start-up, so reaching one here means it
+            # appeared afterwards - an edited or partially written record. It is
+            # accounted once, terminally, rather than requeued forever.
+            self._account_unrunnable(work, EXECUTION_AUTHORITY_UNBOUND)
+            self._fail_unrunnable_record(
+                tenant_ref, job_id, EXECUTION_AUTHORITY_UNBOUND,
+            )
+            return _DISPATCH_RAN
+        if not self._may_execute(record):
+            # Shared durable state, unshared authority. Startup binding makes
+            # this unreachable for a service that came up cleanly - an
+            # incompatible one is refused before it can pump at all - so this is
+            # defence in depth for a record rewritten underneath a running
+            # service. Requeue untouched; executing it here would silently
+            # redirect a caller's work to an agent they never authorized.
+            return _DISPATCH_FOREIGN
         round_envelope = self._read_round_envelope(tenant_ref, work.work_item_id)
         if round_envelope is None or str(round_envelope.get("job_id") or "") != job_id:
             self._account_unrunnable(work, "round_envelope_unbound")
+            self._fail_unrunnable_record(tenant_ref, job_id, "round_envelope_unbound")
             return _DISPATCH_RAN
         rework = bool(round_envelope.get("rework"))
         request = self._reconstruct_request(tenant_ref, job_id, record, round_envelope)
         if request is None:
             self._account_unrunnable(work, "request_unreconstructable")
+            self._fail_unrunnable_record(tenant_ref, job_id, "request_unreconstructable")
             return _DISPATCH_RAN
         if not self._claim_round(job_id):
             # Held by another process. Leaving the `with` block without closing
@@ -2681,6 +2879,600 @@ class CodingService:
         finally:
             self._release_round(job_id)
         return _DISPATCH_RAN
+
+    def _execution_authority(self) -> Dict[str, Any]:
+        """The bounded startup authority a job admitted here may run under.
+
+        Every field is a startup decision no job payload can reach, and none of
+        them is a secret, a credential or an absolute path. It is recorded so a
+        second service sharing this state root can answer one question without
+        guessing: would running this job here construct the same implementer,
+        under the same audit requirement and the same execution envelope, as the
+        service that accepted it?
+        """
+
+        # Deliberately *not* the build id. A hot reload or an ordinary restart
+        # mints a new one, so binding execution to it would strand a queued job
+        # that a semantically identical worker is perfectly able to run - the
+        # exact failure this fingerprint exists to prevent, inverted. Build
+        # identity is still enforced where it belongs: `_commit_admission`
+        # refuses to *admit* new work under a changed build.
+        return {
+            "version": EXECUTION_AUTHORITY_VERSION,
+            "backend": self.implementation_backend,
+            "audit_required": bool(self.require_codex_audit),
+            "config_path": self.config_path,
+            "sandbox_image": self.sandbox_image,
+            "approval_policy": self.approval_policy.value,
+            "sandbox_mode": self.sandbox_mode.value,
+            "route": self._policy_digest(self.route_policy),
+            "emergency": self._policy_digest(self.emergency_policy),
+            "max_rework_rounds": int(self.max_rework_rounds),
+        }
+
+    @classmethod
+    def _policy_digest(cls, policy: Any) -> str:
+        """A bounded, stable digest of one startup policy's *whole* semantics.
+
+        Recursive on purpose. A route policy carries nested policies - the
+        Indexer gate, Blueprint discovery, Core validation, the bounded
+        `RouteLimits` - and an earlier version of this hashed only the top-level
+        scalars, so changing a nested limit or a lane's capability policy
+        produced an identical fingerprint. Two services that would enforce
+        materially different lanes then compared equal and could run each
+        other's work, which is the opposite of what a startup-fixed route is
+        for.
+
+        Every string is hashed exactly as it stands, paths included. An earlier
+        version folded anything path-shaped to a placeholder, reasoning that two
+        hosts keeping their trees in different places should still agree they
+        enforce the same route. That reasoning does not apply here and the
+        collision it created was real: a state root and its `flock` are
+        host-local, so two services sharing one are on the same machine, and
+        capability argv pointing at `/opt/indexer-v1` versus `/opt/indexer-v2`
+        would hash identically and be allowed to share a root while executing
+        different route semantics. Cross-host normalization was never a reason
+        to erase execution identity.
+
+        Hashing exact strings publishes nothing. Only the digest reaches
+        `authority.json`, a record, a receipt or a log; the values themselves
+        never leave this function.
+        """
+
+        if policy is None:
+            return "none"
+        try:
+            fields = dataclasses.asdict(policy)
+        except TypeError:
+            return "opaque-" + type(policy).__name__
+        payload = json.dumps(
+            cls._policy_semantics(fields, 0),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+    @classmethod
+    def _policy_semantics(cls, value: Any, depth: int) -> Any:
+        """Canonicalize one policy value, recursively and within bounds."""
+
+        if depth > _POLICY_MAX_DEPTH:
+            return "truncated"
+        if value is None or isinstance(value, bool) or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            # Exactly as given. Two capability argv entries naming different
+            # executables are different route semantics, and the fingerprint
+            # has to say so.
+            return value
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._policy_semantics(item, depth + 1)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (set, frozenset)):
+            return [
+                cls._policy_semantics(item, depth + 1)
+                for item in sorted(value, key=repr)
+            ]
+        if isinstance(value, (list, tuple)):
+            return [cls._policy_semantics(item, depth + 1) for item in value]
+        enum_value = getattr(value, "value", None)
+        if isinstance(enum_value, (str, int, float, bool)):
+            return cls._policy_semantics(enum_value, depth + 1)
+        return "opaque-" + type(value).__name__
+
+    def _acquire_state_root_authority(self) -> None:
+        """Take this state root's durable authority lease, or refuse to run.
+
+        Scanning job records could never establish this on its own: an empty
+        root has no records, so two incompatible services would both construct,
+        and whichever admitted work first would leave the other one running,
+        able to submit and pump against an authority it does not share. The
+        claim needed a live, durable holder, not an inference from history.
+
+        The protocol is one file and two `flock` modes.
+
+        * Every compatible live service holds a **shared** lock for its whole
+          life, so same-authority services coexist by construction.
+        * A newcomer first tries the **exclusive** lock. Getting it proves no
+          other service is alive here, and only then may the marker be written -
+          bootstrapping an empty root, or rotating one whose work is all
+          terminal. It is then downgraded to shared for the process's life.
+        * Failing to get it proves somebody *is* alive, so the marker is
+          authoritative and must match; a mismatch is refused.
+
+        Liveness is the kernel's answer, never a timestamp: a crashed service
+        releases its share when its descriptor is closed, so recovery needs no
+        TTL and no heartbeat, and a paused service is never declared dead.
+
+        Lock order is authority-lease -> state-guard, always. This runs before
+        the guard is ever taken and never while it is held, so the two cannot
+        deadlock against each other.
+        """
+
+        if fcntl is None:
+            # No `flock`, no isolation. Claiming a multi-process invariant this
+            # host cannot keep would be worse than refusing to run: two services
+            # would both start, both believe they owned the root, and both pump.
+            raise CodingAuthorityUnavailable(
+                "this host has no inter-process lock, so a coding state root"
+                " cannot be bound to one startup authority",
+            )
+        descriptor = self._open_authority_lock()
+        try:
+            exclusive = True
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                exclusive = False
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except OSError as exc:
+                    raise CodingServiceBusy(
+                        "the coding state root authority lease is unavailable",
+                    ) from exc
+            mine = self._execution_authority()
+            # Malformed or unsafe is a refusal, never an absence. Reading it as
+            # "no marker" would let damaged state be overwritten by whoever
+            # started next, which is the one thing a marker exists to stop.
+            recorded = self._read_authority_marker()
+            if not exclusive:
+                if recorded is None:
+                    # Somebody is alive and this root names no authority at all.
+                    # Fail closed: there is nothing to agree with, and this
+                    # caller cannot write one - it does not hold the exclusive
+                    # lock that makes writing safe.
+                    raise CodingAuthorityConflict(
+                        "this coding state root has a live service and no"
+                        " authority marker; stop it before starting here",
+                    )
+                if recorded != mine:
+                    raise CodingAuthorityConflict(
+                        "this coding state root is held by a live service with a"
+                        " different startup authority",
+                    )
+                # A live peer already validated the records; agreeing with its
+                # marker is what makes this a peer rather than a second opinion.
+                with self._state_guard():
+                    self._bind_startup_authority(mine, adopt=False)
+            else:
+                # Everything that could refuse this start-up runs *before* the
+                # marker is touched. Writing first and validating afterwards
+                # meant a refused stranger could destroy a lost marker's
+                # replacement - binding the root to an authority whose own
+                # construction then failed, and locking out the correct worker.
+                with self._state_guard():
+                    if recorded is not None and recorded != mine:
+                        self._require_all_jobs_terminal()
+                    # Only a caller holding the exclusive lock may settle a
+                    # pre-fingerprint record: it is the one that has proved no
+                    # other service is alive to be running it.
+                    self._bind_startup_authority(mine, adopt=True)
+                    if recorded != mine:
+                        self._write_authority_marker(mine)
+                # Downgrade, so the next compatible service can join. `flock`
+                # converts in place; a failure here leaves the exclusive lock
+                # held, which is refused rather than run with.
+                fcntl.flock(descriptor, fcntl.LOCK_SH)
+        except BaseException:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(descriptor)
+            raise
+        self._authority_fd = descriptor
+
+    def _open_authority_lock(self) -> int:
+        """Open the lease file itself, never something standing in for it.
+
+        `O_NOFOLLOW` refuses a symbolic link at the final component, and the
+        descriptor is then `fstat`-ed - so the check is made against the file
+        this process actually holds rather than against a name that could have
+        been replaced in between.
+        """
+
+        path = self.state_root / AUTHORITY_LOCK_NAME
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except OSError as exc:
+            raise CodingAuthorityUnavailable(
+                "the coding state root authority lease could not be opened",
+            ) from exc
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise CodingAuthorityUnavailable(
+                    "the coding state root authority lease is not a regular file",
+                )
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    def _release_state_root_authority(self) -> None:
+        """Give the lease back. Idempotent, and safe on a half-built service."""
+
+        descriptor, self._authority_fd = self._authority_fd, -1
+        if descriptor < 0:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+    def _authority_marker_path(self) -> Path:
+        return self.state_root / AUTHORITY_MARKER_NAME
+
+    def _read_authority_marker(self) -> Optional[Dict[str, Any]]:
+        """The authority this root names, or `None` only when it names none.
+
+        `None` means one thing exactly: no marker file exists. A marker that is
+        a symbolic link, is not a regular file, does not parse, carries unknown
+        keys, names another version, or holds something that is not a mapping is
+        a *refusal*. Reading any of those as absence would let the next service
+        to start overwrite damaged state and rebind the root to itself, which is
+        precisely what a marker exists to prevent.
+        """
+
+        raw = self._read_authority_marker_bytes()
+        if raw is None:
+            return None
+        try:
+            marker = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise CodingAuthorityConflict(
+                "the coding state root authority marker is unreadable or"
+                " malformed; repair or remove it before starting here",
+            ) from exc
+        if not isinstance(marker, dict):
+            raise CodingAuthorityConflict(
+                "the coding state root authority marker is not an object;"
+                " repair or remove it before starting here",
+            )
+        if (
+            set(marker) != _AUTHORITY_MARKER_FIELDS
+            or marker.get("marker_version") != AUTHORITY_MARKER_VERSION
+            or not isinstance(marker.get("authority"), Mapping)
+        ):
+            raise CodingAuthorityConflict(
+                "the coding state root authority marker does not match its"
+                " schema; repair or remove it before starting here",
+            )
+        return dict(marker["authority"])
+
+    def _read_authority_marker_bytes(self) -> Optional[bytes]:
+        """The marker's exact bytes, read through one descriptor, or `None`.
+
+        Nothing here is opened by pathname twice. An `lstat` followed by a
+        separate open is a check against a *name*, and the name can be replaced
+        between the two - so the file that was inspected and the file that was
+        read need not be the same one. The descriptor is therefore opened once
+        with `O_NOFOLLOW` (a symbolic link is refused rather than followed) and
+        `O_CLOEXEC`, and every subsequent question - is this a regular file, how
+        large is it, what does it contain - is asked of *that* descriptor.
+
+        Absence stays distinct from unsafe. A missing file is `None`; a link, a
+        directory, an oversized body or anything that will not decode is a
+        refusal. The size bound is enforced twice - once from `fstat` and once
+        from the bytes actually read - because a file can grow between them.
+        """
+
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        try:
+            descriptor = os.open(self._authority_marker_path(), flags)
+        except FileNotFoundError:
+            return None
+        except NotADirectoryError:
+            return None
+        except OSError as exc:
+            if getattr(exc, "errno", None) in _NOFOLLOW_ERRNOS:
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is a symbolic link;"
+                    " it is refused rather than followed",
+                ) from exc
+            raise CodingAuthorityUnavailable(
+                "the coding state root authority marker could not be opened",
+            ) from exc
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is not a regular"
+                    " file; it is refused rather than read",
+                )
+            if info.st_size > MAX_AUTHORITY_MARKER_BYTES:
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is larger than"
+                    " {} bytes; repair or remove it".format(
+                        MAX_AUTHORITY_MARKER_BYTES,
+                    ),
+                )
+            chunks: list = []
+            remaining = MAX_AUTHORITY_MARKER_BYTES + 1
+            while remaining > 0:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > MAX_AUTHORITY_MARKER_BYTES:
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is larger than"
+                    " {} bytes; repair or remove it".format(
+                        MAX_AUTHORITY_MARKER_BYTES,
+                    ),
+                )
+        except OSError as exc:
+            raise CodingAuthorityUnavailable(
+                "the coding state root authority marker could not be read",
+            ) from exc
+        finally:
+            os.close(descriptor)
+        return raw
+
+    def _write_authority_marker(self, authority: Mapping[str, Any]) -> None:
+        self._write_json(self._authority_marker_path(), {
+            "marker_version": AUTHORITY_MARKER_VERSION,
+            "authority": dict(authority),
+        })
+
+    def _require_all_jobs_terminal(self) -> None:
+        """Refuse rotation while any job of the old authority is still open."""
+
+        root = self.state_root / "tenants"
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*/jobs/job_*.json")):
+            try:
+                state = str(self._read_json(path).get("state") or "")
+            except (OSError, ValueError) as exc:
+                # An unreadable record is not evidence of a terminal one. It
+                # could be the very job the old authority is still running, so
+                # rotation is refused and the marker left as it stands.
+                raise CodingAuthorityConflict(
+                    "this coding state root holds a job record that cannot be"
+                    " read; rotation needs provably terminal work",
+                ) from exc
+            if state and state not in _TERMINAL_STATE_VALUES:
+                raise CodingAuthorityConflict(
+                    "this coding state root still has open work under another"
+                    " startup authority; close it before rotating",
+                )
+
+    def _bind_startup_authority(
+        self, mine: Mapping[str, Any], *, adopt: bool,
+    ) -> None:
+        """Refuse this state root unless its live work is this authority's.
+
+        Runs while the caller holds the authority lease and the state guard, and
+        - critically - *before* any marker is written, so a start-up that this
+        refuses has changed nothing at all. It also runs before the
+        workspace-claim sweep, before restart reconciliation and before any pump
+        exists, so an incompatible service never touches another authority's
+        claims and never consumes a dispatch attempt.
+
+        Four outcomes:
+
+        * every live record already carries this exact authority, or there are
+          no live records - bind, and carry on;
+        * a live record carries a *different* authority - refuse to start;
+        * a record cannot be read, or names no state - refuse to start, because
+          neither is evidence that it is finished;
+        * a live record predates the fingerprint - handled by
+          :meth:`_settle_unfingerprinted_record`, and only when `adopt` says
+          this caller is the one binding the root.
+        """
+
+        root = self.state_root / "tenants"
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*/jobs/job_*.json")):
+            try:
+                record = self._read_json(path)
+            except (OSError, ValueError) as exc:
+                # An unreadable record is not proof of a terminal one. It may be
+                # open work of another authority, so this fails closed and the
+                # marker is left exactly as it was found.
+                raise CodingAuthorityConflict(
+                    "this coding state root holds a job record that cannot be"
+                    " read; repair or remove it before starting here",
+                ) from exc
+            state = str(record.get("state") or "")
+            if state in _TERMINAL_STATE_VALUES:
+                continue
+            if not state:
+                raise CodingAuthorityConflict(
+                    "this coding state root holds a job record with no state;"
+                    " repair or remove it before starting here",
+                )
+            stored = record.get("execution_authority")
+            if isinstance(stored, Mapping):
+                if set(stored) == set(mine) and all(
+                    stored.get(key) == value for key, value in mine.items()
+                ):
+                    continue
+                raise CodingAuthorityConflict(
+                    "this coding state root has live work under a different"
+                    " startup authority; close it or use its own configuration",
+                )
+            self._settle_unfingerprinted_record(path, record, state, mine, adopt)
+
+    def _settle_unfingerprinted_record(
+        self,
+        path: Path,
+        record: Mapping[str, Any],
+        state: str,
+        mine: Mapping[str, Any],
+        adopt: bool,
+    ) -> None:
+        """Adopt a pre-upgrade record only on proof, and never on absence.
+
+        The first version of this treated an empty `implementation_backend` as
+        proof that no implementer had run. It is not. The backend is recorded on
+        *outcome*, so a record that is `running` or `rework_running` with an
+        empty backend may already have entered a provider and be editing a
+        worktree right now. Stamping this service's authority onto it would
+        retroactively claim a round it never authorized.
+
+        So the three shapes are separated by what each one can actually prove:
+
+        * **Queued, implementer never started.** `implementer_started` is
+          written *before* the call, so `False` here is real evidence that no
+          execution began. Nothing is decided retroactively by adopting it.
+        * **Executing.** Never adopted. If its job lease is *held*, a live
+          worker is running a round whose authority nobody can establish, and
+          this service refuses to start beside it - the earlier version let the
+          two coexist, which is precisely the unattributable-execution case the
+          fingerprint exists to prevent. Nothing is touched: the record, its
+          mission item, its worktree claim and the marker are left exactly as
+          found, and a start-up after that lease is released may settle it. If
+          the lease can be taken, the round is provably over and
+          unattributable, so the job is terminalized under a stable code with
+          its mission item and worktree claim accounted.
+        * **Awaiting audit.** Left exactly as it is. The accept path needs no
+          executing authority - it records a verdict about a revision the host
+          already hashed - so v0 work stays auditable. Rework is where an
+          unknown route policy would be adopted silently, and that is refused at
+          the audit instead of here.
+        """
+
+        job_id = str(record.get("job_id") or "")
+        tenant_ref = path.parent.parent.name
+        if not adopt:
+            # A peer joining a root a live service already bound. Settling
+            # another service's records is not a joiner's business, and a v0
+            # record here means the binding service left one behind.
+            raise CodingAuthorityConflict(
+                "this coding state root has live work whose executing authority"
+                " cannot be established; stop its services before starting here",
+            )
+        if state in _PUMPABLE_JOB_STATES:
+            if record.get("implementer_started") is True:
+                # Queued again after a round already ran: same unprovable
+                # attribution as an executing record.
+                self._terminalize_unbound(path, tenant_ref, job_id, record)
+                return
+            self._update_record_locked(path, execution_authority=dict(mine))
+            return
+        if state == CodingJobState.AWAITING_CODEX_AUDIT.value:
+            # Auditable, deliberately unstamped. `audit` decides.
+            return
+        if state in _EXECUTING_JOB_STATES:
+            if not self._acquire_job_lease(job_id):
+                # A live holder is running a round nobody can attribute. Never
+                # stolen, never stamped - and never started beside, either.
+                raise CodingAuthorityConflict(
+                    "this coding state root has a live round whose executing"
+                    " authority cannot be established; let it finish or stop it"
+                    " before starting here",
+                )
+            try:
+                self._terminalize_unbound(path, tenant_ref, job_id, record)
+            finally:
+                self._release_job_lease(job_id)
+            return
+        raise CodingAuthorityConflict(
+            "this coding state root has live work whose executing authority"
+            " cannot be established; close that work before starting here",
+        )
+
+    def _terminalize_unbound(
+        self,
+        path: Path,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+    ) -> None:
+        """Close one unattributable record, its mission item and its worktree.
+
+        Terminal under a stable machine code, with every piece of accounting the
+        job was holding released together: the resume authority, the worktree
+        claim, and the mission work item, which is reclaimed only when its
+        execution lease can be *proved* free.
+        """
+
+        self._update_record_locked(
+            path,
+            state=CodingJobState.FAILED.value,
+            failure_code=EXECUTION_AUTHORITY_UNBOUND,
+            landable=False,
+        )
+        self._discard_resume(tenant_ref, job_id)
+        self._reclaim_mission_item(path, record)
+        self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
+
+    def _may_execute(self, record: Mapping[str, Any]) -> bool:
+        """Whether this service shares the authority this job was admitted under.
+
+        Fails closed in both directions. An absent or malformed fingerprint is
+        refused rather than assumed compatible, because a record written by an
+        unknown build is exactly the case where "probably fine" is wrong; and a
+        fingerprint that differs anywhere is refused whole, because there is no
+        such thing as partially the same implementer.
+        """
+
+        stored = record.get("execution_authority")
+        if not isinstance(stored, Mapping):
+            return False
+        mine = self._execution_authority()
+        if set(stored) != set(mine):
+            return False
+        return all(stored.get(key) == value for key, value in mine.items())
+
+    def _fail_unrunnable_record(
+        self, tenant_ref: str, job_id: str, code: str,
+    ) -> None:
+        """Terminalize a queued record whose durable round cannot be rebuilt.
+
+        The work item is already accounted for by the caller; this is the other
+        half. A record left `queued` with no work item behind it would poll as
+        pending forever, which is the one outcome a fail-closed service must not
+        produce out of corruption.
+        """
+
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        try:
+            with self._state_guard():
+                if str(self._read_json(path).get("state")) not in _PUMPABLE_JOB_STATES:
+                    return
+                self._update_record_locked(
+                    path,
+                    state=CodingJobState.FAILED.value,
+                    failure_code=code,
+                    landable=False,
+                )
+        except (OSError, ValueError, CodingServiceError):
+            return
+        self._discard_resume(tenant_ref, job_id)
 
     def _reconstruct_request(
         self,
@@ -3040,18 +3832,17 @@ class CodingService:
     # -- round leases ---------------------------------------------------
 
     def _claim_round(self, job_id: str) -> bool:
-        """Own this job's round, inheriting a lease this process already holds.
+        """Take execution authority over one round, or decline to run it.
 
-        Admission takes the lease so nothing else can start the job in between;
-        the round that actually runs it inherits that lease rather than
-        deadlocking against it, and hands it back when the round ends. A lease
-        held by *another* process is never taken, which is what stops two
-        services from running one job.
+        Deliberately not an inherit. The lease now covers execution only, so a
+        queued job holds none and *any* compatible worker can take this: that is
+        what lets the store's chosen worker be the one that runs, instead of the
+        one that happened to admit the job. A lease that is already held means a
+        round really is in flight - in this process or another - and the caller
+        requeues the item untouched rather than running it a second time.
         """
 
         with self._lock:
-            if job_id in self._job_leases:
-                return True
             return self._acquire_job_lease(job_id)
 
     def _release_round(self, job_id: str) -> None:
@@ -4551,7 +5342,12 @@ class CodingService:
         A graceful shutdown changes only the lifecycle and the update time. It
         must not erase which job ran, where it stopped, or whether the
         implementer started — that is exactly what a later reader needs.
+
+        Silent when the publisher was never built: a constructor refused at the
+        authority lease still tears down through here.
         """
+        if self._status is None:
+            return
         with self._lock:
             last = dict(self._last_status_record)
         self._publish_status(last, lifecycle="closed")
@@ -4565,7 +5361,13 @@ class CodingService:
         bounded facts cross into the status file: the task message, error text,
         workspace path, and file list stay in the per-job record, which remains
         the single source of authority.
+
+        Silent before the publisher exists, so a start-up refused at the
+        authority lease reports its own refusal rather than an attribute error
+        raised while tearing itself down.
         """
+        if self._status is None:
+            return
         lane, action = route_progress(record)
         try:
             status = CodingRouteStatus(
@@ -5575,7 +6377,18 @@ class CodingService:
                     # An awaiting-audit job survives a restart; in-flight work
                     # does not, but another live MCP process may still own its
                     # job lease.
-                    if record.get("state") in _INTERRUPTED_JOB_STATES:
+                    if record.get("state") in _PUMPABLE_JOB_STATES:
+                        # Queued work is not interrupted work. Everything a
+                        # round needs - the record, the resume envelope, the
+                        # round envelope, the placed work item - is durable, so
+                        # a start-up finds a job waiting for a worker, not a
+                        # casualty. Failing it here is what made "the submitter
+                        # exited" indistinguishable from "the round died", and
+                        # it threw away work nobody had begun.
+                        if self._may_execute(record):
+                            self._reclaimed += 1
+                        continue
+                    if record.get("state") in _EXECUTING_JOB_STATES:
                         job_id = str(record.get("job_id") or "")
                         if not self._acquire_job_lease(job_id):
                             continue
@@ -5607,10 +6420,12 @@ class CodingService:
         # may still be pending.
         self._sweep_workspace_claims()
         self._reconcile_continuation_claims()
-        # One pump per item this pass returned to the queue, so a restart's
-        # accounting happens through the ordinary store-ordered route rather
-        # than through a second, privileged path that could close work the
-        # scheduler still believes is running.
+        # One pump per item this pass left runnable: work it returned to the
+        # queue by proving a lease free, and work that was simply still queued
+        # when its submitter exited. Both go back through the ordinary
+        # store-ordered route rather than through a second, privileged path -
+        # the restart's accounting and the survivor's execution are the same
+        # mechanism, so neither can close work the scheduler believes is live.
         for _ in range(self._reclaimed):
             self._prime_pump()
         self._reclaimed = 0

@@ -43,7 +43,7 @@ def test_agent_ollama_no_api_key_error():
 @pytest.mark.asyncio
 async def test_ollama_chat_no_api_key_error(monkeypatch):
     """chat() with ollama provider doesn't return no_api_key error."""
-    config = AgentConfig(provider="ollama")
+    config = AgentConfig(provider="ollama", enable_memory=False)
     agent = Agent(config=config)
 
     # Mock provider to avoid real LLM call

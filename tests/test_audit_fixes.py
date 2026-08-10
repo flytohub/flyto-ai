@@ -168,7 +168,7 @@ class TestAgentRealPaths:
 
     def test_no_api_key_returns_error(self):
         """agent.chat() returns error when no API key — tests real code path."""
-        config = AgentConfig(provider="openai", api_key="")
+        config = AgentConfig(provider="openai", api_key="", enable_memory=False)
         agent = Agent(config=config)
         loop = asyncio.new_event_loop()
         try:

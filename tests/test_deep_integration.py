@@ -18,7 +18,12 @@ from flyto_ai.tools.core_tools import (
 # ---------------------------------------------------------------------------
 
 def _agent(monkeypatch, mock_chat_fn, *, provider="ollama"):
-    config = AgentConfig(provider=provider, api_key="test", enable_deterministic=False)
+    config = AgentConfig(
+        provider=provider,
+        api_key="test",
+        enable_deterministic=False,
+        enable_memory=False,
+    )
     agent = Agent(config=config)
     agent._tools = [
         {"name": "execute_module", "description": "run", "inputSchema": {}},
@@ -307,7 +312,7 @@ def test_09_error_classification_edge_cases():
 async def test_10_agent_lifecycle_cross_provider(monkeypatch):
     """Non-ollama without key → error; ollama → OK; streaming through both."""
     # Part A: no key → error
-    config_no_key = AgentConfig(provider="openai", api_key="")
+    config_no_key = AgentConfig(provider="openai", api_key="", enable_memory=False)
     agent_no_key = Agent(config=config_no_key)
     result_err = await agent_no_key.chat("hello")
     assert not result_err.ok
@@ -323,7 +328,7 @@ async def test_10_agent_lifecycle_cross_provider(monkeypatch):
             on_stream(StreamEvent(type=StreamEventType.DONE))
         return "Hi from Ollama!", [], 1, {}
 
-    config_ok = AgentConfig(provider="ollama", api_key="ollama")
+    config_ok = AgentConfig(provider="ollama", api_key="ollama", enable_memory=False)
     agent_ok = Agent(config=config_ok)
     agent_ok._tools = []
     agent_ok._dispatch_fn = None

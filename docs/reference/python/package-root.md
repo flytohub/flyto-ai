@@ -946,84 +946,84 @@ Build the strict host-owned route both public commands always enable.
 ### `_default_coding_backend` (internal)
 
 `_default_coding_backend()`
-Source: [`flyto_ai/cli.py:510`](../../../flyto_ai/cli.py#L510)
+Source: [`flyto_ai/cli.py:511`](../../../flyto_ai/cli.py#L511)
 
 Read the optional bounded environment default for the implementer.
 
 ### `_build_claude_agent_factory` (internal)
 
 `_build_claude_agent_factory(args)`
-Source: [`flyto_ai/cli.py:524`](../../../flyto_ai/cli.py#L524)
+Source: [`flyto_ai/cli.py:525`](../../../flyto_ai/cli.py#L525)
 
 Bind one startup Claude configuration reused read-only by every job.
 
 ### `_create_native_coding_provider` (internal)
 
 `_create_native_coding_provider(args)`
-Source: [`flyto_ai/cli.py:546`](../../../flyto_ai/cli.py#L546)
+Source: [`flyto_ai/cli.py:547`](../../../flyto_ai/cli.py#L547)
 
 Build one normal Flyto2 provider; service secrets come from env only.
 
 ### `_build_coding_service` (internal)
 
 `_build_coding_service(args)`
-Source: [`flyto_ai/cli.py:580`](../../../flyto_ai/cli.py#L580)
+Source: [`flyto_ai/cli.py:581`](../../../flyto_ai/cli.py#L581)
 
 Create the optional service with all authority fixed at startup.
 
 ### `_build_emergency_policy` (internal)
 
 `_build_emergency_policy(args, backend)`
-Source: [`flyto_ai/cli.py:629`](../../../flyto_ai/cli.py#L629)
+Source: [`flyto_ai/cli.py:630`](../../../flyto_ai/cli.py#L630)
 
 Build the startup-only emergency overflow authority, or none at all.
 
 ### `_cmd_code_serve` (internal)
 
 `_cmd_code_serve(args)`
-Source: [`flyto_ai/cli.py:654`](../../../flyto_ai/cli.py#L654)
+Source: [`flyto_ai/cli.py:655`](../../../flyto_ai/cli.py#L655)
 
 Run the authenticated loopback HTTP coding facade.
 
 ### `_cmd_code_mcp` (internal)
 
 `_cmd_code_mcp(args)`
-Source: [`flyto_ai/cli.py:693`](../../../flyto_ai/cli.py#L693)
+Source: [`flyto_ai/cli.py:694`](../../../flyto_ai/cli.py#L694)
 
 Run the tenant-bound coding MCP stdio facade.
 
 ### `_cmd_code_mcp_supervisor` (internal)
 
 `_cmd_code_mcp_supervisor(args)`
-Source: [`flyto_ai/cli.py:708`](../../../flyto_ai/cli.py#L708)
+Source: [`flyto_ai/cli.py:709`](../../../flyto_ai/cli.py#L709)
 
 Keep client stdio stable while replacing stale coding workers.
 
 ### `_cmd_code_status` (internal)
 
 `_cmd_code_status(args)`
-Source: [`flyto_ai/cli.py:717`](../../../flyto_ai/cli.py#L717)
+Source: [`flyto_ai/cli.py:718`](../../../flyto_ai/cli.py#L718)
 
 Report the bounded runtime status of coding service instances.
 
 ### `_cmd_code_release` (internal)
 
 `_cmd_code_release(args)`
-Source: [`flyto_ai/cli.py:769`](../../../flyto_ai/cli.py#L769)
+Source: [`flyto_ai/cli.py:770`](../../../flyto_ai/cli.py#L770)
 
 Release a worktree an audit never closed, on explicit host authority.
 
 ### `_cmd_code_claude_sdk` (internal)
 
 `_cmd_code_claude_sdk(args)`
-Source: [`flyto_ai/cli.py:829`](../../../flyto_ai/cli.py#L829)
+Source: [`flyto_ai/cli.py:830`](../../../flyto_ai/cli.py#L830)
 
 Run the explicitly selected legacy Claude SDK compatibility backend.
 
 ### `_print_markdown` (internal)
 
 `_print_markdown(text: str) -> None`
-Source: [`flyto_ai/cli.py:954`](../../../flyto_ai/cli.py#L954)
+Source: [`flyto_ai/cli.py:955`](../../../flyto_ai/cli.py#L955)
 
 Render markdown with rich if available, otherwise plain print.
 
@@ -1031,160 +1031,160 @@ Render markdown with rich if available, otherwise plain print.
 
 `class _RateLimiter`
 
-Source: [`flyto_ai/cli.py:975`](../../../flyto_ai/cli.py#L975)
+Source: [`flyto_ai/cli.py:976`](../../../flyto_ai/cli.py#L976)
 
 Token bucket rate limiter per IP with periodic cleanup.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__()` | internal | Internal `__init__` implementation on `_RateLimiter`; the linked source is authoritative. | [`flyto_ai/cli.py:978`](../../../flyto_ai/cli.py#L978) |
-| `check(ip: str) -> bool` | public | Public `check` implementation on `_RateLimiter`; the linked source is authoritative. | [`flyto_ai/cli.py:981`](../../../flyto_ai/cli.py#L981) |
-| `cleanup()` | public | Remove stale entries to prevent memory leak. | [`flyto_ai/cli.py:996`](../../../flyto_ai/cli.py#L996) |
+| `__init__()` | internal | Internal `__init__` implementation on `_RateLimiter`; the linked source is authoritative. | [`flyto_ai/cli.py:979`](../../../flyto_ai/cli.py#L979) |
+| `check(ip: str) -> bool` | public | Public `check` implementation on `_RateLimiter`; the linked source is authoritative. | [`flyto_ai/cli.py:982`](../../../flyto_ai/cli.py#L982) |
+| `cleanup()` | public | Remove stale entries to prevent memory leak. | [`flyto_ai/cli.py:997`](../../../flyto_ai/cli.py#L997) |
 
 ### `_check_server_auth` (internal)
 
 `_check_server_auth(auth_header: str) -> bool`
-Source: [`flyto_ai/cli.py:1014`](../../../flyto_ai/cli.py#L1014)
+Source: [`flyto_ai/cli.py:1015`](../../../flyto_ai/cli.py#L1015)
 
 Check Bearer token against FLYTO_AI_SERVER_KEY.
 
 ### `_get_cors_origin` (internal)
 
 `_get_cors_origin(request_origin: str) -> str`
-Source: [`flyto_ai/cli.py:1025`](../../../flyto_ai/cli.py#L1025)
+Source: [`flyto_ai/cli.py:1026`](../../../flyto_ai/cli.py#L1026)
 
 Return allowed CORS origin.
 
 ### `_term_width` (internal)
 
 `_term_width()`
-Source: [`flyto_ai/cli.py:1043`](../../../flyto_ai/cli.py#L1043)
+Source: [`flyto_ai/cli.py:1044`](../../../flyto_ai/cli.py#L1044)
 
 Internal `_term_width` implementation on this module; the linked source is authoritative.
 
 ### `_cmd_version` (internal)
 
 `_cmd_version()`
-Source: [`flyto_ai/cli.py:1047`](../../../flyto_ai/cli.py#L1047)
+Source: [`flyto_ai/cli.py:1048`](../../../flyto_ai/cli.py#L1048)
 
 Internal `_cmd_version` implementation on this module; the linked source is authoritative.
 
 ### `_get_pkg_version` (internal)
 
 `_get_pkg_version(pkg_name)`
-Source: [`flyto_ai/cli.py:1086`](../../../flyto_ai/cli.py#L1086)
+Source: [`flyto_ai/cli.py:1087`](../../../flyto_ai/cli.py#L1087)
 
 Get package version from importlib.metadata.
 
 ### `_cmd_blueprints` (internal)
 
 `_cmd_blueprints(args)`
-Source: [`flyto_ai/cli.py:1095`](../../../flyto_ai/cli.py#L1095)
+Source: [`flyto_ai/cli.py:1096`](../../../flyto_ai/cli.py#L1096)
 
 Internal `_cmd_blueprints` implementation on this module; the linked source is authoritative.
 
 ### `_export_blueprints` (internal)
 
 `_export_blueprints(blueprints)`
-Source: [`flyto_ai/cli.py:1154`](../../../flyto_ai/cli.py#L1154)
+Source: [`flyto_ai/cli.py:1155`](../../../flyto_ai/cli.py#L1155)
 
 Export learned blueprints as YAML to stdout.
 
 ### `_cmd_prompt_lab` (internal)
 
 `_cmd_prompt_lab(args)`
-Source: [`flyto_ai/cli.py:1182`](../../../flyto_ai/cli.py#L1182)
+Source: [`flyto_ai/cli.py:1183`](../../../flyto_ai/cli.py#L1183)
 
 Prompt evolution system — eval, evolve, report, cases.
 
 ### `_prompt_lab_eval` (internal)
 
 `_prompt_lab_eval(args)`
-Source: [`flyto_ai/cli.py:1207`](../../../flyto_ai/cli.py#L1207)
+Source: [`flyto_ai/cli.py:1208`](../../../flyto_ai/cli.py#L1208)
 
 Run eval on current baseline prompt (rule-based, no API key needed).
 
 ### `_prompt_lab_evolve` (internal)
 
 `_prompt_lab_evolve(args)`
-Source: [`flyto_ai/cli.py:1277`](../../../flyto_ai/cli.py#L1277)
+Source: [`flyto_ai/cli.py:1278`](../../../flyto_ai/cli.py#L1278)
 
 Run the evolution loop.
 
 ### `_prompt_lab_cases` (internal)
 
 `_prompt_lab_cases(args)`
-Source: [`flyto_ai/cli.py:1334`](../../../flyto_ai/cli.py#L1334)
+Source: [`flyto_ai/cli.py:1335`](../../../flyto_ai/cli.py#L1335)
 
 List all eval test cases.
 
 ### `_prompt_lab_report` (internal)
 
 `_prompt_lab_report(args)`
-Source: [`flyto_ai/cli.py:1357`](../../../flyto_ai/cli.py#L1357)
+Source: [`flyto_ai/cli.py:1358`](../../../flyto_ai/cli.py#L1358)
 
 Show the latest evolution report.
 
 ### `_cmd_mcp` (internal)
 
 `_cmd_mcp()`
-Source: [`flyto_ai/cli.py:1383`](../../../flyto_ai/cli.py#L1383)
+Source: [`flyto_ai/cli.py:1384`](../../../flyto_ai/cli.py#L1384)
 
 Start MCP server (JSON-RPC 2.0 over STDIO).
 
 ### `_handle_memory_cmd` (internal)
 
 `_handle_memory_cmd(subcmd, args_list, agent, loop)`
-Source: [`flyto_ai/cli.py:1389`](../../../flyto_ai/cli.py#L1389)
+Source: [`flyto_ai/cli.py:1390`](../../../flyto_ai/cli.py#L1390)
 
 Handle /memory subcommands: list, search <query>, clear.
 
 ### `_cmd_interactive` (internal)
 
 `_cmd_interactive(args)`
-Source: [`flyto_ai/cli.py:1436`](../../../flyto_ai/cli.py#L1436)
+Source: [`flyto_ai/cli.py:1437`](../../../flyto_ai/cli.py#L1437)
 
 Interactive chat REPL — like Claude Code but for automation workflows.
 
 ### `_cmd_pipe` (internal)
 
 `_cmd_pipe(args)`
-Source: [`flyto_ai/cli.py:1727`](../../../flyto_ai/cli.py#L1727)
+Source: [`flyto_ai/cli.py:1728`](../../../flyto_ai/cli.py#L1728)
 
 Handle piped stdin: echo "scrape example.com" | flyto-ai.
 
 ### `_cmd_chat` (internal)
 
 `_cmd_chat(args)`
-Source: [`flyto_ai/cli.py:1746`](../../../flyto_ai/cli.py#L1746)
+Source: [`flyto_ai/cli.py:1747`](../../../flyto_ai/cli.py#L1747)
 
 Internal `_cmd_chat` implementation on this module; the linked source is authoritative.
 
 ### `_post_webhook` (internal)
 
 `_post_webhook(url, result)`
-Source: [`flyto_ai/cli.py:1812`](../../../flyto_ai/cli.py#L1812)
+Source: [`flyto_ai/cli.py:1813`](../../../flyto_ai/cli.py#L1813)
 
 POST chat result to a webhook URL (user-specified, not SSRF-protected).
 
 ### `_cmd_serve` (internal)
 
 `_cmd_serve(args)`
-Source: [`flyto_ai/cli.py:1823`](../../../flyto_ai/cli.py#L1823)
+Source: [`flyto_ai/cli.py:1824`](../../../flyto_ai/cli.py#L1824)
 
 Start HTTP server.
 
 ### `_cmd_serve_aiohttp` (internal)
 
 `_cmd_serve_aiohttp(args)`
-Source: [`flyto_ai/cli.py:1832`](../../../flyto_ai/cli.py#L1832)
+Source: [`flyto_ai/cli.py:1833`](../../../flyto_ai/cli.py#L1833)
 
 Async HTTP server using aiohttp — native async, supports concurrent requests.
 
 ### `_cmd_serve_stdlib` (internal)
 
 `_cmd_serve_stdlib(args)`
-Source: [`flyto_ai/cli.py:2063`](../../../flyto_ai/cli.py#L2063)
+Source: [`flyto_ai/cli.py:2064`](../../../flyto_ai/cli.py#L2064)
 
 Synchronous HTTP server using stdlib — fallback when aiohttp not installed.
 
@@ -1192,19 +1192,19 @@ Synchronous HTTP server using stdlib — fallback when aiohttp not installed.
 
 `class Handler(BaseHTTPRequestHandler)`
 
-Source: [`flyto_ai/cli.py:2093`](../../../flyto_ai/cli.py#L2093)
+Source: [`flyto_ai/cli.py:2094`](../../../flyto_ai/cli.py#L2094)
 
 Public `Handler` implementation on this module; the linked source is authoritative.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `do_POST()` | public | Public `do_POST` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2094`](../../../flyto_ai/cli.py#L2094) |
-| `_handle_stream(req, body, history_dicts)` | internal | Internal `_handle_stream` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2149`](../../../flyto_ai/cli.py#L2149) |
-| `do_GET()` | public | Public `do_GET` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2190`](../../../flyto_ai/cli.py#L2190) |
-| `do_OPTIONS()` | public | Public `do_OPTIONS` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2198`](../../../flyto_ai/cli.py#L2198) |
-| `_json_response(code, data)` | internal | Internal `_json_response` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2208`](../../../flyto_ai/cli.py#L2208) |
-| `_html_response(html)` | internal | Internal `_html_response` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2219`](../../../flyto_ai/cli.py#L2219) |
-| `log_message(fmt, *a)` | public | Public `log_message` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2227`](../../../flyto_ai/cli.py#L2227) |
+| `do_POST()` | public | Public `do_POST` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2095`](../../../flyto_ai/cli.py#L2095) |
+| `_handle_stream(req, body, history_dicts)` | internal | Internal `_handle_stream` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2150`](../../../flyto_ai/cli.py#L2150) |
+| `do_GET()` | public | Public `do_GET` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2191`](../../../flyto_ai/cli.py#L2191) |
+| `do_OPTIONS()` | public | Public `do_OPTIONS` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2199`](../../../flyto_ai/cli.py#L2199) |
+| `_json_response(code, data)` | internal | Internal `_json_response` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2209`](../../../flyto_ai/cli.py#L2209) |
+| `_html_response(html)` | internal | Internal `_html_response` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2220`](../../../flyto_ai/cli.py#L2220) |
+| `log_message(fmt, *a)` | public | Public `log_message` implementation on `Handler`; the linked source is authoritative. | [`flyto_ai/cli.py:2228`](../../../flyto_ai/cli.py#L2228) |
 
 ## `flyto_ai.closed_loop_mcp`
 

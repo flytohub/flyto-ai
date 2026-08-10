@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The mandatory Indexer lane now uses one shared 60-second transport bound in
+  both the agent-stack preset and the public `code-mcp` / `code-serve` route.
+  Large-workspace strict verification can finish instead of being killed by a
+  CLI-only 30-second deadline; every gate remains mandatory and genuine
+  timeouts still fail closed as `capability_timeout`.
+- Blueprint discovery now ranks ordered phrase overlap before catalogue order,
+  so direction-bearing reuse such as CSV-to-JSON no longer selects the reverse
+  JSON-to-CSV transform when both candidates share the same token set.
+
 - One worktree is now owned by one audited coding job for the whole job, not
   for one implementation round. Previously the cross-process workspace lock was
   released when a round finished, so between `awaiting_codex_audit` and the

@@ -426,6 +426,7 @@ def _build_coding_route_policy(args):
 
     from flyto_ai.coding import CapabilitySpec
     from flyto_ai.coding.route import CodingRoutePolicy
+    from flyto_ai.coding.stack_presets import INDEXER_CAPABILITY_TIMEOUT_SECONDS
 
     def argv_for(value, fallback):
         if not value:
@@ -477,7 +478,7 @@ def _build_coding_route_policy(args):
             ("search", "read_only"), ("structure", "read_only"),
             ("task", "workspace_write"), ("verify", "workspace_write"),
         ),
-        timeout_seconds=30,
+        timeout_seconds=INDEXER_CAPABILITY_TIMEOUT_SECONDS,
     )
     # The strict public route always attaches read-only Blueprint discovery
     # through the supported boundary. An override may replace the command; it

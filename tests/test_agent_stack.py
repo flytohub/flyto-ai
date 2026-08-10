@@ -30,6 +30,7 @@ from flyto_ai.coding.stack_manifest import (
     load_agent_stack_manifest as manifest_load_agent_stack_manifest,
 )
 from flyto_ai.coding.stack_presets import (
+    INDEXER_CAPABILITY_TIMEOUT_SECONDS,
     build_agent_stack_capabilities as preset_build_agent_stack_capabilities,
 )
 from flyto_ai.coding.stack_probe import (
@@ -57,6 +58,9 @@ def test_full_stack_is_split_into_least_privilege_components():
     assert "inspect_page" not in by_name["flyto-core"].allowed_tools
     assert by_name["flyto-indexer"].argv == (
         "python", "-m", "flyto_indexer.mcp_server",
+    )
+    assert by_name["flyto-indexer"].timeout_seconds == (
+        INDEXER_CAPABILITY_TIMEOUT_SECONDS
     )
     assert by_name["flyto-core"].argv == ("python", "-m", "core.mcp_server")
 

@@ -799,6 +799,32 @@ def test_blueprint_projection_is_sanitized_untrusted_metadata(tmp_path):
     assert "login-refactor" in projection
 
 
+def test_blueprint_prefers_directional_phrase_overlap_over_catalogue_order(tmp_path):
+    blueprint = BlueprintDouble(blueprints=[
+        {
+            "name": "ConvertJSONtoCSV",
+            "description": "Convert JSON data to CSV output",
+            "tags": ["convert", "json", "csv"],
+        },
+        {
+            "name": "ConvertCSVtoJSON",
+            "description": "Convert CSV data to JSON output",
+            "tags": ["convert", "csv", "json"],
+        },
+    ])
+    implement = Implementer()
+
+    _, receipt = _run(
+        _policy(), RouteDouble(IndexerDouble(), blueprint),
+        _request(tmp_path, "convert a CSV file to JSON output"), implement,
+    )
+
+    entry = {item.lane: item for item in receipt.lanes}["blueprint"]
+    assert entry.status is RouteLaneStatus.APPLIED
+    assert "ConvertCSVtoJSON" in implement.projections[0]
+    assert "ConvertJSONtoCSV" not in implement.projections[0]
+
+
 def test_blueprint_lane_cannot_be_silently_detached_in_strict_mode(tmp_path):
     # Strict routes attach Blueprint at startup; a configured lane that cannot
     # negotiate fails closed rather than quietly skipping.
@@ -1735,9 +1761,14 @@ def test_route_capability_processes_and_executors_close_cleanly(tmp_path):
 
 # ── real installed Indexer process ────────────────────────────────────
 
-REAL_INDEXER_ROOT = Path("/Users/chester/flytohub/flyto-indexer")
+REAL_INDEXER_ROOT = Path(__file__).resolve().parents[2] / "flyto-indexer"
+INDEXER_RUNTIME_SUPPORTED = sys.version_info >= (3, 11)
 
 
+@pytest.mark.skipif(
+    not INDEXER_RUNTIME_SUPPORTED,
+    reason="flyto-indexer requires Python 3.11 or newer",
+)
 def test_real_installed_indexer_negotiates_the_allowlisted_public_surface():
     """The production server must actually publish the tools we allowlist."""
     import subprocess
@@ -1876,9 +1907,13 @@ def test_leading_json_is_decoded_when_the_server_appends_prose(tmp_path):
 
 # ── live route against the real installed runtime ─────────────────────
 
-VENV_PYTHON = Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"
+RUNTIME_PYTHON = Path(sys.executable)
 
 
+@pytest.mark.skipif(
+    not INDEXER_RUNTIME_SUPPORTED,
+    reason="flyto-indexer requires Python 3.11 or newer",
+)
 def test_the_real_indexer_answers_a_project_scoped_search_inside_its_bound():
     """The reproduced incident, regressed against the installed server.
 
@@ -1891,11 +1926,11 @@ def test_the_real_indexer_answers_a_project_scoped_search_inside_its_bound():
     from flyto_ai.coding.capabilities import CapabilityManager
     from flyto_ai.coding.route import CodingRouteOrchestrator
 
-    if not VENV_PYTHON.exists():
-        pytest.skip("the project .venv interpreter is required for the live regression")
+    if not RUNTIME_PYTHON.exists():
+        pytest.skip("the active Python interpreter is required for the live regression")
     repository = Path(__file__).resolve().parents[1]
     spec = _indexer_spec(
-        argv=(str(VENV_PYTHON), "-m", "flyto_indexer.mcp_server"),
+        argv=(str(RUNTIME_PYTHON), "-m", "flyto_indexer.mcp_server"),
         timeout_seconds=30,
     )
     project = repository.name
@@ -2026,7 +2061,7 @@ def _live_workspace(root: Path) -> Path:
          "commit", "-q", "-m", "initial"], cwd=str(ws), check=True,
     )
     subprocess.run(
-        [str(VENV_PYTHON), "-m", "flyto_indexer.cli", "scan", str(ws), "--full"],
+        [str(RUNTIME_PYTHON), "-m", "flyto_indexer.cli", "scan", str(ws), "--full"],
         capture_output=True, text=True, timeout=600, check=True,
     )
     return ws
@@ -2056,14 +2091,18 @@ class LiveImplementer(ServiceImplementer):
         )
 
 
+@pytest.mark.skipif(
+    not INDEXER_RUNTIME_SUPPORTED,
+    reason="flyto-indexer requires Python 3.11 or newer",
+)
 def test_live_public_route_reaches_awaiting_audit_and_accepts(tmp_path):
-    """The real .venv Indexer, real Blueprint, and Core adapter, end to end."""
+    """The active Indexer, real Blueprint, and Core adapter, end to end."""
     from argparse import Namespace
 
     import flyto_ai.cli as cli
     from flyto_ai.coding.contracts import CodingAuditVerdict
 
-    assert VENV_PYTHON.exists(), "the project .venv interpreter is required"
+    assert RUNTIME_PYTHON.exists(), "the active Python interpreter is required"
     workspace = _live_workspace(tmp_path)
     box = {}
 
@@ -2084,8 +2123,8 @@ def test_live_public_route_reaches_awaiting_audit_and_accepts(tmp_path):
             sandbox="workspace-write", sandbox_image="python:3.12-slim",
             max_workers=1, max_queued=4, implementation_backend="native",
             max_rework_rounds=3,
-            indexer_command="{} -m flyto_indexer.mcp_server".format(VENV_PYTHON),
-            blueprint_command="{} -m flyto_ai.mcp_server".format(VENV_PYTHON),
+            indexer_command="{} -m flyto_indexer.mcp_server".format(RUNTIME_PYTHON),
+            blueprint_command="{} -m flyto_ai.mcp_server".format(RUNTIME_PYTHON),
         ))
     finally:
         cli._create_native_coding_provider = original
@@ -2584,6 +2623,20 @@ def test_public_cli_policy_marks_blueprint_required(tmp_path):
     assert policy.indexer.required is True
     assert policy.blueprint is not None and policy.blueprint.required is True
     assert policy.core_enabled is True
+
+
+def test_public_cli_policy_uses_the_canonical_indexer_timeout():
+    from argparse import Namespace
+
+    import flyto_ai.cli as cli
+    from flyto_ai.coding.stack_presets import INDEXER_CAPABILITY_TIMEOUT_SECONDS
+
+    policy = cli._build_coding_route_policy(Namespace(
+        indexer_command=None, blueprint_command=None,
+    ))
+
+    assert INDEXER_CAPABILITY_TIMEOUT_SECONDS == 60
+    assert policy.indexer.timeout_seconds == INDEXER_CAPABILITY_TIMEOUT_SECONDS
 
 
 def test_public_cli_policy_prefers_the_workspace_indexer_checkout(tmp_path):

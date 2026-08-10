@@ -282,13 +282,16 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
 
 Every host-owned Indexer search in this chain is scoped to the workspace
 project. An unscoped smart search fans out across every indexed project and
-exceeded the 30-second capability bound, failing the mandatory pre-work lane
-before any implementer could start. Lane evidence also survives a partial
-lane: a failed lane receipt keeps every completed call plus one failed call
-naming the exact host-derived action (`structure`, `search`, `task.plan`,
-`task.gate.<phase>`, `task.validate`, `verify.strict`), and a transport
-timeout is classified `capability_timeout` instead of collapsing into
-`domain_failure`.
+can fail the mandatory pre-work lane before any implementer starts. The
+Indexer capability has one shared 60-second transport bound across the stack
+preset and the public `code-mcp` / `code-serve` route. This accommodates a
+legitimate full strict verification or reindex on a large workspace without
+weakening any gate, call-count bound, or fail-closed result. Lane evidence also
+survives a partial lane: a failed lane receipt keeps every completed call plus
+one failed call naming the exact host-derived action (`structure`, `search`,
+`task.plan`, `task.gate.<phase>`, `task.validate`, `verify.strict`), and a
+transport timeout is classified `capability_timeout` instead of collapsing
+into `domain_failure`.
 
 Optional emergency overflow (`flyto.coding-emergency.v1`, startup-only):
 
@@ -342,7 +345,10 @@ command lane; a green check does not substitute for the Indexer post-gate.
 Core validation flows through `flyto_ai.tools.core_tools` with a
 validation-only allowlist that excludes `execute_module` and browser
 authority. Blueprint is read-only discovery that yields a compact
-content-addressed projection, never an executed workflow.
+content-addressed projection, never an executed workflow. Candidate selection
+is bounded and deterministic: real token overlap is required, ordered phrase
+overlap ranks direction-bearing matches above reverse transforms, and catalogue
+order is only the final tie-break.
 
 Provider selection, credentials, tenant identity, workspace roots, the state
 root, the implementer, the rework ceiling, and the audit requirement are all

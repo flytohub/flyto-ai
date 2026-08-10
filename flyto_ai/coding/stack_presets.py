@@ -16,6 +16,11 @@ DEFAULT_COMPONENTS = (
     "flyto-core",
 )
 
+# Strict verification can rebuild a large workspace index and legitimately run
+# longer than the interactive MCP default. Keep every host-owned Indexer entry
+# on one bound so the public CLI cannot silently drift from the stack preset.
+INDEXER_CAPABILITY_TIMEOUT_SECONDS = 60
+
 
 def _preset_factories(python: str, required: set[str]) -> Dict[str, CapabilitySpec]:
     """Build the complete preset catalog before applying caller selection."""
@@ -35,7 +40,7 @@ def _preset_factories(python: str, required: set[str]) -> Dict[str, CapabilitySp
                 ("task", "workspace_write"),
                 ("verify", "workspace_write"),
             ),
-            timeout_seconds=30,
+            timeout_seconds=INDEXER_CAPABILITY_TIMEOUT_SECONDS,
         ),
         "flyto-blueprint": CapabilitySpec(
             name="flyto-blueprint",

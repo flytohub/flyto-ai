@@ -15,6 +15,75 @@ Claude SDK required by the complete route suite. We do not emulate the missing
 primitive with temporary files, monkeypatches, or a weaker continuation path;
 unsupported hosts remain outside the contract and fail closed.
 
+## 2026-08-10: One semantic startup authority owns an active coding state root
+
+A coding state root is bound by a durable authority lease, not by inference from
+its job records. Every compatible live service holds a shared `flock` on
+`<state_root>/.authority.lock`; a newcomer must win the exclusive lock before it
+may write the bounded, secret-free marker in `<state_root>/authority.json`.
+Rotation requires both that no old service is alive and that every job is
+terminal. An incompatible service fails construction before status
+reconciliation, the workspace-claim sweep, or any pump.
+
+Reason: scanning job records could not establish this. An empty root has no
+records, so two incompatible services both constructed, and whichever admitted
+work first left the other one running and able to submit and pump against an
+authority it did not share. Only a live durable holder makes the claim true.
+Refusal at construction also converts "an incompatible worker does not burn
+dispatch attempts" from a per-pump budget into an invariant: a service that
+never starts is never offered an item.
+
+Liveness is `flock`, never a TTL. A crashed service releases its share when the
+kernel closes its descriptor; a paused one is never declared dead.
+
+The fingerprint is a recursive canonical digest of the whole validated startup
+policy, including nested Indexer, Blueprint, Core and `RouteLimits` semantics
+and every configured string exactly as written. Capability argv and executable
+paths are hashed rather than normalized: a state root and its `flock` are
+host-local, so two services sharing one are on the same machine, and folding
+`/opt/indexer-v1` and `/opt/indexer-v2` together would let two lanes that run
+different binaries share a root. Only the digest is persisted, so hashing exact
+strings publishes nothing. The fingerprint
+deliberately excludes `build_id` - a hot reload changes that without
+changing what would execute, and binding to it would strand a queued job a
+semantically identical worker could run. Build identity is still enforced at
+admission.
+
+Every check runs before any write. Marker validation, active-job validation and
+pre-fingerprint settlement all happen under the state guard while the caller
+holds the exclusive lock, and the marker is written last. A refused start-up
+leaves a present marker byte-identical and never creates a missing one; writing
+first let a stranger replace a lost marker, fail on an open job, and lock out
+the correct worker. Malformed, unparseable, non-regular and symlinked markers
+are refusals rather than absences, and unreadable or state-less job records
+refuse both start-up and rotation - neither is evidence that a job finished.
+
+Records predating the fingerprint are adopted only on proof. Queued work with
+`implementer_started` false is migrated and runs normally: that flag is written
+before the provider call, so it is real evidence no execution began. An empty
+`implementation_backend` is *not* such evidence - it is recorded on outcome - so
+an executing v0 record is never adopted; if its job lease is held the service
+refuses to start beside a round nobody can attribute, and once the lease is
+provably free the job is terminalized as `execution_authority_unbound` with its
+mission item and worktree claim accounted. Only an unfingerprinted
+*awaiting-audit* job is accept-but-not-rework, because a verdict describes a
+revision the host already hashed while a new round would adopt an unproven route
+policy.
+
+Where the host has no inter-process lock, construction fails with
+`CodingAuthorityUnavailable` (`execution_authority_unavailable`) rather than
+degrading to a no-op. A service that cannot tell whether another one is alive
+cannot claim this isolation, and claiming it falsely is worse than declining the
+host.
+
+Operator semantics: `CodingAuthorityConflict` (`execution_authority_conflict`)
+and `CodingAuthorityUnavailable` are raised at construction and are not
+retryable. Resolve a conflict by stopping the services of the other authority
+and closing their open jobs, or by starting with that authority's own
+configuration; repair or remove a damaged marker or job record deliberately,
+because the service will not overwrite either. Rollback is to revert this
+change; the marker and lock file are inert to older builds, which ignore both.
+
 ## 2026-08-10: `require_changes` is cumulative across audited rework
 
 `require_changes=true` requires one real attributable job revision; it does not

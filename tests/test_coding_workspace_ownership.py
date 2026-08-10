@@ -17,8 +17,10 @@ import pytest
 from flyto_ai.coding.contracts import CodingAuditVerdict, CodingJobState
 from flyto_ai.coding.mcp_server import CodingMCPServer
 from flyto_ai.coding.service import (
+    AUTHORITY_MARKER_NAME,
     WORKSPACE_CLAIM_VERSION,
     AbandonStateConflict,
+    CodingAuthorityConflict,
     CodingJobNotFound,
     CodingService,
     WorkspaceBusy,
@@ -1253,26 +1255,62 @@ def test_a_legacy_service_still_serializes_instead_of_refusing(
         service.close()
 
 
-def test_a_legacy_service_still_honours_an_audited_job_claim(
+def test_a_legacy_service_cannot_start_beside_an_audited_state_root(
     tmp_path: Path,
 ) -> None:
-    """Otherwise a legacy worker could edit a tree mid-audit."""
+    """A legacy worker can no longer edit a tree mid-audit, because it cannot run.
+
+    This used to prove the weaker half of the same property: a legacy service
+    started beside an audited one and was stopped at `submit` by the audited
+    job's worktree claim. The state-root authority lease now stops it a step
+    earlier - `require_codex_audit=False` is a different startup authority, so it
+    is refused at construction, before it can reconcile status, sweep a claim or
+    dispatch anything.
+
+    The original invariant is asserted in the stronger form it now takes: the
+    audited job keeps its claim, its record and its mission item untouched, no
+    legacy edit reaches the tree, and the audited service can still finish.
+    """
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _declare_verification(workspace)
     audited = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
-    legacy = _service(tmp_path, workspace)
     try:
         owner = _awaiting(audited, "tenant-audit", "mixed-001", workspace)
-        with pytest.raises(WorkspaceBusy) as busy:
-            legacy.submit(
-                "tenant-a", "mixed-002",
-                _request(workspace, require_changes=False),
-            )
-        assert busy.value.owner_job_id == owner.job_id
+        claim = audited._workspace_claim_path(str(workspace))
+        assert claim.exists()
+        claim_before = claim.read_text(encoding="utf-8")
+        record_path = (
+            audited._tenant_dir(audited._tenant_ref("tenant-audit"))
+            / "jobs" / (owner.job_id + ".json")
+        )
+        record_before = record_path.read_text(encoding="utf-8")
+        marker_before = (
+            audited.state_root / AUTHORITY_MARKER_NAME
+        ).read_text(encoding="utf-8")
+
+        with pytest.raises(CodingAuthorityConflict):
+            _service(tmp_path, workspace)
+
+        # Nothing of the audited job moved, and the refused legacy service left
+        # no trace: not the claim it would have had to honour, not the record,
+        # not the authority marker.
+        assert claim.read_text(encoding="utf-8") == claim_before
+        assert record_path.read_text(encoding="utf-8") == record_before
+        assert (
+            audited.state_root / AUTHORITY_MARKER_NAME
+        ).read_text(encoding="utf-8") == marker_before
+        assert audited.get("tenant-audit", owner.job_id).state is (
+            CodingJobState.AWAITING_CODEX_AUDIT
+        )
+        # And the audited owner can still complete its own audit.
+        accepted = audited.audit(
+            "tenant-audit", owner.job_id,
+            owner.implementation_revision_sha256, CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
     finally:
-        legacy.close()
         audited.close()
 
 

@@ -54,7 +54,6 @@ from flyto_ai.agents.models import CodeTaskResponse
 from flyto_ai.coding.continuation import (
     _AUTHORITY_FIELDS,
     CONTINUABLE_STOP_CODES,
-    CONTINUATION_BACKEND_MISMATCH,
     CONTINUATION_CODES,
     CONTINUATION_CONTRACT_CHANGED,
     CONTINUATION_CONTRACT_UNPINNED,
@@ -96,6 +95,8 @@ from flyto_ai.coding.contracts import (
 )
 from flyto_ai.coding import service as service_module
 from flyto_ai.coding.service import (
+    AUTHORITY_MARKER_NAME,
+    CodingAuthorityConflict,
     CodingService,
     ContinuationRefused,
     IdempotencyConflict,
@@ -877,22 +878,45 @@ def test_a_different_workspace_cannot_borrow_the_authority(tmp_path):
         service.close(wait=True)
 
 
-def test_another_backend_cannot_enter_this_session(tmp_path):
+def test_another_backend_cannot_even_start_beside_this_session(tmp_path):
+    """A different implementer is refused a step earlier than it used to be.
+
+    This once proved that a `codex` service constructed beside a live `claude`
+    one was stopped at `submit` by the continuation authority's backend guard.
+    The state-root authority lease now refuses it at construction: the
+    implementer is part of the startup authority, and a root with live work
+    belongs to exactly one.
+
+    The original invariant holds in its stronger form. No foreign backend enters
+    the session, nothing about the stopped round moves, and - the half that
+    matters most - the *correct* service can still continue it.
+    """
+
     service, backend, workspace, stopped = _stopped_job(tmp_path)
     try:
-        codex = _service(
-            tmp_path, workspace, backend, implementation_backend="codex",
+        marker = service.state_root / AUTHORITY_MARKER_NAME
+        marker_before = marker.read_text(encoding="utf-8")
+        record_path = _job_record_path(service, "t", stopped.job_id)
+        record_before = record_path.read_text(encoding="utf-8")
+
+        with pytest.raises(CodingAuthorityConflict):
+            _service(tmp_path, workspace, backend, implementation_backend="codex")
+
+        # The refused service reached no provider, consumed no generation, and
+        # rewrote neither the marker nor the stopped round's record.
+        assert len(backend.requests) == 1
+        assert _authority_of(service, "t").state == STATE_OPEN
+        assert marker.read_text(encoding="utf-8") == marker_before
+        assert record_path.read_text(encoding="utf-8") == record_before
+
+        # And the authority is still spendable by the backend that owns it.
+        resumed = service.submit(
+            "t", "segment-2", _request(workspace, thread_id=_SESSION, resume=True),
         )
-        try:
-            with pytest.raises(ContinuationRefused) as excinfo:
-                codex.submit(
-                    "t", "segment-2",
-                    _request(workspace, thread_id=_SESSION, resume=True),
-                )
-            assert excinfo.value.code == CONTINUATION_BACKEND_MISMATCH
-            assert len(backend.requests) == 1
-        finally:
-            codex.close(wait=True)
+        assert _wait(service, "t", resumed.job_id).state is (
+            CodingJobState.AWAITING_CODEX_AUDIT
+        )
+        assert backend.resumed == [None, _SESSION]
     finally:
         service.close(wait=True)
 
@@ -3870,19 +3894,11 @@ def test_the_pin_is_only_restored_after_every_authority_check_has_passed(
             )
         assert foreign.value.code == CONTINUATION_UNAVAILABLE
 
-        # backend.
-        codex = _service(
-            tmp_path, workspace, backend, implementation_backend="codex",
-        )
-        try:
-            with pytest.raises(ContinuationRefused) as wrong_backend:
-                codex.submit(
-                    "t", "order-3",
-                    _request(workspace, thread_id=_SESSION, resume=True),
-                )
-            assert wrong_backend.value.code == CONTINUATION_BACKEND_MISMATCH
-        finally:
-            codex.close(wait=True)
+        # backend: now refused a step earlier still. A different implementer is
+        # a different startup authority, so it never constructs against this
+        # root at all - and therefore never reaches the pin either.
+        with pytest.raises(CodingAuthorityConflict):
+            _service(tmp_path, workspace, backend, implementation_backend="codex")
 
         # workspace.
         other = _workspace(tmp_path, "order-workspace")

@@ -20,6 +20,53 @@
 - Blueprint discovery now ranks ordered phrase overlap before catalogue order,
   so direction-bearing reuse such as CSV-to-JSON no longer selects the reverse
   JSON-to-CSV transform when both candidates share the same token set.
+- Every coding job now serves a mission in the durable multi-process mission
+  kernel, which is the authority for queue order, repair preference, dependency
+  readiness, worktree exclusion and fencing. A caller that names no mission gets
+  one synthesized by the coding adapter; the kernel stays workload-neutral.
+  Receipts carry only the bounded, secret-free mission projection - no prose, no
+  coordinates, no evidence values, no worker identity, no paths. The public MCP
+  tool inventory is unchanged.
+- A coding state root is now bound to one semantic startup authority by a
+  durable, crash-released `flock` lease plus a bounded marker. Services that
+  share an authority coexist as peers on one queue; a service that would build a
+  different implementer - or run under a different audit requirement, contract
+  path, sandbox, approval policy, host lane policy or rework ceiling - fails
+  construction with `execution_authority_conflict` before it can reconcile
+  status, sweep a workspace claim, or dispatch anything. Rotation is permitted
+  once no old service is live and every job is terminal. **Operators running two
+  differently configured coding services against one state root must give them
+  separate roots.**
+- The job lease now covers execution only. It is released once a job's durable
+  artifacts exist and before any pump can dispatch, so any compatible worker can
+  run the store-selected round and queued work survives its submitter exiting or
+  restarting. Queued and rework-queued records are pumped on restart instead of
+  being failed as `service_restarted`; only genuinely interrupted running work is
+  failed closed, and only after proving no live lease holds it.
+- Jobs recorded before the executing-authority fingerprint existed are adopted
+  only on proof of no execution: queued work that never reached an implementer
+  is migrated and runs normally. An executing record is never adopted - the
+  service refuses to start beside a live round it cannot attribute, and settles
+  one whose lease is provably free as `execution_authority_unbound` with its
+  mission item and worktree claim accounted. An unfingerprinted awaiting-audit
+  job may still be accepted by an auditor but may not be reworked, because a new
+  round would adopt a route policy it never named.
+- A refused start-up now changes nothing: marker and job validation happen
+  before the authority marker is written, so a refusal leaves a present marker
+  byte-identical and never creates a missing one. The marker is read through a
+  single `O_NOFOLLOW`/`O_CLOEXEC` descriptor under a small byte bound and is
+  never re-opened by name after a check, so one that is damaged, unparseable,
+  symlinked, oversized or not a regular file is a refusal rather than an
+  absence; an unreadable job record refuses both start-up and rotation.
+- Service teardown now releases both root descriptors under one outer
+  `finally`, so a failure draining the executor or releasing a job lease can no
+  longer leave a stopped service holding the state root against its successor.
+- **A host with no inter-process lock now refuses to start** with
+  `execution_authority_unavailable` instead of silently running without the
+  isolation it advertises.
+- `CodingAuthorityConflict` and `CodingAuthorityUnavailable` are exported from
+  `flyto_ai.coding`.
+
 - A successful audit rework no longer has to manufacture a second diff when
   the earlier attributable revision is already correct. The service promotes
   only the host-generated `no_changes` outcome with passing required checks

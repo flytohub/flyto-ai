@@ -2,6 +2,59 @@
 
 Last updated: 2026-08-10
 
+## Mission lifecycle and state-root authority (2026-08-10)
+
+Wired `MissionStore` into the real `CodingService` lifecycle, and bound each
+coding state root to one semantic startup authority. See `ARCHITECTURE.md`
+("Coding mission and state-root authority boundary") and the 2026-08-10
+`DECISIONS.md` entry.
+
+Verified on 2026-08-10, on this host, by running the suites below:
+
+- `tests/test_coding_mission_lifecycle.py`: **69 passed in 11.48s** through
+  formal Indexer `task validate` (real `MissionStore`, several
+  `CodingService` instances per test).
+- `tests/test_coding_service.py` + `tests/test_coding_mission_contract.py
+  --timeout=180`: **235 passed in 19.20s**.
+- Full warning-strict suite: **3256 passed, 17 skipped in 224.49s**, including
+  `PytestUnhandledThreadExceptionWarning` as an error.
+- `ruff check` clean on the changed files.
+- Package sdist/wheel build succeeded, all 23 generated Python reference files
+  are current, and Indexer full-scan strict verification passed **18/18**.
+
+Operator-visible behaviour changes:
+
+- Two differently configured coding services must not share a state root. The
+  second one now fails construction with `execution_authority_conflict` instead
+  of starting and quietly competing. Give them separate roots, or stop the other
+  authority's services and close its open jobs before rotating.
+- Queued and rework-queued jobs survive a restart or a submitter exiting and are
+  executed by any compatible worker. They are no longer failed as
+  `service_restarted`; only interrupted *running* work is, and only after
+  proving no live lease holds it.
+- Queued jobs recorded before the executing-authority fingerprint are migrated
+  and run normally. An unfingerprinted awaiting-audit job may still be accepted
+  but cannot be reworked; an unfingerprinted executing job refuses start-up
+  while its lease is live, and settles as `execution_authority_unbound` once the
+  lease is provably free.
+- A damaged, symlinked, oversized or non-regular authority marker, and an
+  unreadable job record, refuse start-up and rotation. Repair or remove them
+  deliberately:
+  the service will not overwrite either, and a refusal leaves a present marker
+  byte-identical.
+- A host without an inter-process lock refuses to start with
+  `execution_authority_unavailable` instead of running without the isolation it
+  advertises.
+
+Rollback: revert the change. The authority lock file and marker are inert to
+older builds, which ignore both; job records gain an `execution_authority` field
+that older builds do not read.
+
+Not proved here: behaviour on hosts without `sqlite3.Connection.serialize`
+(mission tests skip there), and no live multi-machine or NFS deployment was
+exercised - `flock` semantics over a network filesystem are the classic failure
+mode for this design.
+
 ## Current: audited coding route and canonical topology (2026-08-08)
 
 ### Governing architecture

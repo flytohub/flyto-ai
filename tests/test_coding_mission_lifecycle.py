@@ -17,11 +17,15 @@ absent, and the boundary itself is asserted unconditionally.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import os
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -56,6 +60,12 @@ from flyto_ai.coding.mission_runtime import (
     worker_identity,
 )
 from flyto_ai.coding.service import (
+    AUTHORITY_MARKER_NAME,
+    AUTHORITY_MARKER_VERSION,
+    MAX_AUTHORITY_MARKER_BYTES,
+    EXECUTION_AUTHORITY_UNBOUND,
+    CodingAuthorityConflict,
+    CodingAuthorityUnavailable,
     CodingService,
     MissionRouteRefused,
     receipt_to_mapping,
@@ -100,6 +110,19 @@ _SECRET = "sk-" + "live-do-not-leak-0123456789"
 class _Provider:
     """Deterministic provider; every effect goes through the real tool boundary."""
 
+    #: Live rounds across every provider instance, and the high-water mark.
+    #: Resource exclusion is a statement about concurrency, so it is measured
+    #: rather than inferred from which fixture happened to run which job.
+    active = 0
+    max_active = 0
+    census = threading.Lock()
+
+    @classmethod
+    def reset(cls) -> None:
+        with cls.census:
+            cls.active = 0
+            cls.max_active = 0
+
     def __init__(self, delay: float = 0.0, tag: str = "solo") -> None:
         self.delay = delay
         #: Every provider writes into its *own* file with its own bytes. Two
@@ -118,17 +141,26 @@ class _Provider:
             self.rounds += 1
             index = self.rounds
         self.prompts.append(json.dumps(kwargs.get("messages", []), ensure_ascii=False))
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        for path, content in (
-            ("result.txt", "verified\n"),
-            ("notes-{}.txt".format(self.tag), "{} round {}\n".format(self.tag, index)),
-        ):
-            outcome = await kwargs["dispatch_fn"](
-                "coding_write_file",
-                {"path": path, "content": content, "overwrite": True},
-            )
-            assert outcome["ok"]
+        cls = type(self)
+        with cls.census:
+            cls.active += 1
+            cls.max_active = max(cls.max_active, cls.active)
+        try:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            for path, content in (
+                ("result.txt", "verified\n"),
+                ("notes-{}.txt".format(self.tag),
+                 "{} round {}\n".format(self.tag, index)),
+            ):
+                outcome = await kwargs["dispatch_fn"](
+                    "coding_write_file",
+                    {"path": path, "content": content, "overwrite": True},
+                )
+                assert outcome["ok"]
+        finally:
+            with cls.census:
+                cls.active -= 1
         return "done", [{"function": "coding_write_file", "ok": True}], 1, {"total_tokens": 1}
 
 
@@ -447,8 +479,9 @@ def test_two_instances_share_one_queue_and_never_run_one_workspace_twice(
     workspace.mkdir()
     _declare(workspace)
     state = tmp_path / "state"
-    # Distinct attributable bytes per job, so "one provider round each" is a
-    # statement about scheduling rather than about two fixtures colliding.
+    # Distinct attributable bytes per fixture, so a round is never a no-op that
+    # would earn a legitimate extra model round.
+    _Provider.reset()
     first_provider = _Provider(delay=0.3, tag="one")
     second_provider = _Provider(tag="two")
     first = _service(state, workspace, provider=first_provider)
@@ -460,26 +493,25 @@ def test_two_instances_share_one_queue_and_never_run_one_workspace_twice(
         settled_two = _wait(second, two.job_id)
         assert settled_one.state is CodingJobState.COMPLETED
         assert settled_two.state is CodingJobState.COMPLETED
-        # Exactly one provider round each: the handoff never duplicated work.
-        assert first_provider.rounds == 1
-        assert second_provider.rounds == 1
-        # Both jobs really did land their own attributable bytes.
-        assert (workspace / "notes-one.txt").read_text() == "one round 1\n"
-        assert (workspace / "notes-two.txt").read_text() == "two round 1\n"
+        # Exactly two provider rounds across the fleet - one per job. *Which*
+        # instance ran a given job is deliberately not asserted: admission no
+        # longer pins a job to its submitter, so either compatible worker may
+        # execute either job. The global total is the exactly-once invariant.
+        assert first_provider.rounds + second_provider.rounds == 2
+        # Exclusivity is measured, not inferred: the two rounds never overlapped
+        # on this one worktree.
+        assert _Provider.max_active == 1
+        # Two rounds really did land attributable bytes.
+        assert len(list(workspace.glob("notes-*.txt"))) >= 1
         items = _items(state)
         assert len(items) == 2
         # Every item left the queue explicitly, and each was really dispatched.
         assert all(item.status == STATUS_CLOSED for item in items.values())
         assert all(item.disposition for item in items.values())
-        assert all(item.attempts >= 1 for item in items.values())
-        # Exactly two rounds of provider work across both instances - one per
-        # job. `attempts` is deliberately *not* asserted to be one: a pump that
-        # is offered a job another instance has leased requeues it untouched,
-        # which is a correct non-execution and still costs an attempt. The
-        # round counts above are what "no duplicate provider execution" means.
-        assert sum(
-            provider.rounds for provider in (first_provider, second_provider)
-        ) == 2
+        # The strong assertion, restored. A queued job holds no lease, so no
+        # worker can be offered work it must refuse, so nothing requeues and no
+        # attempt is burnt on contention.
+        assert sorted(item.attempts for item in items.values()) == [1, 1]
     finally:
         first.close()
         second.close()
@@ -1015,6 +1047,1161 @@ def test_an_audit_racing_an_unsettled_item_cannot_schedule(tmp_path: Path) -> No
 
 
 # --------------------------------------------------------------------------
+# multi-worker contention: authority is execution, not admission
+# --------------------------------------------------------------------------
+
+
+@contextmanager
+def _resource_held(state: Path, workspace: Path):
+    """Hold one workspace's mission resource, so real jobs cannot dispatch.
+
+    A deterministic stand-in for "some other worker is busy on this worktree",
+    built out of the same kernel primitive the service itself uses. Nothing is
+    mocked: the item really is dispatched and really does hold the claim.
+    """
+
+    blocker = CodingMissionRuntime(state, worker="w-blocker")
+    digest = CodingService._workspace_digest(str(workspace))
+    blocker.admit(
+        tenant_ref="b" * 64, job_id="job_" + "b" * 24,
+        workspace_sha256=digest, envelope=None, message="hold the worktree",
+    )
+    with blocker.dispatch() as held:
+        assert held is not None
+        assert blocker.is_workspace_claimed(digest)
+        try:
+            yield blocker
+        finally:
+            blocker.close_accounted(
+                held, tenant_ref="b" * 64, job_id=held.job_id,
+                mission_id=held.mission_id, work_item_id=held.work_item_id,
+                disposition=DISPOSITION_BLOCKED,
+                rationale="the test released this worktree",
+                risk="none; this item never ran a round",
+                evidence_refs=("test-blocker",),
+            )
+
+
+@needs_host
+def test_several_instances_execute_each_job_once_without_burning_attempts(
+    tmp_path: Path,
+) -> None:
+    """The thundering-herd proof, inverted into an assertion.
+
+    Three current-build services share one state root and one workspace, and
+    every job contends for that single exclusive resource. Admission no longer
+    pins a job to the instance that accepted it, so the store's chosen worker is
+    the one that runs it. Attempts and fencing tokens must therefore grow with
+    completed jobs, not with how many pumps went looking.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    providers = [_Provider(tag="p{}".format(index)) for index in range(3)]
+    services = [_service(state, workspace, provider=provider) for provider in providers]
+    try:
+        receipts = [
+            service.submit(_TENANT, "key-{}".format(index), _request(
+                workspace, message="task {}".format(index),
+            ))
+            for index, service in enumerate(services)
+        ]
+        for service, receipt in zip(services, receipts):
+            assert _wait(service, receipt.job_id).state is CodingJobState.COMPLETED
+        # Exactly one provider round per job, wherever it ran.
+        assert sum(provider.rounds for provider in providers) == 3
+        items = _items(state)
+        assert len(items) == 3
+        assert all(item.status == STATUS_CLOSED for item in items.values())
+        # The strong assertion, restored: no item was ever dispatched twice.
+        assert sorted(item.attempts for item in items.values()) == [1, 1, 1]
+        # And fencing tokens are O(completed jobs), not O(pumps). Every burnt
+        # token is one dispatch; a herd of refusals would show up here first.
+        assert max(item.fence for item in items.values()) <= len(items) + 1
+    finally:
+        for service in services:
+            service.close()
+
+
+@needs_host
+def test_queued_work_survives_the_submitter_and_is_run_by_another_worker(
+    tmp_path: Path,
+) -> None:
+    """Queued is not interrupted, and a restart pumps it instead of failing it."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        submitter = _service(state, workspace, provider=_Provider(tag="gone"))
+        try:
+            receipt = submitter.submit(_TENANT, "key-1", _request(workspace))
+            assert submitter.get(_TENANT, receipt.job_id).state is CodingJobState.QUEUED
+        finally:
+            submitter.close()
+        # The submitter is gone and the job is still queued, not failed.
+        worker = _service(state, workspace, provider=_Provider(tag="worker"))
+        after = worker.get(_TENANT, receipt.job_id)
+        assert after.state is CodingJobState.QUEUED
+        assert after.failure_code is None
+    # Resource released; the surviving worker must complete it from durable
+    # state alone - the job record, the resume envelope and the round envelope.
+    try:
+        settled = _wait(worker, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        assert (workspace / "notes-worker.txt").exists()
+        item = _items(state)[
+            CodingMissionProjection.from_mapping(settled.mission or {}).work_item_id
+        ]
+        assert item.status == STATUS_CLOSED and item.attempts == 1
+    finally:
+        worker.close()
+
+
+def _stranger(state: Path, workspace: Path, **overrides: Any) -> CodingService:
+    fields: Dict[str, Any] = {
+        "state_root": str(state),
+        "workspace_roots": (str(workspace),),
+        "max_workers": 2,
+        "max_queued": 8,
+        "implementation_backend": "some-other-backend",
+    }
+    fields.update(overrides)
+    return CodingService(
+        lambda store: FlytoCodingAgent(_Provider(tag="stranger"), store=store),
+        **fields,
+    )
+
+
+@needs_host
+def test_an_incompatible_service_is_refused_before_it_can_sweep_or_pump(
+    tmp_path: Path,
+) -> None:
+    """One semantic startup authority owns a state root while work is live.
+
+    Refusal at construction is what makes "does not burn attempts" an invariant
+    rather than a budget: a service that never starts is never offered an item,
+    so it can neither consume a dispatch attempt nor sweep a workspace claim it
+    has no standing over.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        owner = _service(
+            state, workspace, provider=_Provider(tag="owner2"),
+            require_codex_audit=True,
+        )
+        receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+        projection = CodingMissionProjection.from_mapping(receipt.mission or {})
+        claim = owner._workspace_claim_path(str(workspace))
+        assert claim.exists()
+        owner.close()
+
+        for overrides in (
+            {"implementation_backend": "some-other-backend"},
+            {"implementation_backend": "native", "require_codex_audit": False},
+            {"implementation_backend": "native", "config_path": ".flyto/other.yaml"},
+            {"implementation_backend": "native", "max_rework_rounds": 2},
+        ):
+            with pytest.raises(CodingAuthorityConflict):
+                _stranger(
+                    state, workspace,
+                    **dict({"require_codex_audit": True}, **overrides),
+                )
+        # Nothing was consumed and nothing was released by the refusals.
+        item = _store(state).get_work_item(projection.work_item_id)
+        assert item.attempts == 0 and item.fence == 0
+        assert item.status == STATUS_READY
+        assert claim.exists()
+        assert not (workspace / "notes-stranger.txt").exists()
+
+    # A compatible heir finishes it from durable state alone.
+    heir = _service(
+        state, workspace, provider=_Provider(tag="heir"), require_codex_audit=True,
+    )
+    try:
+        settled = _wait(heir, receipt.job_id)
+        assert settled.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert (workspace / "notes-heir.txt").exists()
+        assert _store(state).get_work_item(projection.work_item_id).attempts == 1
+    finally:
+        heir.close()
+
+
+@needs_host
+def test_two_different_authorities_cannot_coexist_on_an_empty_root(
+    tmp_path: Path,
+) -> None:
+    """The race a record scan could never see.
+
+    An empty root has no job records, so an inference from history lets both
+    services construct - and whichever admits first leaves the other one alive,
+    able to submit and pump against an authority it does not share. The lease is
+    what makes the claim true rather than aspirational.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    first = _service(state, workspace, provider=_Provider(tag="bind1"))
+    try:
+        marker = json.loads(
+            (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8"),
+        )
+        assert marker["marker_version"] == AUTHORITY_MARKER_VERSION
+        assert marker["authority"] == first._execution_authority()
+        # Secret-free and path-free, like the record fingerprint it mirrors.
+        rendered = json.dumps(marker)
+        assert str(state) not in rendered and str(workspace) not in rendered
+        # No job has ever existed here, and the second authority is still
+        # refused - because a live holder, not a history, is what binds a root.
+        with pytest.raises(CodingAuthorityConflict):
+            _stranger(state, workspace)
+    finally:
+        first.close()
+
+
+@needs_host
+def test_several_same_authority_services_coexist_on_one_root(
+    tmp_path: Path,
+) -> None:
+    """Shared holders, so peers on one queue are the normal case."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    peers = [
+        _service(state, workspace, provider=_Provider(tag="peer{}".format(index)))
+        for index in range(3)
+    ]
+    try:
+        assert all(peer._authority_fd >= 0 for peer in peers)
+        receipt = peers[0].submit(_TENANT, "key-1", _request(workspace))
+        assert _wait(peers[2], receipt.job_id).state is CodingJobState.COMPLETED
+    finally:
+        for peer in peers:
+            peer.close()
+
+
+@needs_host
+def test_rotation_is_refused_while_an_old_service_is_still_live(
+    tmp_path: Path,
+) -> None:
+    """Terminal jobs are not enough; the old authority must actually be gone."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    owner = _service(state, workspace, provider=_Provider(tag="rot1"))
+    try:
+        receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+        assert _wait(owner, receipt.job_id).state is CodingJobState.COMPLETED
+        # Every job is terminal, and rotation is *still* refused: the old
+        # service is alive and holds its share of the lease.
+        with pytest.raises(CodingAuthorityConflict):
+            _stranger(state, workspace)
+        marker = json.loads(
+            (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8"),
+        )
+        assert marker["authority"] == owner._execution_authority()
+    finally:
+        owner.close()
+    # Old service gone, all work terminal: rotation succeeds and rebinds.
+    rotated = _stranger(state, workspace)
+    try:
+        assert rotated.implementation_backend == "some-other-backend"
+        marker = json.loads(
+            (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8"),
+        )
+        assert marker["authority"] == rotated._execution_authority()
+    finally:
+        rotated.close()
+
+
+@needs_host
+def test_rotation_is_refused_while_work_is_open_even_with_no_live_service(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        owner = _service(state, workspace, provider=_Provider(tag="open1"))
+        owner.submit(_TENANT, "key-1", _request(workspace))
+        owner.close()
+        # Nobody is alive, so the exclusive lock is available - and rotation is
+        # still refused, because the old authority's work is still open.
+        with pytest.raises(CodingAuthorityConflict):
+            _stranger(state, workspace)
+
+
+@needs_host
+def test_a_refused_startup_never_rewrites_a_lost_marker(tmp_path: Path) -> None:
+    """Validation happens before the marker is written, not after.
+
+    Writing first meant a stranger could win the exclusive lock, replace a lost
+    marker with its own, and only *then* fail on the open job - leaving the root
+    bound to an authority whose construction had failed and locking out the
+    worker that was actually correct.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        owner = _service(state, workspace, provider=_Provider(tag="lost"))
+        receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+        owner_authority = owner._execution_authority()
+        owner.close()
+        # The marker is lost, but an open job still carries the old authority.
+        (state / AUTHORITY_MARKER_NAME).unlink()
+        assert not (state / AUTHORITY_MARKER_NAME).exists()
+
+        with pytest.raises(CodingAuthorityConflict):
+            _stranger(state, workspace)
+        # Refused, and it did not mint a marker on the way out.
+        assert not (state / AUTHORITY_MARKER_NAME).exists()
+
+        # The correct worker is not locked out: it rebinds the root itself.
+        heir = _service(state, workspace, provider=_Provider(tag="heir2"))
+        try:
+            marker = json.loads(
+                (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8"),
+            )
+            assert marker["authority"] == owner_authority
+            assert heir.get(_TENANT, receipt.job_id).state is CodingJobState.QUEUED
+        finally:
+            heir.close()
+
+
+@needs_host
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{not json",
+        json.dumps({"marker_version": "wrong", "authority": {}}),
+        json.dumps({"marker_version": AUTHORITY_MARKER_VERSION}),
+        json.dumps({"marker_version": AUTHORITY_MARKER_VERSION, "authority": 5}),
+        json.dumps({
+            "marker_version": AUTHORITY_MARKER_VERSION,
+            "authority": {},
+            "extra": 1,
+        }),
+    ],
+)
+def test_a_malformed_marker_is_a_refusal_never_an_absence(
+    tmp_path: Path, body: str,
+) -> None:
+    """Damaged state is not permission to rebind the root."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    _service(state, workspace, provider=_Provider(tag="seed")).close()
+    marker = state / AUTHORITY_MARKER_NAME
+    marker.write_text(body, encoding="utf-8")
+
+    with pytest.raises(CodingAuthorityConflict):
+        _service(state, workspace, provider=_Provider(tag="after"))
+    # Byte-identical: a refusal repairs nothing and overwrites nothing.
+    assert marker.read_text(encoding="utf-8") == body
+
+
+@needs_host
+def test_a_marker_that_is_not_a_regular_file_is_refused(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    _service(state, workspace, provider=_Provider(tag="seed2")).close()
+    marker = state / AUTHORITY_MARKER_NAME
+    marker.unlink()
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text("{}", encoding="utf-8")
+    marker.symlink_to(elsewhere)
+
+    with pytest.raises(CodingAuthorityConflict):
+        _service(state, workspace, provider=_Provider(tag="after2"))
+    # Refused rather than followed: the link and its target are untouched.
+    assert marker.is_symlink()
+    assert elsewhere.read_text(encoding="utf-8") == "{}"
+
+
+@needs_host
+def test_an_oversized_marker_is_refused_without_being_parsed(
+    tmp_path: Path,
+) -> None:
+    """A bounded reader refuses a body it will not read, rather than reading it."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    _service(state, workspace, provider=_Provider(tag="size")).close()
+    marker = state / AUTHORITY_MARKER_NAME
+    # Structurally valid JSON, and far too large to be this marker.
+    body = json.dumps({
+        "marker_version": AUTHORITY_MARKER_VERSION,
+        "authority": {"padding": "x" * (MAX_AUTHORITY_MARKER_BYTES * 2)},
+    })
+    assert len(body.encode()) > MAX_AUTHORITY_MARKER_BYTES
+    marker.write_text(body, encoding="utf-8")
+
+    with pytest.raises(CodingAuthorityConflict):
+        _service(state, workspace, provider=_Provider(tag="size2"))
+    assert marker.read_text(encoding="utf-8") == body
+
+
+@needs_host
+def test_the_marker_is_read_through_one_descriptor_not_a_name(
+    tmp_path: Path,
+) -> None:
+    """Every question is asked of the descriptor, so no name can be swapped.
+
+    An `lstat` followed by a separate open checks one file and reads another
+    whenever the name is replaced in between. These are the shapes that
+    substitution produces, and each must be refused rather than followed.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    service = _service(state, workspace, provider=_Provider(tag="fd"))
+    marker = state / AUTHORITY_MARKER_NAME
+    try:
+        good = marker.read_text(encoding="utf-8")
+        # A regular file reads normally through the descriptor.
+        assert service._read_authority_marker() == service._execution_authority()
+
+        # Replaced by a symbolic link to an otherwise valid marker: refused by
+        # `O_NOFOLLOW` at open time, so the target is never even read.
+        decoy = tmp_path / "decoy.json"
+        decoy.write_text(good, encoding="utf-8")
+        marker.unlink()
+        marker.symlink_to(decoy)
+        with pytest.raises(CodingAuthorityConflict):
+            service._read_authority_marker()
+        assert marker.is_symlink()
+
+        # Replaced by a directory: refused by the `fstat` on that descriptor.
+        marker.unlink()
+        marker.mkdir()
+        with pytest.raises(CodingAuthorityConflict):
+            service._read_authority_marker()
+        marker.rmdir()
+
+        # Absent is still absent, and is the only thing that reads as `None`.
+        assert service._read_authority_marker() is None
+    finally:
+        service.close()
+
+
+@needs_host
+def test_an_unreadable_job_record_refuses_startup_and_rotation(
+    tmp_path: Path,
+) -> None:
+    """An unreadable record is not evidence that its job finished."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    owner = _service(state, workspace, provider=_Provider(tag="corrupt"))
+    try:
+        receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+        assert _wait(owner, receipt.job_id).state is CodingJobState.COMPLETED
+    finally:
+        owner.close()
+    marker_before = (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8")
+    record_path = (
+        state / "tenants" / CodingService._tenant_ref(_TENANT)
+        / "jobs" / (receipt.job_id + ".json")
+    )
+    record_path.write_text("{ truncated", encoding="utf-8")
+
+    # Same authority: refused, because the record cannot be shown to be closed.
+    with pytest.raises(CodingAuthorityConflict):
+        _service(state, workspace, provider=_Provider(tag="same"))
+    # Rotation: refused for the same reason, and the marker survives intact.
+    with pytest.raises(CodingAuthorityConflict):
+        _stranger(state, workspace)
+    assert (state / AUTHORITY_MARKER_NAME).read_text(
+        encoding="utf-8",
+    ) == marker_before
+
+
+@needs_host
+@pytest.mark.parametrize("failure", ["close_status", "shutdown", "job_leases"])
+def test_a_failing_teardown_step_still_releases_both_leases(
+    tmp_path: Path, failure: str,
+) -> None:
+    """No teardown step may keep a stopped service holding the root.
+
+    The `finally` used to sit *inside* the teardown, after the executor drain
+    and the job-lease release, so a failure in either of those earlier steps
+    leaked both root descriptors and locked the state root against every later
+    service - a lock-out invisible in the error the caller actually saw.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    owner = _service(state, workspace, provider=_Provider(tag="teardown"))
+
+    def _explode(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("teardown step is broken")
+
+    if failure == "close_status":
+        owner._close_status = _explode  # type: ignore[method-assign]
+        owner.close()
+    elif failure == "shutdown":
+        owner._executor.shutdown = _explode  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError):
+            owner.close()
+    else:
+        owner._acquire_job_lease("job_" + "f" * 24)
+        owner._release_job_lease = _explode  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError):
+            owner.close()
+    assert owner._authority_fd == -1
+    # Both leases came back despite the injected failure, so another authority
+    # can rotate a root whose every job is terminal.
+    rotated = _stranger(state, workspace)
+    try:
+        marker = json.loads(
+            (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8"),
+        )
+        assert marker["authority"] == rotated._execution_authority()
+    finally:
+        rotated.close()
+
+
+def test_a_host_without_flock_refuses_rather_than_pretending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No inter-process lock, no isolation claim - and therefore no service."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    import flyto_ai.coding.service as service_module
+
+    monkeypatch.setattr(service_module, "fcntl", None)
+    with pytest.raises(CodingAuthorityUnavailable) as refusal:
+        _service(tmp_path / "state", workspace, provider=_Provider(tag="nolock"))
+    assert refusal.value.code == "execution_authority_unavailable"
+    assert refusal.value.retryable is False
+    # Nothing was bound, because nothing could be.
+    assert not (tmp_path / "state" / AUTHORITY_MARKER_NAME).exists()
+
+
+@needs_host
+def test_a_released_descriptor_recovers_the_root_without_a_ttl(
+    tmp_path: Path,
+) -> None:
+    """A crash is a closed descriptor, and the kernel is the only clock."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    crashed = _service(state, workspace, provider=_Provider(tag="crash"))
+    receipt = crashed.submit(_TENANT, "key-1", _request(workspace))
+    assert _wait(crashed, receipt.job_id).state is CodingJobState.COMPLETED
+    # Simulate the process dying: the descriptor goes, nothing else runs.
+    assert crashed._authority_fd >= 0
+    crashed._release_state_root_authority()
+    try:
+        # No TTL elapsed, no heartbeat was missed; the lease is simply free.
+        rotated = _stranger(state, workspace)
+        rotated.close()
+    finally:
+        crashed.close()
+
+
+@needs_host
+def test_a_refused_startup_changes_nothing_it_touched(tmp_path: Path) -> None:
+    """A service that must not run must also not have run."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        owner = _service(
+            state, workspace, provider=_Provider(tag="intact"),
+            require_codex_audit=True,
+        )
+        try:
+            receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+            projection = CodingMissionProjection.from_mapping(receipt.mission or {})
+            claim = owner._workspace_claim_path(str(workspace))
+            before_item = _store(state).get_work_item(projection.work_item_id)
+            before_record = json.loads((
+                state / "tenants" / CodingService._tenant_ref(_TENANT)
+                / "jobs" / (receipt.job_id + ".json")
+            ).read_text(encoding="utf-8"))
+            before_marker = (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8")
+
+            for _ in range(3):
+                with pytest.raises(CodingAuthorityConflict):
+                    _stranger(state, workspace, require_codex_audit=True)
+
+            after_item = _store(state).get_work_item(projection.work_item_id)
+            assert after_item.attempts == before_item.attempts == 0
+            assert after_item.fence == before_item.fence == 0
+            assert after_item.status == STATUS_READY
+            assert claim.exists()
+            assert json.loads((
+                state / "tenants" / CodingService._tenant_ref(_TENANT)
+                / "jobs" / (receipt.job_id + ".json")
+            ).read_text(encoding="utf-8")) == before_record
+            assert (state / AUTHORITY_MARKER_NAME).read_text(
+                encoding="utf-8",
+            ) == before_marker
+        finally:
+            owner.close()
+
+
+@needs_host
+def test_a_nested_route_change_is_incompatible_but_a_new_build_is_not(
+    tmp_path: Path,
+) -> None:
+    """The fingerprint hashes the whole validated policy, not its top level."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    service = _service(state, workspace)
+    try:
+        base = service._execution_authority()
+        # A build id is not part of the fingerprint at all.
+        service.build_id = service.build_id + "-reloaded"
+        assert service._execution_authority() == base
+        assert service._may_execute({"execution_authority": base}) is True
+
+        limits = SimpleNamespace()
+
+        @dataclasses.dataclass(frozen=True)
+        class _Limits:
+            max_seconds: int = 30
+            max_files: int = 10
+
+        @dataclasses.dataclass(frozen=True)
+        class _Lane:
+            enabled: bool = True
+            limits: _Limits = dataclasses.field(default_factory=_Limits)
+
+        @dataclasses.dataclass(frozen=True)
+        class _Route:
+            strict: bool = True
+            indexer: _Lane = dataclasses.field(default_factory=_Lane)
+            blueprint: _Lane = dataclasses.field(default_factory=_Lane)
+
+        del limits
+        outer = CodingService._policy_digest(_Route())
+        # A change buried two levels down must move the digest. Hashing only the
+        # top level made an Indexer, Blueprint or RouteLimits change invisible.
+        nested = CodingService._policy_digest(
+            _Route(indexer=_Lane(limits=_Limits(max_seconds=31))),
+        )
+        deeper = CodingService._policy_digest(
+            _Route(blueprint=_Lane(enabled=False)),
+        )
+        assert len({outer, nested, deeper}) == 3
+        assert len(outer) == 32
+        assert CodingService._policy_digest(None) == "none"
+    finally:
+        service.close()
+
+
+@needs_host
+def test_a_lane_that_runs_a_different_binary_is_a_different_authority() -> None:
+    """Execution identity survives the digest; it is not normalized away.
+
+    An earlier version folded every path-shaped string to a placeholder, so two
+    capability policies invoking `/opt/indexer-v1` and `/opt/indexer-v2` hashed
+    identically and were allowed to share one state root while running different
+    binaries. A state root and its `flock` are host-local, so cross-host
+    pathname stability was never a reason to erase that.
+    """
+
+    @dataclasses.dataclass(frozen=True)
+    class _Capability:
+        name: str = "indexer"
+        argv: tuple = ("/opt/indexer-v1/bin/indexer", "--strict")
+
+    @dataclasses.dataclass(frozen=True)
+    class _Lane:
+        enabled: bool = True
+        capability: _Capability = dataclasses.field(default_factory=_Capability)
+
+    @dataclasses.dataclass(frozen=True)
+    class _Route:
+        strict: bool = True
+        indexer: _Lane = dataclasses.field(default_factory=_Lane)
+
+    baseline = CodingService._policy_digest(_Route())
+    # A different checkout of the same tool, differing *only* in the path.
+    other_checkout = CodingService._policy_digest(_Route(indexer=_Lane(
+        capability=_Capability(argv=("/opt/indexer-v2/bin/indexer", "--strict")),
+    )))
+    # A different executable entirely, nested two levels down.
+    other_binary = CodingService._policy_digest(_Route(indexer=_Lane(
+        capability=_Capability(argv=("/opt/indexer-v1/bin/other", "--strict")),
+    )))
+    # And a relative path, which the old rule also folded away.
+    relative = CodingService._policy_digest(_Route(indexer=_Lane(
+        capability=_Capability(argv=("bin/indexer", "--strict")),
+    )))
+    assert len({baseline, other_checkout, other_binary, relative}) == 4
+    # Still bounded, and still only a digest.
+    for digest in (baseline, other_checkout, other_binary, relative):
+        assert len(digest) == 32
+        assert all(character in "0123456789abcdef" for character in digest)
+        assert "/opt" not in digest and "indexer" not in digest
+
+
+@needs_host
+def test_a_path_only_route_change_refuses_a_shared_state_root(
+    tmp_path: Path,
+) -> None:
+    """The collision, proved end to end against a real state root."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+
+    @dataclasses.dataclass(frozen=True)
+    class _Lane:
+        argv: tuple = ("/opt/indexer-v1/bin/indexer",)
+
+    owner = _service(state, workspace, provider=_Provider(tag="pathauth"))
+    try:
+        # Two policies that differ only in a path now fingerprint differently,
+        # so a service carrying the second cannot adopt the first's records.
+        first = dict(owner._execution_authority())
+        second = dict(
+            first, route=CodingService._policy_digest(
+                _Lane(argv=("/opt/indexer-v2/bin/indexer",)),
+            ),
+        )
+        assert first["route"] != second["route"]
+        assert owner._may_execute({"execution_authority": first}) is True
+        assert owner._may_execute({"execution_authority": second}) is False
+
+        # A build id still changes nothing: it is not in the fingerprint.
+        owner.build_id = owner.build_id + "-reloaded"
+        assert dict(owner._execution_authority()) == first
+        assert owner._may_execute({"execution_authority": first}) is True
+
+        # The marker on disk stays bounded and carries only digests.
+        marker_text = (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8")
+        assert len(marker_text.encode()) <= MAX_AUTHORITY_MARKER_BYTES
+        assert "/opt" not in marker_text
+        assert str(workspace) not in marker_text and str(state) not in marker_text
+        marker = json.loads(marker_text)
+        assert len(marker["authority"]["route"]) in (4, 32)
+        assert len(marker["authority"]["emergency"]) in (4, 32)
+    finally:
+        owner.close()
+
+
+@needs_host
+def test_a_pre_upgrade_record_is_migrated_or_terminalized_never_requeued(
+    tmp_path: Path,
+) -> None:
+    """A record with no fingerprint must not circle the queue forever."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        owner = _service(state, workspace, provider=_Provider(tag="pre"))
+        receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+        path = (
+            state / "tenants" / CodingService._tenant_ref(_TENANT)
+            / "jobs" / (receipt.job_id + ".json")
+        )
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.pop("execution_authority")
+        path.write_text(json.dumps(record), encoding="utf-8")
+        owner.close()
+
+        # No implementer has run, so nothing contradicts adoption: migrate.
+        adopter = _service(state, workspace, provider=_Provider(tag="adopt"))
+        migrated = json.loads(path.read_text(encoding="utf-8"))
+        assert migrated["execution_authority"] == adopter._execution_authority()
+        assert migrated["state"] == CodingJobState.QUEUED.value
+    try:
+        assert _wait(adopter, receipt.job_id).state is CodingJobState.COMPLETED
+    finally:
+        adopter.close()
+
+    # A queued record that has already entered an implementer is *not* the
+    # no-execution case, whatever its backend field says.
+    other = tmp_path / "state2"
+    with _resource_held(other, workspace):
+        owner = _service(other, workspace, provider=_Provider(tag="pre2"))
+        stranded = owner.submit(_TENANT, "key-2", _request(workspace))
+        path = (
+            other / "tenants" / CodingService._tenant_ref(_TENANT)
+            / "jobs" / (stranded.job_id + ".json")
+        )
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.pop("execution_authority")
+        record["implementer_started"] = True
+        path.write_text(json.dumps(record), encoding="utf-8")
+        owner.close()
+
+        settler = _service(other, workspace, provider=_Provider(tag="settle"))
+        try:
+            after = settler.get(_TENANT, stranded.job_id)
+            assert after.state is CodingJobState.FAILED
+            assert after.failure_code == EXECUTION_AUTHORITY_UNBOUND
+            assert after.landable is False
+        finally:
+            settler.close()
+
+
+@needs_host
+def test_a_v0_executing_record_is_never_adopted_on_an_empty_backend(
+    tmp_path: Path,
+) -> None:
+    """`implementation_backend` is written on outcome, so absence proves nothing.
+
+    A `running` record with no backend may already have entered a provider. It
+    is never stamped with this service's authority; it is either left to its
+    live lease holder or, once the lease is provably free, terminalized with its
+    accounting closed.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    runtime = CodingMissionRuntime(state, worker="w-v0")
+    tenant_ref = CodingService._tenant_ref(_TENANT)
+    placed = runtime.admit(
+        tenant_ref=tenant_ref, job_id="job_" + "c" * 24,
+        workspace_sha256="c" * 64, envelope=None, message="v0 running",
+    )
+    jobs = state / "tenants" / tenant_ref / "jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    path = jobs / ("job_" + "c" * 24 + ".json")
+    now = time.time()
+    path.write_text(json.dumps({
+        "job_id": "job_" + "c" * 24,
+        "state": CodingJobState.RUNNING.value,
+        "submitted_at": now,
+        "updated_at": now,
+        "working_dir": str(workspace),
+        "implementation_backend": "",
+        "mission": placed.projection.to_mapping(),
+    }), encoding="utf-8")
+
+    # A live holder of the job lease keeps it. The lock is taken directly,
+    # before any service exists, so nothing has had a chance to settle it.
+    import fcntl
+
+    lease_dir = state / "locks" / "jobs"
+    lease_dir.mkdir(parents=True, exist_ok=True)
+    lease_fd = os.open(
+        lease_dir / ("job_" + "c" * 24 + ".lock"), os.O_CREAT | os.O_RDWR, 0o600,
+    )
+    fcntl.flock(lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    marker_before = (
+        (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8")
+        if (state / AUTHORITY_MARKER_NAME).exists() else None
+    )
+    try:
+        # A live round nobody can attribute. Starting beside it would be
+        # exactly the unattributable execution the fingerprint exists to
+        # prevent, so the new service refuses instead of coexisting.
+        with pytest.raises(CodingAuthorityConflict):
+            _service(state, workspace, provider=_Provider(tag="peer"))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        # Untouched: not stolen, not stamped, not terminalized.
+        assert "execution_authority" not in record
+        assert record["state"] == CodingJobState.RUNNING.value
+        item = _store(state).get_work_item(placed.work_item_id)
+        assert item.status == STATUS_READY and item.attempts == 0
+        after = (
+            (state / AUTHORITY_MARKER_NAME).read_text(encoding="utf-8")
+            if (state / AUTHORITY_MARKER_NAME).exists() else None
+        )
+        assert after == marker_before
+    finally:
+        fcntl.flock(lease_fd, fcntl.LOCK_UN)
+        os.close(lease_fd)
+
+    # Lease provably free: terminalized with a stable code, item accounted.
+    settler = _service(state, workspace, provider=_Provider(tag="settle2"))
+    try:
+        after = settler.get(_TENANT, "job_" + "c" * 24)
+        assert after.state is CodingJobState.FAILED
+        assert after.failure_code == EXECUTION_AUTHORITY_UNBOUND
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert "execution_authority" not in record
+    finally:
+        settler.close()
+
+
+@needs_host
+def test_a_v0_awaiting_record_accepts_but_never_reworks(tmp_path: Path) -> None:
+    """Accept describes a hashed revision; rework would adopt an unknown route."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    for index, verdict in enumerate((
+        CodingAuditVerdict.ACCEPT, CodingAuditVerdict.REWORK,
+    )):
+        state = tmp_path / "state{}".format(index)
+        service = _service(state, workspace, require_codex_audit=True)
+        try:
+            receipt = service.submit(_TENANT, "key-1", _request(workspace))
+            ready = _wait(service, receipt.job_id)
+            assert ready.state is CodingJobState.AWAITING_CODEX_AUDIT
+            path = (
+                state / "tenants" / CodingService._tenant_ref(_TENANT)
+                / "jobs" / (receipt.job_id + ".json")
+            )
+        finally:
+            service.close()
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.pop("execution_authority")
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+        heir = _service(state, workspace, require_codex_audit=True)
+        try:
+            # Start-up leaves an awaiting record exactly as it found it.
+            assert heir.get(_TENANT, receipt.job_id).state is (
+                CodingJobState.AWAITING_CODEX_AUDIT
+            )
+            assert "execution_authority" not in json.loads(
+                path.read_text(encoding="utf-8"),
+            )
+            findings = () if verdict is CodingAuditVerdict.ACCEPT else (
+                CodingAuditFinding(
+                    code="needs_more", message="do more work",
+                    severity=CodingAuditSeverity.MAJOR,
+                ),
+            )
+            if verdict is CodingAuditVerdict.ACCEPT:
+                accepted = heir.audit(
+                    _TENANT, receipt.job_id,
+                    ready.implementation_revision_sha256, verdict, findings,
+                )
+                assert accepted.state is CodingJobState.CODEX_ACCEPTED
+            else:
+                with pytest.raises(CodingAuthorityConflict):
+                    heir.audit(
+                        _TENANT, receipt.job_id,
+                        ready.implementation_revision_sha256, verdict, findings,
+                    )
+                settled = heir.get(_TENANT, receipt.job_id)
+                assert settled.state is CodingJobState.FAILED
+                assert settled.failure_code == EXECUTION_AUTHORITY_UNBOUND
+                assert settled.rework_count == 0
+        finally:
+            heir.close()
+
+
+def test_the_authority_conflict_is_public_package_surface() -> None:
+    """Callers branch on this by type, so it binds to the package, not a module."""
+
+    import flyto_ai.coding as coding
+    from flyto_ai.coding.service import CodingAuthorityConflict as internal
+
+    assert "CodingAuthorityConflict" in coding.__all__
+    assert coding.CodingAuthorityConflict is internal
+    assert issubclass(coding.CodingAuthorityConflict, coding.CodingServiceError)
+    assert coding.CodingAuthorityConflict("x").code == "execution_authority_conflict"
+    assert coding.CodingAuthorityConflict("x").retryable is False
+
+
+@needs_host
+def test_a_changed_build_id_does_not_strand_semantically_identical_work(
+    tmp_path: Path,
+) -> None:
+    """Compatibility is semantic, not a build stamp.
+
+    A hot reload or an ordinary restart mints a new build id. Binding execution
+    to it would strand a queued job that an otherwise identical worker can run
+    perfectly well - the fingerprint's own failure mode, inverted.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        submitter = _service(state, workspace, provider=_Provider(tag="old-build"))
+        try:
+            receipt = submitter.submit(_TENANT, "key-1", _request(workspace))
+            assert submitter.get(_TENANT, receipt.job_id).state is CodingJobState.QUEUED
+            admitted_build = submitter.build_id
+            record = json.loads((
+                state / "tenants" / CodingService._tenant_ref(_TENANT)
+                / "jobs" / (receipt.job_id + ".json")
+            ).read_text(encoding="utf-8"))
+            # The fingerprint never carried the build id in the first place.
+            assert "build_id" not in record["execution_authority"]
+        finally:
+            submitter.close()
+
+        worker = _service(state, workspace, provider=_Provider(tag="new-build"))
+        # A different build, same semantics, and therefore still compatible.
+        worker.build_id = admitted_build + "-reloaded"
+        assert worker.build_id != admitted_build
+        assert worker._may_execute(record) is True
+    try:
+        settled = _wait(worker, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        item = _items(state)[
+            CodingMissionProjection.from_mapping(settled.mission or {}).work_item_id
+        ]
+        assert item.attempts == 1
+    finally:
+        worker.close()
+
+
+@needs_host
+def test_admission_releases_its_lease_before_any_pump_can_dispatch(
+    tmp_path: Path,
+) -> None:
+    """Ordering, asserted from the durable state a pump would have to read.
+
+    Submitting the pump before releasing the lease let this instance's own
+    worker dispatch its own item, refuse it as leased, and requeue it - burning
+    an attempt on its own job. `submit` must therefore return with the lease
+    already gone, and the item must still be untouched at `ready`.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        service = _service(state, workspace, provider=_Provider(tag="order"))
+        try:
+            receipt = service.submit(_TENANT, "key-1", _request(workspace))
+            # The lease is not held by anybody the moment submit returns...
+            assert receipt.job_id not in service._job_leases
+            assert service._claim_round(receipt.job_id) is True
+            service._release_round(receipt.job_id)
+            # ...and no pump has burnt an attempt on it.
+            projection = CodingMissionProjection.from_mapping(receipt.mission or {})
+            item = _store(state).get_work_item(projection.work_item_id)
+            assert item.status == STATUS_READY
+            assert item.attempts == 0 and item.fence == 0
+        finally:
+            pass
+    try:
+        settled = _wait(service, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        item = _store(state).get_work_item(projection.work_item_id)
+        assert item.attempts == 1
+    finally:
+        service.close()
+
+
+@needs_host
+def test_a_live_running_round_cannot_be_stolen_by_another_instance(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    runner = _service(state, workspace, provider=_Provider(delay=0.6, tag="run"))
+    other = _service(state, workspace, provider=_Provider(tag="other"))
+    try:
+        receipt = runner.submit(_TENANT, "key-1", _request(workspace))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if runner.get(_TENANT, receipt.job_id).state is CodingJobState.RUNNING:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("the round never reached running")
+        # A round is genuinely executing, so its lease is genuinely held.
+        assert other._claim_round(receipt.job_id) is False
+        settled = _wait(runner, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        item = _items(state)[
+            CodingMissionProjection.from_mapping(settled.mission or {}).work_item_id
+        ]
+        assert item.attempts == 1
+    finally:
+        runner.close()
+        other.close()
+
+
+@needs_host
+def test_a_different_startup_authority_never_executes_another_worker_job(
+    tmp_path: Path,
+) -> None:
+    """Shared durable state, unshared authority: requeued, never redirected."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        owner = _service(state, workspace, provider=_Provider(tag="owner"))
+        receipt = owner.submit(_TENANT, "key-1", _request(workspace))
+        record = json.loads((
+            state / "tenants" / CodingService._tenant_ref(_TENANT)
+            / "jobs" / (receipt.job_id + ".json")
+        ).read_text(encoding="utf-8"))
+        authority = record["execution_authority"]
+        assert authority["backend"] == "native"
+        assert authority["audit_required"] is False
+        # No secret, no credential, no absolute path in the fingerprint.
+        rendered = json.dumps(authority)
+        assert str(workspace) not in rendered and str(state) not in rendered
+
+        # A service that would build a different implementer cannot even start
+        # against this root while the job is live, so it never reaches a pump.
+        with pytest.raises(CodingAuthorityConflict):
+            _stranger(state, workspace)
+        assert owner._may_execute(record) is True
+        # An unfingerprinted or malformed record fails closed both ways.
+        assert owner._may_execute({}) is False
+        assert owner._may_execute({"execution_authority": {"backend": "native"}}) is False
+        assert owner._may_execute(
+            {"execution_authority": dict(authority, audit_required=True)},
+        ) is False
+    try:
+        settled = _wait(owner, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        # The compatible owner ran it; the stranger's provider never did.
+        assert (workspace / "notes-owner.txt").exists()
+        assert not (workspace / "notes-stranger.txt").exists()
+    finally:
+        owner.close()
+
+
+# --------------------------------------------------------------------------
 # restart
 # --------------------------------------------------------------------------
 
@@ -1039,12 +2226,19 @@ def test_a_restart_reclaims_only_leases_it_can_prove_are_free(
     jobs = state / "tenants" / tenant_ref / "jobs"
     jobs.mkdir(parents=True, exist_ok=True)
     now = time.time()
+    # Stamped with this configuration's own authority, so the record is an
+    # *interrupted* round rather than a pre-fingerprint one - the two settle
+    # under deliberately different codes.
+    probe = _service(state, workspace)
+    authority = probe._execution_authority()
+    probe.close()
     (jobs / ("job_" + "e" * 24 + ".json")).write_text(json.dumps({
         "job_id": "job_" + "e" * 24,
         "state": CodingJobState.RUNNING.value,
         "submitted_at": now,
         "updated_at": now,
         "working_dir": str(workspace),
+        "execution_authority": authority,
         "mission": placed.projection.to_mapping(),
     }), encoding="utf-8")
     # Dispatch it once and leave the block without closing, exactly as an

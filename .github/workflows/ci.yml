@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           repository: flytohub/flyto-indexer
-          ref: 1b624987b15ef7cd2361370478d07ea36e5aa5ee
+          ref: ecb67865cddd3e3b05fa9a2f8867430c858a993f
           path: flyto-indexer
       - uses: actions/setup-python@v7
         with:

@@ -2845,6 +2845,29 @@ def test_an_explicit_existing_request_path_wins_over_a_fuzzy_search_hit(tmp_path
     assert _plan_targets(indexer) == ["scripts/verify-lima-gazebo.sh"]
 
 
+def test_explicit_existing_path_accepts_bracketed_route_segment(tmp_path):
+    """Expo dynamic route segments remain exact intent-ledger targets."""
+
+    route = tmp_path / "app" / "spot" / "[id].tsx"
+    route.parent.mkdir(parents=True)
+    route.write_text("export default function SpotDetailPage() {}\n", encoding="utf-8")
+    indexer = IndexerDouble(search_results=[
+        {"path": "app/unrelated.tsx", "name": "unrelated"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(
+            tmp_path,
+            "Fix app/spot/[id].tsx without widening the change.",
+        ),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["app/spot/[id].tsx"]
+
+
 def test_multiple_explicit_existing_paths_form_one_bounded_plan_scope(tmp_path):
     paths = [
         "src/components/Widget.tsx",

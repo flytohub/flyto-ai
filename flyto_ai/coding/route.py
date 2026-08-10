@@ -48,9 +48,9 @@ _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 #: Absolute, drive, UNC, traversal, whitespace, and control-containing forms
 #: are deliberately outside this grammar and still face filesystem checks.
 _EXPLICIT_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9_.:/\\-])"
-    r"((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+)"
-    r"(?![A-Za-z0-9_./\\-])"
+    r"(?<![A-Za-z0-9_.:/\\\[\]-])"
+    r"((?:[A-Za-z0-9_.\[\]-]+/)*[A-Za-z0-9_.\[\]-]+)"
+    r"(?![A-Za-z0-9_./\\\[\]-])"
 )
 _MAX_EXPLICIT_REQUEST_TARGETS = 12
 

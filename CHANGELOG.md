@@ -7,6 +7,9 @@
   Large-workspace strict verification can finish instead of being killed by a
   CLI-only 30-second deadline; every gate remains mandatory and genuine
   timeouts still fail closed as `capability_timeout`.
+- Blueprint discovery now ranks ordered phrase overlap before catalogue order,
+  so direction-bearing reuse such as CSV-to-JSON no longer selects the reverse
+  JSON-to-CSV transform when both candidates share the same token set.
 
 - One worktree is now owned by one audited coding job for the whole job, not
   for one implementation round. Previously the cross-process workspace lock was

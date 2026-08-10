@@ -1435,37 +1435,61 @@ class CodingRouteOrchestrator:
 
     @classmethod
     def _relevant_blueprint(cls, message: str, matches: Sequence[Any]):
-        """Pick a catalogue entry only on real token overlap with the request.
+        """Pick the best bounded catalogue entry on semantic token overlap.
 
         Blueprint text is untrusted data. It is used here purely as an opaque
         matching corpus; nothing from it is ever handed to the implementer.
         """
-        wanted = cls._tokens(message)
+        wanted_ordered = cls._ordered_tokens(message)
+        wanted = set(wanted_ordered)
         if not wanted:
             return None
+        wanted_pairs = set(zip(wanted_ordered, wanted_ordered[1:]))
+        best = None
+        best_score = (-1, -1)
         for item in matches[:BLUEPRINT_MAX_CANDIDATES]:
             if not isinstance(item, Mapping):
                 raise CodingRouteError("malformed_evidence", RouteLane.BLUEPRINT)
-            corpus = []
+            corpus_tokens = set()
+            corpus_pairs = set()
             for key in ("id", "name", "description", "summary", "tags", "module_ids"):
                 value = item.get(key)
                 if isinstance(value, str):
-                    corpus.append(value)
+                    values = (value,)
                 elif isinstance(value, (list, tuple)):
-                    corpus.extend(str(entry) for entry in value[:32])
-            overlap = wanted & cls._tokens(" ".join(corpus)[:4000])
-            if len(overlap) >= BLUEPRINT_MIN_TOKEN_OVERLAP:
-                return item
-        return None
+                    values = tuple(str(entry) for entry in value[:32])
+                else:
+                    values = ()
+                for entry in values:
+                    ordered = cls._ordered_tokens(entry[:4000])
+                    corpus_tokens.update(ordered)
+                    corpus_pairs.update(zip(ordered, ordered[1:]))
+            overlap = wanted & corpus_tokens
+            if len(overlap) < BLUEPRINT_MIN_TOKEN_OVERLAP:
+                continue
+            # Direction-bearing phrases (for example CSV -> JSON) outrank a
+            # reverse transform with the same bag of tokens. Catalogue order
+            # remains the deterministic tie-break because only a strict score
+            # improvement replaces the current candidate.
+            score = (len(wanted_pairs & corpus_pairs), len(overlap))
+            if score > best_score:
+                best = item
+                best_score = score
+        return best
 
     @staticmethod
-    def _tokens(value: str) -> set:
-        """Normalize text into bounded comparable tokens, minus stop words."""
+    def _ordered_tokens(value: str) -> Tuple[str, ...]:
+        """Normalize bounded comparable tokens while preserving their order."""
         raw = re.findall(r"[a-z0-9]+", str(value or "").lower())
-        return {
+        return tuple(
             token for token in raw[:400]
             if len(token) >= 3 and token not in BLUEPRINT_STOP_WORDS
-        }
+        )
+
+    @classmethod
+    def _tokens(cls, value: str) -> set:
+        """Normalize text into bounded comparable tokens, minus stop words."""
+        return set(cls._ordered_tokens(value))
 
     @staticmethod
     def _safe_label(value: Any) -> str:

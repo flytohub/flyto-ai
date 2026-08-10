@@ -147,6 +147,10 @@ eligibility evidence for the caller, not an action the service performs.
   prevents a valid large-workspace `verify.strict` or reindex from dying at
   the old 30-second CLI-only bound; the lane remains mandatory and a genuine
   timeout still fails closed as `capability_timeout`.
+- Deterministic Blueprint relevance: the read-only lane still requires real
+  token overlap, but now ranks ordered phrase overlap before catalogue order.
+  This distinguishes direction-bearing matches such as CSV-to-JSON from the
+  reverse transform while preserving bounded candidates and inert projection.
 - Exact failure evidence: a failed lane keeps its completed calls plus one
   failed call naming the host-derived semantic action, within the configured
   per-lane call bound. A transport timeout is classified `capability_timeout`

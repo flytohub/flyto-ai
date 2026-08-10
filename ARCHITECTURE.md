@@ -345,7 +345,10 @@ command lane; a green check does not substitute for the Indexer post-gate.
 Core validation flows through `flyto_ai.tools.core_tools` with a
 validation-only allowlist that excludes `execute_module` and browser
 authority. Blueprint is read-only discovery that yields a compact
-content-addressed projection, never an executed workflow.
+content-addressed projection, never an executed workflow. Candidate selection
+is bounded and deterministic: real token overlap is required, ordered phrase
+overlap ranks direction-bearing matches above reverse transforms, and catalogue
+order is only the final tie-break.
 
 Provider selection, credentials, tenant identity, workspace roots, the state
 root, the implementer, the rework ceiling, and the audit requirement are all

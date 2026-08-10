@@ -97,6 +97,23 @@ that topology and are closed here.
   `awaiting_codex_audit` to `failed`, never accept or land — so it is always
   worse for a caller than auditing and cannot become an audit bypass.
 
+## 2026-08-10: Blueprint reuse preserves direction-bearing phrase order
+
+The Blueprint catalogue may return several candidates with the same token set.
+Choosing the first candidate made a request for CSV-to-JSON reuse project a
+JSON-to-CSV label when both shared `convert`, `csv`, and `json`.
+
+- The read-only lane still considers at most 20 candidates and still requires
+  at least two overlapping normalized tokens.
+- Among eligible candidates it ranks overlapping adjacent token pairs first,
+  then total token overlap. Catalogue order remains the deterministic final
+  tie-break.
+- Only the existing inert name-and-digest projection crosses to the
+  implementer. No Blueprint steps, prose, or execution authority are exposed.
+
+This is host-owned matching logic, not learned catalogue trust. Rollback is the
+bounded score selection and its reverse-transform regression test together.
+
 ## 2026-08-10: One bounded Indexer timeout for every coding-route entry
 
 Large Flyto2 workspaces can legitimately need more than 30 seconds for the

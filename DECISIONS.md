@@ -1,5 +1,20 @@
 # Decisions
 
+## 2026-08-10: Mission authority sets the Python floor at 3.11
+
+The public package and coding service require Python 3.11 or newer. The mission
+store deliberately binds its in-memory SQLite authority database into a
+pathname-free byte envelope with `sqlite3.Connection.serialize()` and
+`deserialize()`. Those primitives are part of the supported CPython surface
+from 3.11 onward but are absent on 3.10.
+
+Claiming 3.10 support made a clean runner fail only after entering the mission
+control plane. The package metadata and CI matrix now state the real boundary,
+CI exercises both Python 3.11 and 3.12, and the development extra installs the
+Claude SDK required by the complete route suite. We do not emulate the missing
+primitive with temporary files, monkeypatches, or a weaker continuation path;
+unsupported hosts remain outside the contract and fail closed.
+
 ## 2026-08-10: `require_changes` is cumulative across audited rework
 
 `require_changes=true` requires one real attributable job revision; it does not
@@ -151,6 +166,25 @@ JSON-to-CSV label when both shared `convert`, `csv`, and `json`.
 
 This is host-owned matching logic, not learned catalogue trust. Rollback is the
 bounded score selection and its reverse-transform regression test together.
+
+## 2026-08-10: The execution plan selects one published Indexer gate family
+
+Indexer has published two pre-work gate vocabularies: legacy `assess` /
+`implement`, and current `plan_changes` / `apply_changes`. A route fixed to the
+legacy pair refused the current server's real plan with
+`plan_gate_phase_unknown` before the implementer could start.
+
+The host now derives one complete family from the exact execution plan before
+dispatching its first plan step. A plan without gates keeps the legacy default
+for backwards compatibility. An unknown phase, a duplicate phase within one
+plan scope, or any mix of the two families fails closed. The host never probes
+by sending extra gates and never composes a third vocabulary.
+
+The same compatibility boundary covers the published post-validation result.
+A present legacy `pass` or `passed` field stays authoritative. When neither is
+present, current `overall=pass` evidence is accepted only if both the ruff and
+pytest status blocks explicitly say `pass` or `skipped`. A headline without
+its component evidence, or any contradictory status, remains failure.
 
 ## 2026-08-10: One bounded Indexer timeout for every coding-route entry
 

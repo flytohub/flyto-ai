@@ -1908,7 +1908,7 @@ Whether a required capability cannot be attached *by the selected backend*.
 
 `class RouteLane(str, Enum)`
 
-Source: [`flyto_ai/coding/route.py:261`](../../../flyto_ai/coding/route.py#L261)
+Source: [`flyto_ai/coding/route.py:270`](../../../flyto_ai/coding/route.py#L270)
 
 The host-owned lanes that surround every audited implementation round.
 
@@ -1916,14 +1916,14 @@ The host-owned lanes that surround every audited implementation round.
 
 `class RouteLaneStatus(str, Enum)`
 
-Source: [`flyto_ai/coding/route.py:285`](../../../flyto_ai/coding/route.py#L285)
+Source: [`flyto_ai/coding/route.py:294`](../../../flyto_ai/coding/route.py#L294)
 
 How one lane resolved.
 
 ### `_domain_code_token` (internal)
 
 `_domain_code_token(value: Any, prefix: str) -> str`
-Source: [`flyto_ai/coding/route.py:298`](../../../flyto_ai/coding/route.py#L298)
+Source: [`flyto_ai/coding/route.py:307`](../../../flyto_ai/coding/route.py#L307)
 
 Map one already-valid domain code into the public blocker grammar.
 
@@ -1931,128 +1931,128 @@ Map one already-valid domain code into the public blocker grammar.
 
 `class CodingRouteError(RuntimeError)`
 
-Source: [`flyto_ai/coding/route.py:318`](../../../flyto_ai/coding/route.py#L318)
+Source: [`flyto_ai/coding/route.py:327`](../../../flyto_ai/coding/route.py#L327)
 
 A lane failed closed.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(code: str, lane: RouteLane, blockers: Sequence[str] = ()) -> None` | internal | Internal `__init__` implementation on `CodingRouteError`; the linked source is authoritative. | [`flyto_ai/coding/route.py:321`](../../../flyto_ai/coding/route.py#L321) |
+| `__init__(code: str, lane: RouteLane, blockers: Sequence[str] = ()) -> None` | internal | Internal `__init__` implementation on `CodingRouteError`; the linked source is authoritative. | [`flyto_ai/coding/route.py:330`](../../../flyto_ai/coding/route.py#L330) |
 
 ### `RouteLimits` (public)
 
 `class RouteLimits`
 
-Source: [`flyto_ai/coding/route.py:338`](../../../flyto_ai/coding/route.py#L338)
+Source: [`flyto_ai/coding/route.py:347`](../../../flyto_ai/coding/route.py#L347)
 
 Bounds every loop, payload, and remediation attempt in the route.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `RouteLimits`; the linked source is authoritative. | [`flyto_ai/coding/route.py:367`](../../../flyto_ai/coding/route.py#L367) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `RouteLimits`; the linked source is authoritative. | [`flyto_ai/coding/route.py:376`](../../../flyto_ai/coding/route.py#L376) |
 
 ### `CodingRoutePolicy` (public)
 
 `class CodingRoutePolicy`
 
-Source: [`flyto_ai/coding/route.py:386`](../../../flyto_ai/coding/route.py#L386)
+Source: [`flyto_ai/coding/route.py:395`](../../../flyto_ai/coding/route.py#L395)
 
 Startup-only route authority.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingRoutePolicy`; the linked source is authoritative. | [`flyto_ai/coding/route.py:401`](../../../flyto_ai/coding/route.py#L401) |
-| `lanes() -> Tuple[RouteLane, ...]` | public | Public `lanes` implementation on `CodingRoutePolicy`; the linked source is authoritative. | [`flyto_ai/coding/route.py:431`](../../../flyto_ai/coding/route.py#L431) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingRoutePolicy`; the linked source is authoritative. | [`flyto_ai/coding/route.py:410`](../../../flyto_ai/coding/route.py#L410) |
+| `lanes() -> Tuple[RouteLane, ...]` | public | Public `lanes` implementation on `CodingRoutePolicy`; the linked source is authoritative. | [`flyto_ai/coding/route.py:440`](../../../flyto_ai/coding/route.py#L440) |
 
 ### `RouteCallRecord` (public)
 
 `class RouteCallRecord`
 
-Source: [`flyto_ai/coding/route.py:439`](../../../flyto_ai/coding/route.py#L439)
+Source: [`flyto_ai/coding/route.py:448`](../../../flyto_ai/coding/route.py#L448)
 
 One completed allowlisted call.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `RouteCallRecord`; the linked source is authoritative. | [`flyto_ai/coding/route.py:447`](../../../flyto_ai/coding/route.py#L447) |
-| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `RouteCallRecord`; the linked source is authoritative. | [`flyto_ai/coding/route.py:459`](../../../flyto_ai/coding/route.py#L459) |
-| `from_mapping(value: Mapping[str, Any]) -> 'RouteCallRecord'` | public | Public `from_mapping` implementation on `RouteCallRecord`; the linked source is authoritative. | [`flyto_ai/coding/route.py:466`](../../../flyto_ai/coding/route.py#L466) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `RouteCallRecord`; the linked source is authoritative. | [`flyto_ai/coding/route.py:456`](../../../flyto_ai/coding/route.py#L456) |
+| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `RouteCallRecord`; the linked source is authoritative. | [`flyto_ai/coding/route.py:468`](../../../flyto_ai/coding/route.py#L468) |
+| `from_mapping(value: Mapping[str, Any]) -> 'RouteCallRecord'` | public | Public `from_mapping` implementation on `RouteCallRecord`; the linked source is authoritative. | [`flyto_ai/coding/route.py:475`](../../../flyto_ai/coding/route.py#L475) |
 
 ### `RouteLaneReceipt` (public)
 
 `class RouteLaneReceipt`
 
-Source: [`flyto_ai/coding/route.py:481`](../../../flyto_ai/coding/route.py#L481)
+Source: [`flyto_ai/coding/route.py:490`](../../../flyto_ai/coding/route.py#L490)
 
 Bounded, coherence-validated evidence for one lane.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `RouteLaneReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:492`](../../../flyto_ai/coding/route.py#L492) |
-| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `RouteLaneReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:549`](../../../flyto_ai/coding/route.py#L549) |
-| `from_mapping(value: Mapping[str, Any]) -> 'RouteLaneReceipt'` | public | Public `from_mapping` implementation on `RouteLaneReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:561`](../../../flyto_ai/coding/route.py#L561) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `RouteLaneReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:501`](../../../flyto_ai/coding/route.py#L501) |
+| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `RouteLaneReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:558`](../../../flyto_ai/coding/route.py#L558) |
+| `from_mapping(value: Mapping[str, Any]) -> 'RouteLaneReceipt'` | public | Public `from_mapping` implementation on `RouteLaneReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:570`](../../../flyto_ai/coding/route.py#L570) |
 
 ### `CodingRouteReceipt` (public)
 
 `class CodingRouteReceipt`
 
-Source: [`flyto_ai/coding/route.py:589`](../../../flyto_ai/coding/route.py#L589)
+Source: [`flyto_ai/coding/route.py:598`](../../../flyto_ai/coding/route.py#L598)
 
 Machine-checkable proof of which lanes ran around one round.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingRouteReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:599`](../../../flyto_ai/coding/route.py#L599) |
-| `compute_digest(lanes: Sequence[RouteLaneReceipt], *, strict: bool, ok: bool, failure_code: str = '') -> str` | public | Public `compute_digest` implementation on `CodingRouteReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:677`](../../../flyto_ai/coding/route.py#L677) |
-| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `CodingRouteReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:694`](../../../flyto_ai/coding/route.py#L694) |
-| `from_mapping(value: Mapping[str, Any]) -> 'CodingRouteReceipt'` | public | Revalidate a persisted receipt; a tampered record fails closed. | [`flyto_ai/coding/route.py:705`](../../../flyto_ai/coding/route.py#L705) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingRouteReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:608`](../../../flyto_ai/coding/route.py#L608) |
+| `compute_digest(lanes: Sequence[RouteLaneReceipt], *, strict: bool, ok: bool, failure_code: str = '') -> str` | public | Public `compute_digest` implementation on `CodingRouteReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:686`](../../../flyto_ai/coding/route.py#L686) |
+| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `CodingRouteReceipt`; the linked source is authoritative. | [`flyto_ai/coding/route.py:703`](../../../flyto_ai/coding/route.py#L703) |
+| `from_mapping(value: Mapping[str, Any]) -> 'CodingRouteReceipt'` | public | Revalidate a persisted receipt; a tampered record fails closed. | [`flyto_ai/coding/route.py:714`](../../../flyto_ai/coding/route.py#L714) |
 
 ### `_strict_bool` (internal)
 
 `_strict_bool(value: Any, field_name: str) -> bool`
-Source: [`flyto_ai/coding/route.py:727`](../../../flyto_ai/coding/route.py#L727)
+Source: [`flyto_ai/coding/route.py:736`](../../../flyto_ai/coding/route.py#L736)
 
 Accept only a real JSON boolean; never coerce a string or number.
 
 ### `_strict_str` (internal)
 
 `_strict_str(value: Any, field_name: str) -> str`
-Source: [`flyto_ai/coding/route.py:734`](../../../flyto_ai/coding/route.py#L734)
+Source: [`flyto_ai/coding/route.py:743`](../../../flyto_ai/coding/route.py#L743)
 
 Internal `_strict_str` implementation on this module; the linked source is authoritative.
 
 ### `_strict_list` (internal)
 
 `_strict_list(value: Any, field_name: str) -> list`
-Source: [`flyto_ai/coding/route.py:740`](../../../flyto_ai/coding/route.py#L740)
+Source: [`flyto_ai/coding/route.py:749`](../../../flyto_ai/coding/route.py#L749)
 
 Internal `_strict_list` implementation on this module; the linked source is authoritative.
 
 ### `_primary_boolean` (internal)
 
 `_primary_boolean(body: Mapping[str, Any], primary: str, fallback: str) -> bool`
-Source: [`flyto_ai/coding/route.py:746`](../../../flyto_ai/coding/route.py#L746)
+Source: [`flyto_ai/coding/route.py:755`](../../../flyto_ai/coding/route.py#L755)
 
 Read one success flag with fail-closed key precedence.
 
 ### `bounded_payload` (public)
 
 `bounded_payload(value: Any, limits: RouteLimits) -> Any`
-Source: [`flyto_ai/coding/route.py:760`](../../../flyto_ai/coding/route.py#L760)
+Source: [`flyto_ai/coding/route.py:769`](../../../flyto_ai/coding/route.py#L769)
 
 Reject an MCP payload that exceeds the byte or depth bound.
 
 ### `route_thread_id` (public)
 
 `route_thread_id(supplied: Any) -> str`
-Source: [`flyto_ai/coding/route.py:788`](../../../flyto_ai/coding/route.py#L788)
+Source: [`flyto_ai/coding/route.py:797`](../../../flyto_ai/coding/route.py#L797)
 
 Return a durable thread id even when the route failed before a session.
 
 ### `route_failure_point` (public)
 
 `route_failure_point(receipt: 'CodingRouteReceipt') -> Tuple[str, str, str]`
-Source: [`flyto_ai/coding/route.py:802`](../../../flyto_ai/coding/route.py#L802)
+Source: [`flyto_ai/coding/route.py:811`](../../../flyto_ai/coding/route.py#L811)
 
 Return `(lane, action, failure_code)` for one receipt.
 
@@ -2060,7 +2060,7 @@ Return `(lane, action, failure_code)` for one receipt.
 
 `class _LaneTrace`
 
-Source: [`flyto_ai/coding/route.py:828`](../../../flyto_ai/coding/route.py#L828)
+Source: [`flyto_ai/coding/route.py:837`](../../../flyto_ai/coding/route.py#L837)
 
 Mutable bounded evidence for the lane that is currently running.
 
@@ -2068,59 +2068,59 @@ Mutable bounded evidence for the lane that is currently running.
 
 `class CodingRouteOrchestrator`
 
-Source: [`flyto_ai/coding/route.py:848`](../../../flyto_ai/coding/route.py#L848)
+Source: [`flyto_ai/coding/route.py:857`](../../../flyto_ai/coding/route.py#L857)
 
 Run the host-owned lanes around one implementation round.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(policy: CodingRoutePolicy, *, capability_dispatch: Optional[LaneDispatch] = None, core_dispatch: Optional[LaneDispatch] = None) -> None` | internal | Internal `__init__` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:851`](../../../flyto_ai/coding/route.py#L851) |
-| `_lane_required(lane: RouteLane) -> bool` | internal | On a strict route all four lanes are mandatory, never detachable. | [`flyto_ai/coding/route.py:865`](../../../flyto_ai/coding/route.py#L865) |
-| `_begin_lane(lane: RouteLane) -> list` | internal | Open one lane's call trace and return the list it records into. | [`flyto_ai/coding/route.py:873`](../../../flyto_ai/coding/route.py#L873) |
-| `_charge(lane: RouteLane) -> None` | internal | Reserve one dispatch against this lane's budget, or refuse outright. | [`flyto_ai/coding/route.py:878`](../../../flyto_ai/coding/route.py#L878) |
-| `_remaining_calls(lane: RouteLane) -> int` | internal | How many dispatches this lane may still make. | [`flyto_ai/coding/route.py:893`](../../../flyto_ai/coding/route.py#L893) |
-| `_require_plan_budget(lane: RouteLane, steps: Sequence[Mapping[str, Any]], scheduled: Mapping[str, AbstractSet[str]]) -> None` | internal | Refuse an unrunnable plan before its first step, not halfway through. | [`flyto_ai/coding/route.py:901`](../../../flyto_ai/coding/route.py#L901) |
-| `_failed_call(code: str, lane: RouteLane, action: str) -> CodingRouteError` | internal | Record the exact call that failed, then return the closing error. | [`flyto_ai/coding/route.py:929`](../../../flyto_ai/coding/route.py#L929) |
-| `_capability_reason(raw: Mapping[str, Any]) -> str` | internal | Map a closed capability failure classification to a lane reason. | [`flyto_ai/coding/route.py:950`](../../../flyto_ai/coding/route.py#L950) |
-| `async _call(lane: RouteLane, tool: str, arguments: Dict[str, Any], *, action: str = '') -> Any` | internal | Dispatch one allowlisted call and validate its shape, not its prose. | [`flyto_ai/coding/route.py:957`](../../../flyto_ai/coding/route.py#L957) |
-| `_domain_payload(raw: Mapping[str, Any], lane: RouteLane, action: str = '') -> Any` | internal | Unwrap the negotiated MCP envelope down to its domain result. | [`flyto_ai/coding/route.py:988`](../../../flyto_ai/coding/route.py#L988) |
-| `_lane_projection(result: Any, keys: Sequence[str]) -> Any` | internal | Internal `_lane_projection` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:1039`](../../../flyto_ai/coding/route.py#L1039) |
-| `async _indexer_pre(request: CodingTaskRequest, parent_contract: Optional[Mapping[str, Any]] = None) -> Tuple[RouteLaneReceipt, Dict[str, Any]]` | internal | Run the mandatory pre-work lane against the real Indexer contract. | [`flyto_ai/coding/route.py:1047`](../../../flyto_ai/coding/route.py#L1047) |
-| `async _run_plan_step(lane: RouteLane, step: Mapping[str, Any], scope: str, contract: Mapping[str, Any], state: Dict[str, Any], calls: list, project: str, targets: Sequence[str], allowed: AbstractSet[str], gates_passed: list) -> None` | internal | Run exactly one plan step, or refuse the whole lane. | [`flyto_ai/coding/route.py:1159`](../../../flyto_ai/coding/route.py#L1159) |
-| `_scheduled_gate_phases(groups: Sequence[Any], lane: RouteLane) -> Dict[str, AbstractSet[str]]` | internal | Which canonical gates each compiled plan runs itself, keyed by scope. | [`flyto_ai/coding/route.py:1209`](../../../flyto_ai/coding/route.py#L1209) |
-| `async _indexer_post(request: CodingTaskRequest, context: Mapping[str, Any], result: Optional[CodingTaskResult] = None, changed: Optional[Sequence[str]] = None) -> RouteLaneReceipt` | internal | Validate the real final workspace, then run the strict verify gate. | [`flyto_ai/coding/route.py:1246`](../../../flyto_ai/coding/route.py#L1246) |
-| `_search_args(query: str, project: str) -> Dict[str, Any]` | internal | Scope one host-owned search to the project this round is editing. | [`flyto_ai/coding/route.py:1340`](../../../flyto_ai/coding/route.py#L1340) |
-| `_translate_step(tool, args, allowed, project = '')` | internal | Map one plan operation to an exact allowlisted public call. | [`flyto_ai/coding/route.py:1355`](../../../flyto_ai/coding/route.py#L1355) |
-| `_validation_passed(validated: Any) -> bool` | internal | Require an explicit boolean success from the real validate result. | [`flyto_ai/coding/route.py:1403`](../../../flyto_ai/coding/route.py#L1403) |
-| `_domain_evidence(validated: Any) -> Tuple[str, ...]` | internal | Project a domain gate's own reasons into host-owned blockers. | [`flyto_ai/coding/route.py:1414`](../../../flyto_ai/coding/route.py#L1414) |
-| `_validation_failure_detail(validated: Any) -> str` | internal | Project one bounded Indexer reason into the route receipt. | [`flyto_ai/coding/route.py:1444`](../../../flyto_ai/coding/route.py#L1444) |
-| `_indexer_catalog(lane: RouteLane) -> set` | internal | Internal `_indexer_catalog` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:1465`](../../../flyto_ai/coding/route.py#L1465) |
-| `infer_intent(message: str) -> str` | public | Pick the Indexer plan intent deterministically from the request. | [`flyto_ai/coding/route.py:1474`](../../../flyto_ai/coding/route.py#L1474) |
-| `_relative_path(item: Mapping[str, Any]) -> str` | internal | Return a search hit's canonical repository-relative POSIX path. | [`flyto_ai/coding/route.py:1483`](../../../flyto_ai/coding/route.py#L1483) |
-| `_derive_targets(found: Any) -> list` | internal | Take bounded target hints from real search evidence only. | [`flyto_ai/coding/route.py:1507`](../../../flyto_ai/coding/route.py#L1507) |
-| `_explicit_request_target(message: str, working_dir: str) -> str` | internal | Return the first safe existing repo file explicitly named by a task. | [`flyto_ai/coding/route.py:1545`](../../../flyto_ai/coding/route.py#L1545) |
-| `_prohibited_spans(text: str) -> Tuple[Tuple[int, int], ...]` | internal | Return the `[start, end)` offsets a target may not begin inside. | [`flyto_ai/coding/route.py:1559`](../../../flyto_ai/coding/route.py#L1559) |
-| `_explicit_request_targets(message: str, working_dir: str) -> list` | internal | Return a bounded set of exact repo file paths named by the task. | [`flyto_ai/coding/route.py:1599`](../../../flyto_ai/coding/route.py#L1599) |
-| `_plan_groups(plan_result: Mapping[str, Any], lane: RouteLane) -> list` | internal | Split a contract into its independently compiled plans, in declared order. | [`flyto_ai/coding/route.py:1689`](../../../flyto_ai/coding/route.py#L1689) |
-| `_plan_steps(plan_result: Mapping[str, Any], lane: RouteLane) -> list` | internal | Every step, in the exact order the lane will run it. | [`flyto_ai/coding/route.py:1749`](../../../flyto_ai/coding/route.py#L1749) |
-| `_ordered_steps(steps: Sequence[Mapping[str, Any]], lane: RouteLane) -> list` | internal | Order steps so every declared `depends_on` id precedes its step. | [`flyto_ai/coding/route.py:1759`](../../../flyto_ai/coding/route.py#L1759) |
-| `async _gate(lane: RouteLane, contract: Mapping[str, Any], phase: str, state: Dict[str, Any], calls: list, project: str, targets: Sequence[str], marker: str = '') -> None` | internal | Run one gate, remediate real blockers, and re-run within the bound. | [`flyto_ai/coding/route.py:1797`](../../../flyto_ai/coding/route.py#L1797) |
-| `_remediation_args(tool: str, project: str, targets: Sequence[str]) -> Dict[str, Any]` | internal | Internal `_remediation_args` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:1868`](../../../flyto_ai/coding/route.py#L1868) |
-| `async _blueprint(request: CodingTaskRequest) -> Tuple[RouteLaneReceipt, str]` | internal | Bounded read-only reuse discovery. | [`flyto_ai/coding/route.py:1885`](../../../flyto_ai/coding/route.py#L1885) |
-| `_relevant_blueprint(message: str, matches: Sequence[Any])` | internal | Pick the best bounded catalogue entry on semantic token overlap. | [`flyto_ai/coding/route.py:1944`](../../../flyto_ai/coding/route.py#L1944) |
-| `_ordered_tokens(value: str) -> Tuple[str, ...]` | internal | Normalize bounded comparable tokens while preserving their order. | [`flyto_ai/coding/route.py:1988`](../../../flyto_ai/coding/route.py#L1988) |
-| `_tokens(value: str) -> set` | internal | Normalize text into bounded comparable tokens, minus stop words. | [`flyto_ai/coding/route.py:1997`](../../../flyto_ai/coding/route.py#L1997) |
-| `_safe_label(value: Any) -> str` | internal | Reduce an untrusted catalogue name to a bounded inert identifier. | [`flyto_ai/coding/route.py:2002`](../../../flyto_ai/coding/route.py#L2002) |
-| `core_relevant(request: CodingTaskRequest, changed: Sequence[str]) -> bool` | public | Derive post-work Core relevance from attributable changed paths. | [`flyto_ai/coding/route.py:2012`](../../../flyto_ai/coding/route.py#L2012) |
-| `core_candidate_modules(changed: Sequence[str]) -> list` | public | Derive candidate Core module ids from attributable changed paths. | [`flyto_ai/coding/route.py:2025`](../../../flyto_ai/coding/route.py#L2025) |
-| `async _core_call(tool: str, arguments: Dict[str, Any]) -> Mapping[str, Any]` | internal | Dispatch one allowlisted Core call through the supported adapter. | [`flyto_ai/coding/route.py:2043`](../../../flyto_ai/coding/route.py#L2043) |
-| `async _core(request: CodingTaskRequest, changed: Sequence[str], result: Any) -> RouteLaneReceipt` | internal | Prove the changed Core contract, or fail closed. | [`flyto_ai/coding/route.py:2059`](../../../flyto_ai/coding/route.py#L2059) |
-| `_pinned_proof_checks(request: CodingTaskRequest, result: Any, proof_kind: str) -> Optional[Tuple[str, ...]]` | internal | Return passed host check names, ``()`` on failure, or no claim. | [`flyto_ai/coding/route.py:2154`](../../../flyto_ai/coding/route.py#L2154) |
-| `_validation_proved(proof: Mapping[str, Any]) -> bool` | internal | Accept only an explicit `valid: true` from the real Core contract. | [`flyto_ai/coding/route.py:2195`](../../../flyto_ai/coding/route.py#L2195) |
-| `_first_module_id(found: Any) -> str` | internal | Internal `_first_module_id` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:2218`](../../../flyto_ai/coding/route.py#L2218) |
-| `_example_params(info: Any) -> Optional[Dict[str, Any]]` | internal | Take exact declared example parameters; never invent them. | [`flyto_ai/coding/route.py:2237`](../../../flyto_ai/coding/route.py#L2237) |
-| `async run(request: CodingTaskRequest, implement: Implement, *, parent_contract: Optional[Mapping[str, Any]] = None, on_pre_contract: Optional[Callable[[Mapping[str, Any]], None]] = None, cumulative_scope: Optional[Callable[[Any], Sequence[str]]] = None) -> Tuple[CodingTaskResult, CodingRouteReceipt]` | public | Run pre-lanes, the implementer, then the post-lanes. | [`flyto_ai/coding/route.py:2261`](../../../flyto_ai/coding/route.py#L2261) |
-| `_failed(exc: CodingRouteError, lanes: list[RouteLaneReceipt], request: CodingTaskRequest, *, result: Optional[CodingTaskResult] = None) -> Tuple[CodingTaskResult, CodingRouteReceipt]` | internal | Force a non-auditable failed round with stable, secret-free codes. | [`flyto_ai/coding/route.py:2328`](../../../flyto_ai/coding/route.py#L2328) |
+| `__init__(policy: CodingRoutePolicy, *, capability_dispatch: Optional[LaneDispatch] = None, core_dispatch: Optional[LaneDispatch] = None) -> None` | internal | Internal `__init__` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:860`](../../../flyto_ai/coding/route.py#L860) |
+| `_lane_required(lane: RouteLane) -> bool` | internal | On a strict route all four lanes are mandatory, never detachable. | [`flyto_ai/coding/route.py:874`](../../../flyto_ai/coding/route.py#L874) |
+| `_begin_lane(lane: RouteLane) -> list` | internal | Open one lane's call trace and return the list it records into. | [`flyto_ai/coding/route.py:882`](../../../flyto_ai/coding/route.py#L882) |
+| `_charge(lane: RouteLane) -> None` | internal | Reserve one dispatch against this lane's budget, or refuse outright. | [`flyto_ai/coding/route.py:887`](../../../flyto_ai/coding/route.py#L887) |
+| `_remaining_calls(lane: RouteLane) -> int` | internal | How many dispatches this lane may still make. | [`flyto_ai/coding/route.py:902`](../../../flyto_ai/coding/route.py#L902) |
+| `_require_plan_budget(lane: RouteLane, steps: Sequence[Mapping[str, Any]], scheduled: Mapping[str, AbstractSet[str]], canonical_phases: Sequence[str]) -> None` | internal | Refuse an unrunnable plan before its first step, not halfway through. | [`flyto_ai/coding/route.py:910`](../../../flyto_ai/coding/route.py#L910) |
+| `_failed_call(code: str, lane: RouteLane, action: str) -> CodingRouteError` | internal | Record the exact call that failed, then return the closing error. | [`flyto_ai/coding/route.py:939`](../../../flyto_ai/coding/route.py#L939) |
+| `_capability_reason(raw: Mapping[str, Any]) -> str` | internal | Map a closed capability failure classification to a lane reason. | [`flyto_ai/coding/route.py:960`](../../../flyto_ai/coding/route.py#L960) |
+| `async _call(lane: RouteLane, tool: str, arguments: Dict[str, Any], *, action: str = '') -> Any` | internal | Dispatch one allowlisted call and validate its shape, not its prose. | [`flyto_ai/coding/route.py:967`](../../../flyto_ai/coding/route.py#L967) |
+| `_domain_payload(raw: Mapping[str, Any], lane: RouteLane, action: str = '') -> Any` | internal | Unwrap the negotiated MCP envelope down to its domain result. | [`flyto_ai/coding/route.py:998`](../../../flyto_ai/coding/route.py#L998) |
+| `_lane_projection(result: Any, keys: Sequence[str]) -> Any` | internal | Internal `_lane_projection` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:1049`](../../../flyto_ai/coding/route.py#L1049) |
+| `async _indexer_pre(request: CodingTaskRequest, parent_contract: Optional[Mapping[str, Any]] = None) -> Tuple[RouteLaneReceipt, Dict[str, Any]]` | internal | Run the mandatory pre-work lane against the real Indexer contract. | [`flyto_ai/coding/route.py:1057`](../../../flyto_ai/coding/route.py#L1057) |
+| `async _run_plan_step(lane: RouteLane, step: Mapping[str, Any], scope: str, contract: Mapping[str, Any], state: Dict[str, Any], calls: list, project: str, targets: Sequence[str], allowed: AbstractSet[str], gates_passed: list) -> None` | internal | Run exactly one plan step, or refuse the whole lane. | [`flyto_ai/coding/route.py:1170`](../../../flyto_ai/coding/route.py#L1170) |
+| `_scheduled_gate_phases(groups: Sequence[Any], lane: RouteLane) -> Tuple[Dict[str, AbstractSet[str]], Tuple[str, ...]]` | internal | Which canonical gates each compiled plan runs itself, keyed by scope. | [`flyto_ai/coding/route.py:1220`](../../../flyto_ai/coding/route.py#L1220) |
+| `async _indexer_post(request: CodingTaskRequest, context: Mapping[str, Any], result: Optional[CodingTaskResult] = None, changed: Optional[Sequence[str]] = None) -> RouteLaneReceipt` | internal | Validate the real final workspace, then run the strict verify gate. | [`flyto_ai/coding/route.py:1275`](../../../flyto_ai/coding/route.py#L1275) |
+| `_search_args(query: str, project: str) -> Dict[str, Any]` | internal | Scope one host-owned search to the project this round is editing. | [`flyto_ai/coding/route.py:1369`](../../../flyto_ai/coding/route.py#L1369) |
+| `_translate_step(tool, args, allowed, project = '')` | internal | Map one plan operation to an exact allowlisted public call. | [`flyto_ai/coding/route.py:1384`](../../../flyto_ai/coding/route.py#L1384) |
+| `_validation_passed(validated: Any) -> bool` | internal | Require an explicit boolean success from the real validate result. | [`flyto_ai/coding/route.py:1432`](../../../flyto_ai/coding/route.py#L1432) |
+| `_domain_evidence(validated: Any) -> Tuple[str, ...]` | internal | Project a domain gate's own reasons into host-owned blockers. | [`flyto_ai/coding/route.py:1457`](../../../flyto_ai/coding/route.py#L1457) |
+| `_validation_failure_detail(validated: Any) -> str` | internal | Project one bounded Indexer reason into the route receipt. | [`flyto_ai/coding/route.py:1487`](../../../flyto_ai/coding/route.py#L1487) |
+| `_indexer_catalog(lane: RouteLane) -> set` | internal | Internal `_indexer_catalog` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:1508`](../../../flyto_ai/coding/route.py#L1508) |
+| `infer_intent(message: str) -> str` | public | Pick the Indexer plan intent deterministically from the request. | [`flyto_ai/coding/route.py:1517`](../../../flyto_ai/coding/route.py#L1517) |
+| `_relative_path(item: Mapping[str, Any]) -> str` | internal | Return a search hit's canonical repository-relative POSIX path. | [`flyto_ai/coding/route.py:1526`](../../../flyto_ai/coding/route.py#L1526) |
+| `_derive_targets(found: Any) -> list` | internal | Take bounded target hints from real search evidence only. | [`flyto_ai/coding/route.py:1550`](../../../flyto_ai/coding/route.py#L1550) |
+| `_explicit_request_target(message: str, working_dir: str) -> str` | internal | Return the first safe existing repo file explicitly named by a task. | [`flyto_ai/coding/route.py:1588`](../../../flyto_ai/coding/route.py#L1588) |
+| `_prohibited_spans(text: str) -> Tuple[Tuple[int, int], ...]` | internal | Return the `[start, end)` offsets a target may not begin inside. | [`flyto_ai/coding/route.py:1602`](../../../flyto_ai/coding/route.py#L1602) |
+| `_explicit_request_targets(message: str, working_dir: str) -> list` | internal | Return a bounded set of exact repo file paths named by the task. | [`flyto_ai/coding/route.py:1642`](../../../flyto_ai/coding/route.py#L1642) |
+| `_plan_groups(plan_result: Mapping[str, Any], lane: RouteLane) -> list` | internal | Split a contract into its independently compiled plans, in declared order. | [`flyto_ai/coding/route.py:1732`](../../../flyto_ai/coding/route.py#L1732) |
+| `_plan_steps(plan_result: Mapping[str, Any], lane: RouteLane) -> list` | internal | Every step, in the exact order the lane will run it. | [`flyto_ai/coding/route.py:1792`](../../../flyto_ai/coding/route.py#L1792) |
+| `_ordered_steps(steps: Sequence[Mapping[str, Any]], lane: RouteLane) -> list` | internal | Order steps so every declared `depends_on` id precedes its step. | [`flyto_ai/coding/route.py:1802`](../../../flyto_ai/coding/route.py#L1802) |
+| `async _gate(lane: RouteLane, contract: Mapping[str, Any], phase: str, state: Dict[str, Any], calls: list, project: str, targets: Sequence[str], marker: str = '') -> None` | internal | Run one gate, remediate real blockers, and re-run within the bound. | [`flyto_ai/coding/route.py:1840`](../../../flyto_ai/coding/route.py#L1840) |
+| `_remediation_args(tool: str, project: str, targets: Sequence[str]) -> Dict[str, Any]` | internal | Internal `_remediation_args` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:1911`](../../../flyto_ai/coding/route.py#L1911) |
+| `async _blueprint(request: CodingTaskRequest) -> Tuple[RouteLaneReceipt, str]` | internal | Bounded read-only reuse discovery. | [`flyto_ai/coding/route.py:1928`](../../../flyto_ai/coding/route.py#L1928) |
+| `_relevant_blueprint(message: str, matches: Sequence[Any])` | internal | Pick the best bounded catalogue entry on semantic token overlap. | [`flyto_ai/coding/route.py:1987`](../../../flyto_ai/coding/route.py#L1987) |
+| `_ordered_tokens(value: str) -> Tuple[str, ...]` | internal | Normalize bounded comparable tokens while preserving their order. | [`flyto_ai/coding/route.py:2031`](../../../flyto_ai/coding/route.py#L2031) |
+| `_tokens(value: str) -> set` | internal | Normalize text into bounded comparable tokens, minus stop words. | [`flyto_ai/coding/route.py:2040`](../../../flyto_ai/coding/route.py#L2040) |
+| `_safe_label(value: Any) -> str` | internal | Reduce an untrusted catalogue name to a bounded inert identifier. | [`flyto_ai/coding/route.py:2045`](../../../flyto_ai/coding/route.py#L2045) |
+| `core_relevant(request: CodingTaskRequest, changed: Sequence[str]) -> bool` | public | Derive post-work Core relevance from attributable changed paths. | [`flyto_ai/coding/route.py:2055`](../../../flyto_ai/coding/route.py#L2055) |
+| `core_candidate_modules(changed: Sequence[str]) -> list` | public | Derive candidate Core module ids from attributable changed paths. | [`flyto_ai/coding/route.py:2068`](../../../flyto_ai/coding/route.py#L2068) |
+| `async _core_call(tool: str, arguments: Dict[str, Any]) -> Mapping[str, Any]` | internal | Dispatch one allowlisted Core call through the supported adapter. | [`flyto_ai/coding/route.py:2086`](../../../flyto_ai/coding/route.py#L2086) |
+| `async _core(request: CodingTaskRequest, changed: Sequence[str], result: Any) -> RouteLaneReceipt` | internal | Prove the changed Core contract, or fail closed. | [`flyto_ai/coding/route.py:2102`](../../../flyto_ai/coding/route.py#L2102) |
+| `_pinned_proof_checks(request: CodingTaskRequest, result: Any, proof_kind: str) -> Optional[Tuple[str, ...]]` | internal | Return passed host check names, ``()`` on failure, or no claim. | [`flyto_ai/coding/route.py:2197`](../../../flyto_ai/coding/route.py#L2197) |
+| `_validation_proved(proof: Mapping[str, Any]) -> bool` | internal | Accept only an explicit `valid: true` from the real Core contract. | [`flyto_ai/coding/route.py:2238`](../../../flyto_ai/coding/route.py#L2238) |
+| `_first_module_id(found: Any) -> str` | internal | Internal `_first_module_id` implementation on `CodingRouteOrchestrator`; the linked source is authoritative. | [`flyto_ai/coding/route.py:2261`](../../../flyto_ai/coding/route.py#L2261) |
+| `_example_params(info: Any) -> Optional[Dict[str, Any]]` | internal | Take exact declared example parameters; never invent them. | [`flyto_ai/coding/route.py:2280`](../../../flyto_ai/coding/route.py#L2280) |
+| `async run(request: CodingTaskRequest, implement: Implement, *, parent_contract: Optional[Mapping[str, Any]] = None, on_pre_contract: Optional[Callable[[Mapping[str, Any]], None]] = None, cumulative_scope: Optional[Callable[[Any], Sequence[str]]] = None) -> Tuple[CodingTaskResult, CodingRouteReceipt]` | public | Run pre-lanes, the implementer, then the post-lanes. | [`flyto_ai/coding/route.py:2304`](../../../flyto_ai/coding/route.py#L2304) |
+| `_failed(exc: CodingRouteError, lanes: list[RouteLaneReceipt], request: CodingTaskRequest, *, result: Optional[CodingTaskResult] = None) -> Tuple[CodingTaskResult, CodingRouteReceipt]` | internal | Force a non-auditable failed round with stable, secret-free codes. | [`flyto_ai/coding/route.py:2371`](../../../flyto_ai/coding/route.py#L2371) |
 
 ## `flyto_ai.coding.route_status`
 

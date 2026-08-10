@@ -2,11 +2,21 @@
 
 ## Unreleased
 
+- The supported Python floor is now 3.11, matching the SQLite
+  `serialize()` / `deserialize()` primitive used by the pathname-free mission
+  authority envelope. CI covers Python 3.11 and 3.12, and the development
+  extra now includes the Claude SDK imported by the complete route suite.
 - The mandatory Indexer lane now uses one shared ten-minute transport bound in
   both the agent-stack preset and the public `code-mcp` / `code-serve` route.
   Large-workspace and concurrent-release strict verification can finish instead
   of being killed by a CLI-only 30-second deadline; every gate remains
   mandatory and genuine timeouts still fail closed as `capability_timeout`.
+- The pre-work route now accepts either published Indexer gate family selected
+  by the exact plan: legacy `assess` / `implement`, or current `plan_changes` /
+  `apply_changes`. Unknown, duplicate, and mixed-family plans still fail before
+  any implementation begins. Post validation also understands the current
+  `overall=pass` envelope only when its ruff and pytest statuses explicitly
+  agree; incomplete or contradictory evidence remains fail-closed.
 - Blueprint discovery now ranks ordered phrase overlap before catalogue order,
   so direction-bearing reuse such as CSV-to-JSON no longer selects the reverse
   JSON-to-CSV transform when both candidates share the same token set.
@@ -235,7 +245,7 @@
   state; approval callbacks and outcome sinks have bounded waits and stable
   failure projection.
   Clean-runner CI now installs a pinned sibling Blueprint benchmark fixture
-  before the full Python 3.10/3.12 suite.
+  before the full Python 3.11/3.12 suite.
   It also provisions ripgrep and a digest-pinned Python command sandbox so
   portable search and isolation checks run against real dependencies.
   Protected-file Docker mounts now fail reads consistently across Linux and
@@ -247,7 +257,7 @@
   Hardened real MCP transport for
   concurrent out-of-order responses, cancellation, timeouts, child crashes,
   malformed/oversized JSON-RPC, sustained stderr, and strict catalog schemas;
-  CI now runs the complete suite on Python 3.10 and 3.12.
+  CI now runs the complete suite on Python 3.11 and 3.12.
 - Split the policy-bearing agent stack into atomic manifest, preset, probe,
   MCP transport, catalog, session, transactional registry, and runtime
   permission modules behind the existing `stack` and `capabilities` facades.

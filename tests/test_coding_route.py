@@ -2025,6 +2025,49 @@ def test_plan_operation_names_are_translated_to_exact_public_calls(tmp_path):
         assert public_tool in INDEXER_PLAN_STEP_TOOLS
 
 
+def test_current_indexer_gate_family_is_selected_from_the_real_plan(tmp_path):
+    """A current plan runs only current gates, never legacy gates as extras."""
+    indexer = IndexerDouble(plan=[
+        {"id": "s1", "tool": "task_gate_check",
+         "args": {"next_phase": "plan_changes"}, "depends_on": []},
+        {"id": "s2", "tool": "task_gate_check",
+         "args": {"next_phase": "apply_changes"}, "depends_on": ["s1"]},
+    ])
+
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+
+    assert result.ok is True and receipt.ok is True
+    phases = [
+        args["next_phase"] for tool, args in indexer.calls
+        if tool == "task" and args.get("action") == "gate"
+    ]
+    assert phases == ["plan_changes", "apply_changes", "verify"]
+    assert not {"assess", "implement"} & set(phases)
+
+
+def test_mixed_indexer_gate_families_fail_before_plan_dispatch(tmp_path):
+    """Contract drift may select one family, but cannot compose new authority."""
+    indexer = IndexerDouble(plan=[
+        {"id": "s1", "tool": "task_gate_check",
+         "args": {"next_phase": "assess"}, "depends_on": []},
+        {"id": "s2", "tool": "task_gate_check",
+         "args": {"next_phase": "apply_changes"}, "depends_on": ["s1"]},
+    ])
+    implementer = Implementer()
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer), _request(tmp_path), implementer,
+    )
+
+    assert result.ok is False
+    assert receipt.failure_code == "plan_gate_phase_mixed"
+    assert implementer.rounds == 0
+    assert not any(
+        tool == "task" and args.get("action") == "gate"
+        for tool, args in indexer.calls
+    )
+
+
 def test_an_unmappable_required_plan_step_is_refused(tmp_path):
     implement = Implementer()
     required = IndexerDouble(plan=[
@@ -2079,13 +2122,14 @@ def test_the_real_indexer_answers_a_project_scoped_search_inside_its_bound():
 
     from flyto_ai.coding.capabilities import CapabilityManager
     from flyto_ai.coding.route import CodingRouteOrchestrator
+    from flyto_ai.coding.stack_presets import INDEXER_CAPABILITY_TIMEOUT_SECONDS
 
     if not RUNTIME_PYTHON.exists():
         pytest.skip("the active Python interpreter is required for the live regression")
     repository = Path(__file__).resolve().parents[1]
     spec = _indexer_spec(
         argv=(str(RUNTIME_PYTHON), "-m", "flyto_indexer.mcp_server"),
-        timeout_seconds=30,
+        timeout_seconds=INDEXER_CAPABILITY_TIMEOUT_SECONDS,
     )
     project = repository.name
     arguments = CodingRouteOrchestrator._search_args(
@@ -2492,6 +2536,35 @@ def test_post_validation_accepts_either_documented_success_field(tmp_path, domai
     result, _receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
     assert result.ok is True
     assert CodingRouteOrchestrator._validation_passed(domain) is True
+
+
+def test_post_validation_accepts_current_indexer_status_envelope(tmp_path):
+    domain = {
+        "overall": "pass",
+        "ruff": {"status": "pass"},
+        "pytest": {"status": "skipped"},
+    }
+    indexer = IndexerDouble(overrides={"task.validate": _envelope(domain)})
+
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+
+    assert result.ok is True and receipt.ok is True
+    assert CodingRouteOrchestrator._validation_passed(domain) is True
+
+
+@pytest.mark.parametrize("domain", [
+    {"overall": "pass"},
+    {"overall": "pass", "ruff": {"status": "fail"},
+     "pytest": {"status": "skipped"}},
+    {"overall": "pass", "ruff": {"status": "pass"},
+     "pytest": {"status": "error"}},
+    {"overall": "fail", "ruff": {"status": "pass"},
+     "pytest": {"status": "pass"}},
+    {"pass": False, "overall": "pass", "ruff": {"status": "pass"},
+     "pytest": {"status": "pass"}},
+])
+def test_current_indexer_validation_envelope_stays_fail_closed(domain):
+    assert CodingRouteOrchestrator._validation_passed(domain) is False
 
 
 def test_verify_gate_never_asserts_unproved_impact_evidence(tmp_path):

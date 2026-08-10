@@ -293,6 +293,23 @@ one failed call naming the exact host-derived action (`structure`, `search`,
 transport timeout is classified `capability_timeout` instead of collapsing
 into `domain_failure`.
 
+The pre-work route accepts the two published Indexer gate vocabularies:
+legacy `assess` / `implement` and current `plan_changes` / `apply_changes`. The
+exact execution plan selects one complete family before its first step runs.
+Unknown phases, duplicates within a plan scope, or a plan that mixes families
+fail closed; the host never sends both vocabularies to one Indexer process.
+Post-work validation likewise accepts either the legacy explicit Boolean
+verdict or the current `overall=pass` envelope only when its bounded ruff and
+pytest status blocks both report `pass` or `skipped`; mixed or incomplete
+evidence remains failure.
+
+The coding service requires Python 3.11 or newer. Mission continuation binds
+an in-memory SQLite authority database into a pathname-free byte envelope with
+`sqlite3.Connection.serialize()` / `deserialize()`, APIs available from the
+supported CPython 3.11 floor. An older host is outside the package contract and
+must fail closed; it is never emulated with a temporary file or a weaker
+continuation format. CI proves the public contract on Python 3.11 and 3.12.
+
 Optional emergency overflow (`flyto.coding-emergency.v1`, startup-only):
 
 ```text

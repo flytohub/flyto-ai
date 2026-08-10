@@ -1,6 +1,6 @@
 # State
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 ## Current: audited coding route and canonical topology (2026-08-08)
 
@@ -36,6 +36,12 @@ eligibility evidence for the caller, not an action the service performs.
 
 ### Implemented and covered by focused tests
 
+- The public package and coding service now require Python 3.11 or newer.
+  Mission continuation uses SQLite `serialize()` / `deserialize()` to bind its
+  in-memory authority database into a pathname-free byte envelope; CPython
+  3.10 does not provide that primitive. CI therefore proves the honest runtime
+  contract on Python 3.11 and 3.12, and the development extra includes the
+  Claude SDK imported by the complete route suite.
 - Same-session audit rework now treats `require_changes` as a cumulative job
   invariant. When a rework returns the host-generated `no_changes` result with
   passing required checks, the service re-proves the prior session, tenant/job
@@ -165,6 +171,15 @@ eligibility evidence for the caller, not an action the service performs.
   prevents a valid large-workspace `verify.strict` or reindex from dying at
   the old 30-second CLI-only bound; the lane remains mandatory and a genuine
   timeout still fails closed as `capability_timeout`.
+- Indexer gate-vocabulary compatibility: the host selects either the legacy
+  `assess` / `implement` pair or the current `plan_changes` / `apply_changes`
+  pair from the exact returned execution plan before running its first step.
+  It never sends both families to one server; unknown, repeated, or mixed
+  phases fail closed before the implementer starts.
+- Indexer validation-vocabulary compatibility: legacy explicit Boolean
+  `pass`/`passed` remains authoritative. The current `overall=pass` envelope
+  succeeds only with explicit ruff and pytest statuses of `pass` or `skipped`;
+  missing, mixed, or contradictory evidence remains a closed failure.
 - Deterministic Blueprint relevance: the read-only lane still requires real
   token overlap, but now ranks ordered phrase overlap before catalogue order.
   This distinguishes direction-bearing matches such as CSV-to-JSON from the
@@ -359,7 +374,7 @@ Implemented:
   requires explicit higher authority for controlled fixtures, and distinguishes
   a real domain failure from an undispatched policy denial.
 - Clean-runner CI checks out the exact `flyto-blueprint` benchmark dependency
-  commit beside `flyto-ai` before running the complete suite on Python 3.10 and
+  commit beside `flyto-ai` before running the complete suite on Python 3.11 and
   3.12; local sibling imports no longer hide missing remote test setup.
 - The same matrix provisions ripgrep and a digest-pinned Python Docker sandbox,
   so literal search and real read-only/network-isolated command tests execute on
@@ -370,7 +385,7 @@ Implemented:
 - `Agent` now supports `async with` and idempotent `await close()`, releasing its
   memory database and transcript deterministically and failing on post-close
   chat calls.
-- Python 3.10/3.12 CI treats deprecation and unhandled background-thread
+- Python 3.11/3.12 CI treats deprecation and unhandled background-thread
   warnings as test failures; functional sandbox availability is detected from
   the initialized backend rather than the mere presence of a CLI executable.
 - The agent-stack runtime is now split behind stable compatibility facades into

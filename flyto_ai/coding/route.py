@@ -205,8 +205,17 @@ INDEXER_INTENT_MARKERS = (
     ("migration", ("migrate", "migration", "upgrade", "port to", "rename to",
                    "move to", "replace with")),
 )
-#: Pre-work gate phases, in order, using the public strategy phase names.
-INDEXER_PRE_GATE_PHASES = ("assess", "implement")
+#: Pre-work gate phases, in order, across the two published Indexer contracts.
+#: A single plan selects exactly one family from the phases it returns; the
+#: host never mixes families or sends both sets to one server. A gate-free
+#: legacy plan retains the original pair for backwards compatibility.
+INDEXER_LEGACY_PRE_GATE_PHASES = ("assess", "implement")
+INDEXER_CURRENT_PRE_GATE_PHASES = ("plan_changes", "apply_changes")
+INDEXER_PRE_GATE_PHASE_FAMILIES = (
+    INDEXER_LEGACY_PRE_GATE_PHASES,
+    INDEXER_CURRENT_PRE_GATE_PHASES,
+)
+INDEXER_PRE_GATE_PHASES = INDEXER_LEGACY_PRE_GATE_PHASES
 #: Deterministic remediation for each gate state key the server can request.
 #: Each entry is the real evidence that satisfies it; a key outside this map is
 #: external authority and fails closed instead of being asserted.
@@ -903,6 +912,7 @@ class CodingRouteOrchestrator:
         lane: RouteLane,
         steps: Sequence[Mapping[str, Any]],
         scheduled: Mapping[str, AbstractSet[str]],
+        canonical_phases: Sequence[str],
     ) -> None:
         """Refuse an unrunnable plan before its first step, not halfway through.
 
@@ -921,7 +931,7 @@ class CodingRouteOrchestrator:
         # is counted once there; only a canonical phase that *no* scope
         # scheduled adds a host-run call on top.
         demand = len(steps) + sum(
-            1 for phase in INDEXER_PRE_GATE_PHASES if phase not in covered
+            1 for phase in canonical_phases if phase not in covered
         )
         if demand > self._remaining_calls(lane):
             raise CodingRouteError("plan_call_budget_exceeded", lane)
@@ -1108,12 +1118,13 @@ class CodingRouteOrchestrator:
         steps = [step for _, scoped in groups for step in scoped]
         # The gate phases this plan schedules for itself, decided before any of
         # it runs. Gate expansion is bounded here rather than discovered: the
-        # pre lane has exactly two canonical phases, each may be scheduled at
-        # most once, and anything else is a plan this host will not execute.
+        # pre lane selects one published two-phase family, each phase may be
+        # scheduled at most once, and anything else is a plan this host will
+        # not execute.
         # An unbounded or duplicated gate set is how a legal-looking plan turns
         # into an unpredictable number of calls.
-        scheduled_gates = self._scheduled_gate_phases(groups, lane)
-        self._require_plan_budget(lane, steps, scheduled_gates)
+        scheduled_gates, canonical_phases = self._scheduled_gate_phases(groups, lane)
+        self._require_plan_budget(lane, steps, scheduled_gates, canonical_phases)
         completed_subtasks: list = []
         # Declared scope order is absolute: the root plan, then sub-task one in
         # full, then sub-task two. Each plan was ordered against its own
@@ -1140,7 +1151,7 @@ class CodingRouteOrchestrator:
         covered = set()
         for phases in scheduled_gates.values():
             covered.update(phases)
-        for phase in INDEXER_PRE_GATE_PHASES:
+        for phase in canonical_phases:
             if phase in covered:
                 continue
             await self._gate(lane, contract, phase, state, calls, project, targets)
@@ -1208,7 +1219,7 @@ class CodingRouteOrchestrator:
     @classmethod
     def _scheduled_gate_phases(
         cls, groups: Sequence[Any], lane: RouteLane,
-    ) -> Dict[str, AbstractSet[str]]:
+    ) -> Tuple[Dict[str, AbstractSet[str]], Tuple[str, ...]]:
         """Which canonical gates each compiled plan runs itself, keyed by scope.
 
         Uniqueness is per *scope*, and the scope comes from the walk that found
@@ -1220,12 +1231,14 @@ class CodingRouteOrchestrator:
         `subtask_2:` and buy itself a second `assess`, which is why provenance is
         assigned here rather than parsed.
 
-        Unchanged: only the two canonical phases exist, a phase repeated within
-        one plan is a duplicate and fails closed, an unrecognised phase is
-        refused, and both refusals happen before a single plan step dispatches.
+        One plan may use either published two-phase family, never both. A phase
+        repeated within one scope is a duplicate and fails closed, an
+        unrecognised or mixed-family phase is refused, and every refusal happens
+        before a single plan step dispatches.
         """
 
         scheduled: Dict[str, list] = {}
+        selected_family: Optional[Tuple[str, ...]] = None
         for scope, steps in groups:
             seen = scheduled.setdefault(scope, [])
             for step in steps:
@@ -1236,12 +1249,28 @@ class CodingRouteOrchestrator:
                 if args is not None and not isinstance(args, Mapping):
                     raise CodingRouteError("malformed_evidence", lane)
                 phase = str((args or {}).get("next_phase") or "assess")
-                if phase not in INDEXER_PRE_GATE_PHASES:
+                family = next(
+                    (
+                        candidate
+                        for candidate in INDEXER_PRE_GATE_PHASE_FAMILIES
+                        if phase in candidate
+                    ),
+                    None,
+                )
+                if family is None:
                     raise CodingRouteError("plan_gate_phase_unknown", lane)
+                if selected_family is None:
+                    selected_family = family
+                elif family != selected_family:
+                    raise CodingRouteError("plan_gate_phase_mixed", lane)
                 if phase in seen:
                     raise CodingRouteError("plan_gate_phase_repeated", lane)
                 seen.append(phase)
-        return {scope: frozenset(phases) for scope, phases in scheduled.items()}
+        canonical = selected_family or INDEXER_LEGACY_PRE_GATE_PHASES
+        return (
+            {scope: frozenset(phases) for scope, phases in scheduled.items()},
+            canonical,
+        )
 
     async def _indexer_post(
         self,
@@ -1404,11 +1433,25 @@ class CodingRouteOrchestrator:
         """Require an explicit boolean success from the real validate result.
 
         `pass` is the public field; `passed` is the documented fallback. A
-        missing, null, string, or numeric value is never treated as success.
+        present primary field remains authoritative. Current Indexer releases
+        instead publish `overall=pass` plus explicit ruff/pytest status blocks;
+        that form succeeds only when all three bounded fields agree.
         """
         if not isinstance(validated, Mapping):
             return False
-        return _primary_boolean(validated, "pass", "passed")
+        if "pass" in validated or "passed" in validated:
+            return _primary_boolean(validated, "pass", "passed")
+        if validated.get("overall") != "pass":
+            return False
+        ruff = validated.get("ruff")
+        pytest_result = validated.get("pytest")
+        if not isinstance(ruff, Mapping) or not isinstance(pytest_result, Mapping):
+            return False
+        allowed = {"pass", "skipped"}
+        return (
+            ruff.get("status") in allowed
+            and pytest_result.get("status") in allowed
+        )
 
     @staticmethod
     def _domain_evidence(validated: Any) -> Tuple[str, ...]:

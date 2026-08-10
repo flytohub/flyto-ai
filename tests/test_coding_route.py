@@ -2586,6 +2586,20 @@ def test_public_cli_policy_marks_blueprint_required(tmp_path):
     assert policy.core_enabled is True
 
 
+def test_public_cli_policy_uses_the_canonical_indexer_timeout():
+    from argparse import Namespace
+
+    import flyto_ai.cli as cli
+    from flyto_ai.coding.stack_presets import INDEXER_CAPABILITY_TIMEOUT_SECONDS
+
+    policy = cli._build_coding_route_policy(Namespace(
+        indexer_command=None, blueprint_command=None,
+    ))
+
+    assert INDEXER_CAPABILITY_TIMEOUT_SECONDS == 60
+    assert policy.indexer.timeout_seconds == INDEXER_CAPABILITY_TIMEOUT_SECONDS
+
+
 def test_public_cli_policy_prefers_the_workspace_indexer_checkout(tmp_path):
     from argparse import Namespace
 

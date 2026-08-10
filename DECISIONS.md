@@ -97,6 +97,28 @@ that topology and are closed here.
   `awaiting_codex_audit` to `failed`, never accept or land — so it is always
   worse for a caller than auditing and cannot become an audit bypass.
 
+## 2026-08-10: One bounded Indexer timeout for every coding-route entry
+
+Large Flyto workspaces can legitimately need more than 30 seconds for the
+mandatory post-work `verify.strict`, especially when the Indexer rebuilds its
+generated state. The detachable stack preset and the public `code-mcp` /
+`code-serve` CLI constructed separate `CapabilitySpec` values, so changing one
+left the active public route on the old deadline.
+
+- One named constant now owns the Indexer transport bound, and both route
+  constructors use it.
+- The bound is 60 seconds, the existing contract maximum. It changes only how
+  long the host waits for one allowlisted Indexer call; mandatory lanes, tool
+  permissions, call-count and
+  remediation limits, evidence validation, and fail-closed semantics stay the
+  same.
+- A real overrun is still classified `capability_timeout` and remains
+  non-landable. Green repository checks still cannot replace Indexer post-work
+  evidence.
+
+Rollback is one constant change with the same two-constructor regression test.
+Do not introduce a per-job override: timeout authority remains startup-owned.
+
 ## 2026-08-09: Project-scoped route searches, exact failure evidence, and a startup-only emergency overflow lane
 
 Against the real installed Indexer, the production route policy failed every

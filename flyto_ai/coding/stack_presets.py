@@ -17,9 +17,11 @@ DEFAULT_COMPONENTS = (
 )
 
 # Strict verification can rebuild a large workspace index and legitimately run
-# longer than the interactive MCP default. Keep every host-owned Indexer entry
-# on one bound so the public CLI cannot silently drift from the stack preset.
-INDEXER_CAPABILITY_TIMEOUT_SECONDS = 60
+# longer than the interactive MCP default. Under concurrent release load the
+# post-route verify has exceeded five minutes, so keep a finite ten-minute
+# ceiling. Every host-owned Indexer entry shares this bound so the public CLI
+# cannot silently drift from the stack preset.
+INDEXER_CAPABILITY_TIMEOUT_SECONDS = 600
 
 
 def _preset_factories(python: str, required: set[str]) -> Dict[str, CapabilitySpec]:

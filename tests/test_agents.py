@@ -109,7 +109,10 @@ class TestGuardianBlockedPatterns:
         assert len(BLOCKED_PATHS) >= 10
 
     def test_allowed_extensions_has_common_types(self):
-        for ext in [".py", ".ts", ".js", ".vue", ".html", ".css", ".json", ".yaml", ".md"]:
+        for ext in [
+            ".py", ".ts", ".js", ".mjs", ".vue", ".html", ".css", ".json",
+            ".yaml", ".md", ".service",
+        ]:
             assert ext in ALLOWED_EXTENSIONS
 
     def test_is_path_blocked_env(self):
@@ -126,6 +129,9 @@ class TestGuardianBlockedPatterns:
     def test_is_extension_allowed_python(self):
         assert _is_extension_allowed("app.py") is True
 
+    def test_is_extension_allowed_systemd_service(self):
+        assert _is_extension_allowed("turtlebot3-bringup.service") is True
+
     def test_is_extension_allowed_binary(self):
         assert _is_extension_allowed("app.exe") is False
         assert _is_extension_allowed("image.png") is False
@@ -133,6 +139,13 @@ class TestGuardianBlockedPatterns:
     def test_is_extension_allowed_dockerfile(self):
         assert _is_extension_allowed("Dockerfile") is True
         assert _is_extension_allowed("Makefile") is True
+
+    @pytest.mark.parametrize("name", [".gitignore", ".dockerignore", ".editorconfig"])
+    def test_is_extension_allowed_closed_repository_dotfiles(self, name):
+        assert _is_extension_allowed(name) is True
+
+    def test_is_extension_allowed_arbitrary_dotfile(self):
+        assert _is_extension_allowed(".bashrc") is False
 
 
 @pytest.fixture
@@ -152,6 +165,12 @@ class TestGuardianPreHook:
     def test_approve_edit(self, event_loop):
         result = event_loop.run_until_complete(
             guardian_pre_hook("Edit", {"file_path": "/tmp/app.vue"}, "id2")
+        )
+        assert result == {}
+
+    def test_approve_edit_allowlisted_repository_dotfile(self, event_loop):
+        result = event_loop.run_until_complete(
+            guardian_pre_hook("Edit", {"file_path": "/tmp/.gitignore"}, "id-dotfile")
         )
         assert result == {}
 
@@ -344,7 +363,7 @@ class TestClaudeCodeConfig:
     def test_defaults(self):
         cc = ClaudeCodeConfig()
         assert cc.max_budget_usd == 5.0
-        assert cc.max_turns == 30
+        assert cc.max_turns == 100
         assert cc.max_fix_attempts == 3
         assert "Read" in cc.allowed_tools
         assert "Edit" in cc.allowed_tools

@@ -184,6 +184,11 @@ class CodingRouteStatus:
     audit_count: int = 0
     rework_count: int = 0
     landable: bool = False
+    #: Whether the *job* named by `job_id` is settled. Independent of
+    #: `lifecycle`, which describes this service process: an active instance
+    #: may report a terminal job, and a closed instance may have left one
+    #: awaiting audit.
+    job_terminal: bool = False
     #: Bounded self-report from the recorder itself, so a reader can tell a
     #: quiet service from a broken one.
     publish_failures: int = 0

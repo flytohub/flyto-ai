@@ -2,15 +2,85 @@
 
 ## Unreleased
 
-- The mandatory Indexer lane now uses one shared 60-second transport bound in
+- The supported Python floor is now 3.11, matching the SQLite
+  `serialize()` / `deserialize()` primitive used by the pathname-free mission
+  authority envelope. CI covers Python 3.11 and 3.12, and the development
+  extra now includes the Claude SDK imported by the complete route suite.
+- The mandatory Indexer lane now uses one shared ten-minute transport bound in
   both the agent-stack preset and the public `code-mcp` / `code-serve` route.
-  Large-workspace strict verification can finish instead of being killed by a
-  CLI-only 30-second deadline; every gate remains mandatory and genuine
-  timeouts still fail closed as `capability_timeout`.
+  Large-workspace and concurrent-release strict verification can finish instead
+  of being killed by a CLI-only 30-second deadline; every gate remains
+  mandatory and genuine timeouts still fail closed as `capability_timeout`.
+- The pre-work route now accepts either published Indexer gate family selected
+  by the exact plan: legacy `assess` / `implement`, or current `plan_changes` /
+  `apply_changes`. Unknown, duplicate, and mixed-family plans still fail before
+  any implementation begins. Post validation also understands the current
+  `overall=pass` envelope only when its ruff and pytest statuses explicitly
+  agree; incomplete or contradictory evidence remains fail-closed.
 - Blueprint discovery now ranks ordered phrase overlap before catalogue order,
   so direction-bearing reuse such as CSV-to-JSON no longer selects the reverse
   JSON-to-CSV transform when both candidates share the same token set.
+- Every coding job now serves a mission in the durable multi-process mission
+  kernel, which is the authority for queue order, repair preference, dependency
+  readiness, worktree exclusion and fencing. A caller that names no mission gets
+  one synthesized by the coding adapter; the kernel stays workload-neutral.
+  Receipts carry only the bounded, secret-free mission projection - no prose, no
+  coordinates, no evidence values, no worker identity, no paths. The public MCP
+  tool inventory is unchanged.
+- A coding state root is now bound to one semantic startup authority by a
+  durable, crash-released `flock` lease plus a bounded marker. Services that
+  share an authority coexist as peers on one queue; a service that would build a
+  different implementer - or run under a different audit requirement, contract
+  path, sandbox, approval policy, host lane policy or rework ceiling - fails
+  construction with `execution_authority_conflict` before it can reconcile
+  status, sweep a workspace claim, or dispatch anything. Rotation is permitted
+  once no old service is live and every job is terminal. **Operators running two
+  differently configured coding services against one state root must give them
+  separate roots.**
+- The job lease now covers execution only. It is released once a job's durable
+  artifacts exist and before any pump can dispatch, so any compatible worker can
+  run the store-selected round and queued work survives its submitter exiting or
+  restarting. Queued and rework-queued records are pumped on restart instead of
+  being failed as `service_restarted`; only genuinely interrupted running work is
+  failed closed, and only after proving no live lease holds it.
+- Jobs recorded before the executing-authority fingerprint existed are adopted
+  only on proof of no execution: queued work that never reached an implementer
+  is migrated and runs normally. An executing record is never adopted - the
+  service refuses to start beside a live round it cannot attribute, and settles
+  one whose lease is provably free as `execution_authority_unbound` with its
+  mission item and worktree claim accounted. An unfingerprinted awaiting-audit
+  job may still be accepted by an auditor but may not be reworked, because a new
+  round would adopt a route policy it never named.
+- A refused start-up now changes nothing: marker and job validation happen
+  before the authority marker is written, so a refusal leaves a present marker
+  byte-identical and never creates a missing one. The marker is read through a
+  single `O_NOFOLLOW`/`O_CLOEXEC` descriptor under a small byte bound and is
+  never re-opened by name after a check, so one that is damaged, unparseable,
+  symlinked, oversized or not a regular file is a refusal rather than an
+  absence; an unreadable job record refuses both start-up and rotation.
+- Service teardown now releases both root descriptors under one outer
+  `finally`, so a failure draining the executor or releasing a job lease can no
+  longer leave a stopped service holding the state root against its successor.
+- **A host with no inter-process lock now refuses to start** with
+  `execution_authority_unavailable` instead of silently running without the
+  isolation it advertises.
+- `CodingAuthorityConflict` and `CodingAuthorityUnavailable` are exported from
+  `flyto_ai.coding`.
 
+- A successful audit rework no longer has to manufacture a second diff when
+  the earlier attributable revision is already correct. The service promotes
+  only the host-generated `no_changes` outcome with passing required checks
+  after re-proving the same implementation session, tenant/job workspace
+  claim, sealed resume envelope, cumulative file set, and live content digest;
+  the Indexer post lane then validates that cumulative set normally.
+- Guardian now permits edits to the exact repository dotfiles already present
+  in its closed allowlist (`.gitignore`, `.dockerignore`, `.editorconfig`).
+  Arbitrary dotfiles and all sensitive-path matches remain denied.
+- Claude implementation rounds now default to the already-enforced 100-turn
+  ceiling. This prevents a complete workspace edit from being discarded as
+  `turn_limit_exceeded` merely because an older supervisor started with the
+  30-turn default. Cost, tools, workspace confinement, required checks,
+  host-owned lanes, exact-revision audit, and rework limits are unchanged.
 - One worktree is now owned by one audited coding job for the whole job, not
   for one implementation round. Previously the cross-process workspace lock was
   released when a round finished, so between `awaiting_codex_audit` and the
@@ -222,7 +292,7 @@
   state; approval callbacks and outcome sinks have bounded waits and stable
   failure projection.
   Clean-runner CI now installs a pinned sibling Blueprint benchmark fixture
-  before the full Python 3.10/3.12 suite.
+  before the full Python 3.11/3.12 suite.
   It also provisions ripgrep and a digest-pinned Python command sandbox so
   portable search and isolation checks run against real dependencies.
   Protected-file Docker mounts now fail reads consistently across Linux and
@@ -234,7 +304,7 @@
   Hardened real MCP transport for
   concurrent out-of-order responses, cancellation, timeouts, child crashes,
   malformed/oversized JSON-RPC, sustained stderr, and strict catalog schemas;
-  CI now runs the complete suite on Python 3.10 and 3.12.
+  CI now runs the complete suite on Python 3.11 and 3.12.
 - Split the policy-bearing agent stack into atomic manifest, preset, probe,
   MCP transport, catalog, session, transactional registry, and runtime
   permission modules behind the existing `stack` and `capabilities` facades.
@@ -409,3 +479,40 @@
 - Added repo memory and workflow handoff scaffold.
 - Added `docs/architecture-map.md` so Flyto2 workspace release packets can
   verify `flyto-ai` cross-repo architecture and product-line boundaries.
+
+### Added
+- Cross-job continuation of a bounded provider stop: a tenant-partitioned,
+  single-use continuation authority with an append-only transition journal, an
+  explicit `resume=true, thread_id=<session>` second submit, and two additive
+  receipt fields (`continuation_available`, `continuation_generation`). The MCP
+  surface is unchanged.
+- An explicit, digest-bound workspace snapshot policy. The default observes every
+  non-version-control entry; only the strict Indexer-backed route may classify
+  `.flyto-index` as control-plane runtime state.
+
+### Changed
+- `CodingService.submit` is phased: the verification-contract read and the
+  workspace snapshot now run under a per-workspace admission lock instead of the
+  global state guard, so one large repository no longer stalls unrelated tenants
+  and workspaces.
+- The service state root is created component-by-component and refuses a symlinked
+  ancestor rather than resolving through it.
+
+### Fixed
+- A multi-round coding rework no longer re-roots its Indexer plan each round.
+  The pre-lane amends the exact prior contract, so a later round is not refused
+  with `unplanned_diff` for files an earlier round legitimately opened.
+- Indexer post-work now validates the exact cumulative attributable set that the
+  final revision binds, instead of only the last round's changed files.
+- A dotted machine identifier such as `check.generated_reference` is no longer
+  parsed out of audit feedback as a request to create a file.
+
+### Added
+- Durable, private, integrity-protected plan authority per job, re-proven before
+  a resumed implementer edits anything.
+- Closed typed failures for unprovable plan authority and cumulative scope,
+  reporting `verification`/`workspace` phase with
+  `resubmit_against_current_contract`.
+- Bounded domain diagnostics: a capability's own `reason_codes` and
+  `required_actions` reach `verification_blockers` when they already are machine
+  codes, and are dropped whole when they are not.

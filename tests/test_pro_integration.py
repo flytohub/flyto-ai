@@ -390,6 +390,7 @@ def _make_test_agent(monkeypatch, mock_chat_fn, *, enable_pro=True):
         enable_knowledge=enable_pro,
         enable_contract_validation=enable_pro,
         enable_deterministic=False,
+        enable_memory=False,
     )
     from flyto_ai.agent import Agent
     agent = Agent(config=config)

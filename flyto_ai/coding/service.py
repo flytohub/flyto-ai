@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import errno
 import hashlib
 import json
 import math
@@ -21,9 +22,22 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Protocol, Sequence, Tuple
 
+from flyto_ai.coding.checks import read_project_contract
 from flyto_ai.coding.contracts import (
+    ACTION_RESUBMIT_AGAINST_CURRENT_CONTRACT,
+    ContractSnapshot,
+    FAILURE_PHASE_VERIFICATION,
+    JOB_FAILURE_ACTIONS,
     MAX_AUDIT_ROUNDS,
+    TERMINAL_CODING_JOB_STATES,
     MAX_IMPLEMENTATION_BLOCKERS,
+    MISSION_COMPLETED,
+    MISSION_DISPOSITION_FIXED,
+    MISSION_OPEN,
+    MISSION_PROJECTION_FIELDS,
+    MISSION_STATUS_CLOSED,
+    MISSION_STATUS_DISPATCHED,
+    MISSION_STATUS_READY,
     ApprovalPolicy,
     CapabilityStatus,
     CheckResult,
@@ -31,9 +45,12 @@ from flyto_ai.coding.contracts import (
     CodingAuditVerdict,
     CodingJobReceipt,
     CodingJobState,
+    CodingMissionEnvelope,
+    CodingMissionProjection,
     CodingTaskRequest,
     CodingTaskResult,
     SandboxMode,
+    safe_blockers,
     audit_findings_sha256,
     require_revision_sha256,
     validate_audit_submission,
@@ -46,8 +63,48 @@ from flyto_ai.coding.emergency import (
     EmergencyTrigger,
     classify_overflow_trigger,
 )
+from flyto_ai.coding.continuation import (
+    CONTINUABLE_STOP_CODES,
+    CONTINUATION_BACKEND_MISMATCH,
+    CONTINUATION_CODES,
+    CONTINUATION_CONTRACT_CHANGED,
+    CONTINUATION_CONTRACT_UNPINNED,
+    CONTINUATION_POLICY_CHANGED,
+    CONTINUATION_REVISION_MISMATCH,
+    CONTINUATION_SESSION_INVALID,
+    CONTINUATION_UNAVAILABLE,
+    CONTINUATION_WORKSPACE_MISMATCH,
+    MAX_CONTINUATION_GENERATION,
+    PROVISIONAL_SESSION_PREFIXES,
+    STATE_CLAIMED,
+    STATE_SETTLED,
+    ContinuationAuthority,
+    ContinuationConflict,
+    ContinuationCorrupt,
+    ContinuationStore,
+    DEFAULT_SNAPSHOT_POLICY,
+    SnapshotPolicy,
+    WorkspaceUnobservable,
+    is_continuable_session,
+    secure_directory,
+    workspace_manifest_digest,
+)
+from flyto_ai.coding.mission_runtime import (
+    CRITERION_AUDIT,
+    CRITERION_CHECKS,
+    CRITERION_REVISION,
+    DISPOSITION_BLOCKED,
+    DISPOSITION_DEFERRED,
+    CodingMissionRuntime,
+    DispatchedWork,
+    MissionAdmission,
+    MissionAuthorityRefused,
+    MissionConflictRefused,
+    MissionHeartbeat,
+    MissionRouteError,
+    worker_identity,
+)
 from flyto_ai.coding.route import (
-    ROUTE_THREAD_PREFIX,
     CodingRoutePolicy,
     CodingRouteReceipt,
     route_failure_point,
@@ -63,6 +120,14 @@ from flyto_ai.coding.route_status import (
     service_build_id,
     service_version,
 )
+from flyto_ai.coding.preflight import (
+    FAILURE_PHASE_PREFLIGHT,
+    PREFLIGHT_ACTIONS,
+    CODE_CAPABILITY_UNAVAILABLE,
+    CODE_VERIFICATION_TOOL_MISSING,
+    CODE_VERIFICATION_CONTRACT_INVALID,
+    preflight_repository,
+)
 from flyto_ai.coding.store import ThreadStore, redact_evidence
 
 
@@ -73,6 +138,7 @@ except ImportError:  # pragma: no cover
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _JOB_ID = re.compile(r"^job_[a-f0-9]{24}$")
 _TENANT_REF = re.compile(r"^[a-f0-9]{64}$")
 #: Structured error context is a closed vocabulary of short opaque tokens.
@@ -80,11 +146,25 @@ _TENANT_REF = re.compile(r"^[a-f0-9]{64}$")
 _DETAIL_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 _DETAIL_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _MAX_ERROR_DETAIL_FIELDS = 8
+#: At most this many tokens survive from any one allowlisted list field.
+_MAX_ERROR_DETAIL_TOKENS = 8
+#: The only string tokens a list-valued detail may contain. Keeping this a
+#: closed set is what stops `required_actions` from becoming a prose channel.
+_PROJECTABLE_TOKENS = frozenset(PREFLIGHT_ACTIONS) | frozenset(JOB_FAILURE_ACTIONS)
+#: Detail keys whose lists carry contract identifiers rather than closed
+#: allowlist tokens. Named here, and nowhere else, so adding one is a decision
+#: rather than a side effect of raising an error with a new field.
+_IDENTIFIER_DETAIL_KEYS = frozenset({"verification_blockers"})
 _BACKEND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ALLOWED_REQUEST_FIELDS = frozenset({
     "message", "working_dir", "thread_id", "resume", "max_attempts",
     "max_rounds", "require_changes",
 })
+#: What a public payload may *decode*. Deliberately wider than
+#: `_ALLOWED_REQUEST_FIELDS`, which is also the resume-envelope field list: the
+#: mission envelope is a contract this slice accepts and projects, not durable
+#: session authority to be replayed into a later round.
+_DECODABLE_REQUEST_FIELDS = _ALLOWED_REQUEST_FIELDS | {"mission"}
 # The revision binds only the attributable change set. Version control
 # internals, credential files, evidence, and unrelated workspace content are
 # never read by this digest.
@@ -100,7 +180,7 @@ MAX_REWORK_MESSAGE_CHARS = 180_000
 #: comes from `flyto_ai.coding.route`, `host-` from the Claude adapter's
 #: `HOST_THREAD_PREFIX`. Neither is a resumable implementation session, so
 #: neither may ever be recorded as one. A test binds this to both sources.
-PROVISIONAL_THREAD_PREFIXES = (ROUTE_THREAD_PREFIX, "host-")
+PROVISIONAL_THREAD_PREFIXES = PROVISIONAL_SESSION_PREFIXES
 #: The post-work lane is the only place a host lane refuses a round *because of
 #: the implementation itself* rather than because a lane could not be trusted.
 #: These two codes mean exactly "the implementer's own round did not close its
@@ -128,6 +208,10 @@ AUDITABLE_IMPLEMENTATION_FAILURE_CODES = frozenset({
 #: A blocker list is never empty, so a reader can always tell "blocked" from
 #: "clean", even when nothing more specific survived the bounds.
 GENERIC_IMPLEMENTATION_BLOCKER = "implementation_incomplete"
+#: Stable settlement code for a job that used every configured repair round.
+#: Distinct from any implementer or provider failure: nothing went wrong in the
+#: round, the job simply ran out of the budget the host gave it.
+REWORK_LIMIT_FAILURE_CODE = "rework_limit_reached"
 #: Blocker codes share the audit finding vocabulary: short, stable, opaque.
 _BLOCKER_CODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{1,63}$")
 #: How one round was executed. Persisted before the implementer is invoked, so
@@ -138,6 +222,23 @@ EXECUTION_MODE_EMERGENCY = "emergency"
 #: job record. A file that does not name its exact version is not read.
 WORKSPACE_CLAIM_VERSION = "flyto.coding-workspace-claim.v1"
 RESUME_ENVELOPE_VERSION = "flyto.coding-resume-envelope.v1"
+#: Closed schema token for the private binding between one mission work item and
+#: the exact round it stands for. Private tenant state, never projected.
+ROUND_ENVELOPE_VERSION = "flyto.coding-round-envelope.v1"
+_ROUND_ENVELOPE_FIELDS = frozenset({
+    "envelope_version", "work_item_id", "job_id", "rework", "message", "created_at",
+})
+#: The kernel mints work item ids as a prefix and exactly twelve decimal digits.
+#: Matched here before one is ever used to build a path.
+_WORK_ITEM_ID = re.compile(r"^w-[0-9]{12}$")
+#: Closed schema token for the private record of which Indexer contract this
+#: job's root task is authorized against. It lives in the job record, which is
+#: 0600 and never projected into a receipt, a prompt, a log or an audit body.
+PLAN_AUTHORITY_VERSION = "flyto.coding-plan-authority.v1"
+_PLAN_AUTHORITY_DOMAIN = b"flyto.coding-plan-authority.v1\n"
+#: A plan is a bounded contract, not a payload. Anything larger than this is not
+#: something this host will carry forward across rounds.
+MAX_PLAN_AUTHORITY_BYTES = 256 * 1024
 #: Exactly the keys a workspace claim may contain. The raw worktree path is
 #: deliberately absent: the claim is keyed by its digest, and the owning job
 #: record already holds the path under the same 0600 state root.
@@ -154,23 +255,210 @@ _RESUME_ENVELOPE_FIELDS = frozenset(_ALLOWED_REQUEST_FIELDS) | {
 
 
 class CodingServiceError(RuntimeError):
-    """Base error with a stable, non-sensitive service code."""
+    """Base error with a stable, non-sensitive service code.
+
+    Three typed attributes travel with every error, not just the ones a
+    subclass bothered to annotate, because a caller deciding what to do next
+    needs them for *all* failures:
+
+    `failure_phase`
+        How far the job got before this refusal. `preflight` is the strongest
+        statement available - it means no session was opened, no worktree claim
+        was taken, and no job exists to poll.
+    `retryable`
+        Whether repeating the identical request could ever succeed without
+        somebody changing something first. Capacity is retryable; a missing
+        verification contract is not.
+    `required_actions`
+        Bounded tokens from a closed allowlist naming the work that would clear
+        this. Empty when the caller has nothing to do.
+
+    They are folded into `details` so they cross the MCP and HTTP facades
+    through the one existing bounded projection, rather than needing each
+    transport to learn about them separately.
+    """
 
     code = "service_error"
+    failure_phase = "service"
+    retryable = False
+    required_actions: Tuple[str, ...] = ()
 
     @property
-    def details(self) -> Dict[str, Any]:
-        """Bounded, closed-schema context a facade may publish beside `code`.
+    def context(self) -> Dict[str, Any]:
+        """Subclass-specific bounded context; empty by default.
 
-        The default is deliberately empty: an error is a stable code first, and
-        only a subclass that has something safe and actionable to add may fill
-        this in. Paths, prose, and credentials never appear here.
+        Paths, prose, and credentials never appear here.
         """
         return {}
 
+    @property
+    def details(self) -> Dict[str, Any]:
+        """The typed envelope plus whatever bounded context a subclass added."""
+
+        payload: Dict[str, Any] = {
+            "failure_phase": self.failure_phase,
+            "retryable": bool(self.retryable),
+        }
+        if self.required_actions:
+            payload["required_actions"] = tuple(self.required_actions)
+        payload.update(self.context)
+        return payload
+
 
 class CodingServiceBusy(CodingServiceError):
+    """The service cannot take more work right now; the request itself is fine."""
+
     code = "service_busy"
+    failure_phase = "capacity"
+    retryable = True
+
+
+class CodingCapacityUnavailable(CodingServiceBusy):
+    """The bounded job queue is saturated.
+
+    Distinct from the base `service_busy` so a caller can tell "this instance is
+    at its configured concurrency ceiling, back off and retry" from any other
+    transient refusal. It stays a `CodingServiceBusy` subclass so existing
+    handlers and the 429 mapping keep working unchanged.
+    """
+
+    code = "capacity_unavailable"
+
+
+class VerificationRequired(CodingServiceError):
+    """This repository has not declared how a change to it must be verified.
+
+    Raised from preflight, so nothing was created and nothing needs cleaning
+    up. Never retryable: an identical resubmission fails identically until the
+    repository adds or completes its contract.
+    """
+
+    code = "verification_required"
+    failure_phase = FAILURE_PHASE_PREFLIGHT
+    retryable = False
+
+    def __init__(self, message: str, required_actions: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.required_actions = tuple(required_actions)
+
+
+class VerificationContractInvalid(VerificationRequired):
+    """A verification contract exists but cannot be honoured as written."""
+
+    code = "verification_contract_invalid"
+
+
+class VerificationContractChanged(VerificationRequired):
+    """The contract moved between observing this repository and committing to it.
+
+    Distinct from `verification_contract_invalid`: nothing is wrong with the new
+    contract. It is simply not the one this submit measured the workspace
+    against, and a job pinned for its whole life to a digest that no longer
+    describes the file on disk is a job nobody can audit honestly.
+
+    Refused before a job, a lease, a worktree claim, a continuation claim or a
+    session exists, so the caller may simply resubmit and be admitted against
+    the contract that is actually there.
+
+    Retryable, unlike every other `VerificationRequired`. Those mean "somebody
+    must fix something before this can ever work"; this one means "two things
+    happened in the wrong order". Nothing is broken and there is no required
+    action, so reporting it as terminal would stop a scheduler on a race that
+    resolves itself on the next attempt. A continuation retry is retryable in
+    exactly the same way - it just then meets the ordinary
+    `continuation_contract_changed` rule, because an authority granted under
+    the old contract cannot be relicensed under a new one.
+    """
+
+    code = "verification_contract_changed"
+    retryable = True
+
+
+class VerificationToolMissing(VerificationRequired):
+    """A required check is declared correctly and its program is not installed.
+
+    Three neighbouring refusals, three different people: `verification_required`
+    is for whoever owns the repository's contract, `capability_unavailable` is
+    for whoever provisions the capability bridge, and this one is for whoever
+    provisions the host's tooling. Collapsing them would leave every recipient
+    reading prose to find out whether the work is theirs.
+
+    Carries the names of the checks that cannot run. They are contract
+    identifiers, already validated as safe tokens, so they say *which* tool to
+    install without the refusal becoming a channel for paths or argv.
+    """
+
+    code = "verification_tool_missing"
+
+    def __init__(
+        self,
+        message: str,
+        required_actions: Sequence[str] = (),
+        blockers: Sequence[str] = (),
+    ) -> None:
+        super().__init__(message, required_actions)
+        self.blockers = tuple(blockers)
+
+    @property
+    def context(self) -> Dict[str, Any]:
+        if not self.blockers:
+            return {}
+        return {"verification_blockers": tuple(self.blockers)}
+
+
+class CapabilityUnavailable(VerificationRequired):
+    """A required capability cannot be attached on this host.
+
+    The contract is fine; the environment is not. Kept distinct so an operator
+    installing a missing tool is never sent to edit a correct contract.
+    """
+
+    code = "capability_unavailable"
+
+
+class CodingAuthorityConflict(CodingServiceError):
+    """This state root's active work belongs to a different startup authority.
+
+    The coding route is startup-fixed by design: the implementer, the audit
+    requirement, the contract path, the sandbox, the approval policy and the
+    host lane policies are all decided before a job exists and no payload can
+    reach them. A second service that would decide any of them differently is
+    therefore not a peer worker on this queue - it is a different route sharing
+    a directory.
+
+    Refusing it at construction, rather than letting it start and then declining
+    each item, is the difference between one bounded error and an unbounded one:
+    a running incompatible service is offered every ready item forever, and each
+    refusal costs a dispatch attempt and a fencing token. It is also what keeps
+    such a service away from the workspace-claim sweep, which it has no standing
+    to run against another authority's audit gap.
+
+    Rotation is allowed - just not while work is live. Once every job under the
+    old authority is terminal, the next service binds the root to its own.
+    """
+
+    code = "execution_authority_conflict"
+    failure_phase = "startup"
+    retryable = False
+
+
+class CodingAuthorityUnavailable(CodingServiceError):
+    """This host cannot bind a state root to one startup authority at all.
+
+    Distinct from a conflict, because the two are fixed by different people
+    doing different things: a conflict means "another authority owns this root",
+    and this means "the primitive that would answer that question is missing".
+
+    It is a refusal rather than a degradation on purpose. Without an
+    inter-process lock there is no way to know whether another service is alive
+    here, so continuing would advertise multi-process isolation this host cannot
+    keep - two services would both start, both believe they owned the root, and
+    both dispatch against it.
+    """
+
+    code = "execution_authority_unavailable"
+    failure_phase = "startup"
+    retryable = False
 
 
 class CodingServiceReloadRequired(CodingServiceError):
@@ -201,13 +489,14 @@ class WorkspaceBusy(CodingServiceError):
     """
 
     code = "workspace_busy"
+    failure_phase = "workspace"
 
     def __init__(self, message: str, owner_job_id: str = "") -> None:
         super().__init__(message)
         self.owner_job_id = str(owner_job_id or "")
 
     @property
-    def details(self) -> Dict[str, Any]:
+    def context(self) -> Dict[str, Any]:
         return {"owner_job_id": self.owner_job_id} if self.owner_job_id else {}
 
 
@@ -222,13 +511,14 @@ class WorkspaceClaimUnresolved(CodingServiceError):
     """
 
     code = "workspace_claim_unresolved"
+    failure_phase = "workspace"
 
     def __init__(self, message: str, owner_job_id: str = "") -> None:
         super().__init__(message)
         self.owner_job_id = str(owner_job_id or "")
 
     @property
-    def details(self) -> Dict[str, Any]:
+    def context(self) -> Dict[str, Any]:
         return {"owner_job_id": self.owner_job_id} if self.owner_job_id else {}
 
 
@@ -256,6 +546,80 @@ class RevisionUnavailable(CodingServiceError):
 
 class SessionBindingFailed(CodingServiceError):
     code = "session_binding_failed"
+
+
+class ContinuationRefused(CodingServiceError):
+    """A resume request was not granted, and says as little as it safely can.
+
+    Refused in `submit`, before a job, a lease, a claim or a session exists, so
+    `preflight` is the truthful phase. Never retryable on its own: every code
+    here needs somebody to change something first - restore the bytes, restore
+    the contract, or accept that this session is finished.
+
+    The default code is deliberately the collapsed one. A caller learns a
+    specific reason only after it has already proven it owns the authority; up
+    to that point every distinguishable answer would be an existence oracle for
+    somebody else's session.
+    """
+
+    code = CONTINUATION_UNAVAILABLE
+    failure_phase = "preflight"
+    retryable = False
+
+    def __init__(self, message: str, code: str = CONTINUATION_UNAVAILABLE) -> None:
+        super().__init__(message)
+        # Bounded by the module's own closed set, so a future caller cannot
+        # smuggle prose into a facade through this field.
+        self.code = code if code in CONTINUATION_CODES else CONTINUATION_UNAVAILABLE
+
+
+#: Every way a job's durable Indexer plan authority, or the cumulative scope
+#: it governs, can fail to be provable. Closed by construction: each is a stable
+#: token a caller may branch on, and none of them ever carries contract content,
+#: a path, a session, or provider prose.
+PLAN_AUTHORITY_CODES: Tuple[str, ...] = (
+    "plan_authority_unavailable",
+    "plan_authority_unsealable",
+    "cumulative_scope_unproven",
+    "cumulative_scope_unbounded",
+    "cumulative_session_unproven",
+    "cumulative_workspace_unproven",
+    "cumulative_claim_unproven",
+    "cumulative_resume_unproven",
+    "cumulative_revision_mismatch",
+)
+
+
+class PlanAuthorityUnprovable(CodingServiceError):
+    """This job cannot prove what its root task is authorized to change.
+
+    Lifecycle, stated precisely because the phase depends on it: this is
+    *pre-implementer*, not submit-preflight. The job already exists, it already
+    holds a durable worktree claim, admission and capability startup already
+    happened. What has not happened is the implementer call, so no session was
+    opened, no provider budget was spent and nothing was produced to audit.
+    `preflight` is therefore the wrong phase - that one promises no job and no
+    claim - and `verification` is the truthful one: the host could not verify
+    the authority this round would have run under.
+
+    Not retryable. Every member of the closed set means a durable fact is
+    missing, stale, replayed or contradicted, so an identical rework of this
+    job cannot repair it. The way forward is a fresh job planned against the
+    authority that actually exists now, which is exactly what
+    `resubmit_against_current_contract` names.
+
+    The code is the whole message. The contract itself, the paths it names and
+    the session it belongs to stay in the private job record.
+    """
+
+    code = "plan_authority_unavailable"
+    failure_phase = FAILURE_PHASE_VERIFICATION
+    retryable = False
+    required_actions = (ACTION_RESUBMIT_AGAINST_CURRENT_CONTRACT,)
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code if code in PLAN_AUTHORITY_CODES else "plan_authority_unavailable"
 
 
 class ReworkLimitReached(CodingServiceError):
@@ -288,6 +652,120 @@ class EmergencyAuthorityMissing(CodingServiceError):
 
 
 #: States whose persisted route evidence must still hold when read back.
+class _RoundSettlement:
+    """One round's mission closure: performed once, published with its state.
+
+    The invariant this type exists to hold is a publication order, not a lock.
+    A round used to write `failed` or `awaiting_codex_audit` and only then close
+    its work item, which left a real window in which a poller saw a terminal job
+    whose item this process still held dispatched - and, worse, in which an
+    auditor could accept that job and schedule a repair child before the parent
+    item settled, so the late closure would then rewrite the record's projection
+    onto the wrong work item.
+
+    So the closure happens *before* the state is published and returns the
+    record change instead of writing it. Every publishing path folds that change
+    into the same `_update_record`, which makes "this job is terminal" and "this
+    round's item is owner-closed" one durable fact rather than two.
+
+    Calling it twice is a no-op that replays the first answer: a backstop in the
+    worker's `finally` can therefore always run without risking a second close
+    or a second projection move.
+    """
+
+    __slots__ = ("_service", "_work", "_tenant_ref", "_job_id", "_settled", "_changes")
+
+    def __init__(
+        self,
+        service: "CodingService",
+        work: Optional["DispatchedWork"],
+        tenant_ref: str,
+        job_id: str,
+    ) -> None:
+        self._service = service
+        self._work = work
+        self._tenant_ref = tenant_ref
+        self._job_id = job_id
+        #: A round with no dispatch handle - a legacy direct call - has nothing
+        #: to settle and is born settled, so every call site stays uniform.
+        self._settled = work is None
+        self._changes: Dict[str, Any] = {}
+
+    @property
+    def settled(self) -> bool:
+        return self._settled
+
+    @property
+    def work_item_id(self) -> str:
+        return "" if self._work is None else self._work.work_item_id
+
+    def __call__(
+        self,
+        *,
+        revision: str = "",
+        files: Sequence[str] = (),
+        state: str = "",
+        failure_code: str = "",
+    ) -> Dict[str, Any]:
+        if self._settled:
+            return dict(self._changes)
+        self._settled = True
+        work = self._work
+        assert work is not None  # `_settled` is True from birth when it is None
+        self._changes = self._service._close_round_item(
+            work,
+            self._tenant_ref,
+            self._job_id,
+            revision=revision,
+            files=files,
+            state=state,
+            failure_code=failure_code,
+        )
+        return dict(self._changes)
+
+
+class MissionRouteRefused(CodingServiceError):
+    """The mission lane refused this job, under the kernel's own stable code.
+
+    One class, many codes. `capacity`, `conflict`, `stale fence`, `dependency`,
+    `corruption`, `authority` and `unsupported host` are already a closed,
+    machine-readable vocabulary in `flyto_ai.coding.mission_runtime`, so this
+    adopts that code rather than inventing a parallel one - a caller branching
+    on `code` sees exactly what the kernel decided, and `retryable` travels with
+    it so backing off is never a guess.
+    """
+
+    failure_phase = "mission"
+
+    def __init__(self, exc: MissionRouteError) -> None:
+        super().__init__(str(exc))
+        self.code = getattr(exc, "code", "mission_unavailable")
+        self.retryable = bool(getattr(exc, "retryable", False))
+
+
+#: How long a pump waits for work the store is holding behind a resource
+#: conflict before giving the worker thread back. Bounded on purpose: a pump
+#: that waited forever would be a worker a permanently blocked worktree could
+#: consume. The wait backs off from `_PUMP_POLL_SECONDS` to
+#: `_PUMP_POLL_CEILING`, because each attempt rewrites the durable store.
+_PUMP_WAIT_SECONDS = 120.0
+_PUMP_POLL_SECONDS = 0.02
+_PUMP_POLL_CEILING = 0.2
+#: How many times one pump will accept work whose round another process has
+#: leased before concluding that process owns it. Requeueing is free; retrying
+#: forever would burn a fencing token per attempt for nothing.
+_PUMP_MAX_FOREIGN = 3
+#: How many consecutive "ready work, nothing running, took nothing" readings a
+#: pump needs before believing them. One is a race with a claim released between
+#: the dispatch attempt and the metrics read; two cannot be.
+_PUMP_MAX_IDLE = 2
+
+#: What one dispatch attempt did. A pump treats all three differently, so they
+#: are named rather than encoded as a bare boolean.
+_DISPATCH_RAN = "ran"
+_DISPATCH_IDLE = "idle"
+_DISPATCH_FOREIGN = "foreign"
+
 _ROUTE_EVIDENCE_STATES = frozenset({
     CodingJobState.AWAITING_CODEX_AUDIT.value,
     CodingJobState.REWORK_QUEUED.value,
@@ -302,6 +780,57 @@ _INTERRUPTED_JOB_STATES = frozenset({
     CodingJobState.REWORK_RUNNING.value,
 })
 
+#: The only states a restart may fail closed. A round in one of these was
+#: *executing*: a provider call was in flight, a worktree was being written, and
+#: nothing durable can say how far it got. Everything else that looks unfinished
+#: is merely waiting, and waiting survives a process.
+_EXECUTING_JOB_STATES = frozenset({
+    CodingJobState.RUNNING.value,
+    CodingJobState.REWORK_RUNNING.value,
+})
+
+#: Durably queued work that outlives whoever admitted it. A record in one of
+#: these states carries everything a compatible worker needs - the job record,
+#: the resume envelope, the round envelope and a placed mission work item - so
+#: it is pumped, never failed, when a service starts or the submitter exits.
+_PUMPABLE_JOB_STATES = frozenset({
+    CodingJobState.QUEUED.value,
+    CodingJobState.REWORK_QUEUED.value,
+})
+
+#: Closed schema token for the bounded fingerprint of the startup authority a
+#: job was admitted under. Two services may share a state root and a durable
+#: queue; only one that would construct the *same* implementer, under the same
+#: audit requirement, contract path, sandbox and approval policy, may execute
+#: work the other admitted. No secret, no credential and no absolute path is
+#: part of it.
+EXECUTION_AUTHORITY_VERSION = "flyto.coding-execution-authority.v1"
+#: How deep the recursive policy canonicalization walks before truncating. A
+#: startup policy is a bounded contract, not a graph.
+_POLICY_MAX_DEPTH = 8
+#: Stable machine code for a record whose executing authority cannot be
+#: established. Terminal, so such a record is accounted once rather than
+#: circling the shared queue forever.
+EXECUTION_AUTHORITY_UNBOUND = "execution_authority_unbound"
+#: The durable authority lease for one coding state root. Every live service
+#: compatible with the root holds a *shared* `flock` on this file for its whole
+#: life; rotation needs the *exclusive* one, which is unobtainable while any of
+#: them is alive. The kernel releases it when a process dies, so recovery needs
+#: no TTL, no heartbeat and no guess about liveness.
+AUTHORITY_LOCK_NAME = ".authority.lock"
+#: The marker naming which authority currently owns this root. Bounded, exact
+#: schema, and secret-free: it carries the same fingerprint a job record does.
+AUTHORITY_MARKER_NAME = "authority.json"
+AUTHORITY_MARKER_VERSION = "flyto.coding-state-root-authority.v1"
+_AUTHORITY_MARKER_FIELDS = frozenset({"marker_version", "authority"})
+#: The marker is a handful of bounded tokens and one small mapping. Anything
+#: larger is not one, and is refused rather than parsed - a reader that will
+#: accept an arbitrary body is a reader that can be made to do arbitrary work.
+MAX_AUTHORITY_MARKER_BYTES = 8192
+#: What a kernel reports when `O_NOFOLLOW` refuses the final component. Both
+#: spellings appear across POSIX platforms, so both mean "this is a link".
+_NOFOLLOW_ERRNOS = frozenset({errno.ELOOP, getattr(errno, "EMLINK", errno.ELOOP)})
+
 #: States during which one job owns its worktree exclusively. This is a strict
 #: superset of `_INTERRUPTED_JOB_STATES`: it also covers the audit gap, where
 #: no round is executing but the recorded revision must still describe the
@@ -310,6 +839,13 @@ _INTERRUPTED_JOB_STATES = frozenset({
 _CLAIM_OWNED_STATES = _INTERRUPTED_JOB_STATES | {
     CodingJobState.AWAITING_CODEX_AUDIT.value,
 }
+
+#: The one terminal vocabulary, projected to the raw strings a durable record
+#: stores. Derived from `TERMINAL_CODING_JOB_STATES` so a new terminal state
+#: can never be added in one place and forgotten in the other.
+_TERMINAL_STATE_VALUES = frozenset(
+    state.value for state in TERMINAL_CODING_JOB_STATES
+)
 
 
 def route_blocks_implementation(route: "CodingRouteReceipt") -> bool:
@@ -352,6 +888,11 @@ class _RoundProgress:
 
     def __init__(self, on_start: Optional[Callable[[], None]] = None) -> None:
         self.implementer_started = False
+        #: The exact ordered attributable set this round handed to the proof
+        #: lanes, recorded by the route seam. The durable revision must bind
+        #: this same tuple or the round is refused: a set the Indexer validated
+        #: and a different set an auditor is offered are not the same evidence.
+        self.route_scope: Tuple[str, ...] = ()
         self.emergency = False
         self.trigger: Optional[EmergencyTrigger] = None
         self._on_start = on_start
@@ -363,6 +904,74 @@ class _RoundProgress:
         if self._on_start is not None:
             self._on_start()
         self.implementer_started = True
+
+
+def _arm_start_marker(store: Any, progress: Optional[Any]) -> None:
+    """Let the adapter say when a provider attempt really begins.
+
+    The marker used to be written just before the adapter was entered, which
+    made it a statement about this service rather than about the run: an adapter
+    that refused before ever contacting a provider - an unhonourable contract, a
+    verification tool that is not installed - was durably recorded as having
+    started. The hook moves the signal to the first real provider or session
+    call, where it is both true and still early enough to survive a worker that
+    dies inside that call.
+    """
+
+    if progress is None:
+        return
+    try:
+        store.on_provider_start = progress.begin
+    except Exception as exc:
+        # Failing closed, because the alternative was worse than useless: a
+        # store that cannot carry the callback used to be handled by declaring
+        # the provider started, which is the exact false record this seam
+        # exists to remove. The production store is host-owned and supports
+        # this; anything that does not is a wiring error, not a run.
+        raise RuntimeError(
+            "the implementation store cannot carry the provider start signal",
+        ) from exc
+
+
+def _arm_session_binding(store: Any, binder: Optional[Callable[[str], None]]) -> None:
+    """Let the adapter say which session the provider actually established.
+
+    Separate from `_arm_start_marker` because the two facts are separate. The
+    start marker answers "was an implementer invoked", and it is true before any
+    identity exists. This answers "which conversation is this round", and it is
+    only true once a backend has said so.
+
+    Binding at that moment - rather than when the whole agent call returns - is
+    what makes a bounded stop continuable at all. A round that is killed, or
+    that dies against a ceiling six minutes in, has already had its session
+    written down under the job that owns the worktree.
+
+    Fails closed for the same reason the start marker does: a store that cannot
+    carry the callback is a wiring error, and running a round whose identity
+    nobody records is exactly the state being removed.
+    """
+
+    if binder is None:
+        return
+    try:
+        store.on_provider_session = binder
+    except Exception as exc:
+        raise RuntimeError(
+            "the implementation store cannot carry the provider session signal",
+        ) from exc
+
+
+def _reconcile_start_marker(progress: Optional[Any], result: Any) -> None:
+    """Record a start the adapter proved but did not signal.
+
+    Belt and braces for an implementer that predates the hook: a result showing
+    a real attempt means a provider ran, whoever failed to say so.
+    """
+
+    if progress is None or getattr(progress, "implementer_started", False):
+        return
+    if int(getattr(result, "attempts", 0) or 0) >= 1:
+        progress.begin()
 
 
 class CodingImplementer(Protocol):
@@ -385,9 +994,22 @@ def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:
 
     if not isinstance(value, Mapping):
         raise ValueError("coding request must be an object")
-    unknown = set(value) - _ALLOWED_REQUEST_FIELDS
+    unknown = set(value) - _DECODABLE_REQUEST_FIELDS
     if unknown:
         raise ValueError("unsupported coding request fields: {}".format(", ".join(sorted(unknown))))
+    # Absent and explicitly null are different payloads and are answered
+    # differently. The published schema types `mission` as an object, so a
+    # caller that sent the key sent something the schema does not describe;
+    # silently reading it as "no mission" would let a client believe it had
+    # named one and get a job that ignored it. Both transports decode here, so
+    # MCP and HTTP cannot drift on this.
+    if "mission" in value:
+        mission_value = value["mission"]
+        if mission_value is None:
+            raise ValueError("mission must be an object; omit the key to send no mission")
+        mission = CodingMissionEnvelope.from_mapping(mission_value)
+    else:
+        mission = None
     return CodingTaskRequest(
         message=str(value.get("message", "")),
         working_dir=str(value.get("working_dir", "")),
@@ -396,6 +1018,7 @@ def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:
         max_attempts=int(value.get("max_attempts", 3)),
         max_rounds=int(value.get("max_rounds", 30)),
         require_changes=bool(value.get("require_changes", True)),
+        mission=mission,
     )
 
 
@@ -419,6 +1042,32 @@ def error_details(exc: BaseException) -> Dict[str, Any]:
             projected[key] = value
         elif isinstance(value, str) and _DETAIL_VALUE_RE.fullmatch(value):
             projected[key] = value
+        elif isinstance(value, (list, tuple)):
+            # Two bounded list shapes, and no third. Most keys may carry only
+            # tokens from a closed allowlist, which is what lets
+            # `required_actions` reach a caller as data it can branch on rather
+            # than as prose; anything not on the allowlist is dropped, not
+            # truncated, so this can never become an open string channel.
+            #
+            # `_IDENTIFIER_DETAIL_KEYS` is the single exception, and it is
+            # narrow by construction: the values are contract identifiers whose
+            # shape the config parser already enforced, they are matched against
+            # the same strict pattern as any scalar detail, and the key itself
+            # has to be one this module named in advance. A caller learns which
+            # declared thing blocked it; it never learns a path, an argv or a
+            # message.
+            if key in _IDENTIFIER_DETAIL_KEYS:
+                allowed = [
+                    item for item in value
+                    if isinstance(item, str) and _DETAIL_VALUE_RE.fullmatch(item)
+                ]
+            else:
+                allowed = [
+                    item for item in value
+                    if isinstance(item, str) and item in _PROJECTABLE_TOKENS
+                ]
+            if allowed:
+                projected[key] = sorted(set(allowed))[:_MAX_ERROR_DETAIL_TOKENS]
     return projected
 
 
@@ -426,12 +1075,27 @@ def receipt_to_mapping(receipt: CodingJobReceipt) -> Dict[str, Any]:
     """Return a JSON-safe, secret-redacted public receipt."""
 
     projected = dataclasses.asdict(receipt)
+    # Derived, not stored: `asdict` sees dataclass fields only, so the terminal
+    # signal is injected here to keep one source of truth in the receipt.
+    projected["job_terminal"] = receipt.job_terminal
+    phase, retryable, actions = receipt.failure_semantics
+    projected["failure_phase"] = phase
+    projected["retryable"] = retryable
+    projected["required_actions"] = list(actions)
     result = projected.get("result")
     if isinstance(result, dict):
         result.pop("evidence_path", None)
         for check in result.get("checks", []):
             if isinstance(check, dict):
                 check.pop("output_preview", None)
+    mission = projected.get("mission")
+    if isinstance(mission, dict):
+        # Belt and braces over the receipt's own revalidation: re-project
+        # through the closed field set, so no key can ride out of this facade
+        # that `CodingMissionProjection` does not publish.
+        projected["mission"] = {
+            key: mission[key] for key in sorted(MISSION_PROJECTION_FIELDS) if key in mission
+        }
     return redact_evidence(projected)
 
 
@@ -452,6 +1116,7 @@ class CodingService:
         sandbox_image: str = "python:3.12-slim",
         require_codex_audit: bool = False,
         implementation_backend: str = "native",
+        attachable_capability_kinds: Optional[Sequence[str]] = None,
         max_rework_rounds: int = 3,
         route_policy: Optional[CodingRoutePolicy] = None,
         emergency_policy: Optional[EmergencyOverflowPolicy] = None,
@@ -464,8 +1129,13 @@ class CodingService:
         if not roots or any(not path.is_dir() for path in roots):
             raise ValueError("workspace_roots must contain existing directories")
         self.agent_factory = agent_factory
-        self.state_root = Path(state_root).expanduser().resolve()
-        self.state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Not `.resolve()` + `mkdir(parents=True)`. That pair follows links
+        # twice - once to decide where to write, once to write - and the store
+        # below is built to refuse exactly what it would have followed. The
+        # refusal has to happen here, before any directory exists, or the
+        # service creates state on the far side of a link and only then hands
+        # a store that would have said no.
+        self.state_root = secure_directory(Path(state_root))
         self.workspace_roots = roots
         self.max_queued = max_queued
         self.approval_policy = ApprovalPolicy(approval_policy)
@@ -482,6 +1152,12 @@ class CodingService:
         ):
             raise ValueError("implementation_backend must be a safe non-empty identifier")
         self.implementation_backend = implementation_backend
+        # What the *selected* implementer can bridge, declared by whoever wired
+        # it. `None` means unproven and is treated as "nothing", so a contract
+        # that requires a capability is refused at preflight rather than
+        # accepted here and refused later inside the implementer. Backends
+        # publish their own answer as `attachable_capability_kinds`.
+        self.attachable_capability_kinds = frozenset(attachable_capability_kinds or ())
         if isinstance(max_rework_rounds, bool) or not isinstance(max_rework_rounds, int):
             raise ValueError("max_rework_rounds must be an integer")
         if not 1 <= max_rework_rounds < MAX_AUDIT_ROUNDS:
@@ -510,6 +1186,19 @@ class CodingService:
                 "emergency_policy backend must match the selected implementation backend",
             )
         self._breaker = EmergencyCircuitBreaker(self.emergency_policy)
+        # Tenant-partitioned continuation authorities. Reads and writes always
+        # go through the authenticated caller's own partition, which is what
+        # makes a guessed session from another tenant indistinguishable from a
+        # session that never existed.
+        self._continuation = ContinuationStore(self.state_root)
+        # Which parts of a workspace this host calls source. The strict public
+        # route is the only configuration that may classify anything as
+        # control-plane runtime state, because it is the only one whose
+        # mandatory Indexer pre/post gates independently revalidate that tree
+        # and record the result in the route receipt. Everything else - a
+        # legacy library service, a non-strict route, a route without an
+        # Indexer - gets the default policy and observes the whole tree.
+        self.snapshot_policy = self._startup_snapshot_policy(route_policy)
         # A fresh instance is a fresh, closed circuit with a new opaque id and
         # the build digest of the sources this process actually loaded.
         self.instance_id = uuid.uuid4().hex[:24]
@@ -530,6 +1219,9 @@ class CodingService:
         self._lock = threading.RLock()
         self._state_lock_depth = 0
         self._workspace_locks: Dict[str, threading.Lock] = {}
+        #: Per-workspace admission locks, distinct from the per-round locks
+        #: above so a submit never queues behind a running model round.
+        self._admission_locks: Dict[str, threading.Lock] = {}
         self._job_leases: Dict[str, int] = {}
         # In-memory resume context is only the fast path. The durable, redacted
         # envelope beside each job record is what makes rework possible from a
@@ -540,6 +1232,24 @@ class CodingService:
         self._pending: set[Future[Any]] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="flyto-coding")
         self._closed = False
+        #: The state-root authority lease. `-1` until taken, so every failure
+        #: path - including one before it is taken - can close it uniformly.
+        self._authority_fd = -1
+        #: Set once the publisher exists. A constructor that fails at the
+        #: authority lease is torn down through the same `close()` as any other,
+        #: and that teardown must not raise over a recorder that was never
+        #: built - an `AttributeError` there would replace the real refusal.
+        self._status: Optional[RouteStatusPublisher] = None
+        # The durable, cross-process mission queue. Constructing it creates
+        # nothing, so an unsupported host is discovered by asking rather than by
+        # leaving half a store behind; admission is where the refusal lands.
+        self._mission = CodingMissionRuntime(
+            self.state_root, worker=worker_identity(self.instance_id),
+        )
+        #: How many work items start-up reconciliation returned to the queue.
+        #: Each one earns exactly one pump, so accounting for them stays on the
+        #: ordinary store-ordered route.
+        self._reclaimed = 0
         try:
             self._lock_fd = os.open(
                 self.state_root / ".service.lock", os.O_CREAT | os.O_RDWR, 0o600,
@@ -555,6 +1265,10 @@ class CodingService:
             (self.state_root / "locks" / "workspaces").mkdir(
                 parents=True, exist_ok=True, mode=0o700,
             )
+            # First durable act of a new service, and deliberately before the
+            # status publisher exists: an incompatible service must fail before
+            # it reconciles status, sweeps a workspace claim, or pumps.
+            self._acquire_state_root_authority()
             self._status = RouteStatusPublisher(
                 self.state_root,
                 instance_id=self.instance_id,
@@ -585,19 +1299,275 @@ class CodingService:
         request_digest = self._request_digest(request)
         tenant_dir = self._tenant_dir(tenant_ref)
         idempotency_path = tenant_dir / "idempotency" / (hashlib.sha256(idempotency_key.encode()).hexdigest() + ".json")
+
+        # Phase 0, unlocked: an idempotent replay must not pay for a repository
+        # scan it does not need. This read is advisory - the authoritative one
+        # happens under the guard below - but it is exact when it hits, because
+        # an idempotency record is written once and never rewritten.
+        replay = self._replayed_receipt(
+            tenant_ref, tenant_dir, idempotency_path, request_digest,
+        )
+        if replay is not None:
+            return replay
+
+        # Phase 1, workspace-scoped: everything expensive. Reading the
+        # verification contract and snapshotting the workspace can take tens of
+        # seconds on a large repository, and doing that under the global state
+        # guard put every other tenant, every other workspace and every other
+        # Codex behind whichever submit happened to be scanning. The lock here
+        # is per workspace, so two submits for the *same* tree still cannot both
+        # observe-then-claim, and an unrelated tree is not delayed at all.
+        #
+        # Lock order is workspace-admission -> state guard, everywhere, and the
+        # admission lock is never taken while the state guard or a round's
+        # workspace lock is held. There is therefore no cycle to deadlock on.
+        with self._admission_lock(request.working_dir):
+            # Observation first, and deliberately so. A continuation does not
+            # derive its contract from the tree it is re-entering: the stopped
+            # round may itself have edited `.flyto/coding.yaml`, and that edit
+            # is part of the exact revision a continuation must find unchanged.
+            # Reading the current file to decide a continuation's authority is
+            # what made the two invariants unsatisfiable at once.
+            #
+            # This claims nothing, so nothing is consumed if the transition
+            # below is refused.
+            observed = self._observe_continuation(tenant_ref, request)
+            if observed is None:
+                # An ordinary new job. One read decides feasibility *and* pins,
+                # by value, the contract this job is authorized against for its
+                # whole life, rework rounds included.
+                pinned = self._pin_verified_contract(request.working_dir)
+                observed_config = pinned.config_sha256
+            else:
+                # A continuation inherits the origin's pin, recovered from
+                # private tenant state and re-proved against the identity the
+                # authority itself binds. The current file is not consulted for
+                # authority at all - only for drift, below.
+                pinned = self._restore_pinned_contract(tenant_ref, observed)
+                observed_config = self._observed_config_digest(request.working_dir)
+            authorized_config = pinned.config_sha256
+            request = dataclasses.replace(
+                request,
+                authorized_config_sha256=authorized_config,
+                pinned_contract=pinned,
+            )
+            return self._commit_admission(
+                tenant_ref, tenant_dir, idempotency_path, request,
+                request_digest, authorized_config, observed, pinned,
+                observed_config,
+            )
+
+    def _pin_verified_contract(self, workspace: str) -> ContractSnapshot:
+        """Prove this repository can be verified, and pin what it declared.
+
+        Two reads, bound together by a digest rather than by hope. Preflight
+        performs its own read and returns the digest it decided from; this then
+        reads the document again to capture the checks, capabilities and actions
+        by value, and refuses unless that second read hashes to exactly what
+        preflight approved. A contract swapped between the two is therefore a
+        refusal, not a snapshot of one document wearing another's verdict.
+
+        The snapshot is taken here, at submit, before any implementer has been
+        constructed and long before a provider has been contacted. That timing
+        is the whole guarantee: everything this job later executes was
+        authorized before the first provider edit could exist.
+        """
+
+        authorized = self._require_verifiable_repository(workspace)
+        try:
+            contract = read_project_contract(workspace, self.config_path)
+        except (OSError, ValueError) as exc:
+            raise VerificationContractChanged(
+                "the repository verification contract changed during admission",
+            ) from exc
+        if contract.digest != authorized:
+            raise VerificationContractChanged(
+                "the repository verification contract changed during admission",
+            )
+        return contract.snapshot()
+
+    @staticmethod
+    def _record_pinned_contract(
+        record: Mapping[str, Any],
+    ) -> Optional[ContractSnapshot]:
+        """Rebuild a job's pin from its own durable record, or refuse to guess.
+
+        Revalidating rather than trusting: the stored mapping goes back through
+        the full contract grammar, and the identity the record also stored must
+        still match. A record whose snapshot was edited in place therefore
+        yields `None` rather than a weakened contract, and `None` fails closed
+        everywhere it is consumed - a round with no pin and a non-empty
+        `authorized_config_sha256` falls back to the historical digest gate,
+        which refuses outright when the file no longer matches.
+        """
+
+        stored = record.get("contract_snapshot")
+        if stored is None:
+            return None
+        try:
+            pinned = ContractSnapshot.from_mapping(stored)
+        except (ValueError, TypeError):
+            return None
+        expected = str(record.get("contract_snapshot_sha256") or "")
+        if not expected or pinned.identity() != expected:
+            return None
+        return pinned
+
+    def _observed_config_digest(self, workspace: str) -> str:
+        """The current contract file's digest, or "" when it has none to give.
+
+        Never raises. This is a drift probe, not an authority decision: a
+        continuation's authority comes from its pin, and whether the file on
+        disk currently parses is a fact about the tree the model produced. The
+        empty string is a real observation ("unreadable or absent"), and two
+        empty observations compare equal, so an unparseable contract that stays
+        unparseable is correctly seen as *not* having drifted.
+        """
+
+        try:
+            return read_project_contract(workspace, self.config_path).digest
+        except (OSError, ValueError):
+            return ""
+
+    def _restore_pinned_contract(
+        self, tenant_ref: str, authority: ContinuationAuthority,
+    ) -> ContractSnapshot:
+        """Recover the origin job's pin, and prove it is the one bound here.
+
+        The snapshot lives in the origin job's private record; the authority
+        carries only its content address. Rebuilding goes back through the full
+        validating constructor, so a hand-edited state file cannot introduce a
+        check, capability or action shape the contract grammar would refuse -
+        and the identity comparison then rejects any snapshot that is
+        well-formed but simply not the one this session was granted under.
+
+        Reached only after `_observe_continuation` has proven tenant, session,
+        backend, workspace, policy, revision and manifest. A caller that has not
+        proven all of that never learns anything from here.
+        """
+
+        record: Mapping[str, Any]
+        try:
+            record = self._read_json(
+                self._tenant_dir(tenant_ref, create=False)
+                / "jobs" / (authority.origin_job_id + ".json"),
+            )
+        except (OSError, ValueError):
+            raise ContinuationRefused(
+                "the pinned verification contract can no longer be recovered",
+                CONTINUATION_CONTRACT_UNPINNED,
+            ) from None
+        try:
+            pinned = ContractSnapshot.from_mapping(record.get("contract_snapshot"))
+        except (ValueError, TypeError):
+            raise ContinuationRefused(
+                "the pinned verification contract can no longer be recovered",
+                CONTINUATION_CONTRACT_UNPINNED,
+            ) from None
+        if pinned.identity() != authority.contract_snapshot_sha256:
+            # Stored, well-formed, and not what this authority was granted
+            # under. Tampering and a mismatched restore are the same refusal.
+            raise ContinuationRefused(
+                "the pinned verification contract does not match this authority",
+                CONTINUATION_CONTRACT_CHANGED,
+            )
+        return pinned
+
+    def _replayed_receipt(
+        self,
+        tenant_ref: str,
+        tenant_dir: Path,
+        idempotency_path: Path,
+        request_digest: str,
+    ) -> Optional[CodingJobReceipt]:
+        """Return the receipt an idempotency key already names, or `None`."""
+
+        try:
+            reference = self._read_json(idempotency_path)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        except (OSError, ValueError):
+            # Unreadable here is not decisive; the authoritative check under
+            # the guard will raise if it is really broken.
+            return None
+        if reference.get("request_sha256") != request_digest:
+            raise IdempotencyConflict("idempotency key was already used for another request")
+        referenced = str(reference.get("job_id", ""))
+        if not _JOB_ID.fullmatch(referenced):
+            raise CodingServiceError("idempotency record is invalid")
+        try:
+            record = self._read_json(tenant_dir / "jobs" / (referenced + ".json"))
+        except (OSError, ValueError):
+            return None
+        return self._public_receipt(tenant_ref, record)
+
+    def _commit_admission(
+        self,
+        tenant_ref: str,
+        tenant_dir: Path,
+        idempotency_path: Path,
+        request: CodingTaskRequest,
+        request_digest: str,
+        authorized_config: str,
+        observed: Optional[ContinuationAuthority],
+        pinned: ContractSnapshot,
+        observed_config: str,
+    ) -> CodingJobReceipt:
+        """Re-prove the stopped tree, then take the short guarded transition.
+
+        Not everything here is cheap. For a continuation this method performs
+        the *second* whole-workspace proof, and that walk is the expensive part
+        of admission. It deliberately runs outside the global state guard,
+        immediately before the guarded block below, so the scan costs this
+        workspace time without putting any other tenant or any unrelated
+        workspace behind it. The caller's per-workspace admission lock is what
+        keeps a competing submit for *this* tree from interleaving.
+
+        What is cheap is the guarded transition itself. The caller has already
+        paid for the phase-one observation, and inside the guard only a handful
+        of bounded reads and writes run - including the re-read of one small
+        contract file - so the global guard is held for microseconds rather
+        than for the length of a scan.
+        """
+
+        if observed is not None:
+            # The phase boundary itself was a time-of-check window. Phase one
+            # proved the *whole* tree against the authority; the gate inside the
+            # guard below then re-proved only `.flyto/coding.yaml`. An ordinary
+            # tracked source file rewritten in between satisfied both and still
+            # reached the claim, the worktree and the provider - which is
+            # precisely the "resumed model editing a file it believes it already
+            # wrote" this mechanism exists to refuse.
+            #
+            # Re-proving here rather than inside the guard is deliberate. This
+            # walks the workspace, and a scan under the global guard would put
+            # every other tenant and every unrelated workspace behind it. The
+            # admission lock the caller already holds is per workspace and is
+            # still held, so no competing submit for *this* tree can interleave,
+            # and no unrelated tree is delayed at all.
+            #
+            # It runs before `_claim_continuation`, before the job lease, the
+            # worktree claim, the durable record, the idempotency record and the
+            # resume envelope, so a refusal leaves the authority open and
+            # nothing to clean up.
+            #
+            # Deferred, though, when the contract file is what moved: that is
+            # already the guarded gate's question, and it answers it as a
+            # retryable ordering accident rather than as terminal tree drift.
+            # Re-proving the tree first would relabel a race nobody can fix.
+            if self._observed_config_digest(request.working_dir) == observed_config:
+                self._prove_stopped_tree(observed)
+
         with self._state_guard():
             if self._closed:
                 raise CodingServiceError("coding service is closed")
-            if idempotency_path.exists():
-                reference = self._read_json(idempotency_path)
-                if reference.get("request_sha256") != request_digest:
-                    raise IdempotencyConflict("idempotency key was already used for another request")
-                referenced = str(reference.get("job_id", ""))
-                if not _JOB_ID.fullmatch(referenced):
-                    raise CodingServiceError("idempotency record is invalid")
-                return self._receipt(
-                    self._read_json(tenant_dir / "jobs" / (referenced + ".json")),
-                )
+            # Authoritative replay check. A competing submit with the same key
+            # may have landed while this one was scanning.
+            replay = self._replayed_receipt(
+                tenant_ref, tenant_dir, idempotency_path, request_digest,
+            )
+            if replay is not None:
+                return replay
             if current_service_build_id() != self.build_id:
                 # Never begin a fresh job with modules imported from a
                 # different build than the files an auditor will inspect.
@@ -607,9 +1577,47 @@ class CodingService:
                     "coding service source changed; reload the MCP worker",
                 )
             if len(self._pending) >= self.max_queued:
-                raise CodingServiceBusy("coding job queue is full")
+                raise CodingCapacityUnavailable("coding job queue is full")
+            # The last authority to re-prove, and the reason it is re-proven
+            # here rather than trusted from phase one: the contract read and
+            # the workspace snapshot happen outside the global guard, so a
+            # repository whose `.flyto/coding.yaml` is replaced in between
+            # would otherwise pin this job to a digest that no longer matches
+            # the file. This is a bounded re-read of one small file, not the
+            # snapshot, so the guard stays short.
+            #
+            # It runs before the continuation claim, the lease, the worktree
+            # claim and every durable record, so a change here leaves nothing
+            # behind: no job to poll, no claim to release, no authority
+            # consumed. An unreadable or unhonourable contract keeps its own
+            # precise preflight refusal; a *different but valid* one is a
+            # distinct answer, because the caller has nothing to fix.
+            #
+            # What is re-proved is that the contract *file* is still the one
+            # phase one observed - not that it still matches this job's pinned
+            # authority. For a new job those are the same digest. For a
+            # continuation they are deliberately different: the pin is the
+            # pre-edit contract and the file may legitimately be the post-edit
+            # one, so comparing against the pin here would re-introduce exactly
+            # the deadlock. Drift of the file during admission is still caught,
+            # which is what this gate was always for.
+            if self._observed_config_digest(request.working_dir) != observed_config:
+                raise VerificationContractChanged(
+                    "the repository verification contract changed during admission",
+                )
+            if observed is None and not observed_config:
+                # A new job must have a readable contract; `_pin_verified_contract`
+                # already proved that, so an empty digest here is a race.
+                raise VerificationContractChanged(
+                    "the repository verification contract changed during admission",
+                )
             now = time.time()
             job_id = "job_{}".format(uuid.uuid4().hex[:24])
+            # The claim is a compare-and-swap against the durable journal tail,
+            # so an authority that moved while this submit was scanning is
+            # refused here rather than double-spent. Observation was advisory;
+            # this is the decision.
+            granted = self._claim_continuation(tenant_ref, job_id, observed)
             if not self._acquire_job_lease(job_id):
                 raise CodingServiceBusy("coding job lease is already held")
             record = {
@@ -637,10 +1645,48 @@ class CodingService:
                 "audit_count": 0,
                 "rework_count": 0,
                 "audit_findings_sha256": "",
+                # Host-owned contract authority for this job's whole life. A
+                # later round re-applies exactly this, never the current file.
+                "authorized_config_sha256": authorized_config,
+                # The contract itself, by value, in private tenant state. This
+                # record is 0600 and is never projected into a receipt, a
+                # status document, a prompt, a log or an audit body: only
+                # bounded, already-validated contract data lives here - no
+                # workspace path, no message, no secret. It is what a rework
+                # round and a restart restore, and what a continuation must
+                # reproduce by identity.
+                "contract_snapshot": pinned.to_mapping(),
+                "contract_snapshot_sha256": pinned.identity(),
                 "landable": False,
                 "implementation_blockers": [],
+                # Bounded continuation binding. Empty for an ordinary job; for a
+                # continuation it names the exact session this job was admitted
+                # to re-enter and the generation it consumed.
+                "continuation_session_id": granted.session_id if granted else "",
+                "continuation_generation": granted.generation if granted else 0,
+                "continuation_origin_job_id": granted.origin_job_id if granted else "",
+                # Bounded, secret-safe mission coordinates. Filled in below,
+                # from the work item admission actually placed.
+                "mission": None,
+                # Which startup authority this job may be executed under. The
+                # durable queue is shared; the authority is not, so a worker
+                # that would build a different implementer leaves this work for
+                # one that would build the same.
+                "execution_authority": self._execution_authority(),
             }
             try:
+                # Every job gets a mission. A caller that named one has its
+                # immutable contract honoured and validated; a caller that named
+                # none gets the coding adapter's synthesized contract, which is
+                # built here and never inside the workload-neutral kernel.
+                #
+                # This runs before the worktree claim and before any durable
+                # job record, so a refusal leaves no record to poll. A crash
+                # *after* it leaves one ready work item whose job never came into
+                # existence; the dispatch pump accounts for that item explicitly
+                # rather than leaving it in the queue forever.
+                admission = self._admit_mission(tenant_ref, job_id, request)
+                record["mission"] = admission.projection.to_mapping()
                 # Exclusive worktree ownership is taken here, once an
                 # idempotent replay has already been ruled out, and it is held
                 # for the whole job rather than for one round. Everything after
@@ -669,17 +1715,81 @@ class CodingService:
                 self._write_resume_envelope(
                     tenant_ref, job_id, request, request_digest,
                 )
-                future = self._executor.submit(self._run_job, tenant_ref, job_id, request)
+                # What one dispatch needs to reconstruct this exact round, in
+                # private tenant state. A first round replays the resume
+                # envelope's own message, so nothing is duplicated here.
+                self._write_round_envelope(
+                    tenant_ref, job_id, admission.work_item_id, rework=False,
+                )
             except BaseException:
                 self._release_workspace_claim(job_id, request.working_dir)
                 self._discard_resume(tenant_ref, job_id)
+                # A job that never came into existence never consumed a
+                # generation. Returning the authority to `open` is safe because
+                # this still runs inside the guard that claimed it, so no other
+                # process could have observed the claim in between.
+                self._revert_continuation_claim(tenant_ref, granted, job_id)
                 self._release_job_lease(job_id)
                 raise
-            self._pending.add(future)
-            future.add_done_callback(
-                lambda completed, claimed=job_id: self._forget_future(completed, claimed),
+            # Admission is over, and with it this instance's exclusive hold.
+            #
+            # Holding the lease from here until *this* instance's pump happened
+            # to reach this job was the thundering herd: the queue is global, so
+            # the store would offer the item to whichever compatible service
+            # asked next, that service could not take the lease, and it requeued
+            # the item - burning an attempt and a fencing token every time. The
+            # job record, the idempotency record, the resume envelope, the round
+            # envelope and the mission work item are all durable now, so any
+            # compatible worker can execute this round from durable state alone.
+            # The lease goes back to meaning exactly one thing: a round of this
+            # job is executing right now.
+            #
+            # Release happens-before the pump exists. Submitting the pump first
+            # let this instance's own worker dispatch this very item while the
+            # lease was still held here, refuse it as foreign, and requeue it -
+            # burning an attempt on its own job. There is no such window now.
+            self._release_job_lease(job_id)
+            self._schedule_pump()
+            return self._public_receipt(tenant_ref, record)
+
+    def _require_verifiable_repository(self, workspace: str) -> str:
+        """Refuse, before anything exists, a repository that cannot be verified.
+
+        The three outcomes are deliberately three different exception types
+        rather than one with a variable message: "you have no contract", "your
+        contract is wrong" and "this host is missing a tool you require" are
+        resolved by different people doing different work, and a caller that
+        branches on `code` must be able to tell them apart without reading
+        prose.
+        """
+
+        outcome = preflight_repository(
+            workspace,
+            self.config_path,
+            attachable_capability_kinds=self.attachable_capability_kinds,
+        )
+        if outcome.ok:
+            return outcome.config_sha256
+        if outcome.code == CODE_VERIFICATION_CONTRACT_INVALID:
+            raise VerificationContractInvalid(
+                "repository verification contract cannot be honoured",
+                outcome.required_actions,
             )
-            return self._receipt(record)
+        if outcome.code == CODE_CAPABILITY_UNAVAILABLE:
+            raise CapabilityUnavailable(
+                "a required capability cannot be attached on this host",
+                outcome.required_actions,
+            )
+        if outcome.code == CODE_VERIFICATION_TOOL_MISSING:
+            raise VerificationToolMissing(
+                "a required verification tool is not installed on this host",
+                outcome.required_actions,
+                outcome.blockers,
+            )
+        raise VerificationRequired(
+            "repository has not declared how a change must be verified",
+            outcome.required_actions,
+        )
 
     def _reassert_audit_claim(
         self, tenant_ref: str, record: Mapping[str, Any],
@@ -717,6 +1827,15 @@ class CodingService:
 
         return dataclasses.replace(
             request,
+            # Never carried by a payload: the service sets the job's contract
+            # authority explicitly after preflight has read the contract, and
+            # re-applies it from the durable record on every rework round.
+            authorized_config_sha256="",
+            # Never carried by a payload either, and for the same reason: the
+            # pin *is* the verifier, so a request that could supply one could
+            # choose the checks it is graded against. The service re-applies it
+            # from the durable job record on every round.
+            pinned_contract=None,
             approval_policy=self.approval_policy,
             sandbox_mode=self.sandbox_mode,
             checks=(),
@@ -725,12 +1844,285 @@ class CodingService:
             command_sandbox_image=self.sandbox_image,
         )
 
+    @staticmethod
+    def _startup_snapshot_policy(route_policy: Any) -> SnapshotPolicy:
+        """Decide, once, which projection this host is entitled to use.
+
+        Only a strict route with a required Indexer capability may classify a
+        directory as control-plane runtime state, and the reason is specific:
+        that route runs a mandatory Indexer gate before any model edit and
+        again after the source-controlled checks, and records both in the route
+        receipt. The classified tree is therefore still validated - by the lane
+        that owns it - rather than merely unobserved.
+
+        Any other configuration gets the default policy, which observes every
+        non-VCS entry. That includes a service whose route was configured
+        without an Indexer: the justification is the gate, not the intention.
+        """
+
+        indexer = getattr(route_policy, "indexer", None)
+        if (
+            route_policy is None
+            or not getattr(route_policy, "strict", False)
+            or indexer is None
+            or not getattr(indexer, "required", False)
+        ):
+            return DEFAULT_SNAPSHOT_POLICY
+        return SnapshotPolicy(
+            runtime_state_names=(".flyto-index",),
+            rationale="host-owned Indexer pre/post gates revalidate this tree",
+        )
+
+    @contextmanager
+    def _admission_lock(self, workspace: str) -> Iterator[None]:
+        """Serialize observe-then-claim for one workspace, and only that one.
+
+        Deliberately a different lock from the per-round workspace lock. This
+        one is held only across admission, so a submit never waits behind a
+        model round, and a running round never waits behind a scan.
+        """
+
+        resolved = str(Path(workspace).resolve())
+        with self._lock:
+            local = self._admission_locks.setdefault(resolved, threading.Lock())
+        digest = hashlib.sha256(resolved.encode()).hexdigest()
+        directory = self.state_root / "locks" / "admission"
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = directory / (digest + ".lock")
+        with local:
+            handle = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_EX)
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+                os.close(handle)
+
+    def _observe_continuation(
+        self,
+        tenant_ref: str,
+        request: CodingTaskRequest,
+    ) -> Optional[ContinuationAuthority]:
+        """Decide whether this submit may re-enter an existing backend session.
+
+        Returns the claimed authority, or `None` when the request is an ordinary
+        new job. Raises `ContinuationRefused` when a continuation was asked for
+        and cannot be granted.
+
+        Single ownership rests on the durable transition journal, not on this
+        process holding a lock. The claim is a compare-and-swap against the
+        journal tail, so a second OS process that loaded the same open
+        authority - even one that never shared this interpreter or this
+        in-process guard - finds the tail already moved and is refused. The
+        state guard around this call is an optimisation, not the invariant.
+
+        Ordering is a disclosure decision. Everything that could reveal whether
+        somebody else's authority exists is answered first, with one code.
+        Only after this caller has proven it holds an open authority in its own
+        partition do the specific mismatches become visible - and by then they
+        describe the caller's own workspace and contract, not a secret.
+        """
+
+        if not request.resume:
+            return None
+        session = str(request.thread_id or "")
+        if not session:
+            # `resume` with no thread id is the historical in-process rework
+            # shape, which never crosses this path.
+            return None
+        if not is_continuable_session(session):
+            # A host-minted provisional id, an oversized id, or an id outside
+            # the accepted shape. Refused without any lookup at all, so it
+            # cannot be used to probe for anything.
+            raise ContinuationRefused(
+                "the requested session cannot be continued",
+                CONTINUATION_SESSION_INVALID,
+            )
+        authority = self._continuation.open_authority(tenant_ref, session)
+        if authority is None:
+            # Absent, another tenant's, already consumed, settled, superseded,
+            # corrupt, truncated, replayed, or claimed by a racing process.
+            # Exactly one answer for all of them - with one exception, and only
+            # because it is not a secret: an authority this tenant stored under
+            # the pre-pinning schema names no contract, so no continuation of it
+            # could ever prove which verifier the stopped round ran. That is the
+            # caller's own record, it is terminal, and no retry changes it, so
+            # saying which of the two it is costs nothing and saves an operator
+            # from retrying something that can never succeed.
+            if self._continuation.is_unpinned_legacy(tenant_ref, session):
+                raise ContinuationRefused(
+                    "this continuation authority predates contract pinning",
+                    CONTINUATION_CONTRACT_UNPINNED,
+                )
+            raise ContinuationRefused("no continuation authority is available")
+        if not authority.contract_snapshot_sha256:
+            # Defensive: a v3 record must bind a snapshot. Reaching here means a
+            # record was written by something that skipped the binding, and an
+            # unbound authority is never continued on a guess.
+            raise ContinuationRefused(
+                "this continuation authority binds no verification contract",
+                CONTINUATION_CONTRACT_UNPINNED,
+            )
+        if authority.generation >= MAX_CONTINUATION_GENERATION:
+            raise ContinuationRefused("no continuation authority is available")
+        if authority.backend != self.implementation_backend:
+            # This host would call a different provider, so "the same session"
+            # is not a thing it could enter.
+            raise ContinuationRefused(
+                "the continuation authority names another implementation backend",
+                CONTINUATION_BACKEND_MISMATCH,
+            )
+        if (
+            authority.working_dir != request.working_dir
+            or authority.workspace_sha256 != hashlib.sha256(
+                request.working_dir.encode(),
+            ).hexdigest()
+        ):
+            raise ContinuationRefused(
+                "the continuation authority was taken in another workspace",
+                CONTINUATION_WORKSPACE_MISMATCH,
+            )
+        if authority.snapshot_policy_sha256 != self.snapshot_policy.identity():
+            # The authority was granted under a different projection of this
+            # workspace. Continuing would mean re-proving a snapshot that never
+            # observed the same things - which is what a policy change, an
+            # added exclusion, or a strict-route authority replayed on a
+            # non-strict service all look like.
+            raise ContinuationRefused(
+                "the workspace snapshot policy changed since the stop",
+                CONTINUATION_POLICY_CHANGED,
+            )
+        # There is deliberately no comparison against the *current* contract
+        # file here any more. The stopped round may have edited it, and that
+        # edit is part of the exact revision the manifest check below demands be
+        # unchanged - so requiring the file to still hash to the pre-edit
+        # authority made the two invariants unsatisfiable together, and the only
+        # ways out were to re-read (letting the edit authorize itself) or to
+        # refuse forever. The authority instead binds the snapshot it was
+        # granted under, and `_restore_pinned_contract` re-proves it by identity
+        # after everything below has passed. Pinning is not weakened: it moved
+        # from "the file still hashes to X" to "the contract still *is* X".
+        #
+        # A contract file edited *after* the stop is still refused, and audibly:
+        # `.flyto/coding.yaml` is inside the workspace and is not one of the three
+        # excluded version-control names, so it is part of the manifest below and
+        # arrives as `CONTINUATION_REVISION_MISMATCH` rather than as a
+        # contract-specific code. That is the honest answer - the tree moved -
+        # and it is why the contract-specific codes are reserved for a pin that
+        # cannot be recovered or re-proved.
+        self._prove_stopped_tree(authority)
+        return authority
+
+    def _prove_stopped_tree(self, authority: ContinuationAuthority) -> None:
+        """Prove the workspace is still, byte for byte, the tree that stopped.
+
+        Factored out because it is asked twice, and must answer identically both
+        times: once when the authority is observed, and again at the phase
+        boundary immediately before that authority is consumed. One
+        implementation means the seam re-proof can never drift into a weaker
+        question than the observation it is re-proving.
+        """
+
+        try:
+            revision = self._revision_digest(authority.working_dir, authority.files)
+            # The whole tree, not only what the stopped round was credited
+            # with. An audit probe added an unrelated `intruder.py` between
+            # segments and was admitted, because a digest of the attributable
+            # set cannot see a path nobody attributed. A resumed model would
+            # then be reasoning about a workspace it had never seen.
+            manifest = workspace_manifest_digest(
+                authority.working_dir, self.snapshot_policy,
+            )
+        except (CodingServiceError, WorkspaceUnobservable, OSError):
+            # Unreadable, replaced by a directory, symlink-swapped, escaped, a
+            # special file, or past a manifest bound. None of that is the tree
+            # that stopped, and none of it is describable exactly enough to
+            # continue into.
+            raise ContinuationRefused(
+                "the workspace no longer matches the stopped revision",
+                CONTINUATION_REVISION_MISMATCH,
+            ) from None
+        if (
+            revision != authority.revision_sha256
+            or manifest != authority.workspace_manifest_sha256
+        ):
+            # Modified, added, deleted, chmod'ed, re-typed or newly-appeared
+            # bytes. All of them land here, and they land before the provider
+            # is contacted.
+            raise ContinuationRefused(
+                "the workspace no longer matches the stopped revision",
+                CONTINUATION_REVISION_MISMATCH,
+            )
+
+    def _claim_continuation(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        observed: Optional[ContinuationAuthority],
+    ) -> Optional[ContinuationAuthority]:
+        """Consume exactly the authority that was observed, or refuse.
+
+        The compare-and-swap is against the durable journal tail, not against
+        what this process last read, so a second OS process that observed the
+        same open authority while this one was scanning cannot also claim it.
+        """
+
+        if observed is None:
+            return None
+        try:
+            return self._continuation.commit(
+                observed, observed.claimed(job_id, time.time()),
+            )
+        except (ContinuationConflict, ContinuationCorrupt, OSError, ValueError):
+            # Another process consumed this exact transition first, or the
+            # journal stopped being readable. Both are "you may not have it",
+            # and neither reveals which.
+            raise ContinuationRefused(
+                "no continuation authority is available",
+            ) from None
+
+    def _revert_continuation_claim(
+        self,
+        tenant_ref: str,
+        granted: Optional[ContinuationAuthority],
+        job_id: str,
+    ) -> None:
+        """Settle a claim whose job failed to come into existence.
+
+        Never reopened. A consumed transition is consumed: the journal has
+        already recorded it, and rewinding a hash chain would be the one edit
+        that turns this mechanism back into something replayable. The operator
+        loses a continuation they had not yet started, which is strictly safer
+        than a generation two processes could both believe they own.
+        """
+
+        if granted is None:
+            return
+        try:
+            stored = self._continuation.load(tenant_ref, granted.session_id)
+            if (
+                stored is None
+                or stored.state != STATE_CLAIMED
+                or stored.claimed_by_job_id != job_id
+                or stored.sequence != granted.sequence
+            ):
+                # Somebody else's state now. Never rewrite it.
+                return
+            self._continuation.commit(stored, stored.settled(time.time()))
+        except (ContinuationConflict, ContinuationCorrupt, OSError, ValueError):
+            # The submit is already failing. A stuck `claimed` record is safe:
+            # it refuses further continuation rather than granting one.
+            pass
+
     def get(self, tenant_id: str, job_id: str) -> CodingJobReceipt:
         """Read a job only from the authenticated tenant namespace."""
 
         if not _JOB_ID.fullmatch(job_id):
             raise CodingJobNotFound("coding job does not exist")
-        path = self._tenant_dir(self._tenant_ref(tenant_id), create=False) / "jobs" / (job_id + ".json")
+        tenant_ref = self._tenant_ref(tenant_id)
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
         with self._state_guard():
             try:
                 record = self._read_json(path)
@@ -744,7 +2136,7 @@ class CodingService:
                 or record.get("landable") is True
             ):
                 self._require_execution_authority(record)
-            return self._receipt(record)
+            return self._public_receipt(tenant_ref, record)
 
     def audit(
         self,
@@ -779,6 +2171,18 @@ class CodingService:
                 raise CodingJobNotFound("coding job does not exist") from exc
             if str(record.get("state")) != CodingJobState.AWAITING_CODEX_AUDIT.value:
                 raise AuditStateConflict("coding job is not awaiting an audit")
+            # Belt and braces over the publication order. `awaiting_codex_audit`
+            # is written in the same record update as this round's owner-closed
+            # projection, so an open one here means the record was edited or an
+            # older build wrote it. Either way an audit must not act: accepting
+            # would land a revision whose work item is still dispatched, and
+            # reworking would place a repair child under a parent that has not
+            # settled, which is exactly how one audit forks the graph.
+            settled = self._record_projection(record)
+            if settled is not None and settled.status != MISSION_STATUS_CLOSED:
+                raise AuditStateConflict(
+                    "this round's mission work item has not settled yet",
+                )
             stored = str(record.get("implementation_revision_sha256") or "")
             if stored != claimed:
                 raise RevisionMismatch("audit does not bind the recorded implementation revision")
@@ -828,7 +2232,14 @@ class CodingService:
                     failure_code=None,
                 )
                 self._discard_resume(tenant_ref, job_id)
-                return self._receipt(self._read_json(path))
+                # The accepted revision is what completes the mission, and only
+                # on the main axis: a side item's accept closes that branch and
+                # returns to its ancestor without ever claiming the objective
+                # was reached.
+                self._accept_mission(
+                    tenant_ref, job_id, self._read_json(path), path,
+                )
+                return self._public_receipt(tenant_ref, self._read_json(path))
             return self._schedule_rework(
                 path, tenant_ref, job_id, record, findings, digest, audit_count,
             )
@@ -871,7 +2282,11 @@ class CodingService:
                 self._release_job_lease(job_id)
             self._discard_resume(tenant_ref, job_id)
             self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
-            return self._receipt(self._read_json(path))
+            # An abandoned predecessor leaves nothing to continue. Settling here
+            # is what makes a later resume of its session refuse rather than
+            # re-enter a conversation whose operator has walked away from it.
+            self._settle_continuation(tenant_ref, job_id, path)
+            return self._public_receipt(tenant_ref, self._read_json(path))
 
     def repair_workspace_claim(self, workspace: str) -> Dict[str, Any]:
         """Clear an unevaluable workspace claim on explicit host authority.
@@ -901,21 +2316,42 @@ class CodingService:
             if self._closed:
                 return
             self._closed = True
-        # The state-root lease must outlive active worker writes. `wait=False`
-        # cancels jobs that have not started but still drains running jobs.
-        self._executor.shutdown(wait=True, cancel_futures=not wait)
-        with self._lock:
-            for job_id in tuple(self._job_leases):
-                self._release_job_lease(job_id)
+        # One outer `finally` over the *whole* teardown. Draining the executor
+        # and handing back job leases can both raise, and either one leaving
+        # the root descriptors open would keep a service that has already
+        # stopped serving holding this state root against every later one - a
+        # lock-out no operator could diagnose from the failure they saw.
         try:
-            with self._state_guard():
-                # A graceful shutdown says so, keeping every fact it already
-                # published. A crashed instance keeps its last `active` row,
-                # which is why a reader also consults the pid and timestamp.
-                self._close_status()
-        except OSError:
-            pass
-        os.close(self._lock_fd)
+            # The state-root lease must outlive active worker writes.
+            # `wait=False` cancels jobs that have not started but still drains
+            # running jobs.
+            self._executor.shutdown(wait=True, cancel_futures=not wait)
+            with self._lock:
+                for job_id in tuple(self._job_leases):
+                    self._release_job_lease(job_id)
+            try:
+                with self._state_guard():
+                    # A graceful shutdown says so, keeping every fact it
+                    # already published. A crashed instance keeps its last
+                    # `active` row, which is why a reader also consults the pid
+                    # and timestamp.
+                    self._close_status()
+            except Exception:
+                # A diagnostic write is never allowed to keep this root bound.
+                # Deliberately `Exception` and not `BaseException`: a broken
+                # status recorder is swallowed, but a `KeyboardInterrupt` or a
+                # `SystemExit` still propagates - and still runs the release
+                # below on its way out.
+                pass
+        finally:
+            try:
+                os.close(self._lock_fd)
+            except OSError:
+                pass
+            # Last, and after every other descriptor: while this is held,
+            # another authority may not rotate this root, so it must outlive
+            # every write above.
+            self._release_state_root_authority()
 
     def _schedule_rework(
         self,
@@ -929,8 +2365,28 @@ class CodingService:
     ) -> CodingJobReceipt:
         """Queue one same-session repair round; the caller holds the lock."""
 
+        # A v0 record carries no executing authority, and a rework is a *new*
+        # implementation round: running it here would adopt this service's route
+        # policy, lane configuration and emergency authority on behalf of a job
+        # that never named any of them. Accepting such a record is fine - a
+        # verdict describes a revision the host already hashed - but reworking
+        # it is not, so it settles under the same stable code instead.
+        if not isinstance(record.get("execution_authority"), Mapping):
+            self._terminalize_unbound(path, tenant_ref, job_id, record)
+            raise CodingAuthorityConflict(
+                "this coding job predates the executing authority record and"
+                " cannot be reworked under an unproven route policy",
+            )
         rework_count = int(record.get("rework_count", 0)) + 1
         if rework_count > self.max_rework_rounds:
+            # The ceiling is a settlement, not a bounce. Leaving the job in
+            # `awaiting_codex_audit` kept its worktree claim held forever by a
+            # job no verdict could ever move again, so the tree stayed locked
+            # against every other job and the terminal condition was invisible
+            # to a caller polling the receipt.
+            self._settle_at_rework_limit(
+                path, tenant_ref, job_id, record, audit_count, digest,
+            )
             raise ReworkLimitReached("coding job exhausted its rework rounds")
         session = str(record.get("implementation_session_id") or "")
         # An audit may legitimately arrive at a different worker than the one
@@ -943,12 +2399,24 @@ class CodingService:
             original = self._read_resume_envelope(tenant_ref, job_id, record)
         if not session or original is None:
             raise ReworkNotResumable("the implementation session cannot be resumed")
-        request = self._with_startup_authority(dataclasses.replace(
-            original,
-            message=self._rework_message(original.message, findings),
-            thread_id=session,
-            resume=True,
-        ))
+        request = dataclasses.replace(
+            self._with_startup_authority(dataclasses.replace(
+                original,
+                message=self._rework_message(original.message, findings),
+                thread_id=session,
+                resume=True,
+            )),
+            # The authority this job was granted at submit, restored from the
+            # durable record. Recomputing it from the current file is exactly
+            # the escalation this closes: a model that edited the contract in
+            # round one would otherwise have the edit authorized in round two.
+            authorized_config_sha256=str(record.get("authorized_config_sha256") or ""),
+            # The contract itself, restored from the same durable record rather
+            # than re-read. This is what lets a job whose implementation edited
+            # `.flyto/coding.yaml` still reach rework: the round runs the checks
+            # the job was admitted under, not the ones it just wrote for itself.
+            pinned_contract=self._record_pinned_contract(record),
+        )
         if len(self._pending) >= self.max_queued:
             raise CodingServiceBusy("coding job queue is full")
         # Claim the job before queueing. A concurrent audit then observes a
@@ -956,6 +2424,16 @@ class CodingService:
         if not self._acquire_job_lease(job_id):
             raise CodingServiceBusy("coding job is already being executed")
         try:
+            # One repair child, under the same mission, in the repair lane, with
+            # an explicit parent and a return edge that points at the main axis.
+            # The operation key names this job and this repair round, so a retry
+            # - here or in a second process reading the same record - reconciles
+            # to the child that already exists instead of forking the graph.
+            repair = self._submit_repair(tenant_ref, job_id, record, rework_count)
+            self._write_round_envelope(
+                tenant_ref, job_id, repair.work_item_id, rework=True,
+                message=request.message,
+            )
             self._update_record_locked(
                 path,
                 state=CodingJobState.REWORK_QUEUED.value,
@@ -964,6 +2442,13 @@ class CodingService:
                 audit_findings_sha256=digest,
                 landable=False,
                 failure_code=None,
+                mission=repair.projection.to_mapping(),
+                # An awaiting-audit record admitted before the fingerprint
+                # existed would otherwise produce a repair child no worker could
+                # prove it may run, and the child would sit queued forever. The
+                # audit is happening *here*, under this authority, so this is
+                # the point at which the record can honestly name it.
+                execution_authority=self._execution_authority(),
             )
         except BaseException:
             # The transition was refused — most often because this job can no
@@ -972,21 +2457,62 @@ class CodingService:
             # every later caller.
             self._release_job_lease(job_id)
             raise
-        try:
-            future = self._executor.submit(self._run_job, tenant_ref, job_id, request, rework=True)
-        except RuntimeError as exc:
-            self._update_record_locked(
-                path,
-                state=CodingJobState.FAILED.value,
-                failure_code="service_rework_not_scheduled",
-            )
-            self._release_job_lease(job_id)
-            raise CodingServiceError("coding rework could not be scheduled") from exc
-        self._pending.add(future)
-        future.add_done_callback(
-            lambda completed, claimed=job_id: self._forget_future(completed, claimed),
+        # Same rule and same order as admission: the repair child, its round
+        # envelope and the `rework_queued` record are all durable, so any
+        # compatible worker may run this round, and the lease goes back before
+        # a pump can exist to race it. A scheduling failure is not a job
+        # failure - the round is recoverable from durable state - so it is no
+        # longer terminalized here.
+        self._release_job_lease(job_id)
+        self._schedule_pump()
+        return self._public_receipt(tenant_ref, self._read_json(path))
+
+    def _settle_at_rework_limit(
+        self,
+        path: Path,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+        audit_count: int,
+        audit_findings_sha256: str,
+    ) -> None:
+        """Terminalize a job that has used every repair round it was given.
+
+        Explicitly, and in one place, so the three things that must happen
+        together cannot drift apart:
+
+        * the record becomes `failed` under a stable code, which makes
+          `job_terminal` true and makes any later audit or rework impossible
+          because both require an awaiting state;
+        * the resume authority is discarded, so the session can never be
+          reopened by a worker that reads the envelope later;
+        * the exact worktree claim is released, so the tree this job has
+          finished with stops blocking every other job.
+
+        The bounded historical evidence - session, cumulative files, revision,
+        blockers - is deliberately *kept*. It is what an operator reads to see
+        what was attempted and how far it got; none of it makes the job
+        landable, because `landable` requires an accepted verdict this job can
+        no longer receive.
+        """
+
+        self._update_record_locked(
+            path,
+            state=CodingJobState.FAILED.value,
+            audit_count=audit_count,
+            # The count and the evidence must describe the same verdict.
+            # Persisting the incremented count beside the *previous* audit's
+            # digest left a record that read as "N audits, and here is the
+            # findings hash of audit N-1".
+            audit_findings_sha256=audit_findings_sha256,
+            failure_code=REWORK_LIMIT_FAILURE_CODE,
+            landable=False,
         )
-        return self._receipt(self._read_json(path))
+        # Both are idempotent by construction: discarding an absent envelope
+        # and releasing a claim this job no longer holds are both no-ops, so a
+        # retried settlement cannot release somebody else's later claim.
+        self._discard_resume(tenant_ref, job_id)
+        self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
 
     @staticmethod
     def _rework_message(original: str, findings: Sequence[CodingAuditFinding]) -> str:
@@ -1011,39 +2537,1317 @@ class CodingService:
         request: CodingTaskRequest,
         *,
         rework: bool = False,
+        work: Optional[DispatchedWork] = None,
     ) -> None:
         path = self._tenant_dir(tenant_ref) / "jobs" / (job_id + ".json")
         workspace_lock = self._workspace_lock(request.working_dir)
         progress = _RoundProgress(
             on_start=lambda: self._mark_implementer_started(path),
         )
+        # Liveness while the implementer runs, and again at every phase
+        # boundary. Observability only: no lease moves, no fencing token is
+        # burned, and nothing about this dispatch's authority depends on a
+        # heartbeat arriving - which is exactly why no worker is ever stolen
+        # from because one stopped.
+        pulse = MissionHeartbeat(work.handle) if work is not None else None
+        # The round's mission closure, performed exactly once and *published
+        # with* the state it justifies. Every terminal or audit-ready record
+        # this round writes folds the closed item's projection into the same
+        # write, so no reader and no auditor can ever observe a settled job
+        # whose work item this process still holds open.
+        settle = _RoundSettlement(self, work, tenant_ref, job_id)
         with workspace_lock:
             try:
                 self._update_record(path, state=(
                     CodingJobState.REWORK_RUNNING if rework else CodingJobState.RUNNING
                 ).value)
+                if pulse is not None:
+                    # The receipt's mission projection follows the work item's
+                    # real lifecycle, so a reader can tell "queued behind a busy
+                    # worktree" from "running" without inferring either.
+                    self._advance_projection(path, status=MISSION_STATUS_DISPATCHED)
+                    pulse.beat()
+                    pulse.start()
                 store = ThreadStore(str(self._tenant_dir(tenant_ref) / "threads"))
+                # Armed once, for every lane this round might take. The strict
+                # route, the emergency lane and the unrouted legacy call all
+                # share this store, so none of them can run a provider whose
+                # session the host would not write down.
+                _arm_session_binding(store, self._session_binder(
+                    path, tenant_ref, job_id, request.working_dir,
+                ))
                 result, route, authority = asyncio.run(
                     self._run_round(
                         store, request, job_id, path, progress, rework=rework,
                     ),
                 )
+                if pulse is not None:
+                    pulse.beat()
                 self._record_outcome(
                     path, tenant_ref, job_id, request, result, store, rework, route,
-                    progress=progress, authority=authority,
+                    progress=progress, authority=authority, settle=settle,
                 )
             except CodingServiceError as exc:
-                self._fail_job(path, tenant_ref, job_id, exc.code, exc, progress)
+                self._fail_job(
+                    path, tenant_ref, job_id, exc.code, exc, progress, settle=settle,
+                )
             except BaseException as exc:  # noqa: BLE001 - a worker never leaks
                 # Every exit from a worker must leave a terminal record. An
                 # unobserved future exception would strand the job `running`
                 # forever, which is exactly what a fail-closed service must
                 # never do.
                 self._fail_job(
-                    path, tenant_ref, job_id, "service_execution_failed", exc, progress,
+                    path, tenant_ref, job_id, "service_execution_failed", exc,
+                    progress, settle=settle,
                 )
                 if not isinstance(exc, Exception):
                     raise
+            finally:
+                # Stopping the pulse first keeps a heartbeat from racing the
+                # closure. The settlement below is a *backstop* only: every
+                # publishing path above has already taken it, and taking it
+                # twice is a no-op. It exists for the paths that never reached a
+                # publish at all - an unwritable record, a killed transition -
+                # where leaving the item dispatched would strand the queue.
+                if pulse is not None:
+                    pulse.stop()
+                if not settle.settled:
+                    changes = settle(state="round_unpublished")
+                    if changes:
+                        try:
+                            self._update_record(path, **changes)
+                        except (OSError, ValueError):
+                            pass
+
+    # -- mission lane ---------------------------------------------------
+
+    def _admit_mission(
+        self, tenant_ref: str, job_id: str, request: CodingTaskRequest,
+    ) -> "MissionAdmission":
+        """Create or validate this job's mission and place its one work item."""
+
+        try:
+            return self._mission.admit(
+                tenant_ref=tenant_ref,
+                job_id=job_id,
+                workspace_sha256=self._workspace_digest(request.working_dir),
+                envelope=request.mission,
+                message=request.message,
+            )
+        except MissionRouteError as exc:
+            raise MissionRouteRefused(exc) from exc
+
+    def _submit_repair(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+        rework_count: int,
+    ) -> "MissionAdmission":
+        """Place one repair child for this job's next round."""
+
+        projection = self._record_projection(record)
+        if projection is None:
+            raise MissionRouteRefused(
+                MissionAuthorityRefused("this job has no mission work item to repair"),
+            )
+        try:
+            return self._mission.submit_repair(
+                tenant_ref=tenant_ref,
+                job_id=job_id,
+                workspace_sha256=self._workspace_digest(
+                    str(record.get("working_dir") or ""),
+                ),
+                projection=projection,
+                round_index=int(rework_count),
+            )
+        except MissionRouteError as exc:
+            raise MissionRouteRefused(exc) from exc
+
+    @staticmethod
+    def _record_projection(
+        record: Mapping[str, Any],
+    ) -> Optional[CodingMissionProjection]:
+        """Rebuild a job's mission projection, revalidating it on the way out.
+
+        A stored mapping goes back through the closed decoder, so a record
+        edited in place yields `None` rather than a weakened projection - and
+        `None` fails closed everywhere it is consumed.
+        """
+
+        stored = record.get("mission")
+        if not isinstance(stored, Mapping):
+            return None
+        try:
+            return CodingMissionProjection.from_mapping(stored)
+        except (ValueError, TypeError):
+            return None
+
+    def _pump_dispatch(self) -> None:
+        """Run exactly one store-selected work item, whichever job owns it.
+
+        The handoff this loop exists for is the cross-instance one. Two jobs on
+        one worktree cannot run at the same time - the mission store holds that
+        worktree as an exclusive resource - so the second job's pump finds every
+        candidate conflicted and must not simply hand its worker back: the
+        worktree's claim is released in *another* process, and no in-process
+        callback will ever fire to say so. Waiting on the store's own two
+        numbers is what makes the release observable across instances.
+
+        It is bounded in three independent ways, so it can never poll forever:
+
+        * it stops the moment the store reports no item in `ready`;
+        * it stops once nothing is running anywhere and the queue has stopped
+          moving, because then the conflict is not going to resolve itself;
+        * it stops at a hard deadline regardless.
+
+        The wait also backs off, because every dispatch attempt rewrites the
+        durable store. A tight retry against a busy worktree would cost more
+        than the round it is waiting for.
+        """
+
+        deadline = time.monotonic() + _PUMP_WAIT_SECONDS
+        delay = _PUMP_POLL_SECONDS
+        foreign = 0
+        idle = 0
+        while not self._closed:
+            outcome = self._dispatch_once()
+            if outcome == _DISPATCH_RAN:
+                # This process just released a resource claim. Anything that was
+                # waiting on it inside *this* instance is woken immediately
+                # rather than after a poll tick.
+                self._prime_pump()
+                return
+            if outcome == _DISPATCH_FOREIGN:
+                # The store offered work this instance may not execute: either a
+                # round of it is genuinely in flight, or the job was admitted
+                # under a startup authority this service does not share. Either
+                # way it was requeued untouched - never stolen, never run twice -
+                # and a worker that may run it will. Retrying costs a fencing
+                # token per attempt and buys nothing, so back off to the ceiling
+                # and give the worker back.
+                delay = _PUMP_POLL_CEILING
+                foreign += 1
+                if foreign >= _PUMP_MAX_FOREIGN:
+                    return
+            ready, dispatched = self._mission.queue_state()
+            if not ready or time.monotonic() >= deadline:
+                return
+            if dispatched:
+                # Something is running somewhere, so a release is coming and
+                # this pump waits for it.
+                idle = 0
+            else:
+                # Ready work, nothing running, and this pump could not take it.
+                # That reading used to retire the worker immediately - and it
+                # was wrong exactly once per race: a claim released between the
+                # dispatch attempt and this metrics read looks identical to
+                # "nothing will ever release anything". So confirm it with a
+                # second dispatch attempt before believing it. Two consecutive
+                # idle observations with nothing running cannot both fall inside
+                # the same release window, and two is still bounded, so a
+                # synchronous pump never waits out the deadline for work that
+                # genuinely is not coming.
+                idle += 1
+                if idle >= _PUMP_MAX_IDLE:
+                    return
+            time.sleep(delay)
+            delay = min(_PUMP_POLL_CEILING, delay * 2)
+
+    def _schedule_pump(self) -> None:
+        """Queue one pump for work that is already durable and recoverable.
+
+        Scheduling is best effort *on purpose*. By the time this runs the job
+        record, its envelopes and its mission work item are all durable, so a
+        service that is shutting down - or an executor that refuses the task -
+        leaves queued work a compatible worker will pick up, at start-up or on
+        its next pump. Raising here would falsely terminalize a job nothing is
+        wrong with, and rolling back would delete work already published to the
+        shared queue.
+        """
+
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                future = self._executor.submit(self._pump_dispatch)
+            except RuntimeError:
+                return
+            self._pending.add(future)
+        future.add_done_callback(self._forget_future)
+
+    def _prime_pump(self) -> None:
+        """Queue one more pump when the shared queue still holds ready work."""
+
+        with self._lock:
+            if self._closed or len(self._pending) >= self.max_queued:
+                return
+            if not self._mission.ready_work():
+                return
+            try:
+                future = self._executor.submit(self._pump_dispatch)
+            except RuntimeError:
+                return
+            self._pending.add(future)
+        future.add_done_callback(self._forget_future)
+
+    def _dispatch_once(self) -> str:
+        """Take the next work item the store chose and run its owning job.
+
+        Answers which of three things happened, because a pump treats them
+        differently: this call ran or accounted for an item, the store had
+        nothing to give, or the item belongs to a round another process holds.
+        """
+
+        try:
+            with self._mission.dispatch() as work:
+                if work is None:
+                    return _DISPATCH_IDLE
+                return self._run_dispatched(work)
+        except MissionRouteError:
+            # A refusal from the kernel is never a reason to spin: the pump
+            # gives its worker back and the next submit will try again.
+            return _DISPATCH_IDLE
+
+    def _run_dispatched(self, work: "DispatchedWork") -> str:
+        """Resolve one dispatched work item back to its private owner and run it.
+
+        Three refusals happen before anything is executed, and each of them is a
+        case where running would be worse than not running:
+
+        * the owning record cannot be read, or is already terminal. The item is
+          closed with full accounting rather than left in the queue, which is
+          what makes a restart's failed-closed jobs explicitly accounted for.
+        * the round envelope does not name this work item. Something else placed
+          it, so this process has no proof of what it was for.
+        * the job lease is held elsewhere. Another process owns this round; the
+          item is requeued untouched, never stolen and never duplicated.
+        """
+
+        tenant_ref, job_id = work.tenant_ref, work.job_id
+        if not _JOB_ID.fullmatch(job_id) or not _TENANT_REF.fullmatch(tenant_ref):
+            self._account_unrunnable(work, "mission_coordinates_unresolvable")
+            return _DISPATCH_RAN
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        try:
+            record = self._read_json(path)
+        except (OSError, ValueError):
+            self._account_unrunnable(work, "job_record_unreadable")
+            return _DISPATCH_RAN
+        state = str(record.get("state") or "")
+        if state in _TERMINAL_STATE_VALUES or state not in (
+            CodingJobState.QUEUED.value, CodingJobState.REWORK_QUEUED.value,
+        ):
+            self._account_unrunnable(work, "job_not_runnable")
+            return _DISPATCH_RAN
+        if not isinstance(record.get("execution_authority"), Mapping):
+            # A record with no provable executing authority. `_bind_startup_
+            # authority` settles these at start-up, so reaching one here means it
+            # appeared afterwards - an edited or partially written record. It is
+            # accounted once, terminally, rather than requeued forever.
+            self._account_unrunnable(work, EXECUTION_AUTHORITY_UNBOUND)
+            self._fail_unrunnable_record(
+                tenant_ref, job_id, EXECUTION_AUTHORITY_UNBOUND,
+            )
+            return _DISPATCH_RAN
+        if not self._may_execute(record):
+            # Shared durable state, unshared authority. Startup binding makes
+            # this unreachable for a service that came up cleanly - an
+            # incompatible one is refused before it can pump at all - so this is
+            # defence in depth for a record rewritten underneath a running
+            # service. Requeue untouched; executing it here would silently
+            # redirect a caller's work to an agent they never authorized.
+            return _DISPATCH_FOREIGN
+        round_envelope = self._read_round_envelope(tenant_ref, work.work_item_id)
+        if round_envelope is None or str(round_envelope.get("job_id") or "") != job_id:
+            self._account_unrunnable(work, "round_envelope_unbound")
+            self._fail_unrunnable_record(tenant_ref, job_id, "round_envelope_unbound")
+            return _DISPATCH_RAN
+        rework = bool(round_envelope.get("rework"))
+        request = self._reconstruct_request(tenant_ref, job_id, record, round_envelope)
+        if request is None:
+            self._account_unrunnable(work, "request_unreconstructable")
+            self._fail_unrunnable_record(tenant_ref, job_id, "request_unreconstructable")
+            return _DISPATCH_RAN
+        if not self._claim_round(job_id):
+            # Held by another process. Leaving the `with` block without closing
+            # requeues the item, so the owner keeps its work and nothing is
+            # duplicated behind its back.
+            return _DISPATCH_FOREIGN
+        try:
+            self._run_job(tenant_ref, job_id, request, rework=rework, work=work)
+        finally:
+            self._release_round(job_id)
+        return _DISPATCH_RAN
+
+    def _execution_authority(self) -> Dict[str, Any]:
+        """The bounded startup authority a job admitted here may run under.
+
+        Every field is a startup decision no job payload can reach, and none of
+        them is a secret, a credential or an absolute path. It is recorded so a
+        second service sharing this state root can answer one question without
+        guessing: would running this job here construct the same implementer,
+        under the same audit requirement and the same execution envelope, as the
+        service that accepted it?
+        """
+
+        # Deliberately *not* the build id. A hot reload or an ordinary restart
+        # mints a new one, so binding execution to it would strand a queued job
+        # that a semantically identical worker is perfectly able to run - the
+        # exact failure this fingerprint exists to prevent, inverted. Build
+        # identity is still enforced where it belongs: `_commit_admission`
+        # refuses to *admit* new work under a changed build.
+        return {
+            "version": EXECUTION_AUTHORITY_VERSION,
+            "backend": self.implementation_backend,
+            "audit_required": bool(self.require_codex_audit),
+            "config_path": self.config_path,
+            "sandbox_image": self.sandbox_image,
+            "approval_policy": self.approval_policy.value,
+            "sandbox_mode": self.sandbox_mode.value,
+            "route": self._policy_digest(self.route_policy),
+            "emergency": self._policy_digest(self.emergency_policy),
+            "max_rework_rounds": int(self.max_rework_rounds),
+        }
+
+    @classmethod
+    def _policy_digest(cls, policy: Any) -> str:
+        """A bounded, stable digest of one startup policy's *whole* semantics.
+
+        Recursive on purpose. A route policy carries nested policies - the
+        Indexer gate, Blueprint discovery, Core validation, the bounded
+        `RouteLimits` - and an earlier version of this hashed only the top-level
+        scalars, so changing a nested limit or a lane's capability policy
+        produced an identical fingerprint. Two services that would enforce
+        materially different lanes then compared equal and could run each
+        other's work, which is the opposite of what a startup-fixed route is
+        for.
+
+        Every string is hashed exactly as it stands, paths included. An earlier
+        version folded anything path-shaped to a placeholder, reasoning that two
+        hosts keeping their trees in different places should still agree they
+        enforce the same route. That reasoning does not apply here and the
+        collision it created was real: a state root and its `flock` are
+        host-local, so two services sharing one are on the same machine, and
+        capability argv pointing at `/opt/indexer-v1` versus `/opt/indexer-v2`
+        would hash identically and be allowed to share a root while executing
+        different route semantics. Cross-host normalization was never a reason
+        to erase execution identity.
+
+        Hashing exact strings publishes nothing. Only the digest reaches
+        `authority.json`, a record, a receipt or a log; the values themselves
+        never leave this function.
+        """
+
+        if policy is None:
+            return "none"
+        try:
+            fields = dataclasses.asdict(policy)
+        except TypeError:
+            return "opaque-" + type(policy).__name__
+        payload = json.dumps(
+            cls._policy_semantics(fields, 0),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+    @classmethod
+    def _policy_semantics(cls, value: Any, depth: int) -> Any:
+        """Canonicalize one policy value, recursively and within bounds."""
+
+        if depth > _POLICY_MAX_DEPTH:
+            return "truncated"
+        if value is None or isinstance(value, bool) or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            # Exactly as given. Two capability argv entries naming different
+            # executables are different route semantics, and the fingerprint
+            # has to say so.
+            return value
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._policy_semantics(item, depth + 1)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (set, frozenset)):
+            return [
+                cls._policy_semantics(item, depth + 1)
+                for item in sorted(value, key=repr)
+            ]
+        if isinstance(value, (list, tuple)):
+            return [cls._policy_semantics(item, depth + 1) for item in value]
+        enum_value = getattr(value, "value", None)
+        if isinstance(enum_value, (str, int, float, bool)):
+            return cls._policy_semantics(enum_value, depth + 1)
+        return "opaque-" + type(value).__name__
+
+    def _acquire_state_root_authority(self) -> None:
+        """Take this state root's durable authority lease, or refuse to run.
+
+        Scanning job records could never establish this on its own: an empty
+        root has no records, so two incompatible services would both construct,
+        and whichever admitted work first would leave the other one running,
+        able to submit and pump against an authority it does not share. The
+        claim needed a live, durable holder, not an inference from history.
+
+        The protocol is one file and two `flock` modes.
+
+        * Every compatible live service holds a **shared** lock for its whole
+          life, so same-authority services coexist by construction.
+        * A newcomer first tries the **exclusive** lock. Getting it proves no
+          other service is alive here, and only then may the marker be written -
+          bootstrapping an empty root, or rotating one whose work is all
+          terminal. It is then downgraded to shared for the process's life.
+        * Failing to get it proves somebody *is* alive, so the marker is
+          authoritative and must match; a mismatch is refused.
+
+        Liveness is the kernel's answer, never a timestamp: a crashed service
+        releases its share when its descriptor is closed, so recovery needs no
+        TTL and no heartbeat, and a paused service is never declared dead.
+
+        Lock order is authority-lease -> state-guard, always. This runs before
+        the guard is ever taken and never while it is held, so the two cannot
+        deadlock against each other.
+        """
+
+        if fcntl is None:
+            # No `flock`, no isolation. Claiming a multi-process invariant this
+            # host cannot keep would be worse than refusing to run: two services
+            # would both start, both believe they owned the root, and both pump.
+            raise CodingAuthorityUnavailable(
+                "this host has no inter-process lock, so a coding state root"
+                " cannot be bound to one startup authority",
+            )
+        descriptor = self._open_authority_lock()
+        try:
+            exclusive = True
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                exclusive = False
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except OSError as exc:
+                    raise CodingServiceBusy(
+                        "the coding state root authority lease is unavailable",
+                    ) from exc
+            mine = self._execution_authority()
+            # Malformed or unsafe is a refusal, never an absence. Reading it as
+            # "no marker" would let damaged state be overwritten by whoever
+            # started next, which is the one thing a marker exists to stop.
+            recorded = self._read_authority_marker()
+            if not exclusive:
+                if recorded is None:
+                    # Somebody is alive and this root names no authority at all.
+                    # Fail closed: there is nothing to agree with, and this
+                    # caller cannot write one - it does not hold the exclusive
+                    # lock that makes writing safe.
+                    raise CodingAuthorityConflict(
+                        "this coding state root has a live service and no"
+                        " authority marker; stop it before starting here",
+                    )
+                if recorded != mine:
+                    raise CodingAuthorityConflict(
+                        "this coding state root is held by a live service with a"
+                        " different startup authority",
+                    )
+                # A live peer already validated the records; agreeing with its
+                # marker is what makes this a peer rather than a second opinion.
+                with self._state_guard():
+                    self._bind_startup_authority(mine, adopt=False)
+            else:
+                # Everything that could refuse this start-up runs *before* the
+                # marker is touched. Writing first and validating afterwards
+                # meant a refused stranger could destroy a lost marker's
+                # replacement - binding the root to an authority whose own
+                # construction then failed, and locking out the correct worker.
+                with self._state_guard():
+                    if recorded is not None and recorded != mine:
+                        self._require_all_jobs_terminal()
+                    # Only a caller holding the exclusive lock may settle a
+                    # pre-fingerprint record: it is the one that has proved no
+                    # other service is alive to be running it.
+                    self._bind_startup_authority(mine, adopt=True)
+                    if recorded != mine:
+                        self._write_authority_marker(mine)
+                # Downgrade, so the next compatible service can join. `flock`
+                # converts in place; a failure here leaves the exclusive lock
+                # held, which is refused rather than run with.
+                fcntl.flock(descriptor, fcntl.LOCK_SH)
+        except BaseException:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(descriptor)
+            raise
+        self._authority_fd = descriptor
+
+    def _open_authority_lock(self) -> int:
+        """Open the lease file itself, never something standing in for it.
+
+        `O_NOFOLLOW` refuses a symbolic link at the final component, and the
+        descriptor is then `fstat`-ed - so the check is made against the file
+        this process actually holds rather than against a name that could have
+        been replaced in between.
+        """
+
+        path = self.state_root / AUTHORITY_LOCK_NAME
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except OSError as exc:
+            raise CodingAuthorityUnavailable(
+                "the coding state root authority lease could not be opened",
+            ) from exc
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise CodingAuthorityUnavailable(
+                    "the coding state root authority lease is not a regular file",
+                )
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    def _release_state_root_authority(self) -> None:
+        """Give the lease back. Idempotent, and safe on a half-built service."""
+
+        descriptor, self._authority_fd = self._authority_fd, -1
+        if descriptor < 0:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+    def _authority_marker_path(self) -> Path:
+        return self.state_root / AUTHORITY_MARKER_NAME
+
+    def _read_authority_marker(self) -> Optional[Dict[str, Any]]:
+        """The authority this root names, or `None` only when it names none.
+
+        `None` means one thing exactly: no marker file exists. A marker that is
+        a symbolic link, is not a regular file, does not parse, carries unknown
+        keys, names another version, or holds something that is not a mapping is
+        a *refusal*. Reading any of those as absence would let the next service
+        to start overwrite damaged state and rebind the root to itself, which is
+        precisely what a marker exists to prevent.
+        """
+
+        raw = self._read_authority_marker_bytes()
+        if raw is None:
+            return None
+        try:
+            marker = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise CodingAuthorityConflict(
+                "the coding state root authority marker is unreadable or"
+                " malformed; repair or remove it before starting here",
+            ) from exc
+        if not isinstance(marker, dict):
+            raise CodingAuthorityConflict(
+                "the coding state root authority marker is not an object;"
+                " repair or remove it before starting here",
+            )
+        if (
+            set(marker) != _AUTHORITY_MARKER_FIELDS
+            or marker.get("marker_version") != AUTHORITY_MARKER_VERSION
+            or not isinstance(marker.get("authority"), Mapping)
+        ):
+            raise CodingAuthorityConflict(
+                "the coding state root authority marker does not match its"
+                " schema; repair or remove it before starting here",
+            )
+        return dict(marker["authority"])
+
+    def _read_authority_marker_bytes(self) -> Optional[bytes]:
+        """The marker's exact bytes, read through one descriptor, or `None`.
+
+        Nothing here is opened by pathname twice. An `lstat` followed by a
+        separate open is a check against a *name*, and the name can be replaced
+        between the two - so the file that was inspected and the file that was
+        read need not be the same one. The descriptor is therefore opened once
+        with `O_NOFOLLOW` (a symbolic link is refused rather than followed) and
+        `O_CLOEXEC`, and every subsequent question - is this a regular file, how
+        large is it, what does it contain - is asked of *that* descriptor.
+
+        Absence stays distinct from unsafe. A missing file is `None`; a link, a
+        directory, an oversized body or anything that will not decode is a
+        refusal. The size bound is enforced twice - once from `fstat` and once
+        from the bytes actually read - because a file can grow between them.
+        """
+
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        try:
+            descriptor = os.open(self._authority_marker_path(), flags)
+        except FileNotFoundError:
+            return None
+        except NotADirectoryError:
+            return None
+        except OSError as exc:
+            if getattr(exc, "errno", None) in _NOFOLLOW_ERRNOS:
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is a symbolic link;"
+                    " it is refused rather than followed",
+                ) from exc
+            raise CodingAuthorityUnavailable(
+                "the coding state root authority marker could not be opened",
+            ) from exc
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is not a regular"
+                    " file; it is refused rather than read",
+                )
+            if info.st_size > MAX_AUTHORITY_MARKER_BYTES:
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is larger than"
+                    " {} bytes; repair or remove it".format(
+                        MAX_AUTHORITY_MARKER_BYTES,
+                    ),
+                )
+            chunks: list = []
+            remaining = MAX_AUTHORITY_MARKER_BYTES + 1
+            while remaining > 0:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > MAX_AUTHORITY_MARKER_BYTES:
+                raise CodingAuthorityConflict(
+                    "the coding state root authority marker is larger than"
+                    " {} bytes; repair or remove it".format(
+                        MAX_AUTHORITY_MARKER_BYTES,
+                    ),
+                )
+        except OSError as exc:
+            raise CodingAuthorityUnavailable(
+                "the coding state root authority marker could not be read",
+            ) from exc
+        finally:
+            os.close(descriptor)
+        return raw
+
+    def _write_authority_marker(self, authority: Mapping[str, Any]) -> None:
+        self._write_json(self._authority_marker_path(), {
+            "marker_version": AUTHORITY_MARKER_VERSION,
+            "authority": dict(authority),
+        })
+
+    def _require_all_jobs_terminal(self) -> None:
+        """Refuse rotation while any job of the old authority is still open."""
+
+        root = self.state_root / "tenants"
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*/jobs/job_*.json")):
+            try:
+                state = str(self._read_json(path).get("state") or "")
+            except (OSError, ValueError) as exc:
+                # An unreadable record is not evidence of a terminal one. It
+                # could be the very job the old authority is still running, so
+                # rotation is refused and the marker left as it stands.
+                raise CodingAuthorityConflict(
+                    "this coding state root holds a job record that cannot be"
+                    " read; rotation needs provably terminal work",
+                ) from exc
+            if state and state not in _TERMINAL_STATE_VALUES:
+                raise CodingAuthorityConflict(
+                    "this coding state root still has open work under another"
+                    " startup authority; close it before rotating",
+                )
+
+    def _bind_startup_authority(
+        self, mine: Mapping[str, Any], *, adopt: bool,
+    ) -> None:
+        """Refuse this state root unless its live work is this authority's.
+
+        Runs while the caller holds the authority lease and the state guard, and
+        - critically - *before* any marker is written, so a start-up that this
+        refuses has changed nothing at all. It also runs before the
+        workspace-claim sweep, before restart reconciliation and before any pump
+        exists, so an incompatible service never touches another authority's
+        claims and never consumes a dispatch attempt.
+
+        Four outcomes:
+
+        * every live record already carries this exact authority, or there are
+          no live records - bind, and carry on;
+        * a live record carries a *different* authority - refuse to start;
+        * a record cannot be read, or names no state - refuse to start, because
+          neither is evidence that it is finished;
+        * a live record predates the fingerprint - handled by
+          :meth:`_settle_unfingerprinted_record`, and only when `adopt` says
+          this caller is the one binding the root.
+        """
+
+        root = self.state_root / "tenants"
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*/jobs/job_*.json")):
+            try:
+                record = self._read_json(path)
+            except (OSError, ValueError) as exc:
+                # An unreadable record is not proof of a terminal one. It may be
+                # open work of another authority, so this fails closed and the
+                # marker is left exactly as it was found.
+                raise CodingAuthorityConflict(
+                    "this coding state root holds a job record that cannot be"
+                    " read; repair or remove it before starting here",
+                ) from exc
+            state = str(record.get("state") or "")
+            if state in _TERMINAL_STATE_VALUES:
+                continue
+            if not state:
+                raise CodingAuthorityConflict(
+                    "this coding state root holds a job record with no state;"
+                    " repair or remove it before starting here",
+                )
+            stored = record.get("execution_authority")
+            if isinstance(stored, Mapping):
+                if set(stored) == set(mine) and all(
+                    stored.get(key) == value for key, value in mine.items()
+                ):
+                    continue
+                raise CodingAuthorityConflict(
+                    "this coding state root has live work under a different"
+                    " startup authority; close it or use its own configuration",
+                )
+            self._settle_unfingerprinted_record(path, record, state, mine, adopt)
+
+    def _settle_unfingerprinted_record(
+        self,
+        path: Path,
+        record: Mapping[str, Any],
+        state: str,
+        mine: Mapping[str, Any],
+        adopt: bool,
+    ) -> None:
+        """Adopt a pre-upgrade record only on proof, and never on absence.
+
+        The first version of this treated an empty `implementation_backend` as
+        proof that no implementer had run. It is not. The backend is recorded on
+        *outcome*, so a record that is `running` or `rework_running` with an
+        empty backend may already have entered a provider and be editing a
+        worktree right now. Stamping this service's authority onto it would
+        retroactively claim a round it never authorized.
+
+        So the three shapes are separated by what each one can actually prove:
+
+        * **Queued, implementer never started.** `implementer_started` is
+          written *before* the call, so `False` here is real evidence that no
+          execution began. Nothing is decided retroactively by adopting it.
+        * **Executing.** Never adopted. If its job lease is *held*, a live
+          worker is running a round whose authority nobody can establish, and
+          this service refuses to start beside it - the earlier version let the
+          two coexist, which is precisely the unattributable-execution case the
+          fingerprint exists to prevent. Nothing is touched: the record, its
+          mission item, its worktree claim and the marker are left exactly as
+          found, and a start-up after that lease is released may settle it. If
+          the lease can be taken, the round is provably over and
+          unattributable, so the job is terminalized under a stable code with
+          its mission item and worktree claim accounted.
+        * **Awaiting audit.** Left exactly as it is. The accept path needs no
+          executing authority - it records a verdict about a revision the host
+          already hashed - so v0 work stays auditable. Rework is where an
+          unknown route policy would be adopted silently, and that is refused at
+          the audit instead of here.
+        """
+
+        job_id = str(record.get("job_id") or "")
+        tenant_ref = path.parent.parent.name
+        if not adopt:
+            # A peer joining a root a live service already bound. Settling
+            # another service's records is not a joiner's business, and a v0
+            # record here means the binding service left one behind.
+            raise CodingAuthorityConflict(
+                "this coding state root has live work whose executing authority"
+                " cannot be established; stop its services before starting here",
+            )
+        if state in _PUMPABLE_JOB_STATES:
+            if record.get("implementer_started") is True:
+                # Queued again after a round already ran: same unprovable
+                # attribution as an executing record.
+                self._terminalize_unbound(path, tenant_ref, job_id, record)
+                return
+            self._update_record_locked(path, execution_authority=dict(mine))
+            return
+        if state == CodingJobState.AWAITING_CODEX_AUDIT.value:
+            # Auditable, deliberately unstamped. `audit` decides.
+            return
+        if state in _EXECUTING_JOB_STATES:
+            if not self._acquire_job_lease(job_id):
+                # A live holder is running a round nobody can attribute. Never
+                # stolen, never stamped - and never started beside, either.
+                raise CodingAuthorityConflict(
+                    "this coding state root has a live round whose executing"
+                    " authority cannot be established; let it finish or stop it"
+                    " before starting here",
+                )
+            try:
+                self._terminalize_unbound(path, tenant_ref, job_id, record)
+            finally:
+                self._release_job_lease(job_id)
+            return
+        raise CodingAuthorityConflict(
+            "this coding state root has live work whose executing authority"
+            " cannot be established; close that work before starting here",
+        )
+
+    def _terminalize_unbound(
+        self,
+        path: Path,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+    ) -> None:
+        """Close one unattributable record, its mission item and its worktree.
+
+        Terminal under a stable machine code, with every piece of accounting the
+        job was holding released together: the resume authority, the worktree
+        claim, and the mission work item, which is reclaimed only when its
+        execution lease can be *proved* free.
+        """
+
+        self._update_record_locked(
+            path,
+            state=CodingJobState.FAILED.value,
+            failure_code=EXECUTION_AUTHORITY_UNBOUND,
+            landable=False,
+        )
+        self._discard_resume(tenant_ref, job_id)
+        self._reclaim_mission_item(path, record)
+        self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
+
+    def _may_execute(self, record: Mapping[str, Any]) -> bool:
+        """Whether this service shares the authority this job was admitted under.
+
+        Fails closed in both directions. An absent or malformed fingerprint is
+        refused rather than assumed compatible, because a record written by an
+        unknown build is exactly the case where "probably fine" is wrong; and a
+        fingerprint that differs anywhere is refused whole, because there is no
+        such thing as partially the same implementer.
+        """
+
+        stored = record.get("execution_authority")
+        if not isinstance(stored, Mapping):
+            return False
+        mine = self._execution_authority()
+        if set(stored) != set(mine):
+            return False
+        return all(stored.get(key) == value for key, value in mine.items())
+
+    def _fail_unrunnable_record(
+        self, tenant_ref: str, job_id: str, code: str,
+    ) -> None:
+        """Terminalize a queued record whose durable round cannot be rebuilt.
+
+        The work item is already accounted for by the caller; this is the other
+        half. A record left `queued` with no work item behind it would poll as
+        pending forever, which is the one outcome a fail-closed service must not
+        produce out of corruption.
+        """
+
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        try:
+            with self._state_guard():
+                if str(self._read_json(path).get("state")) not in _PUMPABLE_JOB_STATES:
+                    return
+                self._update_record_locked(
+                    path,
+                    state=CodingJobState.FAILED.value,
+                    failure_code=code,
+                    landable=False,
+                )
+        except (OSError, ValueError, CodingServiceError):
+            return
+        self._discard_resume(tenant_ref, job_id)
+
+    def _reconstruct_request(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+        round_envelope: Mapping[str, Any],
+    ) -> Optional[CodingTaskRequest]:
+        """Rebuild the private request one dispatched round must execute.
+
+        Host authority is never replayed from a durable envelope. The bounded
+        public request comes back from this job's own resume envelope, the
+        startup authority is re-imposed by *this* service, and the pinned
+        contract and its digest are restored from the job record - exactly as a
+        rework round already did, so a second process cannot widen what an
+        implementer is authorized to do.
+        """
+
+        request_sha256 = str(record.get("request_sha256") or "")
+        original = self._resume.get((tenant_ref, job_id))
+        if original is None:
+            original = self._load_resume_request(tenant_ref, job_id, request_sha256)
+        if original is None:
+            return None
+        rework = bool(round_envelope.get("rework"))
+        if rework:
+            session = str(record.get("implementation_session_id") or "")
+            message = str(round_envelope.get("message") or "")
+            if not session or not message:
+                return None
+            original = dataclasses.replace(
+                original, message=message, thread_id=session, resume=True,
+            )
+        try:
+            return dataclasses.replace(
+                self._with_startup_authority(original),
+                authorized_config_sha256=str(
+                    record.get("authorized_config_sha256") or "",
+                ),
+                pinned_contract=self._record_pinned_contract(record),
+            )
+        except (ValueError, TypeError):
+            return None
+
+    def _account_unrunnable(self, work: "DispatchedWork", reason: str) -> None:
+        """Close one work item nobody can run, with the whole accounting.
+
+        Accounted rather than silently dropped, and never fixed: work that never
+        ran did not deliver anything. This is the path an interrupted job's item
+        takes after a restart failed it closed, which is what keeps a reclaimed
+        item from circling the queue forever.
+
+        A job that is simply no longer runnable - already terminal, already
+        settled - is `deferred`: the work was not refused, it was overtaken, and
+        a fresh submission is the way back. Anything this host could not even
+        resolve is `blocked`, because something has to be repaired before that
+        item could ever run. Both carry the whole accounting either way.
+        """
+
+        deferred = reason == "job_not_runnable"
+        try:
+            self._mission.close_accounted(
+                work,
+                tenant_ref=work.tenant_ref,
+                job_id=work.job_id,
+                mission_id=work.mission_id,
+                work_item_id=work.work_item_id,
+                disposition=(
+                    DISPOSITION_DEFERRED if deferred else DISPOSITION_BLOCKED
+                ),
+                rationale=(
+                    "the host could not run this work item: {}".format(reason)
+                ),
+                risk=(
+                    "the mission's objective is not reached and this workspace's "
+                    "next round has to be submitted again"
+                ),
+                evidence_refs=("reason-{}".format(reason), "job-{}".format(work.job_id)),
+            )
+        except MissionRouteError:
+            return
+
+    def _close_round_item(
+        self,
+        work: "DispatchedWork",
+        tenant_ref: str,
+        job_id: str,
+        *,
+        revision: str,
+        files: Sequence[str],
+        state: str,
+        failure_code: str,
+    ) -> Dict[str, Any]:
+        """Owner-close this round's work item and return the record change.
+
+        Nothing is written here. The caller folds the returned mapping into the
+        *same* `_update_record` that publishes the round's terminal or
+        audit-ready state, so the two become durable together: a poller that can
+        see `failed` or `awaiting_codex_audit` already sees the closed item's
+        projection, and an auditor that can act on that state is acting after
+        this process gave up its execution authority over the item.
+
+        `fixed` is reachable only when the host itself has an attributable,
+        auditable revision to point at - a digest it computed and the exact file
+        set it computed it over - and both are passed in by the round rather
+        than re-read, because at this point they are not on disk yet. Everything
+        else is a pre-audit terminal failure and closes `blocked` with the whole
+        accounting, because a round that stopped without producing an auditable
+        revision is precisely the outcome a silent close would hide.
+        """
+
+        try:
+            if revision and files:
+                self._mission.close_fixed(
+                    work,
+                    tenant_ref=tenant_ref,
+                    job_id=job_id,
+                    mission_id=work.mission_id,
+                    work_item_id=work.work_item_id,
+                )
+                disposition = MISSION_DISPOSITION_FIXED
+            else:
+                self._mission.close_accounted(
+                    work,
+                    tenant_ref=tenant_ref,
+                    job_id=job_id,
+                    mission_id=work.mission_id,
+                    work_item_id=work.work_item_id,
+                    disposition=DISPOSITION_BLOCKED,
+                    rationale=(
+                        "this round produced no attributable auditable revision;"
+                        " the job settled as {}".format(state or "unknown")
+                    ),
+                    risk=(
+                        "the mission's main axis is not proven and no audit can "
+                        "accept this workspace's current state"
+                    ),
+                    evidence_refs=(
+                        "job-{}".format(job_id),
+                        "state-{}".format(state or "unknown"),
+                        "code-{}".format(failure_code or "none"),
+                    ),
+                )
+                disposition = DISPOSITION_BLOCKED
+        except MissionRouteError:
+            # The item could not be closed - a stale fence, a corrupt store. The
+            # projection is deliberately left describing the dispatch, because
+            # advancing it would publish a closure that did not happen.
+            return {}
+        return self._projection_change(
+            work, status=MISSION_STATUS_CLOSED, disposition=disposition,
+        )
+
+    def _projection_change(
+        self,
+        work: "DispatchedWork",
+        *,
+        status: str,
+        disposition: str = "",
+    ) -> Dict[str, Any]:
+        """Build the record change that moves *this round's* projection.
+
+        The identity check is the whole point. A repair child may already have
+        replaced the record's projection by the time a late closure lands, and
+        advancing it then would publish this round's disposition onto the next
+        round's work item. When the record has moved on, this round's closure
+        has nothing to say about it and says nothing.
+        """
+
+        try:
+            record = self._read_json(
+                self._tenant_dir(work.tenant_ref, create=False)
+                / "jobs" / (work.job_id + ".json"),
+            )
+        except (OSError, ValueError):
+            return {}
+        stored = record.get("mission")
+        if not isinstance(stored, Mapping):
+            return {}
+        if str(stored.get("work_item_id") or "") != work.work_item_id:
+            return {}
+        try:
+            return {
+                "mission": CodingMissionRuntime.advance(
+                    stored, status=status, disposition=disposition,
+                ),
+            }
+        except (ValueError, TypeError):
+            return {}
+
+    def _advance_projection(
+        self,
+        path: Path,
+        *,
+        status: str,
+        disposition: str = "",
+        mission_status: Optional[str] = None,
+        returned_to_main_axis: Optional[bool] = None,
+    ) -> None:
+        """Move the record's stored projection, or leave it exactly as it was."""
+
+        try:
+            record = self._read_json(path)
+        except (OSError, ValueError):
+            return
+        stored = record.get("mission")
+        if not isinstance(stored, Mapping):
+            return
+        try:
+            advanced = CodingMissionRuntime.advance(
+                stored,
+                status=status,
+                disposition=disposition,
+                mission_status=mission_status,
+                returned_to_main_axis=returned_to_main_axis,
+            )
+        except (ValueError, TypeError):
+            return
+        try:
+            self._update_record(path, mission=advanced)
+        except (OSError, ValueError):
+            return
+
+    def _accept_mission(
+        self, tenant_ref: str, job_id: str, record: Mapping[str, Any], path: Path,
+    ) -> None:
+        """Apply one accepted audit to this job's mission.
+
+        A root accept completes the mission - but only once every work item of
+        that mission is closed, and only with evidence for exactly the criteria
+        the mission itself declared. A side item's accept closes nothing further
+        and completes nothing: it records that control returned to the ancestor
+        the item named, and the main axis keeps whatever state it had.
+        """
+
+        projection = self._record_projection(record)
+        if projection is None:
+            return
+        evidence = {
+            CRITERION_REVISION: str(
+                record.get("implementation_revision_sha256") or "",
+            ),
+            CRITERION_CHECKS: str(record.get("authorized_config_sha256") or ""),
+            CRITERION_AUDIT: str(record.get("audit_findings_sha256") or ""),
+        }
+        try:
+            mission = self._mission.complete(
+                tenant_ref=tenant_ref,
+                job_id=job_id,
+                mission_id=projection.mission_id,
+                work_item_id=projection.work_item_id,
+                evidence={key: value for key, value in evidence.items() if value},
+            )
+        except MissionRouteError:
+            return
+        self._advance_projection(
+            path,
+            status=MISSION_STATUS_CLOSED,
+            disposition=MISSION_DISPOSITION_FIXED,
+            mission_status=(
+                MISSION_COMPLETED if mission is not None else MISSION_OPEN
+            ),
+            returned_to_main_axis=None if projection.is_root else True,
+        )
+
+    # -- mission observability -----------------------------------------
+
+    def mission_fleet(self, *, limit: int = 50) -> Dict[str, Any]:
+        """A bounded, snapshot-only, secret-free view of every mission here.
+
+        Observable, never actionable, and never conversational. Nothing in this
+        payload is accepted as authority by any operation on this service, and
+        nothing in it is ever placed in a request, a prompt or a thread: another
+        Codex job is something an operator can see, not something a model can be
+        told about.
+        """
+
+        return self._mission.fleet(limit=limit)
+
+    def mission_context(self, tenant_id: str, job_id: str) -> Dict[str, Any]:
+        """Full mission context for one job, for its owning tenant only."""
+
+        tenant_ref = self._tenant_ref(tenant_id)
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingJobNotFound("coding job does not exist")
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        try:
+            record = self._read_json(path)
+        except (OSError, ValueError) as exc:
+            raise CodingJobNotFound("coding job does not exist") from exc
+        projection = self._record_projection(record)
+        if projection is None:
+            raise CodingJobNotFound("coding job has no mission")
+        try:
+            return self._mission.context(
+                tenant_ref=tenant_ref,
+                job_id=job_id,
+                work_item_id=projection.work_item_id,
+            )
+        except MissionRouteError as exc:
+            raise MissionRouteRefused(exc) from exc
+
+    # -- round envelopes ------------------------------------------------
+
+    def _round_path(self, tenant_ref: str, work_item_id: str) -> Path:
+        if not _WORK_ITEM_ID.fullmatch(str(work_item_id)):
+            raise CodingServiceError("coding round envelope id is invalid")
+        return (
+            self.state_root / "tenants" / tenant_ref / "rounds"
+            / (work_item_id + ".json")
+        )
+
+    def _write_round_envelope(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        work_item_id: str,
+        *,
+        rework: bool,
+        message: str = "",
+    ) -> None:
+        """Bind one placed work item to the exact round it stands for.
+
+        Private tenant state, 0600, and never projected anywhere. A first round
+        replays this job's resume envelope, so it stores no message at all; a
+        repair round stores the bounded audit feedback the host rendered, which
+        is the one thing a second process could not otherwise reconstruct.
+        """
+
+        self._write_json(self._round_path(tenant_ref, work_item_id), {
+            "envelope_version": ROUND_ENVELOPE_VERSION,
+            "work_item_id": work_item_id,
+            "job_id": job_id,
+            "rework": bool(rework),
+            "message": str(message or "")[:MAX_REWORK_MESSAGE_CHARS] if rework else "",
+            "created_at": time.time(),
+        })
+
+    def _read_round_envelope(
+        self, tenant_ref: str, work_item_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Read one round envelope, or refuse a file that is not exactly one."""
+
+        try:
+            envelope = self._read_json(self._round_path(tenant_ref, work_item_id))
+        except (OSError, ValueError, CodingServiceError):
+            return None
+        if (
+            envelope.get("envelope_version") != ROUND_ENVELOPE_VERSION
+            or set(envelope) - _ROUND_ENVELOPE_FIELDS
+            or str(envelope.get("work_item_id") or "") != work_item_id
+            or not isinstance(envelope.get("rework"), bool)
+        ):
+            return None
+        return envelope
+
+    # -- round leases ---------------------------------------------------
+
+    def _claim_round(self, job_id: str) -> bool:
+        """Take execution authority over one round, or decline to run it.
+
+        Deliberately not an inherit. The lease now covers execution only, so a
+        queued job holds none and *any* compatible worker can take this: that is
+        what lets the store's chosen worker be the one that runs, instead of the
+        one that happened to admit the job. A lease that is already held means a
+        round really is in flight - in this process or another - and the caller
+        requeues the item untouched rather than running it a second time.
+        """
+
+        with self._lock:
+            return self._acquire_job_lease(job_id)
+
+    def _release_round(self, job_id: str) -> None:
+        with self._lock:
+            self._release_job_lease(job_id)
 
     async def _run_round(
         self,
@@ -1075,7 +3879,17 @@ class CodingService:
             )
             return result, None, authority
 
-        result, route = await self._implement(store, request, progress)
+        rework_binding = None
+        if rework:
+            # A rework snapshots only this round, but the audit binds the whole
+            # job's attributable revision.  Keep the durable record available
+            # to the implementer boundary so a clean no-op verification can be
+            # promoted only after that cumulative binding is re-proved.
+            rework_binding = (record, path.parent.parent.name, job_id)
+        result, route = await self._implement(
+            store, request, progress, rework_binding=rework_binding,
+            job_binding=(path, path.parent.parent.name, job_id),
+        )
         trigger = self._overflow_trigger(route, result, progress, path)
         if trigger is None:
             return result, route, None
@@ -1105,6 +3919,280 @@ class CodingService:
         if self.require_codex_audit:
             changes["implementation_backend"] = self.implementation_backend
         self._update_record(path, **changes)
+
+    def _session_binder(
+        self, path: Path, tenant_ref: str, job_id: str, workspace: str,
+    ) -> Callable[[str], None]:
+        """Build this round's durable session-binding callback."""
+
+        def bind(session_id: str) -> None:
+            self._bind_provider_session(path, tenant_ref, job_id, workspace, session_id)
+
+        return bind
+
+    def _bind_provider_session(
+        self,
+        path: Path,
+        tenant_ref: str,
+        job_id: str,
+        workspace: str,
+        session_id: str,
+    ) -> None:
+        """Persist the session the provider just established, or refuse the round.
+
+        Three bindings, and any of them failing stops the round before the model
+        can do anything the host would then be unable to attribute:
+
+        * the id must be a real backend session. A host-minted `host-`/`route-`
+          provisional id is a placeholder this service invented, and promoting
+          one into an implementation session would manufacture a continuable
+          identity out of nothing;
+        * this worker must still hold the job's execution lease. Without it
+          another process owns the round, and a session written from here would
+          name a conversation this job no longer controls;
+        * the record must not already name a *different* session. A backend that
+          moves a bound round into another conversation is a boundary violation,
+          not a reconnect.
+
+        Repeating the identical id is a no-op, so an SDK that re-announces its
+        init - or a resumed round that lands in exactly the session it asked for
+        - costs nothing and changes nothing.
+
+        The write itself goes through `_update_record_locked`, which reasserts
+        the worktree claim for a claim-owned state. So a job that has lost its
+        exclusive hold on the tree cannot bind a session to it either.
+        """
+
+        if not is_continuable_session(session_id):
+            raise SessionBindingFailed("the provider session identity is unusable")
+        with self._state_guard():
+            if job_id not in self._job_leases:
+                raise SessionBindingFailed(
+                    "this worker no longer holds the coding job execution lease",
+                )
+            record = self._read_json(path)
+            recorded = str(record.get("implementation_session_id") or "")
+            if recorded == session_id:
+                return
+            if recorded:
+                raise SessionBindingFailed(
+                    "the provider established a different implementation session",
+                )
+            changes: Dict[str, Any] = {
+                "implementation_session_id": session_id,
+                # A provider that has named a session was necessarily entered.
+                "implementer_started": True,
+            }
+            if self.require_codex_audit:
+                changes["implementation_backend"] = self.implementation_backend
+            self._update_record_locked(path, **changes)
+
+    @staticmethod
+    def _plan_authority_digest(
+        job_id: str, request_sha256: str, workspace_sha256: str, contract: Mapping[str, Any],
+    ) -> str:
+        payload = json.dumps(
+            {
+                "version": PLAN_AUTHORITY_VERSION,
+                "job_id": job_id,
+                "request_sha256": request_sha256,
+                "workspace_sha256": workspace_sha256,
+                "contract": contract,
+            },
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            allow_nan=False, default=str,
+        )
+        digest = hashlib.sha256()
+        digest.update(_PLAN_AUTHORITY_DOMAIN)
+        digest.update(payload.encode("utf-8"))
+        return digest.hexdigest()
+
+    def _persist_plan_authority(
+        self, path: Path, record: Mapping[str, Any], contract: Mapping[str, Any],
+    ) -> None:
+        """Record which contract this round was authorized against.
+
+        Called only after a genuine pre-lane success, so a lane that refused
+        never leaves behind authority a later round could amend. Bounded and
+        integrity-protected: a contract this host cannot carry exactly is not
+        carried at all, and a later round then fails closed rather than
+        amending something nobody proved.
+        """
+
+        if not isinstance(contract, Mapping) or not contract:
+            # A pre-lane that "succeeded" without returning a contract has not
+            # proven what this round is authorized to change, and a later round
+            # would have nothing exact to amend. Refuse now rather than defer
+            # the defect to whichever rework discovers it.
+            raise PlanAuthorityUnprovable("plan_authority_unsealable")
+        job_id = str(record.get("job_id") or "")
+        request_sha256 = str(record.get("request_sha256") or "")
+        workspace_sha256 = str(record.get("workspace_sha256") or "")
+        try:
+            body = json.dumps(
+                contract, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False, default=str,
+            )
+        except (TypeError, ValueError):
+            # Not canonically serializable, so not something this host can
+            # carry forward byte-exactly across a restart.
+            raise PlanAuthorityUnprovable("plan_authority_unsealable") from None
+        if len(body.encode("utf-8")) > MAX_PLAN_AUTHORITY_BYTES:
+            raise PlanAuthorityUnprovable("plan_authority_unsealable")
+        stored = json.loads(body)
+        self._update_record(path, indexer_plan_authority={
+            "version": PLAN_AUTHORITY_VERSION,
+            "job_id": job_id,
+            "request_sha256": request_sha256,
+            "workspace_sha256": workspace_sha256,
+            "contract": stored,
+            "contract_sha256": self._plan_authority_digest(
+                job_id, request_sha256, workspace_sha256, stored,
+            ),
+            "recorded_at": time.time(),
+        })
+
+    def _load_plan_authority(
+        self, record: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Return the exact parent contract this job may amend, or `None`.
+
+        Every binding is re-proven from the durable record: schema version, the
+        job it belongs to, the root request it was planned for, the workspace it
+        was planned in, and its own content digest. A replayed envelope from
+        another job, a stale one from a different request, or a hand-edited
+        contract all fail here - before the caller can ask an Indexer to amend
+        something nobody authorized.
+        """
+
+        envelope = record.get("indexer_plan_authority")
+        if not isinstance(envelope, Mapping):
+            return None
+        if str(envelope.get("version") or "") != PLAN_AUTHORITY_VERSION:
+            return None
+        contract = envelope.get("contract")
+        if not isinstance(contract, Mapping) or not contract:
+            return None
+        job_id = str(record.get("job_id") or "")
+        request_sha256 = str(record.get("request_sha256") or "")
+        workspace_sha256 = str(record.get("workspace_sha256") or "")
+        if (
+            str(envelope.get("job_id") or "") != job_id
+            or str(envelope.get("request_sha256") or "") != request_sha256
+            or str(envelope.get("workspace_sha256") or "") != workspace_sha256
+        ):
+            return None
+        expected = self._plan_authority_digest(
+            job_id, request_sha256, workspace_sha256, contract,
+        )
+        if str(envelope.get("contract_sha256") or "") != expected:
+            return None
+        return dict(contract)
+
+    def _prove_prior_scope(
+        self,
+        record: Mapping[str, Any],
+        request: CodingTaskRequest,
+        tenant_ref: str,
+        job_id: str,
+    ) -> Tuple[str, ...]:
+        """Re-prove what this job already owns, *before* the implementer edits.
+
+        Timing is the whole point. The stored revision describes the tree as it
+        was when the previous round closed, so it can only be re-proven while
+        that is still true. Asking the same question after a resumed model has
+        edited the workspace would compare the old digest against new bytes and
+        refuse every legitimate rework.
+
+        Every binding a cumulative audit will later rely on is asserted here:
+        a bounded, canonical, duplicate-free prior set; a real backend session
+        the record already names; a durable resume envelope sealed to that
+        session; this tenant and job's live worktree claim; the same workspace
+        path; and the exact bytes the recorded revision digest describes.
+        Anything unproven raises before a provider is contacted.
+        """
+
+        prior_raw = record.get("implementation_files")
+        if prior_raw in (None, []):
+            return ()
+        if not isinstance(prior_raw, (list, tuple)):
+            raise PlanAuthorityUnprovable("cumulative_scope_unproven")
+        prior = [
+            str(item) for item in prior_raw
+            if isinstance(item, str) and not isinstance(item, bool)
+        ]
+        if len(prior) != len(prior_raw) or len(set(prior)) != len(prior):
+            raise PlanAuthorityUnprovable("cumulative_scope_unproven")
+        if len(prior) > MAX_ATTRIBUTABLE_FILES:
+            raise PlanAuthorityUnprovable("cumulative_scope_unbounded")
+
+        session = str(record.get("implementation_session_id") or "")
+        if not session or session.startswith(PROVISIONAL_THREAD_PREFIXES):
+            raise PlanAuthorityUnprovable("cumulative_session_unproven")
+        if not _SHA256_RE.fullmatch(
+            str(record.get("implementation_revision_sha256") or ""),
+        ):
+            raise PlanAuthorityUnprovable("cumulative_scope_unproven")
+        if str(record.get("working_dir") or "") != request.working_dir:
+            raise PlanAuthorityUnprovable("cumulative_workspace_unproven")
+        try:
+            self._require_owned_claim(tenant_ref, job_id, request.working_dir)
+        except CodingServiceError:
+            raise PlanAuthorityUnprovable("cumulative_claim_unproven") from None
+        if self._load_resume_request(
+            tenant_ref, job_id, str(record.get("request_sha256") or ""),
+            session_bound=session,
+        ) is None:
+            raise PlanAuthorityUnprovable("cumulative_resume_unproven")
+        try:
+            current = self._revision_digest(request.working_dir, sorted(prior))
+        except CodingServiceError:
+            raise PlanAuthorityUnprovable("cumulative_revision_mismatch") from None
+        if current != str(record.get("implementation_revision_sha256") or ""):
+            raise PlanAuthorityUnprovable("cumulative_revision_mismatch")
+        return tuple(sorted(prior))
+
+    def _cumulative_route_scope(
+        self,
+        prior: Sequence[str],
+        session_bound: str,
+        result: CodingTaskResult,
+        request: CodingTaskRequest,
+    ) -> Tuple[str, ...]:
+        """Union the proven prior scope with this round's host snapshot.
+
+        The expensive proofs already happened before the round. What is left is
+        the part that can only be known afterwards: that the round stayed in the
+        session it was bound to, and that the union is still a bounded,
+        canonical, in-workspace set. This is the exact ordered set the service
+        will hash into the revision an auditor signs, so it is also exactly what
+        the Indexer is asked to validate.
+        """
+
+        from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+        def refuse(code: str) -> "CodingRouteError":
+            return CodingRouteError(code, RouteLane.INDEXER_POST)
+
+        if prior:
+            session = str(getattr(result, "thread_id", "") or "")
+            if not session or session != session_bound:
+                raise refuse("cumulative_session_unproven")
+        union = sorted({
+            str(item) for item in (getattr(result, "files_changed", ()) or ())
+        } | {str(item) for item in prior})
+        if not union or len(union) > MAX_ATTRIBUTABLE_FILES:
+            raise refuse("cumulative_scope_unbounded")
+        root = Path(request.working_dir).resolve()
+        for relative in union:
+            try:
+                # Canonical, inside the workspace, not a link: identical to what
+                # the revision digest will demand, asserted before the lanes
+                # rather than after them.
+                self._revision_target(root, relative)
+            except CodingServiceError:
+                raise refuse("cumulative_scope_unsafe") from None
+        return tuple(union)
 
     def _bound_emergency_authority(
         self, record: Mapping[str, Any], job_id: str, *, rework: bool,
@@ -1240,8 +4328,9 @@ class CodingService:
                 "code": trigger.code,
             },
         })
-        progress.begin()
+        _arm_start_marker(store, progress)
         result = await self.agent_factory(store).run(request)
+        _reconcile_start_marker(progress, result)
         required = [
             item for item in (getattr(result, "checks", ()) or ())
             if getattr(item, "required", False)
@@ -1278,6 +4367,9 @@ class CodingService:
         store: ThreadStore,
         request: CodingTaskRequest,
         progress: Optional[_RoundProgress] = None,
+        *,
+        rework_binding: Optional[Tuple[Mapping[str, Any], str, str]] = None,
+        job_binding: Optional[Tuple[Path, str, str]] = None,
     ) -> "tuple[CodingTaskResult, Optional[CodingRouteReceipt]]":
         """Run the selected implementer, wrapped by the host-owned route.
 
@@ -1288,9 +4380,14 @@ class CodingService:
 
         policy = self.route_policy
         if policy is None or not policy.strict:
-            if progress is not None:
-                progress.begin()
-            return await self.agent_factory(store).run(request), None
+            _arm_start_marker(store, progress)
+            unrouted = await self.agent_factory(store).run(request)
+            _reconcile_start_marker(progress, unrouted)
+            if rework_binding is not None:
+                unrouted = self._promote_verified_cumulative_no_change(
+                    unrouted, request, *rework_binding,
+                )
+            return unrouted, None
 
         from flyto_ai.coding.capabilities import CapabilityManager
         from flyto_ai.coding.route import CodingRouteOrchestrator
@@ -1340,13 +4437,63 @@ class CodingService:
                         bound_request,
                         message="{}\n\n{}".format(bound_request.message, projection),
                     )
-                if progress is not None:
-                    # The host records the start durably here, between the
-                    # pre-lanes passing and the model actually being called.
-                    progress.begin()
-                return await self.agent_factory(store).run(effective)
+                # The pre-lanes have passed. The start itself is recorded
+                # by the adapter, at the first real provider or session call,
+                # so an adapter that refuses before contacting one is not
+                # written down as having started.
+                _arm_start_marker(store, progress)
+                routed = await self.agent_factory(store).run(effective)
+                _reconcile_start_marker(progress, routed)
+                if rework_binding is not None:
+                    routed = self._promote_verified_cumulative_no_change(
+                        routed, bound_request, *rework_binding,
+                    )
+                return routed
 
-            outcome = await orchestrator.run(request, implement)
+            parent_contract = None
+            on_pre_contract = None
+            cumulative_scope = None
+            if job_binding is not None:
+                job_path, job_tenant_ref, bound_job_id = job_binding
+                bound_record = self._read_json(job_path)
+                # Only a rework amends. A first round has no parent and its
+                # Indexer request is unchanged from what it has always been.
+                prior_scope: Tuple[str, ...] = ()
+                session_bound = ""
+                if rework_binding is not None:
+                    parent_contract = self._load_plan_authority(bound_record)
+                    if parent_contract is None:
+                        raise PlanAuthorityUnprovable("plan_authority_unavailable")
+                    # Before the resumed implementer touches anything, while
+                    # the recorded revision still describes the tree.
+                    prior_scope = self._prove_prior_scope(
+                        bound_record, request, job_tenant_ref, bound_job_id,
+                    )
+                    session_bound = str(
+                        bound_record.get("implementation_session_id") or "",
+                    )
+
+                def on_pre_contract(contract, _path=job_path):
+                    self._persist_plan_authority(
+                        _path, self._read_json(_path), contract,
+                    )
+
+                def cumulative_scope(
+                    round_result, _prior=prior_scope, _session=session_bound,
+                ):
+                    scope = self._cumulative_route_scope(
+                        _prior, _session, round_result, request,
+                    )
+                    if progress is not None:
+                        progress.route_scope = scope
+                    return scope
+
+            outcome = await orchestrator.run(
+                request, implement,
+                parent_contract=parent_contract,
+                on_pre_contract=on_pre_contract,
+                cumulative_scope=cumulative_scope,
+            )
         finally:
             closed = True
             try:
@@ -1361,6 +4508,49 @@ class CodingService:
                 self._route_unavailable_receipt(policy, "capability_close_failed"),
             )
         return outcome
+
+    def _promote_verified_cumulative_no_change(
+        self,
+        result: CodingTaskResult,
+        request: CodingTaskRequest,
+        record: Mapping[str, Any],
+        tenant_ref: str,
+        job_id: str,
+    ) -> CodingTaskResult:
+        """Close a clean no-op rework against the already audited revision.
+
+        ``require_changes`` is a job invariant, not a demand to manufacture a
+        fresh diff after every audit.  The provider adapter reports
+        ``no_changes`` when a resumed round leaves the tree untouched even if
+        the job already owns a real attributable revision.  Promote only that
+        exact host-generated outcome, only with passing required checks, and
+        only after every cumulative session/claim/envelope/content binding is
+        re-proved.  The promoted ``files_changed`` is therefore the job's
+        cumulative attributable set consumed by the post-route validator, not
+        a claim that this round rewrote those files.
+        """
+
+        if result.ok or self._implementation_failure_code(result) != "no_changes":
+            return result
+        required = [
+            item for item in (getattr(result, "checks", ()) or ())
+            if getattr(item, "required", False)
+        ]
+        if not required or any(not getattr(item, "passed", False) for item in required):
+            return result
+        cumulative = self._cumulative_attribution(
+            record, result, request, tenant_ref, job_id,
+        )
+        if not cumulative:
+            return result
+        return dataclasses.replace(
+            result,
+            ok=True,
+            status="completed",
+            files_changed=list(cumulative),
+            failure_code=None,
+            message=result.message or "Coding rework verified the cumulative revision.",
+        )
 
     @staticmethod
     def _lane_dispatcher(manager: Any, specs: Sequence[Any]) -> Any:
@@ -1460,8 +4650,18 @@ class CodingService:
         *,
         progress: Optional[_RoundProgress] = None,
         authority: Optional[EmergencyAuthorityReceipt] = None,
+        settle: Optional["_RoundSettlement"] = None,
     ) -> None:
-        """Move one finished implementation round into its durable state."""
+        """Move one finished implementation round into its durable state.
+
+        Every exit from here that publishes a terminal or audit-ready state
+        settles the round's mission work item first and writes the resulting
+        projection in the same record update, so the published state and the
+        owner-closed item are never observable apart.
+        """
+
+        if settle is None:
+            settle = _RoundSettlement(self, None, tenant_ref, job_id)
 
         started = progress.implementer_started if progress is not None else False
         result_record = dataclasses.asdict(result)
@@ -1479,16 +4679,58 @@ class CodingService:
             "result": result_record,
             "failure_code": result.failure_code,
             "implementer_started": started,
+            # Re-validated on the way in: whatever an adapter put here, only
+            # safe contract identifiers become durable.
+            "verification_blockers": list(
+                safe_blockers(getattr(result, "verification_blockers", ()))
+            ),
         }
         if started and self.require_codex_audit:
             outcome["implementation_backend"] = self.implementation_backend
         blockers: Tuple[str, ...] = ()
+        cumulative: Tuple[str, ...] = ()
+        if rework and not result.ok and not (result.files_changed or ()):
+            # Only asked on the exact path the production failure took: a
+            # rework round that changed nothing new. Everywhere else the
+            # round's own files are the evidence and this proof is not
+            # consulted at all.
+            cumulative = self._cumulative_attribution(
+                self._read_json(path), result, request, tenant_ref, job_id,
+            )
         if not result.ok:
-            if not self._auditable_failure(result, route, authority, started):
+            if not self._auditable_failure(
+                result, route, authority, started, cumulative,
+            ):
+                # The route seam already proved this round's cumulative scope
+                # before the proof lanes ran, so a lane that refused afterwards
+                # does not narrow what the round owns. If that proof never
+                # succeeded the terminal evidence stays this round's own.
+                proof = self._failed_round_proof(
+                    request, result, started, outcome,
+                    tuple(getattr(progress, "route_scope", ()) or ()),
+                )
                 self._discard_resume(tenant_ref, job_id)
+                # Terminal and non-landable either way. The only question left
+                # is whether this exact session may be carried forward, and it
+                # is answered from host-owned proof, never from the round's
+                # word: a recognized bounded stop, a real session, and a
+                # revision the host itself just hashed.
+                #
+                # Settled *before* the terminal state is published, so a reader
+                # that sees `failed` already sees the final continuation answer.
+                # Publishing first would expose a window in which a job looks
+                # finished while its authority is still mid-rotation.
+                self._close_continuation(
+                    tenant_ref, job_id, path,
+                    self._implementation_failure_code(result), proof,
+                )
                 self._update_record(
                     path, state=CodingJobState.FAILED.value, landable=False,
-                    **self._failed_round_proof(request, result, started, outcome),
+                    **settle(
+                        state=CodingJobState.FAILED.value,
+                        failure_code=self._implementation_failure_code(result),
+                    ),
+                    **proof,
                 )
                 return
             # A real, attributable, resumable implementation that is not
@@ -1498,7 +4740,14 @@ class CodingService:
             blockers = self._implementation_blockers(result, route)
         if not self.require_codex_audit:
             self._discard_resume(tenant_ref, job_id)
-            self._update_record(path, state=CodingJobState.COMPLETED.value, **outcome)
+            self._update_record(
+                path, state=CodingJobState.COMPLETED.value,
+                **settle(
+                    state=CodingJobState.COMPLETED.value,
+                    failure_code=str(result.failure_code or ""),
+                ),
+                **outcome,
+            )
             return
         session = str(result.thread_id or "")
         if not session:
@@ -1522,6 +4771,15 @@ class CodingService:
             # untouched earlier file could change without invalidating it.
             files |= {str(item) for item in (record.get("implementation_files") or [])}
         files = sorted(files)
+        validated_scope = tuple(getattr(progress, "route_scope", ()) or ())
+        if validated_scope and tuple(files) != validated_scope:
+            # Equality, not inclusion. The whole point of validating a
+            # cumulative scope is that it is the scope an auditor is later
+            # offered; a record that reconstructs a different order or a
+            # different membership has quietly broken that link.
+            raise RevisionUnavailable(
+                "the audited change set is not the validated cumulative scope",
+            )
         if not files:
             raise RevisionUnavailable("no attributable implementation change to audit")
         if len(files) > MAX_ATTRIBUTABLE_FILES:
@@ -1552,10 +4810,27 @@ class CodingService:
                 str(self._read_json(path).get("request_sha256") or ""),
                 session,
             )
+        # Reaching an auditable revision is where a continuation ends. The
+        # ordinary same-session audit and rework rules own the job from here,
+        # so the authority settles exactly once and can never be spent again -
+        # and it settles before the job becomes visibly auditable, so no reader
+        # ever sees an audit-ready job still advertising a live resume.
+        self._settle_continuation(tenant_ref, job_id, path)
+        # The item closes `fixed` here, on this round's own revision and file
+        # set, and the closed projection is published in the same write that
+        # makes the job auditable. An auditor therefore never observes an
+        # audit-ready job whose work item is still dispatched, which is what
+        # made an accept-then-rework able to fork the graph.
+        settled = settle(
+            revision=revision,
+            files=files,
+            state=CodingJobState.AWAITING_CODEX_AUDIT.value,
+        )
         self._update_record(
             path,
             state=CodingJobState.AWAITING_CODEX_AUDIT.value,
             implementation_session_id=session,
+            **settled,
             implementation_revision_sha256=revision,
             implementation_files=files,
             working_dir=request.working_dir,
@@ -1567,12 +4842,278 @@ class CodingService:
             **outcome,
         )
 
+    def _close_continuation(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        path: Path,
+        failure_code: str,
+        proof: Mapping[str, Any],
+    ) -> None:
+        """Open, rotate, or settle this job's continuation authority.
+
+        Called on the terminal path only. A round that became auditable keeps
+        the existing same-session rework loop instead, which is why a Codex
+        rework and a budget continuation can never be confused: they are
+        produced by mutually exclusive branches of the same decision.
+
+        Creating one requires all four host-owned facts at once - an audited
+        service, a recognized bounded stop, a real backend session, and a
+        revision this host hashed from the tree it still owns. Anything less
+        settles instead, so a failure the host cannot describe never leaves a
+        resumable record behind.
+        """
+
+        session = str(proof.get("implementation_session_id") or "")
+        revision = str(proof.get("implementation_revision_sha256") or "")
+        files = tuple(str(item) for item in (proof.get("implementation_files") or ()))
+        record = self._read_json(path)
+        continuable = (
+            self.require_codex_audit
+            and failure_code in CONTINUABLE_STOP_CODES
+            and is_continuable_session(session)
+            and bool(_SHA256_RE.fullmatch(revision))
+            and bool(files)
+            and len(files) <= MAX_ATTRIBUTABLE_FILES
+            # A session whose pin cannot be recovered and re-proved is not
+            # offered forward at all. Writing an authority that no continuation
+            # could ever satisfy would advertise something untrue on the
+            # receipt; declining to write one keeps the job terminal and honest.
+            and self._record_pinned_contract(record) is not None
+        )
+        if continuable:
+            try:
+                # The tree as it stands at the stop, in full. This is the state
+                # a later segment must find unchanged, so it is measured here
+                # rather than reconstructed from the attributable set.
+                manifest = workspace_manifest_digest(
+                    str(record.get("working_dir") or ""), self.snapshot_policy,
+                )
+            except (WorkspaceUnobservable, OSError):
+                # A workspace this host cannot describe exactly cannot be
+                # promised to a later segment. The job stays terminal and
+                # truthful; it simply offers nothing.
+                continuable = False
+        if not continuable:
+            self._settle_continuation(tenant_ref, job_id, path)
+            return
+        with self._state_guard():
+            existing = self._continuation.load(tenant_ref, session)
+            now = time.time()
+            if existing is None:
+                authority = ContinuationAuthority(
+                    tenant_ref=tenant_ref,
+                    backend=self.implementation_backend,
+                    session_id=session,
+                    job_id=job_id,
+                    origin_job_id=job_id,
+                    working_dir=str(record.get("working_dir") or ""),
+                    workspace_sha256=str(record.get("workspace_sha256") or ""),
+                    revision_sha256=revision,
+                    workspace_manifest_sha256=manifest,
+                    snapshot_policy_sha256=self.snapshot_policy.identity(),
+                    files=tuple(sorted(set(files))),
+                    authorized_config_sha256=str(
+                        record.get("authorized_config_sha256") or "",
+                    ),
+                    # Bind the contract this session ran under, by identity. The
+                    # snapshot stays in this job's private record; the authority
+                    # carries only its address, so a later segment has to
+                    # produce a snapshot that still hashes to it.
+                    contract_snapshot_sha256=str(
+                        record.get("contract_snapshot_sha256") or "",
+                    ),
+                    request_sha256=str(record.get("request_sha256") or ""),
+                    failure_code=failure_code,
+                    generation=1,
+                    sequence=1,
+                )
+                try:
+                    self._continuation.create(authority)
+                except (ContinuationConflict, ContinuationCorrupt, OSError, ValueError):
+                    # The job is already terminal and truthful. A continuation
+                    # that could not be written is simply not offered.
+                    return
+                self._update_record_locked(
+                    path,
+                    continuation_session_id=session,
+                    continuation_generation=1,
+                    continuation_origin_job_id=job_id,
+                )
+                return
+            if existing.claimed_by_job_id != job_id or existing.state != STATE_CLAIMED:
+                # This job is not the one that consumed the live authority, so
+                # it has no standing to move it. Never rewrite somebody else's
+                # generation, and never resurrect a settled one.
+                return
+            try:
+                if existing.generation >= MAX_CONTINUATION_GENERATION:
+                    self._continuation.commit(existing, existing.settled(now))
+                    return
+                rotated = self._continuation.commit(existing, existing.rotated(
+                    job_id=job_id,
+                    revision_sha256=revision,
+                    workspace_manifest_sha256=manifest,
+                    files=files,
+                    failure_code=failure_code,
+                    now=now,
+                ))
+            except (ContinuationConflict, ContinuationCorrupt, OSError, ValueError):
+                return
+            self._update_record_locked(
+                path,
+                continuation_session_id=session,
+                continuation_generation=rotated.generation,
+                continuation_origin_job_id=rotated.origin_job_id,
+            )
+
+    def _settle_continuation(
+        self, tenant_ref: str, job_id: str, path: Optional[Path] = None,
+    ) -> None:
+        """Close this job's continuation authority, exactly once and only its own.
+
+        Idempotent, so the crash-reconciliation path, a terminal worker exit, an
+        abandon, and a normal settlement can all call it without double-closing
+        anything. A record it does not own is left untouched: settling another
+        job's authority would silently destroy a live continuation.
+        """
+
+        try:
+            record = self._read_json(path) if path is not None else {}
+        except (OSError, ValueError):
+            return
+        session = str(record.get("continuation_session_id") or "")
+        if not is_continuable_session(session):
+            return
+        with self._state_guard():
+            authority = self._continuation.load(tenant_ref, session)
+            if authority is None or authority.state == STATE_SETTLED:
+                return
+            if job_id not in {authority.job_id, authority.claimed_by_job_id}:
+                return
+            try:
+                self._continuation.commit(authority, authority.settled(time.time()))
+            except (ContinuationConflict, ContinuationCorrupt, OSError, ValueError):
+                return
+
+    def _cumulative_attribution(
+        self,
+        record: Optional[Mapping[str, Any]],
+        result: CodingTaskResult,
+        request: CodingTaskRequest,
+        tenant_ref: str,
+        job_id: str,
+    ) -> Tuple[str, ...]:
+        """Prove a rework round is still bound to a real earlier revision.
+
+        A rework round snapshots the worktree itself, so it reports only what
+        *this* round touched. When the auditor's finding is about a file the
+        previous round already changed, the correct repair frequently rewrites
+        that same file - and the honest answer to "what is newly attributable
+        here" is nothing at all. Terminalizing on that is the production bug:
+        a real, still-auditable revision was thrown away, its session was
+        discarded, and Codex lost the loop it was in the middle of.
+
+        Zero new files is therefore not, by itself, a dead end. It is only a
+        dead end when the *cumulative* binding cannot still be proven. Every
+        binding below is proven from durable host state, never from the
+        model's word, and any one of them failing returns `()`:
+
+        * the record is already audit-bound - it names a session, a revision
+          and a bounded, non-empty attributable set;
+        * this round resumed that exact session, and it is a real backend
+          session rather than a provisional host id;
+        * the workspace is the same one the recorded change was measured in;
+        * this exact tenant+job still holds the live worktree claim, so nobody
+          else has edited the tree since;
+        * the resume envelope still exists, still matches this job's request
+          digest, and is still sealed to that same session;
+        * every cumulative path still resolves, canonically and without
+          following a link, to a regular file inside the workspace.
+
+        Returns the cumulative set on success so the caller re-derives the
+        revision from exactly what was proven, never from a stored digest.
+        """
+
+        if not record:
+            return ()
+        recorded_session = str(record.get("implementation_session_id") or "")
+        session = str(getattr(result, "thread_id", "") or "")
+        if (
+            not recorded_session
+            or recorded_session != session
+            or session.startswith(PROVISIONAL_THREAD_PREFIXES)
+        ):
+            return ()
+        if not _SHA256_RE.fullmatch(str(record.get("implementation_revision_sha256") or "")):
+            return ()
+
+        stored = record.get("implementation_files")
+        if not isinstance(stored, (list, tuple)):
+            return ()
+        files = sorted({
+            str(item) for item in stored
+            if isinstance(item, str) and not isinstance(item, bool)
+        })
+        if not files or len(files) != len(stored) or len(files) > MAX_ATTRIBUTABLE_FILES:
+            # A mutated set - duplicated, re-typed, or grown past the bound -
+            # is not the set that was audited.
+            return ()
+
+        workspace = str(record.get("working_dir") or "")
+        if not workspace or workspace != request.working_dir:
+            return ()
+
+        try:
+            # Still ours, and still ours *in this tenant*.
+            self._require_owned_claim(tenant_ref, job_id, workspace)
+        except CodingServiceError:
+            return ()
+
+        if self._load_resume_request(
+            tenant_ref,
+            job_id,
+            str(record.get("request_sha256") or ""),
+            session_bound=session,
+        ) is None:
+            return ()
+
+        root = Path(workspace).resolve()
+        for relative in files:
+            try:
+                target = self._revision_target(root, relative)
+            except CodingServiceError:
+                return ()
+            # `_revision_digest` treats a deleted path as a recorded absence,
+            # which is right for a round that really did delete something. It
+            # is not right here: the cumulative set is being reused as the sole
+            # evidence, so every member has to still be a real file.
+            if target.is_symlink() or not target.is_file():
+                return ()
+
+        # The load-bearing check, and the one that was missing: the *bytes*
+        # must still hash to the revision an auditor already saw. Checking only
+        # that a digest was recorded proves the job was once bound to
+        # something; it says nothing about what is in the tree now. Without
+        # this, a round that changed `result.txt` outside its own attribution -
+        # or anything else that edited the tree between rounds - would be
+        # laundered into a "continuous" revision and re-signed under the same
+        # session, which is precisely the continuity claim an audit relies on.
+        try:
+            current = self._revision_digest(workspace, files)
+        except CodingServiceError:
+            return ()
+        if current != str(record.get("implementation_revision_sha256") or ""):
+            return ()
+        return tuple(files)
+
     def _auditable_failure(
         self,
         result: CodingTaskResult,
         route: Optional["CodingRouteReceipt"],
         authority: Optional[EmergencyAuthorityReceipt],
         started: bool,
+        cumulative: Tuple[str, ...] = (),
     ) -> bool:
         """Whether a failed round is real work awaiting rework, not a dead end.
 
@@ -1608,9 +5149,15 @@ class CodingService:
             # rework loop on already-degraded authority.
             return False
         files = tuple(str(item) for item in (getattr(result, "files_changed", ()) or ()))
-        if not files or len(files) > MAX_ATTRIBUTABLE_FILES:
-            # No attributable change, or more than the revision bound can
-            # describe, means no exact revision an auditor could bind.
+        if len(files) > MAX_ATTRIBUTABLE_FILES:
+            # More than the revision bound can describe means no exact revision
+            # an auditor could bind.
+            return False
+        if not files and not cumulative:
+            # Nothing new *and* nothing still provable from earlier rounds. A
+            # fresh job in this position has produced nothing; a rework round
+            # in this position has lost its bindings. Either way there is no
+            # revision to audit.
             return False
         session = str(getattr(result, "thread_id", "") or "")
         if not session or session.startswith(PROVISIONAL_THREAD_PREFIXES):
@@ -1679,6 +5226,7 @@ class CodingService:
         result: CodingTaskResult,
         started: bool,
         outcome: Mapping[str, Any],
+        scope: Sequence[str] = (),
     ) -> Dict[str, Any]:
         """Keep bounded proof that an implementation ran, without landability.
 
@@ -1687,6 +5235,15 @@ class CodingService:
         revision digest lets a later reader tell "the model never ran" from
         "the model ran and the proof lane refused it". None of this makes the
         job auditable: the state stays terminal and non-landable.
+
+        `scope` is the cumulative set the route seam already proved for this
+        round - the same tuple `_cumulative_route_scope` returned and recorded
+        on the round's progress. A rework round only reports what it touched,
+        so deriving the terminal evidence from `files_changed` alone would drop
+        every file earlier rounds opened and describe a narrower change set
+        than the one this job actually owns. When that proof exists the
+        evidence binds it exactly; when it does not, nothing is carried over
+        and this round's own snapshot remains the only claim made.
         """
 
         record = dict(outcome)
@@ -1697,7 +5254,11 @@ class CodingService:
             # A provisional host thread proves nothing about an implementation
             # session, so it is never promoted into one.
             record["implementation_session_id"] = session
-        files = sorted({str(item) for item in (result.files_changed or ())})
+        proven = [str(item) for item in (scope or ())]
+        # The proven union in the exact order it was validated in, or else this
+        # round's own snapshot. Never a reconstruction from the stored record:
+        # a prior scope that was not re-proven before the round is not evidence.
+        files = proven or sorted({str(item) for item in (result.files_changed or ())})
         if not files or len(files) > MAX_ATTRIBUTABLE_FILES:
             return record
         record["implementation_files"] = files
@@ -1720,8 +5281,15 @@ class CodingService:
         code: str,
         exc: BaseException,
         progress: Optional[_RoundProgress] = None,
+        *,
+        settle: Optional["_RoundSettlement"] = None,
     ) -> None:
-        """Force one terminal fail-closed record for any worker exit."""
+        """Force one terminal fail-closed record for any worker exit.
+
+        The round's work item is owner-closed before this record is published,
+        and its projection travels in the same write, so `failed` is never
+        observable while this process still holds the item dispatched.
+        """
 
         self._discard_resume(tenant_ref, job_id)
         changes: Dict[str, Any] = {
@@ -1730,10 +5298,20 @@ class CodingService:
             "landable": False,
             "error": str(redact_evidence(str(exc)))[:1000],
         }
+        if settle is not None:
+            changes.update(
+                settle(state=CodingJobState.FAILED.value, failure_code=code),
+            )
         if progress is not None and progress.implementer_started:
             changes["implementer_started"] = True
             if self.require_codex_audit:
                 changes["implementation_backend"] = self.implementation_backend
+        # Any worker exit that lands here is a failure the host could not
+        # classify as a bounded stop, so whatever continuation this job was
+        # holding is closed rather than left looking resumable - and closed
+        # before the terminal record is published, so the two are never
+        # observable out of order.
+        self._settle_continuation(tenant_ref, job_id, path)
         try:
             self._update_record(path, **changes)
         except (OSError, ValueError):
@@ -1764,7 +5342,12 @@ class CodingService:
         A graceful shutdown changes only the lifecycle and the update time. It
         must not erase which job ran, where it stopped, or whether the
         implementer started — that is exactly what a later reader needs.
+
+        Silent when the publisher was never built: a constructor refused at the
+        authority lease still tears down through here.
         """
+        if self._status is None:
+            return
         with self._lock:
             last = dict(self._last_status_record)
         self._publish_status(last, lifecycle="closed")
@@ -1778,7 +5361,13 @@ class CodingService:
         bounded facts cross into the status file: the task message, error text,
         workspace path, and file list stay in the per-job record, which remains
         the single source of authority.
+
+        Silent before the publisher exists, so a start-up refused at the
+        authority lease reports its own refusal rather than an attribute error
+        raised while tearing itself down.
         """
+        if self._status is None:
+            return
         lane, action = route_progress(record)
         try:
             status = CodingRouteStatus(
@@ -1809,6 +5398,7 @@ class CodingService:
                 audit_count=int(record.get("audit_count") or 0),
                 rework_count=int(record.get("rework_count") or 0),
                 landable=record.get("landable") is True,
+                job_terminal=str(record.get("state") or "") in _TERMINAL_STATE_VALUES,
                 publish_failures=self._status_failures,
                 last_publish_failure_code=self._status_failure_code,
             )
@@ -2588,8 +6178,26 @@ class CodingService:
 
     @staticmethod
     def _request_digest(request: CodingTaskRequest) -> str:
+        """Identity of what the *caller* asked for, host authority excluded.
+
+        `authorized_config_sha256` is decided by the service, not the caller,
+        and it is decided after this digest has already been used to look up an
+        idempotency record. Hashing it would make an identical resubmission
+        collide with its own earlier record whenever the repository contract
+        had changed in between - an idempotent replay would raise a conflict
+        instead of returning the receipt it was replaying.
+        """
+
+        fields = dataclasses.asdict(request)
+        fields.pop("authorized_config_sha256", None)
+        # An absent mission is dropped rather than hashed as `null`. A caller
+        # that never named one must keep digesting to exactly the value it did
+        # before this field existed, or every stored idempotency record from
+        # before the envelope would stop matching its own replay.
+        if fields.get("mission") is None:
+            fields.pop("mission", None)
         payload = json.dumps(
-            dataclasses.asdict(request), ensure_ascii=False, sort_keys=True,
+            fields, ensure_ascii=False, sort_keys=True,
             separators=(",", ":"), default=lambda value: value.value,
         )
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -2676,9 +6284,51 @@ class CodingService:
         data["capabilities"] = statuses
         return CodingTaskResult(**data)
 
+    @staticmethod
+    def _bounded_generation(value: Any) -> int:
+        """A generation is a small counter or it is nothing."""
+
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 0
+        if value < 0 or value > MAX_CONTINUATION_GENERATION:
+            return 0
+        return value
+
+    def _public_receipt(
+        self, tenant_ref: str, record: Mapping[str, Any],
+    ) -> CodingJobReceipt:
+        """Project one job, including whether anything is left to continue.
+
+        `continuation_available` is answered from the authority itself rather
+        than from a flag on the record, because the record cannot know when a
+        successor consumed it. A stale `True` would invite a caller to resume
+        something already spent, which is exactly the wrong direction to be
+        wrong in. The authority record, its generation history, and the
+        canonical workspace path stay private; only the boolean crosses.
+        """
+
+        receipt = self._receipt(record)
+        session = str(record.get("continuation_session_id") or "")
+        if not is_continuable_session(session):
+            return receipt
+        try:
+            authority = self._continuation.open_authority(tenant_ref, session)
+        except (OSError, ValueError):
+            return receipt
+        if authority is None:
+            return receipt
+        return dataclasses.replace(
+            receipt,
+            continuation_available=authority.generation < MAX_CONTINUATION_GENERATION,
+            continuation_generation=authority.generation,
+        )
+
     @classmethod
     def _receipt(cls, record: Mapping[str, Any]) -> CodingJobReceipt:
         return CodingJobReceipt(
+            continuation_generation=cls._bounded_generation(
+                record.get("continuation_generation"),
+            ),
             job_id=str(record["job_id"]),
             state=CodingJobState(str(record["state"])),
             submitted_at=float(record["submitted_at"]),
@@ -2696,6 +6346,9 @@ class CodingService:
             landable=record.get("landable") is True,
             implementer_started=record.get("implementer_started") is True,
             implementation_blockers=recorded_blockers(record),
+            # Re-validated on the way out too. A record written by an older
+            # build, or edited, cannot put anything but an identifier here.
+            verification_blockers=safe_blockers(record.get("verification_blockers")),
             route_receipt=(
                 record["route_receipt"]
                 if isinstance(record.get("route_receipt"), dict) else None
@@ -2703,6 +6356,15 @@ class CodingService:
             emergency_authority=(
                 record["emergency_authority"]
                 if isinstance(record.get("emergency_authority"), dict) else None
+            ),
+            # Only the bounded, secret-safe projection crosses. The receipt
+            # revalidates it through the closed field set on the way in, so a
+            # record edited in place cannot publish a mission field this
+            # contract does not name - and prose, coordinates, evidence values,
+            # worker identity and worktree paths have no field to ride out on.
+            mission=(
+                record["mission"]
+                if isinstance(record.get("mission"), dict) else None
             ),
         )
 
@@ -2715,7 +6377,18 @@ class CodingService:
                     # An awaiting-audit job survives a restart; in-flight work
                     # does not, but another live MCP process may still own its
                     # job lease.
-                    if record.get("state") in _INTERRUPTED_JOB_STATES:
+                    if record.get("state") in _PUMPABLE_JOB_STATES:
+                        # Queued work is not interrupted work. Everything a
+                        # round needs - the record, the resume envelope, the
+                        # round envelope, the placed work item - is durable, so
+                        # a start-up finds a job waiting for a worker, not a
+                        # casualty. Failing it here is what made "the submitter
+                        # exited" indistinguishable from "the round died", and
+                        # it threw away work nobody had begun.
+                        if self._may_execute(record):
+                            self._reclaimed += 1
+                        continue
+                    if record.get("state") in _EXECUTING_JOB_STATES:
                         job_id = str(record.get("job_id") or "")
                         if not self._acquire_job_lease(job_id):
                             continue
@@ -2730,6 +6403,7 @@ class CodingService:
                             self._publish_status(record)
                             # `.../tenants/<tenant_ref>/jobs/<job_id>.json`
                             self._discard_resume(path.parent.parent.name, job_id)
+                            self._reclaim_mission_item(path, record)
                         finally:
                             self._release_job_lease(job_id)
                 except (OSError, ValueError, json.JSONDecodeError):
@@ -2745,3 +6419,119 @@ class CodingService:
         # operator, because discarding it would reopen a worktree whose audit
         # may still be pending.
         self._sweep_workspace_claims()
+        self._reconcile_continuation_claims()
+        # One pump per item this pass left runnable: work it returned to the
+        # queue by proving a lease free, and work that was simply still queued
+        # when its submitter exited. Both go back through the ordinary
+        # store-ordered route rather than through a second, privileged path -
+        # the restart's accounting and the survivor's execution are the same
+        # mechanism, so neither can close work the scheduler believes is live.
+        for _ in range(self._reclaimed):
+            self._prime_pump()
+        self._reclaimed = 0
+
+    def _reclaim_mission_item(self, path: Path, record: Mapping[str, Any]) -> None:
+        """Return one interrupted job's work item to the queue, on proof.
+
+        Proof, never age. The kernel reclaims a dispatch exactly when it can
+        take that item's execution lease itself, which is impossible while any
+        live process holds it - so a worker that is slow, paused, or simply on
+        the other side of a restart is never stolen from, and no heartbeat gap
+        or TTL is consulted at any point. A live holder answers
+        `MissionConflictRefused` and this pass leaves the item exactly where it
+        found it.
+
+        A reclaimed item goes back to `ready`, and its accounting happens when a
+        pump next offers it: the owning record is terminal by then, so it closes
+        deferred with the full rationale rather than running a job that already
+        failed closed.
+        """
+
+        projection = self._record_projection(record)
+        if projection is None:
+            return
+        item = self._mission.work_item(projection.work_item_id)
+        if item is None or item.status != MISSION_STATUS_DISPATCHED:
+            return
+        try:
+            reclaimed = self._mission.reclaim(projection.work_item_id)
+        except MissionConflictRefused:
+            # A live worker still holds this lease. It keeps it.
+            return
+        except MissionRouteError:
+            return
+        if not reclaimed:
+            return
+        self._advance_projection(path, status=MISSION_STATUS_READY)
+        self._reclaimed += 1
+
+    def _reconcile_continuation_claims(self) -> None:
+        """Resolve authorities whose claiming job died before it could settle.
+
+        A crash between "the authority is claimed" and "the job recorded an
+        outcome" is the one window where a continuation could be pinned forever.
+        The pin is deliberate while a job might still be live -- releasing it
+        early is how two workers would enter the same session -- so this pass
+        only acts once the claiming job has provably stopped, and it decides
+        from the claimant's own durable record rather than from a timer:
+
+        * the record is gone, or names another workspace, or cannot be read:
+          the authority is settled. Nothing can prove what that job did, and a
+          continuation nobody can attribute is not one this host will grant.
+        * the record settled without producing a newer generation: settled, for
+          the same reason its own terminal path would have settled it.
+        * the record is still in an in-flight state after a restart: that state
+          was already failed closed above, so it settles here too.
+
+        Reopening is never done. An authority that returns to `open` after an
+        unexplained death would let a second worker re-enter a session whose
+        first attempt may have already spent it, which is exactly the duplicate
+        provider call this whole mechanism exists to prevent. The operator's
+        route back is a fresh job, and `continuation_available` reports `False`
+        truthfully rather than offering a resume that might double-spend.
+        """
+
+        root = self.state_root / "tenants"
+        if not root.is_dir():
+            return
+        for path in root.glob("*/continuation/*.json"):
+            tenant_ref = path.parent.parent.name
+            try:
+                # The file name is a digest, so the session can only come from
+                # the body. That body is then re-read through the store, which
+                # subjects this pass to the same journal agreement every other
+                # reader gets: a replayed authority resolves to `None` here and
+                # is left exactly where it is.
+                claimed_session = str(
+                    json.loads(path.read_text(encoding="utf-8")).get("session_id") or "",
+                )
+                if not is_continuable_session(claimed_session):
+                    continue
+                authority = self._continuation.load(tenant_ref, claimed_session)
+            except (ContinuationCorrupt, OSError, ValueError, AttributeError):
+                continue
+            if authority is None or authority.state != STATE_CLAIMED:
+                continue
+            claimant = str(authority.claimed_by_job_id or "")
+            if not _JOB_ID.fullmatch(claimant):
+                self._force_settle(authority)
+                continue
+            record_path = root / tenant_ref / "jobs" / (claimant + ".json")
+            try:
+                record = self._read_json(record_path)
+            except (OSError, ValueError):
+                self._force_settle(authority)
+                continue
+            if str(record.get("state")) in _CLAIM_OWNED_STATES:
+                # Still, as far as this pass can tell, a live or audit-ready
+                # job. Its own settlement path owns the authority.
+                continue
+            self._force_settle(authority)
+
+    def _force_settle(self, authority: ContinuationAuthority) -> None:
+        """Settle forward. Reconciliation never rewinds the journal."""
+
+        try:
+            self._continuation.commit(authority, authority.settled(time.time()))
+        except (ContinuationConflict, ContinuationCorrupt, OSError, ValueError):
+            return

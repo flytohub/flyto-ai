@@ -13,6 +13,8 @@
 - [x] Repair full-suite pytest drift after deterministic planning and Python 3.11 event loop changes.
 - [x] Add an exhaustive source-generated implementation reference and strict documentation contract.
 - [x] Eliminate hard-coded runtime module totals from package, CLI, MCP, and demo behavior.
+- [x] Align Claude implementation rounds with the existing bounded 100-turn ceiling.
+- [x] Make Guardian honor its closed repository-dotfile edit allowlist.
 # Mission Stations
 
 - [x] Add strict judge-drawn card interpretation and deterministic fallback.

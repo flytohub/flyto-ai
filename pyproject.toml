@@ -8,7 +8,7 @@ version = "0.16.0"
 description = "Open-source AI agent layer for natural-language workflow automation with runtime-discovered modules and reusable YAML recipes."
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["ai-agent", "ai-agent-framework", "automation", "workflow-automation", "llm", "workflow", "mcp", "browser-automation", "openai", "anthropic", "ollama"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -61,6 +61,7 @@ claude-sdk = ["claude-agent-sdk>=0.1.0"]
 # collection the moment the split landed.
 dev = [
     "pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0",
+    "claude-agent-sdk>=0.1.0",
     "anthropic>=0.20.0",
     "flyto-core[browser]>=2.16.1",
     "flyto-pro-core>=0.1.0",

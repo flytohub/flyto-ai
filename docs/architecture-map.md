@@ -125,7 +125,7 @@ point-in-time observation, not a continuously enforced check.
 | Core registration mechanism exists | implemented | `flyto-core` `src/core/modules/registry/core.py` `ModuleRegistry` with registration validation. This proves the mechanism only. |
 | Every `flyto-modules-*` extension actually registers | unverified | No complete module inventory plus per-module registration trace was performed. Do not read the row above as universal compliance. The invariant still governs: every extension must register with Core. |
 | `flyto-indexer` -> `flyto-engine` index feed | implemented | `flyto-engine` `internal/scanner/scanner.go::populateLayer3FromIndexer`. |
-| Indexer / Blueprint / Core surround every public audited coding job | implemented | `flyto_ai/coding/route.py` runs the mandatory Indexer pre/post lanes, Blueprint discovery, and Core validation around whichever implementer startup selected. All four lanes are configured on every strict public route; none is detachable. Blueprint and Core may resolve only `applied` or `not_applicable`. The Indexer preset and public route share a 60-second transport bound so a large strict reindex can finish while every gate remains fail-closed. Blueprint reuse requires token overlap and ranks ordered phrase overlap before catalogue order, so a direction-bearing transform is not replaced by its reverse. Proved by `tests/test_coding_route.py` against the installed Indexer end to end, the real Core adapter (`array.join` validated), and the real Blueprint adapter (`ConvertCSVtoJSON` projected). |
+| Indexer / Blueprint / Core surround every public audited coding job | implemented | `flyto_ai/coding/route.py` runs the mandatory Indexer pre/post lanes, Blueprint discovery, and Core validation around whichever implementer startup selected. All four lanes are configured on every strict public route; none is detachable. Blueprint and Core may resolve only `applied` or `not_applicable`. The Indexer preset and public route share a finite ten-minute transport bound so large or contended strict verification can finish while every gate remains fail-closed. One execution plan may select the published legacy (`assess` / `implement`) or current (`plan_changes` / `apply_changes`) Indexer gate family; unknown, duplicate, or mixed-family plans fail before dispatch. Post validation accepts the legacy Boolean verdict or the current `overall=pass` envelope only when both bounded ruff/pytest statuses agree. Blueprint reuse requires token overlap and ranks ordered phrase overlap before catalogue order, so a direction-bearing transform is not replaced by its reverse. Proved by `tests/test_coding_route.py` against the installed Indexer end to end, the real Core adapter (`array.join` validated), and the real Blueprint adapter (`ConvertCSVtoJSON` projected). |
 | Long-lived Codex MCP process -> current coding worker | implemented | `flyto_ai/coding/mcp_supervisor.py` keeps host stdio stable, detects coding-source build drift, preserves non-terminal exact-session jobs, and replaces only the inner worker at a safe boundary. `CodingService.submit` independently rejects a stale direct worker before mutation. |
 | `flyto-indexer` scans Core and modules | unverified | Inventory confirms the repositories; the two scan inputs were not separately traced in this pass. |
 | `flyto-admin` manages both projects | partial | Cloud admin surfaces exist and `backend/internal/engine/scans.go::codeOrg` touches the Code side; evidence is not strong enough to claim complete two-product project management. |
@@ -223,3 +223,65 @@ Flyto2 Cloud / CLI / MCP client
   cross-tenant data.
 - Enterprise/airgap mode must have a local-provider or rules-only path and must
   not require external egress by default.
+
+## Coding control plane: phased admission and continuation policy
+
+Runtime note only. No product ownership, repository boundary or integration arrow
+changes here, and `flyto-cloud` remains parallel to - and level with - the combined
+`flyto-code` / `flyto-engine` column.
+
+`CodingService.submit` admits in phases. The verification-contract read and the
+whole-workspace snapshot run under a per-workspace admission lock; the global state
+guard is entered only for the short authoritative transition, which re-proves the
+contract digest and compare-and-swaps the continuation authority before any lease,
+worktree claim or durable record exists. Lock order is admission -> state guard.
+
+Cross-job continuation is a tenant-partitioned, single-use authority advanced by an
+append-only journal, and the snapshot projection it was granted under is digest-bound
+into it. Only the strict Indexer-backed coding route may classify `.flyto-index` as
+control-plane runtime state, because only that route's mandatory Indexer pre/post
+gates revalidate that tree and record the result in the route receipt.
+
+The coding service runtime floor is Python 3.11. Its pathname-free mission
+authority envelope uses CPython's SQLite `serialize()` / `deserialize()` byte
+binding; unsupported older hosts fail closed instead of receiving a temporary
+file or downgraded continuation path. CI covers Python 3.11 and 3.12.
+
+See `ARCHITECTURE.md`, `docs/CODING_CONTROL_PLANE.md` and `DECISIONS.md` (2026-08-10).
+
+## Coding control plane: mission scheduling and state-root authority
+
+Runtime note only. No product ownership, repository boundary or integration arrow
+changes here, and `flyto-cloud` remains parallel to - and level with - the combined
+`flyto-code` / `flyto-engine` column.
+
+Every coding job serves a mission in `flyto_ai.orchestration.mission_control`,
+which stays workload-neutral: the coding vocabulary - synthesized objective,
+attributable verified revision, pinned checks, Codex audit - lives only in
+`flyto_ai.coding.mission_runtime`. The kernel decides queue order, repair-lane
+preference, dependency readiness, worktree exclusion by resource digest, and
+fencing. The service dispatches whatever the store selected and reconstructs the
+owning private request from durable envelopes, so per-submit executor timing
+cannot reorder the queue.
+
+Two leases, two meanings. The **job lease** covers execution only and is released
+once a job's durable artifacts exist, before any pump can dispatch - so queued
+work survives its submitter and any compatible worker may run it. The
+**state-root authority lease** is a shared `flock` on `<state_root>/.authority.lock`
+held by every compatible live service, with a bounded secret-free marker in
+`<state_root>/authority.json`; the exclusive lock is required to write that
+marker, so rotation needs no live holder *and* every job terminal. An
+incompatible service fails construction before status reconciliation, the
+workspace-claim sweep, or any pump. Lock order is authority-lease -> admission ->
+state guard. Crash recovery is `flock` release, never a TTL.
+
+Every validation precedes every write: the marker, the active-job scan and any
+pre-fingerprint settlement are checked under the state guard while the caller
+holds the exclusive lock, and the marker is written last, so a refused start-up
+leaves a present marker byte-identical and never creates a missing one. Damaged,
+symlinked or non-regular markers and unreadable job records are refusals, not
+absences. A host without an inter-process lock refuses to start
+(`execution_authority_unavailable`) rather than degrading the isolation to a
+no-op.
+
+See `ARCHITECTURE.md` and `DECISIONS.md` (2026-08-10).

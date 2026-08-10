@@ -1,6 +1,59 @@
 # State
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
+
+## Mission lifecycle and state-root authority (2026-08-10)
+
+Wired `MissionStore` into the real `CodingService` lifecycle, and bound each
+coding state root to one semantic startup authority. See `ARCHITECTURE.md`
+("Coding mission and state-root authority boundary") and the 2026-08-10
+`DECISIONS.md` entry.
+
+Verified on 2026-08-10, on this host, by running the suites below:
+
+- `tests/test_coding_mission_lifecycle.py`: **69 passed in 11.48s** through
+  formal Indexer `task validate` (real `MissionStore`, several
+  `CodingService` instances per test).
+- `tests/test_coding_service.py` + `tests/test_coding_mission_contract.py
+  --timeout=180`: **235 passed in 19.20s**.
+- Full warning-strict suite: **3256 passed, 17 skipped in 224.49s**, including
+  `PytestUnhandledThreadExceptionWarning` as an error.
+- `ruff check` clean on the changed files.
+- Package sdist/wheel build succeeded, all 23 generated Python reference files
+  are current, and Indexer full-scan strict verification passed **18/18**.
+
+Operator-visible behaviour changes:
+
+- Two differently configured coding services must not share a state root. The
+  second one now fails construction with `execution_authority_conflict` instead
+  of starting and quietly competing. Give them separate roots, or stop the other
+  authority's services and close its open jobs before rotating.
+- Queued and rework-queued jobs survive a restart or a submitter exiting and are
+  executed by any compatible worker. They are no longer failed as
+  `service_restarted`; only interrupted *running* work is, and only after
+  proving no live lease holds it.
+- Queued jobs recorded before the executing-authority fingerprint are migrated
+  and run normally. An unfingerprinted awaiting-audit job may still be accepted
+  but cannot be reworked; an unfingerprinted executing job refuses start-up
+  while its lease is live, and settles as `execution_authority_unbound` once the
+  lease is provably free.
+- A damaged, symlinked, oversized or non-regular authority marker, and an
+  unreadable job record, refuse start-up and rotation. Repair or remove them
+  deliberately:
+  the service will not overwrite either, and a refusal leaves a present marker
+  byte-identical.
+- A host without an inter-process lock refuses to start with
+  `execution_authority_unavailable` instead of running without the isolation it
+  advertises.
+
+Rollback: revert the change. The authority lock file and marker are inert to
+older builds, which ignore both; job records gain an `execution_authority` field
+that older builds do not read.
+
+Not proved here: behaviour on hosts without `sqlite3.Connection.serialize`
+(mission tests skip there), and no live multi-machine or NFS deployment was
+exercised - `flock` semantics over a network filesystem are the classic failure
+mode for this design.
 
 ## Current: audited coding route and canonical topology (2026-08-08)
 
@@ -36,6 +89,30 @@ eligibility evidence for the caller, not an action the service performs.
 
 ### Implemented and covered by focused tests
 
+- The public package and coding service now require Python 3.11 or newer.
+  Mission continuation uses SQLite `serialize()` / `deserialize()` to bind its
+  in-memory authority database into a pathname-free byte envelope; CPython
+  3.10 does not provide that primitive. CI therefore proves the honest runtime
+  contract on Python 3.11 and 3.12, and the development extra includes the
+  Claude SDK imported by the complete route suite.
+- Same-session audit rework now treats `require_changes` as a cumulative job
+  invariant. When a rework returns the host-generated `no_changes` result with
+  passing required checks, the service re-proves the prior session, tenant/job
+  claim, sealed resume envelope, file set, and content digest before supplying
+  that cumulative attribution to the ordinary Indexer post lane. Failed proof,
+  changed bytes, missing checks, or any other provider outcome still fails
+  closed.
+- The Claude implementation adapter now defaults to its existing bounded
+  100-turn ceiling. The USD budget, edit-only tool catalog, workspace
+  confinement, required checks, exact-revision audit, and rework ceiling are
+  unchanged. This closes repeated `turn_limit_exceeded` failures where Claude
+  had already written a complete verifier but could not return a provider
+  result before the former 30/60-turn startup limits.
+- Guardian now honors the exact repository dotfiles already named in its edit
+  allowlist (`.gitignore`, `.dockerignore`, `.editorconfig`). Python's
+  `splitext` reports these as extensionless, so they were previously blocked
+  despite the closed allowlist; arbitrary dotfiles and sensitive paths remain
+  denied.
 - `flyto.coding-service.v2` audit states and receipt fields:
   `awaiting_codex_audit`, `rework_queued`, `rework_running`, `codex_accepted`,
   plus `implementation_backend`, opaque `implementation_session_id`, exact
@@ -143,10 +220,19 @@ eligibility evidence for the caller, not an action the service performs.
   capability bound and failed the mandatory pre-work lane before the
   implementer started. Regressed against the real installed Indexer.
 - Shared Indexer transport bound: the detachable stack preset and the public
-  `code-mcp` / `code-serve` route now use the same 60-second timeout. This
+  `code-mcp` / `code-serve` route now use the same ten-minute timeout. This
   prevents a valid large-workspace `verify.strict` or reindex from dying at
   the old 30-second CLI-only bound; the lane remains mandatory and a genuine
   timeout still fails closed as `capability_timeout`.
+- Indexer gate-vocabulary compatibility: the host selects either the legacy
+  `assess` / `implement` pair or the current `plan_changes` / `apply_changes`
+  pair from the exact returned execution plan before running its first step.
+  It never sends both families to one server; unknown, repeated, or mixed
+  phases fail closed before the implementer starts.
+- Indexer validation-vocabulary compatibility: legacy explicit Boolean
+  `pass`/`passed` remains authoritative. The current `overall=pass` envelope
+  succeeds only with explicit ruff and pytest statuses of `pass` or `skipped`;
+  missing, mixed, or contradictory evidence remains a closed failure.
 - Deterministic Blueprint relevance: the read-only lane still requires real
   token overlap, but now ranks ordered phrase overlap before catalogue order.
   This distinguishes direction-bearing matches such as CSV-to-JSON from the
@@ -341,7 +427,7 @@ Implemented:
   requires explicit higher authority for controlled fixtures, and distinguishes
   a real domain failure from an undispatched policy denial.
 - Clean-runner CI checks out the exact `flyto-blueprint` benchmark dependency
-  commit beside `flyto-ai` before running the complete suite on Python 3.10 and
+  commit beside `flyto-ai` before running the complete suite on Python 3.11 and
   3.12; local sibling imports no longer hide missing remote test setup.
 - The same matrix provisions ripgrep and a digest-pinned Python Docker sandbox,
   so literal search and real read-only/network-isolated command tests execute on
@@ -352,7 +438,7 @@ Implemented:
 - `Agent` now supports `async with` and idempotent `await close()`, releasing its
   memory database and transcript deterministically and failing on post-close
   chat calls.
-- Python 3.10/3.12 CI treats deprecation and unhandled background-thread
+- Python 3.11/3.12 CI treats deprecation and unhandled background-thread
   warnings as test failures; functional sandbox availability is detected from
   the initialized backend rather than the mere presence of a CLI executable.
 - The agent-stack runtime is now split behind stable compatibility facades into
@@ -614,3 +700,31 @@ Known constraints:
   or authenticated third-party APIs.
 - Local Ollama runs expose zero provider charge and therefore prove token
   reduction, not cloud billing reduction.
+
+### Coding continuation (2026-08-10)
+
+Cross-job continuation of a bounded provider stop is implemented in
+`flyto_ai/coding/continuation.py` and admitted by `CodingService.submit`. Verified
+locally: focused suite `tests/test_coding_continuation.py` green; related coding
+suites green. `tests/test_coding_service.py::test_http_server_requires_auth_rejects_provider_fields_and_runs_job`
+cannot run in the worker sandbox, which denies `socket.bind` (`PermissionError` at
+`socketserver.server_bind`); Codex reran it unrestricted and it passed in 4.78s, so
+this is an environment restriction rather than an open defect. A mutation matrix
+applied and caught every row. Not yet exercised against a live provider account: whether a real
+`error_max_budget_usd` round can be resumed by session id is an account-level fact
+no local test establishes.
+
+### Cumulative Indexer plan authority (2026-08-10)
+
+Multi-round rework now amends one root Indexer task and validates the exact
+cumulative set the final revision binds. Verified locally: `tests/test_coding_plan_amendment.py`
+(56 tests) covers three-round growth A -> A+B -> A+B+C, restart-and-amend across
+a new service object, missing/tampered/replayed/wrong-job/request/workspace
+authority, altered prior revision bytes, a failed pre-lane leaving no amendable
+authority, hostile domain prose, and the phase/action/receipt contract. Focused
+gate `test_coding_plan_amendment.py` + `test_coding_route.py`: 276 passed.
+Generated references regenerated with the canonical generator.
+
+Not yet proven live: the sibling Indexer package's real `task_contract`
+behaviour. The declared contract is exercised with a faithful fake at the
+capability boundary; Codex owns the controlled package load.

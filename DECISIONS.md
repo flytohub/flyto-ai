@@ -99,7 +99,7 @@ that topology and are closed here.
 
 ## 2026-08-10: One bounded Indexer timeout for every coding-route entry
 
-Large Flyto workspaces can legitimately need more than 30 seconds for the
+Large Flyto2 workspaces can legitimately need more than 30 seconds for the
 mandatory post-work `verify.strict`, especially when the Indexer rebuilds its
 generated state. The detachable stack preset and the public `code-mcp` /
 `code-serve` CLI constructed separate `CapabilitySpec` values, so changing one

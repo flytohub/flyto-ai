@@ -22,7 +22,7 @@ python scripts/generate_reference.py --check
 ```
 
 The focused service/route/CLI suite passed 323 tests. The complete suite passed
-1900 tests with 17 skips. A fresh Flyto Indexer rebuild and verify completed all
+1900 tests with 17 skips. A fresh Flyto2 Indexer rebuild and verify completed all
 18 checks with no warnings or failures.
 
 A real local subprocess probe started two `flyto-ai code-mcp` processes with

@@ -1762,8 +1762,13 @@ def test_route_capability_processes_and_executors_close_cleanly(tmp_path):
 # ── real installed Indexer process ────────────────────────────────────
 
 REAL_INDEXER_ROOT = Path(__file__).resolve().parents[2] / "flyto-indexer"
+INDEXER_RUNTIME_SUPPORTED = sys.version_info >= (3, 11)
 
 
+@pytest.mark.skipif(
+    not INDEXER_RUNTIME_SUPPORTED,
+    reason="flyto-indexer requires Python 3.11 or newer",
+)
 def test_real_installed_indexer_negotiates_the_allowlisted_public_surface():
     """The production server must actually publish the tools we allowlist."""
     import subprocess
@@ -1905,6 +1910,10 @@ def test_leading_json_is_decoded_when_the_server_appends_prose(tmp_path):
 RUNTIME_PYTHON = Path(sys.executable)
 
 
+@pytest.mark.skipif(
+    not INDEXER_RUNTIME_SUPPORTED,
+    reason="flyto-indexer requires Python 3.11 or newer",
+)
 def test_the_real_indexer_answers_a_project_scoped_search_inside_its_bound():
     """The reproduced incident, regressed against the installed server.
 
@@ -2082,8 +2091,12 @@ class LiveImplementer(ServiceImplementer):
         )
 
 
+@pytest.mark.skipif(
+    not INDEXER_RUNTIME_SUPPORTED,
+    reason="flyto-indexer requires Python 3.11 or newer",
+)
 def test_live_public_route_reaches_awaiting_audit_and_accepts(tmp_path):
-    """The real .venv Indexer, real Blueprint, and Core adapter, end to end."""
+    """The active Indexer, real Blueprint, and Core adapter, end to end."""
     from argparse import Namespace
 
     import flyto_ai.cli as cli

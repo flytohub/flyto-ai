@@ -56,8 +56,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m pip install -e ../flyto-blueprint
-          python -m pip install ../flyto-indexer
           python -m pip install -e ".[dev]"
+      - name: Install flyto-indexer test dependency
+        if: matrix.python-version != '3.10'
+        run: python -m pip install ../flyto-indexer
       - name: Lint imports with compileall
         run: |
           echo "lint: compile imports"

@@ -103,7 +103,7 @@ def main():
         help="Native workspace authority (no unrestricted mode)",
     )
     code_p.add_argument(
-        "--sandbox-image", default="python:3.12-slim",
+        "--sandbox-image", default="flyto-coding-actions:node24-python3-git-20260809",
         help="Pinned local Docker image for model-issued commands",
     )
     code_p.add_argument(
@@ -151,7 +151,7 @@ def main():
             help="Service-wide workspace authority",
         )
         service_parser.add_argument(
-            "--sandbox-image", default="python:3.12-slim",
+            "--sandbox-image", default="flyto-coding-actions:node24-python3-git-20260809",
             help="Pinned local Docker image for model-issued commands",
         )
         service_parser.add_argument("--max-workers", type=int, default=2, help="Concurrent job workers")
@@ -577,6 +577,23 @@ def _create_native_coding_provider(args):
     return create_provider(provider_name, **provider_kwargs)
 
 
+def _declared_capability_kinds(implementer):
+    """Read one implementer's declared capability bridge, failing closed.
+
+    An implementer that declares nothing - or declares something that is not a
+    set of plain strings - is treated as able to bridge nothing. Assuming
+    capability is how a green preflight ended up in front of a backend that
+    refuses every required capability on sight.
+    """
+    declared = getattr(implementer, "attachable_capability_kinds", None)
+    if not isinstance(declared, (frozenset, set, tuple, list)):
+        return ()
+    return tuple(sorted(
+        item for item in declared
+        if isinstance(item, str) and item and not isinstance(item, bool)
+    ))
+
+
 def _build_coding_service(args):
     """Create the optional service with all authority fixed at startup.
 
@@ -595,13 +612,18 @@ def _build_coding_service(args):
             ),
         )
     if backend == "claude":
+        from flyto_ai.agents.claude_code import ClaudeCodingAgent
+
         agent_factory = _build_claude_agent_factory(args)
+        implementer = ClaudeCodingAgent
     else:
         # Fail startup early, then create an isolated provider client per job.
         _create_native_coding_provider(args)
 
         def agent_factory(store):
             return FlytoCodingAgent(_create_native_coding_provider(args), store=store)
+
+        implementer = FlytoCodingAgent
 
     roots = tuple(_os.path.abspath(_os.path.expanduser(path)) for path in args.workspace_root)
     return CodingService(
@@ -618,6 +640,12 @@ def _build_coding_service(args):
         # flag or environment variable that turns this off.
         require_codex_audit=True,
         implementation_backend=backend,
+        # The selected implementer declares what it can actually bridge, so
+        # preflight can refuse an infeasible contract before a job exists
+        # instead of after a session has opened. Read off the class rather
+        # than branched on the backend name: a new backend answers for itself,
+        # and one that answers nothing is refused, not assumed capable.
+        attachable_capability_kinds=_declared_capability_kinds(implementer),
         max_rework_rounds=getattr(args, "max_rework_rounds", 3),
         # The public route is one entry: host-owned lanes always surround
         # whichever implementer was selected above.

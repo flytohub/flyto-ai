@@ -77,7 +77,7 @@ FUNCTION_CALLING_SUPPORT = {
 class ClaudeCodeConfig:
     """Configuration for the Claude Code Agent mode."""
     max_budget_usd: float = 5.0
-    max_turns: int = 30
+    max_turns: int = 100
     max_fix_attempts: int = 3
     allowed_tools: List[str] = field(default_factory=lambda: [
         "Read", "Edit", "Write", "Bash", "Glob", "Grep",
@@ -116,7 +116,7 @@ class ClaudeCodeConfig:
         """
         return cls(
             max_budget_usd=_env_number("FLYTO_AI_CC_MAX_BUDGET", "5.0", float),
-            max_turns=_env_number("FLYTO_AI_CC_MAX_TURNS", "30", int),
+            max_turns=_env_number("FLYTO_AI_CC_MAX_TURNS", "100", int),
             max_fix_attempts=_env_number("FLYTO_AI_CC_MAX_FIX_ATTEMPTS", "3", int),
             model=os.getenv("FLYTO_AI_CC_MODEL", "claude-opus-5"),
         )

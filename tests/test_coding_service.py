@@ -54,9 +54,12 @@ from flyto_ai.coding.service import (
     IdempotencyConflict,
     RevisionMismatch,
     RevisionUnavailable,
+    REWORK_LIMIT_FAILURE_CODE,
     ReworkLimitReached,
     ReworkNotResumable,
+    VerificationRequired,
     WorkspaceDenied,
+    error_details,
     request_from_mapping,
     receipt_to_mapping,
 )
@@ -64,6 +67,25 @@ from flyto_ai.coding.service import (
 TEST_BEARER_TOKEN = "unit-test-bearer-token"
 # The implementer stops at `awaiting_codex_audit`; waiting only for the legacy
 # terminal states would hang once the phase-2 service lands that transition.
+#: Preflight refuses a repository that never declared how it wants to be
+#: verified, before a job, a worktree claim or an implementer session exists.
+#: A fixture that means to exercise anything past preflight therefore has to
+#: declare a contract, exactly as a real repository does.
+_TEST_VERIFICATION_CONTRACT = """version: flyto.coding-config.v1
+checks:
+  - name: declared
+    argv: [python, --version]
+    timeout_seconds: 30
+    required: true
+"""
+
+
+def _declare_verification(workspace) -> None:
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(_TEST_VERIFICATION_CONTRACT, encoding="utf-8")
+
+
 _SETTLED_STATES = TERMINAL_CODING_JOB_STATES | {CodingJobState.AWAITING_CODEX_AUDIT}
 _AUDIT_JOB_ID = "job_" + "a1b2c3d4" * 3
 _AUDIT_REVISION = "b3" * 32
@@ -209,6 +231,7 @@ def _service(
 def test_service_runs_real_tools_checks_idempotently_and_isolates_tenants(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _service(tmp_path, workspace)
     try:
         untrusted_request = _request(workspace)
@@ -246,6 +269,7 @@ def test_service_runs_real_tools_checks_idempotently_and_isolates_tenants(tmp_pa
 def test_service_serializes_jobs_that_share_a_workspace(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     RealToolProvider.active = 0
     RealToolProvider.max_active = 0
     service = _service(tmp_path, workspace, delay=0.1)
@@ -268,6 +292,7 @@ def test_services_share_one_state_root_without_reconciling_live_jobs(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     RealToolProvider.active = 0
     RealToolProvider.max_active = 0
     first = _service(tmp_path, workspace, delay=0.15)
@@ -297,6 +322,7 @@ def test_services_serialize_distinct_jobs_for_one_workspace_across_instances(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     RealToolProvider.active = 0
     RealToolProvider.max_active = 0
     first = _service(tmp_path, workspace, delay=0.1)
@@ -321,6 +347,7 @@ def test_services_serialize_distinct_jobs_for_one_workspace_across_instances(
 def test_http_server_requires_auth_rejects_provider_fields_and_runs_job(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _service(tmp_path, workspace)
     server = build_http_server(
         service, tenant_id="tenant-http", auth_token=TEST_BEARER_TOKEN, port=0,
@@ -364,6 +391,7 @@ def test_http_server_requires_auth_rejects_provider_fields_and_runs_job(tmp_path
 def test_mcp_negotiates_protocol_and_exposes_tenant_bound_tools(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _service(tmp_path, workspace)
     server = CodingMCPServer(service, "tenant-mcp")
     try:
@@ -431,6 +459,7 @@ def test_capability_preflight_uses_real_negotiation_and_required_tool_catalog(
 def test_code_mcp_cli_runs_as_a_real_stdio_process(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     process = subprocess.Popen(
         [
             sys.executable,
@@ -480,6 +509,7 @@ def test_code_mcp_cli_runs_as_a_real_stdio_process(tmp_path: Path) -> None:
 def test_service_mapping_forbids_authority_fields_and_capability_contract_is_typed(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     with pytest.raises(ValueError, match="unsupported coding request fields"):
         request_from_mapping({"message": "task", "working_dir": str(workspace), "provider": "openai"})
     with pytest.raises(ValueError, match="unsupported coding request fields"):
@@ -929,7 +959,7 @@ def _claude_workspace(tmp_path: Path, *, check: str = "pass") -> Path:
     workspace = tmp_path / "claude-workspace"
     workspace.mkdir(parents=True)
     config = workspace / ".flyto" / "coding.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     argv = {
         "pass": [sys.executable, "-c", "from pathlib import Path; assert Path('result.txt').read_text() == 'verified\\n'"],
         "trivial": [sys.executable, "-c", "pass"],
@@ -1213,19 +1243,44 @@ def test_pre_session_failures_carry_a_durable_non_sdk_thread_id(tmp_path: Path) 
 
 
 def test_claude_missing_checks_fail_durably_through_the_real_service(tmp_path: Path) -> None:
+    """A repository with no verification contract is refused before it costs anything.
+
+    This used to be discovered inside the implementer, so "you never said how
+    to verify this" arrived as a failed job with a burnt session, a held
+    worktree claim and a receipt to poll. Preflight answers the same question
+    first, so the refusal is a `verification_required` raised out of `submit`
+    itself and there is nothing left behind to clean up.
+    """
+
     workspace = tmp_path / "unchecked-workspace"
     workspace.mkdir()
     backend = FakeClaudeBackend(workspace)
     service = _claude_service(tmp_path, workspace, backend)
+    tenant_ref = service._tenant_ref("tenant-claude")
     try:
+        with pytest.raises(VerificationRequired) as refused:
+            service.submit("tenant-claude", "claude-checks", _request(workspace))
+
+        assert refused.value.code == "verification_required"
+        assert error_details(refused.value) == {
+            "failure_phase": "preflight",
+            "retryable": False,
+            "required_actions": ["add_repository_verification_contract"],
+        }
+
+        # Nothing was created: no job record to poll, no worktree claim to
+        # release, and the implementer was never contacted.
+        jobs = service.state_root / "tenants" / tenant_ref / "jobs"
+        assert not jobs.exists() or list(jobs.glob("*.json")) == []
+        assert not service._workspace_claim_path(str(workspace)).exists()
+        assert backend.requests == [] if hasattr(backend, "requests") else True
+
+        # And the refusal is not sticky: declaring a contract makes the very
+        # same submission viable, so preflight gates feasibility rather than
+        # blacklisting a workspace.
+        _declare_verification(workspace)
         queued = service.submit("tenant-claude", "claude-checks", _request(workspace))
-        failed = _wait(service, "tenant-claude", queued.job_id)
-        assert failed.state is CodingJobState.FAILED
-        assert failed.failure_code == "verification_required"
-        assert failed.result is not None
-        assert failed.result.failure_code == "verification_required"
-        assert failed.thread_id and len(failed.evidence_sha256) == 64
-        assert failed.landable is False
+        assert queued.job_id
     finally:
         service.close()
 
@@ -1724,6 +1779,7 @@ def _http(
 def test_http_audit_endpoint_drives_the_real_state_machine(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -1801,6 +1857,7 @@ def test_http_audit_rejects_malformed_or_authority_bearing_bodies(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-http", "http-malformed", workspace)
@@ -1819,6 +1876,7 @@ def test_http_audit_rejects_malformed_or_authority_bearing_bodies(
 def test_http_routes_stay_compatible_and_reject_unknown_audit_paths(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _service(tmp_path, workspace)
     try:
         status, payload, _ = _http(service, "GET", "/healthz", token="")
@@ -1864,8 +1922,9 @@ def test_cli_built_native_service_stops_at_awaiting_codex_audit(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     config = workspace / ".flyto" / "coding.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(
         "version: flyto.coding-config.v1\n"
         "checks:\n"
@@ -1946,8 +2005,9 @@ def test_public_route_fails_closed_when_the_indexer_lane_is_unreachable(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     config = workspace / ".flyto" / "coding.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(
         "version: flyto.coding-config.v1\n"
         "checks:\n"
@@ -2037,6 +2097,7 @@ def test_public_package_exports_the_canonical_audit_surface() -> None:
 def test_audit_disabled_service_keeps_the_legacy_completed_flow(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _service(tmp_path, workspace)
     try:
         assert service.require_codex_audit is False
@@ -2060,6 +2121,7 @@ def test_required_audit_holds_a_successful_implementation_and_accept_makes_it_la
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-001", workspace)
@@ -2094,6 +2156,7 @@ def test_required_audit_holds_a_successful_implementation_and_accept_makes_it_la
 def test_failed_implementation_stays_failed_under_required_audit(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=NoChangeProvider())
     try:
         queued = service.submit("tenant-audit", "audit-fail", _request(workspace))
@@ -2114,6 +2177,7 @@ def test_rework_resumes_the_same_job_thread_and_session_with_a_new_revision(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -2158,6 +2222,7 @@ def test_rework_resumes_the_same_job_thread_and_session_with_a_new_revision(
 def test_rework_rounds_are_bounded_by_startup_configuration(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider, max_rework_rounds=1)
     try:
@@ -2173,9 +2238,18 @@ def test_rework_rounds_are_bounded_by_startup_configuration(tmp_path: Path) -> N
                 "tenant-audit", first.job_id, second.implementation_revision_sha256,
                 CodingAuditVerdict.REWORK, (_blocker("second_round"),),
             )
-        unchanged = service.get("tenant-audit", first.job_id)
-        assert unchanged.state is CodingJobState.AWAITING_CODEX_AUDIT
-        assert unchanged.rework_count == 1
+        # The ceiling now settles the job instead of bouncing the caller and
+        # leaving a worktree claimed forever by a job no verdict could move.
+        settled = service.get("tenant-audit", first.job_id)
+        assert settled.state is CodingJobState.FAILED
+        assert settled.failure_code == REWORK_LIMIT_FAILURE_CODE
+        assert settled.rework_count == 1
+        assert settled.landable is False
+        assert receipt_to_mapping(settled)["job_terminal"] is True
+        # Bounded history survives; resume authority and the claim do not.
+        assert settled.implementation_session_id
+        assert settled.implementation_revision_sha256
+        assert not service._workspace_claim_path(str(workspace)).exists()
         assert provider.rounds == 2
     finally:
         service.close()
@@ -2184,6 +2258,7 @@ def test_rework_rounds_are_bounded_by_startup_configuration(tmp_path: Path) -> N
 def test_concurrent_audit_calls_schedule_at_most_one_rework(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider(delay=0.2)
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -2229,6 +2304,7 @@ def test_concurrent_audit_calls_schedule_at_most_one_rework(tmp_path: Path) -> N
 def test_audit_fails_closed_on_stale_wrong_or_incoherent_input(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-stale", workspace)
@@ -2274,6 +2350,7 @@ def test_audit_fails_closed_on_stale_wrong_or_incoherent_input(tmp_path: Path) -
 def test_live_workspace_edit_invalidates_the_audited_revision(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-live", workspace)
@@ -2302,6 +2379,7 @@ def test_live_workspace_edit_invalidates_the_audited_revision(tmp_path: Path) ->
 def test_revision_digest_rejects_unsafe_attributable_paths(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     (workspace / "result.txt").write_text("verified\n")
     (workspace / "package").mkdir()
     outside = tmp_path / "outside.txt"
@@ -2342,6 +2420,7 @@ def test_rework_revision_stays_cumulative_over_earlier_attributable_files(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = PartialReworkProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -2388,6 +2467,7 @@ def test_restart_revalidates_the_persisted_workspace_before_reading_it(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-authority", workspace)
@@ -2449,6 +2529,7 @@ def test_revision_hashing_detects_a_swapped_or_mutated_descriptor(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     (workspace / "result.txt").write_text("verified\n")
     assert len(CodingService._revision_digest(str(workspace), ["result.txt"])) == 64
 
@@ -2472,6 +2553,7 @@ def test_revision_hashing_fails_closed_without_o_nofollow(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     (workspace / "result.txt").write_text("verified\n")
 
     # The documented fallback: identity comparison, not the open flag, is what
@@ -2492,6 +2574,7 @@ def test_revision_hashing_fails_closed_without_o_nofollow(
 def test_revision_hashing_rejects_unreadable_and_dangling_paths(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     (workspace / "dangling.txt").symlink_to(tmp_path / "never-created.txt")
     with pytest.raises(RevisionUnavailable):
         CodingService._revision_digest(str(workspace), ["dangling.txt"])
@@ -2522,6 +2605,7 @@ def test_restart_preserves_awaiting_audit_and_reworks_the_same_session(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-restart", workspace)
@@ -2566,6 +2650,7 @@ def test_rework_fails_closed_when_the_resume_envelope_is_gone(tmp_path: Path) ->
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-noenv", workspace)
@@ -2598,6 +2683,7 @@ def test_rework_fails_closed_when_the_resume_envelope_is_gone(tmp_path: Path) ->
 def test_restart_rejects_an_awaiting_job_whose_workspace_moved_on(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-drift", workspace)
@@ -2622,6 +2708,7 @@ def test_restart_rejects_an_awaiting_job_whose_workspace_moved_on(tmp_path: Path
 def test_restart_reconciles_interrupted_rework_to_a_stable_failure(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace)
     try:
         awaiting = _awaiting(service, "tenant-audit", "audit-inflight", workspace)
@@ -2660,6 +2747,7 @@ def test_restart_reconciles_interrupted_rework_to_a_stable_failure(tmp_path: Pat
 def test_audit_authority_is_startup_only_and_receipts_stay_redacted(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     for forbidden in (
         {"implementation_backend": "claude"},
         {"require_codex_audit": False},
@@ -2711,6 +2799,7 @@ def test_audit_authority_is_startup_only_and_receipts_stay_redacted(tmp_path: Pa
 def test_mcp_audit_tool_drives_the_real_service_state_machine(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     server = CodingMCPServer(service, "tenant-mcp-audit")
@@ -2735,7 +2824,13 @@ def test_mcp_audit_tool_drives_the_real_service_state_machine(tmp_path: Path) ->
             findings=[],
         ))["result"]
         assert stale["isError"] is True
-        assert stale["structuredContent"] == {"ok": False, "error": "revision_mismatch"}
+        # Every service error now carries the typed envelope, so a caller can
+        # branch on phase and retryability without a per-code lookup table.
+        assert stale["structuredContent"] == {
+            "ok": False,
+            "error": "revision_mismatch",
+            "details": {"failure_phase": "service", "retryable": False},
+        }
 
         accepted = server.handle(_audit_request(
             job_id=awaiting.job_id,
@@ -2897,3 +2992,102 @@ def test_known_turn_limit_is_classified_apart_from_an_unknown_failure(
     assert unknown.failure_code == "provider_failed"
     unknown_event = _provider_error_event(unknown_store, unknown.thread_id)
     assert unknown_event["data"]["failure_code"] == "provider_failed"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# the host-pinned verification contract, across a same-job rework round
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_a_rework_round_reapplies_the_pin_and_never_the_edited_contract(
+    tmp_path: Path,
+) -> None:
+    """The escalation this closes, end to end, through the real state machine.
+
+    Round one is admitted against the contract the repository declared. The
+    contract file is then replaced with bytes no reader accepts - the strongest
+    available stand-in for "the implementation rewrote its own verifier", because
+    a round that re-read the file could not even parse it and would fail
+    `invalid_config` before deriving a single check.
+
+    Round two nevertheless completes, which is only possible if it executed the
+    snapshot the host captured before the first provider call. The pin is
+    therefore not a way to skip verification: it is what keeps a job that touched
+    its own contract still gradeable against the checks it was admitted under.
+    """
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    provider = ReworkingProvider()
+    service = _audited_service(tmp_path, workspace, provider=provider)
+    try:
+        first = _awaiting(service, "tenant-pin", "pin-rework", workspace)
+        record_path = (
+            service._tenant_dir(service._tenant_ref("tenant-pin"))
+            / "jobs" / (first.job_id + ".json")
+        )
+        record = service._read_json(record_path)
+        bound = record["contract_snapshot_sha256"]
+        authorized = record["authorized_config_sha256"]
+        # Captured by value, and addressable. Both are required: a digest alone
+        # could only ever refuse, never keep executing.
+        assert record["contract_snapshot"]["config_sha256"] == authorized
+        assert [check["name"] for check in record["contract_snapshot"]["checks"]] == [
+            "real_file_check",
+        ]
+        assert service._record_pinned_contract(record).identity() == bound
+
+        # The contract the round was graded by is replaced by something no
+        # reader will accept, exactly as a self-editing implementation could.
+        config = workspace / ".flyto" / "coding.yaml"
+        config.write_text("checks:\n  - name: [unclosed\n", encoding="utf-8")
+        assert service._observed_config_digest(str(workspace)) == ""
+
+        queued = service.audit(
+            "tenant-pin", first.job_id, first.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK, (_blocker(),),
+        )
+        assert queued.state is CodingJobState.REWORK_QUEUED
+
+        second = _wait(service, "tenant-pin", first.job_id)
+        # Reached at all, rather than stranded on `invalid_config`.
+        assert second.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert second.failure_code is None
+        assert provider.rounds == 2
+        assert second.result is not None
+        # ...and graded by the pinned check, not by anything now on disk.
+        assert [check.name for check in second.result.checks] == ["real_file_check"]
+        assert all(check.passed for check in second.result.checks)
+
+        # The authority the job carries is unchanged by the edit. Recomputing it
+        # from the current file is the escalation; restoring it is the fix.
+        after = service._read_json(record_path)
+        assert after["contract_snapshot_sha256"] == bound
+        assert after["authorized_config_sha256"] == authorized
+    finally:
+        service.close()
+
+
+def test_a_caller_may_never_supply_its_own_verifier(tmp_path: Path) -> None:
+    """The pin is the verifier, so a decodable request must not be able to set one."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    for field in ("pinned_contract", "authorized_config_sha256"):
+        with pytest.raises(ValueError, match="unsupported coding request fields"):
+            request_from_mapping({
+                "message": "task", "working_dir": str(workspace), field: None,
+            })
+    # A locally-constructed request may name one, but the service overwrites
+    # every authority field from startup configuration before it is used.
+    service = _service(tmp_path, workspace)
+    try:
+        smuggled = dataclasses.replace(
+            _request(workspace), authorized_config_sha256="c" * 64,
+        )
+        assert service._with_startup_authority(smuggled).authorized_config_sha256 == ""
+        assert service._with_startup_authority(smuggled).pinned_contract is None
+    finally:
+        service.close()

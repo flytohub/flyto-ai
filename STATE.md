@@ -36,6 +36,24 @@ eligibility evidence for the caller, not an action the service performs.
 
 ### Implemented and covered by focused tests
 
+- Same-session audit rework now treats `require_changes` as a cumulative job
+  invariant. When a rework returns the host-generated `no_changes` result with
+  passing required checks, the service re-proves the prior session, tenant/job
+  claim, sealed resume envelope, file set, and content digest before supplying
+  that cumulative attribution to the ordinary Indexer post lane. Failed proof,
+  changed bytes, missing checks, or any other provider outcome still fails
+  closed.
+- The Claude implementation adapter now defaults to its existing bounded
+  100-turn ceiling. The USD budget, edit-only tool catalog, workspace
+  confinement, required checks, exact-revision audit, and rework ceiling are
+  unchanged. This closes repeated `turn_limit_exceeded` failures where Claude
+  had already written a complete verifier but could not return a provider
+  result before the former 30/60-turn startup limits.
+- Guardian now honors the exact repository dotfiles already named in its edit
+  allowlist (`.gitignore`, `.dockerignore`, `.editorconfig`). Python's
+  `splitext` reports these as extensionless, so they were previously blocked
+  despite the closed allowlist; arbitrary dotfiles and sensitive paths remain
+  denied.
 - `flyto.coding-service.v2` audit states and receipt fields:
   `awaiting_codex_audit`, `rework_queued`, `rework_running`, `codex_accepted`,
   plus `implementation_backend`, opaque `implementation_session_id`, exact
@@ -605,3 +623,31 @@ Known constraints:
   or authenticated third-party APIs.
 - Local Ollama runs expose zero provider charge and therefore prove token
   reduction, not cloud billing reduction.
+
+### Coding continuation (2026-08-10)
+
+Cross-job continuation of a bounded provider stop is implemented in
+`flyto_ai/coding/continuation.py` and admitted by `CodingService.submit`. Verified
+locally: focused suite `tests/test_coding_continuation.py` green; related coding
+suites green. `tests/test_coding_service.py::test_http_server_requires_auth_rejects_provider_fields_and_runs_job`
+cannot run in the worker sandbox, which denies `socket.bind` (`PermissionError` at
+`socketserver.server_bind`); Codex reran it unrestricted and it passed in 4.78s, so
+this is an environment restriction rather than an open defect. A mutation matrix
+applied and caught every row. Not yet exercised against a live provider account: whether a real
+`error_max_budget_usd` round can be resumed by session id is an account-level fact
+no local test establishes.
+
+### Cumulative Indexer plan authority (2026-08-10)
+
+Multi-round rework now amends one root Indexer task and validates the exact
+cumulative set the final revision binds. Verified locally: `tests/test_coding_plan_amendment.py`
+(56 tests) covers three-round growth A -> A+B -> A+B+C, restart-and-amend across
+a new service object, missing/tampered/replayed/wrong-job/request/workspace
+authority, altered prior revision bytes, a failed pre-lane leaving no amendable
+authority, hostile domain prose, and the phase/action/receipt contract. Focused
+gate `test_coding_plan_amendment.py` + `test_coding_route.py`: 276 passed.
+Generated references regenerated with the canonical generator.
+
+Not yet proven live: the sibling Indexer package's real `task_contract`
+behaviour. The declared contract is exercised with a faithful fake at the
+capability boundary; Codex owns the controlled package load.

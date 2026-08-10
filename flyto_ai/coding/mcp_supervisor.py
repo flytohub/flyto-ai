@@ -9,9 +9,11 @@ replaceable ``code-mcp`` child. When the coding source digest changes, it
 restarts only that child at a safe job boundary and replays the MCP handshake.
 
 The proxy never retries a request whose delivery is uncertain and never
-replaces a worker while a known job is non-terminal. New submissions are
-failed closed with ``service_reload_pending`` until the existing exact-session
-job reaches a terminal state.
+replaces a worker while a job *this connection submitted* is non-terminal. New
+submissions are failed closed with ``service_reload_pending`` until that
+exact-session job reaches a terminal state. Jobs merely observed through the
+tenant-visible ``flyto_coding_get`` and ``flyto_coding_audit`` tools belong to
+other supervisors and never hold this worker back.
 
 Every read from the worker is deadlined. This service only schedules or
 inspects background work, so a call that has not answered within seconds is a
@@ -317,7 +319,7 @@ class CodingMCPWorkerSupervisor:
             return self._protocol_error(request.get("id"), -32603, "coding worker unavailable")
 
         if response is not None:
-            self._observe_job(response)
+            self._observe_job(response, request)
             if method == "initialize":
                 self._initialized = True
         if method == "notifications/initialized":
@@ -427,37 +429,90 @@ class CodingMCPWorkerSupervisor:
             raise CodingMCPWorkerUnavailable("worker response is missing or oversized")
         return response
 
-    def _observe_job(self, raw: bytes) -> None:
+    def _observe_job(self, raw: bytes, request: Mapping[str, Any]) -> None:
+        """Update tracked jobs from one response, bounded by its own request.
+
+        Ownership is decided by the request a response answers, never by the
+        response alone. `flyto_coding_get` and `flyto_coding_audit` are
+        tenant-visible: they answer truthfully about jobs a *different*
+        supervisor submitted, on a different workspace, over a different
+        connection. Registering a non-terminal job seen through them would pin
+        this connection's worker to work it does not own, so every submission
+        here would be refused with `service_reload_pending` until somebody
+        else's job settled.
+
+        Only a successful `flyto_coding_submit` on this connection registers a
+        job. `_active_jobs` is therefore exactly the set of jobs submitted
+        locally and still non-terminal: a terminal observation may clear an
+        entry — including through `get` or `audit`, which is how a caller
+        reports its own job settled — but no observation can ever create one.
+        An idempotent submit replay names the same locally submitted job, so it
+        re-registers it and tracking survives the replay.
+        """
+
+        observed = self._observed_job(raw, request)
+        if observed is None:
+            return
+        job_id, state = observed
+        if state in TERMINAL_JOB_STATES:
+            # Clears only what is already tracked; a foreign job is not.
+            self._active_jobs.pop(job_id, None)
+            return
+        if self._tool_name(request) != "flyto_coding_submit":
+            return
+        self._active_jobs[job_id] = state
+
+    @staticmethod
+    def _observed_job(
+        raw: bytes, request: Mapping[str, Any],
+    ) -> Optional[tuple[str, str]]:
+        """Return the `(job_id, state)` this response truthfully reports.
+
+        Anything short of a successful, correctly addressed, well-formed job
+        receipt returns `None` and therefore changes no tracked state. The id
+        check keeps the observation bound to the request that caused it, and
+        the job-id pattern check keeps a tracked job reconcilable: an id the
+        durable reader would refuse could never be released again.
+        """
+
         try:
             response = json.loads(raw)
-        except (UnicodeError, json.JSONDecodeError):
-            return
-        if not isinstance(response, Mapping):
-            return
+        except (UnicodeError, json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(response, Mapping) or "error" in response:
+            return None
+        if response.get("id") != request.get("id"):
+            return None
         result = response.get("result")
-        if not isinstance(result, Mapping):
-            return
+        if not isinstance(result, Mapping) or result.get("isError"):
+            return None
         structured = result.get("structuredContent")
-        if not isinstance(structured, Mapping):
-            return
+        if not isinstance(structured, Mapping) or structured.get("ok") is not True:
+            return None
         job = structured.get("job")
         if not isinstance(job, Mapping):
-            return
+            return None
         job_id = job.get("job_id")
         state = job.get("state")
         if not isinstance(job_id, str) or not isinstance(state, str):
-            return
-        if state in TERMINAL_JOB_STATES:
-            self._active_jobs.pop(job_id, None)
-        else:
-            self._active_jobs[job_id] = state
+            return None
+        if not _JOB_ID_RE.fullmatch(job_id):
+            return None
+        return job_id, state
 
     @staticmethod
-    def _is_submit(request: Mapping[str, Any]) -> bool:
+    def _tool_name(request: Mapping[str, Any]) -> str:
         if request.get("method") != "tools/call":
-            return False
+            return ""
         params = request.get("params")
-        return isinstance(params, Mapping) and params.get("name") == "flyto_coding_submit"
+        if not isinstance(params, Mapping):
+            return ""
+        name = params.get("name")
+        return name if isinstance(name, str) else ""
+
+    @classmethod
+    def _is_submit(cls, request: Mapping[str, Any]) -> bool:
+        return cls._tool_name(request) == "flyto_coding_submit"
 
     @staticmethod
     def _protocol_error(request_id: Any, code: int, message: str) -> bytes:

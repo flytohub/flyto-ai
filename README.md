@@ -764,7 +764,7 @@ The table below covers the most common values. See the complete generated
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot token for /telegram webhook |
 | `TELEGRAM_ALLOWED_CHATS` | Comma-separated Telegram chat_id whitelist |
 | `FLYTO_AI_CC_MAX_BUDGET` | Claude Code Agent max budget in USD (default: 5.0) |
-| `FLYTO_AI_CC_MAX_TURNS` | Claude Code Agent max turns (default: 30) |
+| `FLYTO_AI_CC_MAX_TURNS` | Claude Code Agent max turns (default: 100, bounded ceiling: 100) |
 | `FLYTO_AI_CC_MAX_FIX_ATTEMPTS` | Claude Code Agent max fix attempts (default: 3) |
 
 ## License

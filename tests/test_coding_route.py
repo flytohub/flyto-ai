@@ -14,10 +14,17 @@ from pathlib import Path
 
 import pytest
 from flyto_ai.coding import CapabilitySpec, CodingTaskRequest
-from flyto_ai.coding.contracts import CodingJobReceipt, CodingJobState, CodingTaskResult
+from flyto_ai.coding.contracts import (
+    CheckSpec,
+    CodingJobReceipt,
+    CodingJobState,
+    CodingTaskResult,
+    ContractSnapshot,
+)
 from flyto_ai.coding.route import (
     BLUEPRINT_ALLOWED_TOOLS,
     CORE_ALLOWED_TOOLS,
+    CORE_MODULE_CONTRACT_PROOF,
     INDEXER_ALLOWED_TOOLS,
     INDEXER_PLAN_STEP_TOOLS,
     ROUTE_CONTRACT_VERSION,
@@ -52,6 +59,25 @@ INDEXER_SCHEMAS = {
     }),
 }
 TASK_ACTIONS = {"grill", "plan", "gate", "validate", "feedback"}
+
+
+#: Preflight refuses a repository that never declared how it wants to be
+#: verified, before a job, a worktree claim or an implementer session exists.
+#: A fixture that means to exercise anything past preflight therefore has to
+#: declare a contract, exactly as a real repository does.
+_TEST_VERIFICATION_CONTRACT = """version: flyto.coding-config.v1
+checks:
+  - name: declared
+    argv: [python, --version]
+    timeout_seconds: 30
+    required: true
+"""
+
+
+def _declare_verification(workspace) -> None:
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(_TEST_VERIFICATION_CONTRACT, encoding="utf-8")
 
 
 def _envelope(domain: dict, *, is_error: bool = False) -> dict:
@@ -452,6 +478,13 @@ def test_bounded_payload_rejects_oversized_and_deep_responses():
         bounded_payload({"a": "x" * 4096}, limits)
 
 
+def test_default_route_bound_allows_post_decode_transport_overhead():
+    limits = RouteLimits()
+    assert limits.max_response_bytes == 512 * 1024
+    payload = {"content": "x" * (300 * 1024)}
+    assert bounded_payload(payload, limits) is payload
+
+
 # ── Indexer lane against the real contract ────────────────────────────
 
 
@@ -709,10 +742,31 @@ def test_post_validation_receipt_preserves_one_bounded_reason_code(tmp_path):
 
     assert result.ok is False and receipt.failure_code == "validation_failed"
     post = next(lane for lane in receipt.lanes if lane.lane == "indexer_post")
-    assert post.calls[-1].detail_code == "validation_intent_ledger_nonconformant"
+    # `INTENT_LEDGER_NONCONFORMANT` used to be normalized into
+    # `validation_intent_ledger_nonconformant`. It no longer is, and the change
+    # is deliberate: normalizing before validating is what also turned
+    # `please open /Users/alice/private token` into a token that reads like one
+    # this host owns. A value only becomes a code if the capability already
+    # wrote it as one, so a screaming-case value falls back to the generic
+    # host-owned detail rather than being rescued into validity.
+    assert post.calls[-1].detail_code == "validation_failed"
     encoded = json.dumps(receipt.to_mapping())
     assert "path-bearing prose" not in encoded
     assert "UNSAFE / raw detail" not in encoded
+    assert "INTENT_LEDGER_NONCONFORMANT" not in encoded
+
+    # ...and a code the capability really did emit as a machine code still
+    # reaches the receipt intact.
+    conforming = IndexerDouble(overrides={"task.validate": _envelope({
+        "pass": False,
+        "reason_codes": ["fix_intent_ledger:task:unplanned_diff"],
+        "required_actions": ["amend_intent_ledger"],
+    })})
+    _, receipt = _run(_policy(), RouteDouble(conforming), _request(tmp_path))
+    post = next(lane for lane in receipt.lanes if lane.lane == "indexer_post")
+    assert post.calls[-1].detail_code == (
+        "validation_fix_intent_ledger_task_unplanned_diff"
+    )
 
 
 def test_post_validation_is_scoped_to_the_host_attributable_change_set(tmp_path):
@@ -904,6 +958,99 @@ def test_core_manifest_discovery_alone_is_not_validation(tmp_path):
     )
     assert result.ok is False and receipt.failure_code == "core_proof_unavailable"
     assert "get_core_capability_manifest" not in [tool for tool, _ in core.calls]
+
+
+def _request_with_pinned_core_proof(tmp_path):
+    digest = "a" * 64
+    snapshot = ContractSnapshot(
+        checks=(CheckSpec(
+            name="core-plugin-proof",
+            argv=(sys.executable, "scripts/verify-core-plugin.py"),
+            required=True,
+            proof_kinds=(CORE_MODULE_CONTRACT_PROOF,),
+        ),),
+        config_sha256=digest,
+    )
+    return CodingTaskRequest(
+        message="add a Core plugin module",
+        working_dir=str(tmp_path),
+        authorized_config_sha256=digest,
+        pinned_contract=snapshot,
+    )
+
+
+def test_pinned_required_check_can_prove_a_new_worktree_core_plugin(tmp_path):
+    core = _core_double({})
+    result, receipt = _run(
+        _policy(), RouteDouble(IndexerDouble()),
+        _request_with_pinned_core_proof(tmp_path),
+        Implementer(
+            changed=("src/new_plugin/modules/case_read.py",),
+            checks=(_green_check("core-plugin-proof"),),
+        ),
+        core=core,
+    )
+    assert result.ok is True
+    entry = {item.lane: item for item in receipt.lanes}["core"]
+    assert entry.status is RouteLaneStatus.APPLIED
+    assert entry.reason_code == "pinned_core_contract_proved"
+    assert entry.gates_passed == ("core-plugin-proof",)
+    assert core.calls == [], "the host must not import an uninstalled worktree plugin"
+
+
+@pytest.mark.parametrize("checks", [
+    (),
+    (_green_check("core-plugin-proof", passed=False),),
+    (_green_check("core-plugin-proof"), _green_check("core-plugin-proof")),
+])
+def test_pinned_core_proof_fails_closed_without_one_passing_host_result(
+    tmp_path, checks,
+):
+    result, receipt = _run(
+        _policy(), RouteDouble(IndexerDouble()),
+        _request_with_pinned_core_proof(tmp_path),
+        Implementer(
+            changed=("src/new_plugin/modules/case_read.py",), checks=checks,
+        ),
+        core=_core_double({}),
+    )
+    assert result.ok is False
+    assert receipt.failure_code == "core_validation_failed"
+
+
+def test_an_unpinned_green_check_never_bypasses_core_discovery(tmp_path):
+    result, receipt = _run(
+        _policy(), RouteDouble(IndexerDouble()), _request(tmp_path),
+        Implementer(
+            changed=("src/new_plugin/modules/case_read.py",),
+            checks=(_green_check("core-plugin-proof"),),
+        ),
+        core=_core_double({
+            "search_modules": {"ok": True, "result": {"modules": []}},
+        }),
+    )
+    assert result.ok is False
+    assert receipt.failure_code == "core_proof_unavailable"
+
+
+def test_check_proof_contract_is_required_bounded_and_backward_compatible():
+    with pytest.raises(ValueError, match="proof check must be required"):
+        CheckSpec(
+            name="optional-proof", argv=(sys.executable, "--version"),
+            required=False, proof_kinds=(CORE_MODULE_CONTRACT_PROOF,),
+        )
+    with pytest.raises(ValueError, match="contains duplicates"):
+        CheckSpec(
+            name="duplicate-proof", argv=(sys.executable, "--version"),
+            proof_kinds=(CORE_MODULE_CONTRACT_PROOF, CORE_MODULE_CONTRACT_PROOF),
+        )
+
+    legacy = ContractSnapshot(
+        checks=(CheckSpec(name="unit", argv=(sys.executable, "--version")),),
+        config_sha256="b" * 64,
+    )
+    assert "proof_kinds" not in legacy.to_mapping()["checks"][0]
+    assert ContractSnapshot.from_mapping(legacy.to_mapping()).identity() == legacy.identity()
 
 
 def test_core_relevant_work_without_a_dispatcher_or_proof_fails_closed(tmp_path):
@@ -1387,6 +1534,7 @@ def test_service_route_completes_rework_and_audit_with_real_processes(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     blueprint_fixture = tmp_path / "blueprint_fixture.py"
     blueprint_fixture.write_text(BLUEPRINT_FIXTURE)
     box = {"agent": None}
@@ -1474,6 +1622,7 @@ def test_strict_route_holds_a_blocked_implementation_open_for_rework(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box = {"agent": None}
     service = _route_service(tmp_path, workspace, box)
     # The factory builds a plain ServiceImplementer on first use, so the
@@ -1555,6 +1704,7 @@ def test_strict_route_keeps_an_unknown_provider_failure_terminal(tmp_path):
     """
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box = {"agent": None}
     service = _route_service(tmp_path, workspace, box, state_dir="route-unknown")
     box["agent"] = BlockedServiceImplementer(None, failure_code="provider_failed")
@@ -1579,6 +1729,7 @@ def test_audit_refuses_missing_or_tampered_route_evidence(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box = {"agent": None}
     service = _route_service(tmp_path, workspace, box)
     try:
@@ -1638,6 +1789,7 @@ def test_audit_refuses_missing_or_tampered_route_evidence(tmp_path):
 def test_unavailable_indexer_fails_before_any_implementer_round(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box = {"agent": None}
     service = _route_service(
         tmp_path, workspace, box,
@@ -1661,6 +1813,7 @@ def test_both_backends_share_the_same_service_level_route(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     fixture = tmp_path / "indexer_fixture.py"
     fixture.write_text(INDEXER_FIXTURE)
     blueprint_fixture = tmp_path / "blueprint_fixture.py"
@@ -1716,6 +1869,7 @@ def test_route_capability_processes_and_executors_close_cleanly(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     before = {t.ident for t in threading.enumerate() if not t.daemon}
     box = {"agent": None}
     service = _route_service(tmp_path, workspace, box)
@@ -1935,6 +2089,7 @@ def _live_workspace(root: Path) -> Path:
 
     ws = root / "sample_project"
     (ws / "src").mkdir(parents=True)
+    _declare_verification(ws)
     (ws / "tests").mkdir()
     (ws / "docs").mkdir()
     (ws / ".github" / "workflows").mkdir(parents=True)
@@ -2142,6 +2297,7 @@ def test_routed_service_process_exits_cleanly_under_a_hard_timeout(tmp_path):
     blueprint_fixture.write_text(BLUEPRINT_FIXTURE)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     script = tmp_path / "run_route.py"
     script.write_text(textwrap.dedent('''
         import sys, time
@@ -2745,6 +2901,7 @@ def _landable_after_tamper(tmp_path, mutate, state_dir):
     workspace = tmp_path / "workspace"
     if not workspace.exists():
         workspace.mkdir()
+        _declare_verification(workspace)
     box = {"agent": None}
     service = _route_service(tmp_path, workspace, box, state_dir=state_dir)
     try:
@@ -2845,6 +3002,34 @@ def test_an_explicit_existing_request_path_wins_over_a_fuzzy_search_hit(tmp_path
     assert _plan_targets(indexer) == ["scripts/verify-lima-gazebo.sh"]
 
 
+def test_explicit_existing_path_accepts_parenthesized_route_segment(tmp_path):
+    """Expo route groups are ordinary repository path components.
+
+    Parentheses are valid POSIX filename characters and Expo uses them for
+    directories such as ``app/(tabs)``. The scanner must retain the full path
+    so the intent ledger authorizes the exact file named by the task.
+    """
+
+    route = tmp_path / "app" / "(tabs)" / "map.tsx"
+    route.parent.mkdir(parents=True)
+    route.write_text("export default function MapTab() {}\n", encoding="utf-8")
+    indexer = IndexerDouble(search_results=[
+        {"path": "app/unrelated.tsx", "name": "unrelated"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(
+            tmp_path,
+            "Fix app/(tabs)/map.tsx without widening the change.",
+        ),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["app/(tabs)/map.tsx"]
+
+
 def test_explicit_existing_path_accepts_bracketed_route_segment(tmp_path):
     """Expo dynamic route segments remain exact intent-ledger targets."""
 
@@ -2866,6 +3051,20 @@ def test_explicit_existing_path_accepts_bracketed_route_segment(tmp_path):
 
     assert result.ok is True and receipt.ok is True
     assert _plan_targets(indexer) == ["app/spot/[id].tsx"]
+
+
+def test_impact_step_binds_repo_path_to_current_project_file_symbol():
+    translated = CodingRouteOrchestrator._translate_step(
+        "impact_analysis",
+        {"symbol_id": "app/(tabs)/map.tsx"},
+        {"impact"},
+        "turibi",
+    )
+
+    assert translated == (
+        "impact",
+        {"target": "turibi:app/(tabs)/map.tsx:file:map"},
+    )
 
 
 def test_multiple_explicit_existing_paths_form_one_bounded_plan_scope(tmp_path):
@@ -2891,6 +3090,59 @@ def test_multiple_explicit_existing_paths_form_one_bounded_plan_scope(tmp_path):
 
     assert result.ok is True and receipt.ok is True
     assert _plan_targets(indexer) == paths
+
+
+def test_explicit_new_file_under_existing_parent_enters_the_intent_ledger(tmp_path):
+    """A requested new file must not become an unplanned diff at post-validate."""
+    (tmp_path / "scripts").mkdir()
+    target = "scripts/new-verifier.py"
+    indexer = IndexerDouble(search_results=[
+        {"path": "unrelated.py", "name": "unrelated"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(tmp_path, "Create {} with focused tests.".format(target)),
+        Implementer(changed=(target,)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == [target]
+
+
+@pytest.mark.parametrize("target", [
+    "missing-parent/new.py",
+    "nested/missing/new.py",
+])
+def test_explicit_new_file_requires_an_existing_parent(tmp_path, target):
+    indexer = IndexerDouble(search_results=[
+        {"path": "safe.py", "name": "safe"},
+    ])
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer),
+        _request(tmp_path, "Create {}.".format(target)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["safe.py"]
+
+
+def test_explicit_new_file_refuses_a_broken_final_symlink(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "new.py").symlink_to("missing.py")
+    indexer = IndexerDouble(search_results=[
+        {"path": "safe.py", "name": "safe"},
+    ])
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer),
+        _request(tmp_path, "Create scripts/new.py."),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["safe.py"]
 
 
 def test_explicit_scope_includes_root_files_and_more_than_five_targets(tmp_path):
@@ -2919,6 +3171,20 @@ def test_explicit_scope_includes_root_files_and_more_than_five_targets(tmp_path)
 
     assert result.ok is True and receipt.ok is True
     assert _plan_targets(indexer) == paths
+
+
+def test_explicit_scope_keeps_a_locale_generator_closure_but_stays_bounded(tmp_path):
+    paths = ["locales/code/l{:02d}/code.json".format(index) for index in range(65)]
+    for relative in paths:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}\n", encoding="utf-8")
+
+    projected = CodingRouteOrchestrator._explicit_request_targets(
+        "Update {} together.".format(", ".join(paths)), str(tmp_path),
+    )
+
+    assert projected == paths[:64]
 
 
 def test_default_route_bound_accepts_a_realistic_compound_plan(tmp_path):
@@ -2963,6 +3229,220 @@ def test_an_explicit_path_before_sentence_punctuation_stays_authoritative(tmp_pa
 
     assert result.ok is True and receipt.ok is True
     assert _plan_targets(indexer) == ["scripts/verify-lima-gazebo.sh"]
+
+
+# ── explicit target polarity ──────────────────────────────────────────
+
+
+def _seed_files(root, *relatives):
+    """Create real files so the filesystem, not prose, proves they exist."""
+    for relative in relatives:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("seed\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("message", [
+    # The four spellings the control plane must refuse at minimum.
+    "Do not modify pkg/mod.py",
+    "Never edit pkg/mod.py",
+    "Refactor the loader without changing pkg/mod.py",
+    "You must not create pkg/mod.py",
+    # Ordinary re-wordings of the same prohibition.
+    "Do not modify pkg/mod.py.",
+    "do not touch pkg/mod.py",
+    "Don't edit pkg/mod.py",
+    "Please don’t rewrite pkg/mod.py",
+    "never touch pkg/mod.py",
+    "avoid editing pkg/mod.py",
+    "Exclude pkg/mod.py from this change",
+    "You cannot edit pkg/mod.py",
+    "Editing pkg/mod.py is not allowed",
+    # The mirror case: the path is the subject the prohibition fences off, so
+    # the cue trails it. A leftward-only rule is re-worded around in one move.
+    "pkg/mod.py must not be modified",
+    "Leave pkg/mod.py unchanged",
+    "Keep pkg/mod.py untouched",
+    "pkg/mod.py stays unmodified",
+    "pkg/mod.py is read-only",
+    "pkg/mod.py is out of scope",
+])
+def test_a_prohibiting_clause_is_never_edit_authority(tmp_path, message):
+    """A named path that exists is still not a target when it is fenced off."""
+
+    _seed_files(tmp_path, "pkg/mod.py")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == []
+    assert CodingRouteOrchestrator._explicit_request_target(
+        message, str(tmp_path),
+    ) == ""
+
+
+@pytest.mark.parametrize("message", [
+    # `must not create` used to satisfy the mutation-verb rule on the strength
+    # of the word `create` inside the prohibition itself.
+    "You must not create tests/test_new.py",
+    "Do not create tests/test_new.py",
+    "Never add tests/test_new.py",
+    "Fix the loader without adding tests/test_new.py",
+    "tests/test_new.py must not be created",
+])
+def test_a_prohibited_new_file_is_never_a_target(tmp_path, message):
+    (tmp_path / "tests").mkdir()
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == []
+
+
+@pytest.mark.parametrize("separator", [". ", "! ", "? ", "; ", " ; ", "\n", ".\n"])
+def test_a_negative_clause_cannot_suppress_a_later_positive_clause(
+    tmp_path, separator,
+):
+    """Polarity is bounded to the clause, in whichever order the two appear."""
+
+    _seed_files(tmp_path, "pkg/keep.py", "pkg/edit.py")
+
+    forward = "Do not modify pkg/keep.py{}Rewrite pkg/edit.py now".format(separator)
+    reverse = "Rewrite pkg/edit.py now{}Do not modify pkg/keep.py".format(separator)
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        forward, str(tmp_path),
+    ) == ["pkg/edit.py"]
+    # And the mirror: a positive clause never launders the prohibition after it.
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        reverse, str(tmp_path),
+    ) == ["pkg/edit.py"]
+
+
+@pytest.mark.parametrize("message", [
+    # A qualifier that bounds the scope of a positive instruction is not a
+    # prohibition against the file that instruction names.
+    "Fix pkg/mod.py without widening the change",
+    "Fix pkg/mod.py and avoid regressions",
+    "Edit only pkg/mod.py, never anything else",
+    "Update pkg/mod.py",
+])
+def test_a_scope_qualifier_after_the_path_still_authorizes_it(tmp_path, message):
+    _seed_files(tmp_path, "pkg/mod.py")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == ["pkg/mod.py"]
+
+
+def test_a_positive_exact_allowlist_survives_a_neighbouring_prohibition(tmp_path):
+    """The allowlist this repository is actually driven by must keep working."""
+
+    allowed = [
+        "flyto_ai/coding/route.py",
+        "tests/test_coding_route.py",
+        ".gitignore",
+        "AGENTS.md",
+    ]
+    _seed_files(tmp_path, *allowed, "docs/reference/python/coding.md")
+    message = (
+        "Modify exactly flyto_ai/coding/route.py and tests/test_coding_route.py.\n"
+        "Also refresh .gitignore and AGENTS.md.\n"
+        "Do not edit docs/reference/python/coding.md and do not commit."
+    )
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == allowed
+
+
+def test_root_dotfiles_follow_the_polarity_of_their_own_clause(tmp_path):
+    _seed_files(tmp_path, ".gitignore", ".flyto/coding.yaml")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Update .flyto/coding.yaml; never edit .gitignore", str(tmp_path),
+    ) == [".flyto/coding.yaml"]
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Do not modify .flyto/coding.yaml. Update .gitignore instead.",
+        str(tmp_path),
+    ) == [".gitignore"]
+
+
+def test_a_requested_new_file_survives_a_neighbouring_prohibition(tmp_path):
+    _seed_files(tmp_path, "tests/test_existing.py")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Add tests/test_polarity.py; do not modify tests/test_existing.py",
+        str(tmp_path),
+    ) == ["tests/test_polarity.py"]
+
+
+def test_polarity_keeps_the_finite_explicit_target_bound(tmp_path):
+    paths = ["locales/l{:02d}/code.json".format(index) for index in range(70)]
+    _seed_files(tmp_path, *paths)
+    message = "Do not modify {}.\nUpdate {} together.".format(
+        paths[0], ", ".join(paths[1:]),
+    )
+
+    projected = CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    )
+
+    assert paths[0] not in projected
+    assert projected == paths[1:65]
+
+
+@pytest.mark.parametrize("spelling", [
+    "/scripts/verify.sh",
+    "../scripts/verify.sh",
+    "C:/scripts/verify.sh",
+    "scripts\\verify.sh",
+    "//host/share/verify.sh",
+    "missing/verify.sh",
+])
+def test_a_positive_clause_never_relaxes_a_path_safety_bound(tmp_path, spelling):
+    """Polarity narrows authority; it can never widen it."""
+
+    _seed_files(tmp_path, "scripts/verify.sh")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Rewrite {} now; do not touch anything else".format(spelling),
+        str(tmp_path),
+    ) == []
+
+
+def test_a_fenced_path_never_reaches_the_intent_ledger(tmp_path):
+    _seed_files(tmp_path, "pkg/keep.py", "pkg/edit.py")
+    indexer = IndexerDouble(search_results=[
+        {"path": "pkg/other.py", "name": "other"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(tmp_path, "Rewrite pkg/edit.py. Do not modify pkg/keep.py."),
+        Implementer(changed=("pkg/edit.py",)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["pkg/edit.py"]
+
+
+def test_an_entirely_negative_message_falls_back_to_search_discovery(tmp_path):
+    """Refusing a fenced path is not authority to plan against it anyway."""
+
+    _seed_files(tmp_path, "pkg/keep.py")
+    indexer = IndexerDouble(search_results=[
+        {"path": "pkg/other.py", "name": "other"},
+    ])
+
+    result, receipt = _run(
+        _policy(),
+        RouteDouble(indexer),
+        _request(tmp_path, "Do not modify pkg/keep.py under any circumstances."),
+        Implementer(changed=("pkg/other.py",)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == ["pkg/other.py"]
 
 
 @pytest.mark.parametrize("spelling", [

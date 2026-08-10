@@ -76,6 +76,55 @@ def redact_evidence(value: Any) -> Any:
     return _safe_text(str(value), 10_000)
 
 
+def mark_provider_start(store: Any) -> None:
+    """Signal, exactly once, that a real provider attempt is beginning.
+
+    The host needs a durable "the implementer started" marker, and the honest
+    place for it is the first provider or session call - not the moment an
+    adapter is entered. An adapter that refuses before ever calling a provider
+    (a contract it cannot honour, a verification tool that is not installed) did
+    not start anything, and recording that it did turns a clean pre-provider
+    refusal into an apparently half-run job.
+
+    The hook is optional and backend-neutral: a caller that installs one gets a
+    durable marker before the provider is entered, so a worker that dies inside
+    the call is still recorded as having started; a caller that installs none is
+    unaffected. Idempotent, because retries and resumes call it again.
+    """
+
+    hook = getattr(store, "on_provider_start", None)
+    if hook is None or getattr(store, "_provider_started", False):
+        return
+    try:
+        setattr(store, "_provider_started", True)
+    except Exception:  # pragma: no cover - exotic store objects stay usable
+        pass
+    hook()
+
+
+def bind_provider_session(store: Any, session_id: str) -> None:
+    """Tell the host the provider has established *this* session identity.
+
+    Deliberately a second, separate hook from `mark_provider_start`. "A round
+    began" and "the round is this conversation" are different facts learned at
+    different moments: the first is true as soon as the provider is entered, the
+    second only once the backend has said which session it opened. Folding them
+    together would either delay the start marker past a crash or invent an
+    identity before one exists.
+
+    Backend-neutral and optional, like the start marker: a caller that installs
+    no hook is unaffected. A caller that does gets the session durably bound
+    while it still owns the job, instead of learning it only if the whole agent
+    call happens to return. Any failure propagates -- an unbindable session is
+    a fail-closed condition, never a round that quietly continues unowned.
+    """
+
+    hook = getattr(store, "on_provider_session", None)
+    if hook is None:
+        return
+    hook(session_id)
+
+
 class ThreadStore:
     """Own per-thread metadata and an append-only JSONL event stream."""
 

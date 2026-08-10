@@ -35,7 +35,12 @@ def _preset_factories(python: str, required: set[str]) -> Dict[str, CapabilitySp
                 ("task", "workspace_write"),
                 ("verify", "workspace_write"),
             ),
-            timeout_seconds=30,
+            # The standalone strict check has measured 64 seconds, while the
+            # post-route MCP verify (which also reconciles task state and
+            # serializes evidence) has exceeded five minutes under concurrent
+            # release load. Keep a ten-minute hard bound for that single call
+            # so successful verification is not reclassified as a timeout.
+            timeout_seconds=600,
         ),
         "flyto-blueprint": CapabilitySpec(
             name="flyto-blueprint",

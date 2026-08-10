@@ -58,6 +58,10 @@ def test_full_stack_is_split_into_least_privilege_components():
     assert by_name["flyto-indexer"].argv == (
         "python", "-m", "flyto_indexer.mcp_server",
     )
+    # The post-route MCP verify exceeded 120 seconds under concurrent release
+    # load. Pin a finite five-minute ceiling so a passing result cannot be
+    # reclassified as a capability timeout.
+    assert by_name["flyto-indexer"].timeout_seconds == 600
     assert by_name["flyto-core"].argv == ("python", "-m", "core.mcp_server")
 
 
@@ -164,6 +168,12 @@ def test_capability_contract_rejects_invalid_direct_python_values(override, mess
     value.update(override)
     with pytest.raises(ValueError, match=message):
         CapabilitySpec(**value)
+
+
+def test_capability_timeout_keeps_a_bounded_release_load_ceiling():
+    assert CapabilitySpec(name="boundary", argv=("runner",), timeout_seconds=900)
+    with pytest.raises(ValueError, match="between 1 and 900"):
+        CapabilitySpec(name="boundary", argv=("runner",), timeout_seconds=901)
 
 
 def test_capability_manager_satisfies_generic_agent_tool_executor(tmp_path):

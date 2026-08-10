@@ -45,6 +45,14 @@ _AUDIT_STATUS = {
     "session_binding_failed": 409,
     "idempotency_conflict": 409,
     "service_busy": 429,
+    "capacity_unavailable": 429,
+    # Preflight refusals are well-formed requests against a repository that has
+    # not declared, or cannot honour, its own verification contract. 422 keeps
+    # them distinct from a malformed body (400) and from a permission or state
+    # refusal (403/409), so a client never has to guess from the body alone.
+    "verification_required": 422,
+    "verification_contract_invalid": 422,
+    "capability_unavailable": 422,
 }
 
 

@@ -223,3 +223,23 @@ Flyto2 Cloud / CLI / MCP client
   cross-tenant data.
 - Enterprise/airgap mode must have a local-provider or rules-only path and must
   not require external egress by default.
+
+## Coding control plane: phased admission and continuation policy
+
+Runtime note only. No product ownership, repository boundary or integration arrow
+changes here, and `flyto-cloud` remains parallel to - and level with - the combined
+`flyto-code` / `flyto-engine` column.
+
+`CodingService.submit` admits in phases. The verification-contract read and the
+whole-workspace snapshot run under a per-workspace admission lock; the global state
+guard is entered only for the short authoritative transition, which re-proves the
+contract digest and compare-and-swaps the continuation authority before any lease,
+worktree claim or durable record exists. Lock order is admission -> state guard.
+
+Cross-job continuation is a tenant-partitioned, single-use authority advanced by an
+append-only journal, and the snapshot projection it was granted under is digest-bound
+into it. Only the strict Indexer-backed coding route may classify `.flyto-index` as
+control-plane runtime state, because only that route's mandatory Indexer pre/post
+gates revalidate that tree and record the result in the route receipt.
+
+See `ARCHITECTURE.md`, `docs/CODING_CONTROL_PLANE.md` and `DECISIONS.md` (2026-08-10).

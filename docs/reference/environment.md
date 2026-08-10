@@ -16,7 +16,7 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_AI_BASE_URL` | `required/None` | `flyto_ai/config.py` |
 | `FLYTO_AI_CC_MAX_BUDGET` | `'5.0'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CC_MAX_FIX_ATTEMPTS` | `'3'` | `flyto_ai/config.py` |
-| `FLYTO_AI_CC_MAX_TURNS` | `'30'` | `flyto_ai/config.py` |
+| `FLYTO_AI_CC_MAX_TURNS` | `'100'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CC_MODEL` | `'claude-opus-5'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CHECKPOINT_DIR` | `'~/.flyto/checkpoints'` | `flyto_ai/config.py` |
 | `FLYTO_AI_CODING_BACKEND` | `''` | `flyto_ai/cli.py` |

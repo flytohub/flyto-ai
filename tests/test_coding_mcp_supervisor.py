@@ -616,6 +616,298 @@ def test_an_omitted_state_dir_still_enables_durable_reconciliation() -> None:
     assert expected is not None
 
 
+#: A worker that reports exactly the job the caller names, so a test can drive
+#: two independent jobs — one owned by this supervisor, one owned by another —
+#: through the same connection. `as_error` and `wrong_id` let a test replay the
+#: two response shapes a supervisor must never learn anything from.
+_MULTI_JOB_WORKER = r"""
+import json
+import pathlib
+import sys
+
+version = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+for raw in sys.stdin.buffer:
+    request = json.loads(raw)
+    request_id = request.get("id")
+    if request_id is None:
+        continue
+    method = request.get("method")
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "fake", "version": version},
+        }
+    elif method == "tools/list":
+        result = {"tools": [{"name": version}]}
+    elif method == "tools/call":
+        arguments = request.get("params", {}).get("arguments", {})
+        job = {
+            "job_id": arguments.get("job_id", "job_" + "0" * 24),
+            "state": arguments.get("state", "queued"),
+        }
+        if arguments.get("as_error"):
+            payload = {"ok": False, "error": "job_not_visible", "job": job}
+            result = {
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                "isError": True,
+                "structuredContent": payload,
+            }
+        else:
+            payload = {"ok": True, "job": job}
+            result = {
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                "isError": False,
+                "structuredContent": payload,
+            }
+        if arguments.get("wrong_id"):
+            request_id = "unrelated-{}".format(request_id)
+    else:
+        result = {}
+    response = {"jsonrpc": "2.0", "id": request_id, "result": result}
+    sys.stdout.buffer.write(json.dumps(response).encode() + b"\n")
+    sys.stdout.buffer.flush()
+"""
+
+
+_LOCAL_JOB = "job_" + "a" * 24
+_FOREIGN_JOB = "job_" + "b" * 24
+
+
+def _multi_job_supervisor(tmp_path, build, name="one"):
+    """One supervisor over a worker that echoes whichever job it is asked about."""
+
+    home = tmp_path / name
+    home.mkdir(parents=True, exist_ok=True)
+    script = home / "worker.py"
+    marker = home / "version.txt"
+    script.write_text(_MULTI_JOB_WORKER, encoding="utf-8")
+    marker.write_text(build[0], encoding="utf-8")
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, "-u", str(script), str(marker)),
+        build_id_provider=lambda: build[0],
+    )
+    return supervisor, marker
+
+
+def _call(supervisor, request_id, tool, arguments):
+    return _value(supervisor.handle_line(_line({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments},
+    })))
+
+
+def test_reading_another_supervisors_live_job_never_pins_this_worker(tmp_path) -> None:
+    """Two supervisors, two jobs: a tenant-visible read is not ownership.
+
+    Supervisor one submits and owns a live job. Supervisor two — a different
+    Codex session on a different workspace — reads that same job, which is
+    legitimate and returns a truthful non-terminal receipt. If supervisor two
+    adopted it, the very next source repair would leave supervisor two refusing
+    every submission until somebody else's job settled.
+    """
+
+    build_one = ["build-one"]
+    build_two = ["build-one"]
+    one, _marker_one = _multi_job_supervisor(tmp_path, build_one, name="one")
+    two, marker_two = _multi_job_supervisor(tmp_path, build_two, name="two")
+    try:
+        _initialize(one)
+        _initialize(two)
+        submitted = _call(one, 2, "flyto_coding_submit", {
+            "job_id": _FOREIGN_JOB, "state": "running", "workspace": "/ws/one",
+        })
+        assert submitted["result"]["structuredContent"]["job"]["state"] == "running"
+        assert one._active_jobs == {_FOREIGN_JOB: "running"}
+
+        # Supervisor two only *reads* that job. It owns nothing.
+        seen = _call(two, 2, "flyto_coding_get", {
+            "job_id": _FOREIGN_JOB, "state": "running",
+        })
+        assert seen["result"]["structuredContent"]["job"]["state"] == "running"
+        assert two._active_jobs == {}
+
+        # A safe source repair lands. Supervisor two has no live work of its
+        # own, so it must hot reload and accept a new different-workspace job.
+        original_pid = two.worker_pid
+        marker_two.write_text("build-two", encoding="utf-8")
+        build_two[0] = "build-two"
+        accepted = _call(two, 3, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued", "workspace": "/ws/two",
+        })
+        assert accepted["result"]["structuredContent"] == {
+            "ok": True, "job": {"job_id": _LOCAL_JOB, "state": "queued"},
+        }
+        assert two.worker_pid != original_pid
+        assert two.reload_count == 1
+        assert two._active_jobs == {_LOCAL_JOB: "queued"}
+
+        # Supervisor one is untouched and still holds its own live job.
+        assert one._active_jobs == {_FOREIGN_JOB: "running"}
+    finally:
+        two.close()
+        one.close()
+
+
+def test_a_locally_submitted_live_job_still_blocks_until_it_is_terminal(
+    tmp_path,
+) -> None:
+    """Isolation must not weaken the reload gate for work this session owns."""
+
+    build = ["build-one"]
+    supervisor, marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        original_pid = supervisor.worker_pid
+        _call(supervisor, 2, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued",
+        })
+        assert supervisor._active_jobs == {_LOCAL_JOB: "queued"}
+
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+        blocked = _call(supervisor, 3, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued",
+        })
+        assert blocked["result"]["structuredContent"] == {
+            "ok": False, "error": "service_reload_pending",
+        }
+        assert supervisor.worker_pid == original_pid
+
+        # Reading a foreign live job neither releases nor extends the gate.
+        _call(supervisor, 4, "flyto_coding_get", {
+            "job_id": _FOREIGN_JOB, "state": "running",
+        })
+        assert supervisor._active_jobs == {_LOCAL_JOB: "queued"}
+        blocked_again = _call(supervisor, 5, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued",
+        })
+        assert blocked_again["result"]["structuredContent"]["error"] == (
+            "service_reload_pending"
+        )
+        assert supervisor.worker_pid == original_pid
+
+        # A terminal read of the *local* job is what releases the reload.
+        settled = _call(supervisor, 6, "flyto_coding_get", {
+            "job_id": _LOCAL_JOB, "state": "completed",
+        })
+        assert settled["result"]["structuredContent"]["job"]["state"] == "completed"
+        assert supervisor._active_jobs == {}
+        listed = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": {},
+        })))
+        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert supervisor.worker_pid != original_pid
+        assert supervisor.reload_count == 1
+    finally:
+        supervisor.close()
+
+
+def test_a_terminal_foreign_observation_cannot_release_a_local_job(tmp_path) -> None:
+    """Clearing is also scoped: a foreign job settling is not this job settling."""
+
+    build = ["build-one"]
+    supervisor, marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        original_pid = supervisor.worker_pid
+        _call(supervisor, 2, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "running",
+        })
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+
+        _call(supervisor, 3, "flyto_coding_get", {
+            "job_id": _FOREIGN_JOB, "state": "codex_accepted",
+        })
+        assert supervisor._active_jobs == {_LOCAL_JOB: "running"}
+        blocked = _call(supervisor, 4, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued",
+        })
+        assert blocked["result"]["structuredContent"]["error"] == "service_reload_pending"
+        assert supervisor.worker_pid == original_pid
+    finally:
+        supervisor.close()
+
+
+def test_audit_and_rework_observations_cannot_adopt_foreign_work(tmp_path) -> None:
+    """Every non-submit tool is default-deny, including ones added later."""
+
+    build = ["build-one"]
+    supervisor, marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        original_pid = supervisor.worker_pid
+        _call(supervisor, 2, "flyto_coding_audit", {
+            "job_id": _FOREIGN_JOB, "state": "awaiting_codex_audit",
+        })
+        _call(supervisor, 3, "flyto_coding_rework", {
+            "job_id": _LOCAL_JOB, "state": "running",
+        })
+        assert supervisor._active_jobs == {}
+
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+        accepted = _call(supervisor, 4, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued", "workspace": "/ws/other",
+        })
+        assert accepted["result"]["structuredContent"]["ok"] is True
+        assert supervisor.worker_pid != original_pid
+        assert supervisor.reload_count == 1
+    finally:
+        supervisor.close()
+
+
+def test_an_idempotent_submit_replay_keeps_the_local_job_tracked(tmp_path) -> None:
+    """A replayed idempotency key returns the same job; it stays owned here."""
+
+    build = ["build-one"]
+    supervisor, _marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        _call(supervisor, 2, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued",
+        })
+        replay = _call(supervisor, 3, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "running",
+        })
+        assert replay["result"]["structuredContent"]["job"]["job_id"] == _LOCAL_JOB
+        assert supervisor._active_jobs == {_LOCAL_JOB: "running"}
+    finally:
+        supervisor.close()
+
+
+def test_malformed_and_error_responses_register_nothing(tmp_path) -> None:
+    """Only a successful, correctly addressed receipt may change tracked state."""
+
+    build = ["build-one"]
+    supervisor, _marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        refused = _call(supervisor, 2, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued", "as_error": True,
+        })
+        assert refused["result"]["structuredContent"]["ok"] is False
+        assert supervisor._active_jobs == {}
+
+        # A receipt addressed to somebody else's request proves nothing.
+        _call(supervisor, 3, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued", "wrong_id": True,
+        })
+        assert supervisor._active_jobs == {}
+
+        # An id the durable reader could never reconcile is refused too, or it
+        # would pin this worker with no way left to release it.
+        _call(supervisor, 4, "flyto_coding_submit", {
+            "job_id": "not-a-job-id", "state": "queued",
+        })
+        assert supervisor._active_jobs == {}
+    finally:
+        supervisor.close()
+
+
 def test_option_values_are_read_from_either_flag_spelling() -> None:
     argv = (
         "flyto-ai", "code-mcp-supervisor", "--tenant", "local-codex",

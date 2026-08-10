@@ -37,11 +37,30 @@ from tests.test_coding_service import (
 )
 
 
+#: Preflight refuses a repository that never declared how it wants to be
+#: verified, before a job, a worktree claim or an implementer session exists.
+#: A fixture that means to exercise anything past preflight therefore has to
+#: declare a contract, exactly as a real repository does.
+_TEST_VERIFICATION_CONTRACT = """version: flyto.coding-config.v1
+checks:
+  - name: declared
+    argv: [python, --version]
+    timeout_seconds: 30
+    required: true
+"""
+
+
+def _declare_verification(workspace) -> None:
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(_TEST_VERIFICATION_CONTRACT, encoding="utf-8")
+
+
 def _workspace(root: Path, name: str) -> Path:
     """Create one worktree with the repository check the harness expects."""
 
     workspace = root / name
-    (workspace / ".flyto").mkdir(parents=True)
+    (workspace / ".flyto").mkdir(parents=True, exist_ok=True)
     (workspace / "result.txt").write_text("verified\n", encoding="utf-8")
     return workspace
 
@@ -70,6 +89,7 @@ def test_two_workers_on_one_worktree_fail_fast_and_name_the_owner(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     first, second = _paired_services(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(first, "tenant-audit", "own-001", workspace)
@@ -80,7 +100,14 @@ def test_two_workers_on_one_worktree_fail_fast_and_name_the_owner(
         assert busy.value.owner_job_id == owner.job_id
         # The owning job id is the only context published, and it is an opaque
         # host-minted token rather than a path or any prompt material.
-        assert error_details(busy.value) == {"owner_job_id": owner.job_id}
+        # The owning job still crosses the boundary, now inside the typed
+        # envelope every service error carries: which phase refused, whether
+        # retrying could ever help, and what the caller would have to do.
+        assert error_details(busy.value) == {
+            "owner_job_id": owner.job_id,
+            "failure_phase": "workspace",
+            "retryable": False,
+        }
         assert str(workspace) not in json.dumps(error_details(busy.value))
 
         # The refusal changed nothing: the owner is still exactly auditable.
@@ -99,6 +126,7 @@ def test_mcp_publishes_the_busy_owner_as_bounded_structured_error_details(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     first, second = _paired_services(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(first, "tenant-audit", "own-001", workspace)
@@ -117,7 +145,11 @@ def test_mcp_publishes_the_busy_owner_as_bounded_structured_error_details(
         structured = response["result"]["structuredContent"]
         assert structured["ok"] is False
         assert structured["error"] == "workspace_busy"
-        assert structured["details"] == {"owner_job_id": owner.job_id}
+        assert structured["details"] == {
+            "owner_job_id": owner.job_id,
+            "failure_phase": "workspace",
+            "retryable": False,
+        }
         assert response["result"]["isError"] is True
     finally:
         second.close()
@@ -152,6 +184,7 @@ def test_an_idempotent_retry_replays_the_receipt_without_a_second_claim(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     first, second = _paired_services(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(first, "tenant-audit", "idem-001", workspace)
@@ -181,6 +214,7 @@ def test_rework_through_a_non_owner_worker_resumes_the_same_session(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     implementer = ReworkingProvider()
     auditor_side = ReworkingProvider()
     first = _audited_service(tmp_path, workspace, provider=implementer)
@@ -231,6 +265,7 @@ def test_the_durable_envelope_never_restores_startup_authority(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "env-001", workspace)
@@ -268,6 +303,7 @@ def test_an_envelope_bound_to_another_session_is_refused(tmp_path: Path) -> None
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "bind-001", workspace)
@@ -295,6 +331,7 @@ def test_rework_does_not_deadlock_on_the_claim_it_already_holds(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider, max_rework_rounds=3)
     try:
@@ -332,6 +369,7 @@ def test_the_claim_survives_the_audit_gap_and_releases_on_accept(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     first, second = _paired_services(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(first, "tenant-audit", "gap-001", workspace)
@@ -364,6 +402,7 @@ def test_a_settled_owner_releases_its_claim_on_the_next_startup(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     tenant_ref = service._tenant_ref("tenant-audit")
     try:
@@ -426,6 +465,7 @@ def test_an_unevaluable_claim_fails_closed_and_is_never_discarded(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         path = _claim_path(service, workspace)
@@ -457,6 +497,7 @@ def test_a_claim_naming_an_unknown_job_is_unresolved_not_free(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         path = _claim_path(service, workspace)
@@ -531,6 +572,7 @@ def test_a_partially_bound_claim_is_unresolved_never_free(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "bind-100", workspace)
@@ -602,6 +644,7 @@ def test_a_record_whose_own_workspace_fields_disagree_is_unresolved(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "bind-200", workspace)
@@ -644,6 +687,7 @@ def test_a_record_without_a_known_state_is_unresolved_never_free(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "state-100", workspace)
@@ -678,6 +722,7 @@ def test_a_non_finite_claim_timestamp_is_unresolved(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "finite-100", workspace)
@@ -717,6 +762,7 @@ def test_accept_is_refused_while_a_foreign_claim_owns_the_worktree(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "acc-foreign", workspace)
@@ -746,6 +792,7 @@ def test_accept_is_refused_while_the_claim_cannot_be_evaluated(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "acc-unres", workspace)
@@ -785,6 +832,7 @@ def test_a_missing_claim_refuses_both_verdicts_and_is_not_recreated(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -816,6 +864,7 @@ def test_a_brand_new_submit_still_creates_its_first_claim(tmp_path: Path) -> Non
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         assert service._workspace_authority(str(workspace)) == ("free", "")
@@ -837,6 +886,7 @@ def test_host_abandon_is_the_spillway_for_an_orphaned_claimless_job(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "spill-001", workspace)
@@ -861,6 +911,7 @@ def test_a_same_job_id_claim_from_another_tenant_is_never_taken_over(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "tenant-001", workspace)
@@ -887,6 +938,7 @@ def test_a_record_naming_a_different_job_cannot_answer_for_a_claim(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "bind-300", workspace)
@@ -911,6 +963,7 @@ def test_rework_still_succeeds_while_the_valid_claim_is_present(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -939,6 +992,7 @@ def test_a_foreign_claim_stops_a_round_before_it_becomes_audit_ready(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     provider = ReworkingProvider()
     service = _audited_service(tmp_path, workspace, provider=provider)
     try:
@@ -989,6 +1043,7 @@ def test_an_unresolved_claim_stops_a_round_and_is_left_for_repair(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "unres-001", workspace)
@@ -1018,6 +1073,7 @@ def test_a_claim_write_failure_cannot_open_an_unclaimed_audit_gap(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     original = service._reassert_workspace_claim
     calls = {"n": 0}
@@ -1046,6 +1102,7 @@ def test_host_repair_clears_only_an_unresolved_claim(tmp_path: Path) -> None:
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "repair-001", workspace)
@@ -1082,6 +1139,7 @@ def test_abandon_releases_the_worktree_and_can_never_land_a_job(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     first, second = _paired_services(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(first, "tenant-audit", "aband-001", workspace)
@@ -1117,6 +1175,7 @@ def test_abandon_refuses_every_state_that_is_not_audit_ready(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         owner = _awaiting(service, "tenant-audit", "aband-003", workspace)
@@ -1142,6 +1201,7 @@ def test_abandon_is_not_reachable_through_the_public_mcp_inventory(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:
         server = CodingMCPServer(service, "tenant-audit")
@@ -1177,6 +1237,7 @@ def test_a_legacy_service_still_serializes_instead_of_refusing(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     service = _service(tmp_path, workspace)
     try:
         one = service.submit(
@@ -1199,6 +1260,7 @@ def test_a_legacy_service_still_honours_an_audited_job_claim(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     audited = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     legacy = _service(tmp_path, workspace)
     try:

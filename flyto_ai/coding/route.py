@@ -33,26 +33,143 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Sequence, Tuple
+from typing import (
+    AbstractSet,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
-from flyto_ai.coding.contracts import CapabilitySpec, CodingTaskRequest, CodingTaskResult
+from flyto_ai.coding.contracts import (
+    CapabilitySpec,
+    CodingTaskRequest,
+    CodingTaskResult,
+    safe_blockers,
+)
 
 
 ROUTE_CONTRACT_VERSION = "flyto.coding-route.v1"
 _ROUTE_DOMAIN = b"flyto.coding-route.v1\n"
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+#: What a capability must *already* have written for this host to treat it as a
+#: machine code rather than as prose. Deliberately validated before any
+#: normalization: normalizing first turns
+#: `please open /Users/alice/private token` into
+#: `validation_please_open_users_alice_private_token`, which reads exactly like a
+#: host-owned control token and is not one. Whitespace, slashes, URLs, controls,
+#: upper case and anything overlong are dropped whole, never truncated into
+#: validity.
+_DOMAIN_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{1,63}$")
 _ACTION_RE = re.compile(r"^[a-z][a-z0-9_.:-]{1,63}$")
+#: Host-created provenance for the root execution plan. A sub-task's scope
+#: is "subtask_<n>" for its declared position. These names are assigned by
+#: this module while walking the contract - never parsed back out of a step
+#: id, because an id is contract data and a scope is an authority decision.
+_ROOT_SCOPE = ""
 #: A leading drive letter spells a Windows path, never a repository-relative one.
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 #: A conservative repository-relative path explicitly written in task prose.
 #: Absolute, drive, UNC, traversal, whitespace, and control-containing forms
 #: are deliberately outside this grammar and still face filesystem checks.
 _EXPLICIT_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9_.:/\\\[\]-])"
-    r"((?:[A-Za-z0-9_.\[\]-]+/)*[A-Za-z0-9_.\[\]-]+)"
-    r"(?![A-Za-z0-9_./\\\[\]-])"
+    r"(?<![A-Za-z0-9_.:/\\()[\]\-])"
+    r"((?:[A-Za-z0-9_.()[\]\-]+/)*[A-Za-z0-9_.()[\]\-]+)"
+    r"(?![A-Za-z0-9_./\\()[\]\-])"
 )
-_MAX_EXPLICIT_REQUEST_TARGETS = 12
+# Generator-backed changes routinely update one authored file and two
+# published bundles per locale.  Twelve exact paths forced those deterministic
+# outputs out of the intent ledger even though the user named every file.  Keep
+# the scope finite, but large enough for a 16-locale source+dist closure plus
+# its focused regression test (51 files).
+_MAX_EXPLICIT_REQUEST_TARGETS = 64
+#: What a *new* file's extension may look like. Audit codes, gate names and
+#: evidence refs share the conservative path grammar - `check.generated_reference`,
+#: `human.approval`, `module.identifier`, `pkg/check.some_capability` all parse as
+#: "a name with a suffix" - and the previous rule accepted any non-empty suffix.
+#: A file the task is asking to *create* therefore has to carry an extension that
+#: looks like one: short, alphanumeric, no underscores. Existing paths are
+#: unaffected; they are proven by the filesystem, not by their spelling.
+_NEW_FILE_SUFFIX_RE = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
+#: A file that does not exist yet is only a target when the task actually asks
+#: for it. `human.approval` and `pkg/check.some_capability` are perfectly
+#: well-formed filenames; what distinguishes them from `add tests/test_x.py` is
+#: not their spelling but that nobody asked for them to be written.
+#:
+#: Deliberately a generic mutation vocabulary rather than a list of audit words:
+#: blacklisting `check.` or `approval` would be a product-specific rule that the
+#: next unfamiliar identifier walks straight past. Existing paths are unaffected
+#: - the filesystem already proved those.
+_MUTATION_VERB_RE = re.compile(
+    r"\b(add|create|new|write|generate|emit|produce|introduce|implement|"
+    r"update|edit|modify|change|rewrite|replace|amend|patch|fix|repair|"
+    r"rename|move|delete|remove|drop|touch|append|extend)\b[^A-Za-z0-9]*$",
+    re.IGNORECASE,
+)
+#: How far back a mutation verb may sit and still govern the candidate. Long
+#: enough for "please add a new file called ...", short enough that a verb from
+#: an unrelated clause cannot reach across a sentence.
+_MUTATION_VERB_WINDOW = 48
+#: Where one instruction stops and the next begins. A sentence terminator only
+#: closes a clause when whitespace or the end of the message follows it, so the
+#: dot inside `flyto_ai/coding/route.py` is punctuation *in* a path rather than
+#: the end of a thought, while `... route.py. Do not ...` splits exactly where a
+#: reader would split it. A semicolon or a newline always closes a clause, which
+#: is how bullet lists and `positive; negative` prose stay separable.
+_CLAUSE_BOUNDARY_RE = re.compile(r"[;\n\r\x0b\x0c]|[.!?](?=\s|$)")
+#: Negative polarity, read in the direction the prohibition actually points.
+#:
+#: "do not modify X", "never edit X", "without changing X" and "you must not
+#: create X" all *name* a real repository file, and the previous rule handed
+#: every one of them to the intent ledger as an edit target - existing paths
+#: because the filesystem proved them, new paths because `must not create`
+#: satisfies the mutation-verb rule on the strength of the word `create` inside
+#: the prohibition itself.
+#:
+#: A prohibition governs what follows it: everything from the cue to the end of
+#: the clause. This is deliberately a generic vocabulary rather than a list of
+#: phrases - enumerating "do not modify" alone lets the next spelling walk past
+#: - but it is directional, because a cue *after* the path usually belongs to a
+#: positive instruction that merely bounds its own scope. "Fix app/map.tsx
+#: without widening the change" is a request to edit `app/map.tsx`; refusing it
+#: because the sentence later contains "without" would read the qualifier as if
+#: it were the verb.
+_NEGATIVE_LEADING_RE = re.compile(
+    r"\b(?:"
+    r"do(?:es)?\s+not|do(?:es)?n[’']?t|did\s+not|didn[’']?t|"
+    r"must\s+not|mustn[’']?t|must\s+never|may\s+not|might\s+not|"
+    r"shall\s+not|should\s+not|shouldn[’']?t|will\s+not|won[’']?t|"
+    r"would\s+not|wouldn[’']?t|cannot|can\s+not|can[’']?t|"
+    r"could\s+not|couldn[’']?t|never|without|"
+    r"avoid(?:s|ed|ing)?|refrain|leave\s+alone|hands\s+off|"
+    r"no\s+changes?\s+to|no\s+edits?\s+to|exclude|excluding|"
+    r"not\s+allowed|forbidden|prohibited|off[\s-]limits|out\s+of\s+scope"
+    r")\b",
+    re.IGNORECASE,
+)
+#: The mirror case: the path is the *subject* being fenced off, so the cue
+#: trails it. "tests/test_x.py must not be created", "leave docs/README.md
+#: unchanged", "scripts/run.sh is read-only" are prohibitions with the same
+#: force as the leading forms, and a rule that only looked leftward could be
+#: re-worded around by moving the verb. Only cues that genuinely make the
+#: preceding path their subject belong here: `without` and `avoid` do not,
+#: because in trailing position they qualify an earlier positive verb.
+_NEGATIVE_TRAILING_RE = re.compile(
+    r"\b(?:"
+    r"must\s+not|mustn[’']?t|must\s+never|may\s+not|might\s+not|"
+    r"shall\s+not|should\s+not|shouldn[’']?t|will\s+not|won[’']?t|"
+    r"would\s+not|wouldn[’']?t|cannot|can\s+not|can[’']?t|"
+    r"is\s+not|are\s+not|isn[’']?t|aren[’']?t|"
+    r"unchanged|untouched|unmodified|unaltered|stays?\s+the\s+same|"
+    r"read[\s-]only|off[\s-]limits|out\s+of\s+scope|as[\s-]is|"
+    r"not\s+allowed|forbidden|prohibited"
+    r")\b",
+    re.IGNORECASE,
+)
 
 #: The real public Indexer surface. These names and their argument schemas come
 #: from the installed sibling server; nothing here invents a tool.
@@ -121,6 +238,10 @@ CORE_ALLOWED_TOOLS = (
     "list_modules", "search_modules", "get_module_info", "get_module_examples",
     "validate_params", "list_recipes", "get_core_capability_manifest",
 )
+#: A pinned repository check may prove a Core module contract in an isolated
+#: process. This is a semantic evidence kind rather than a check-name
+#: convention, so repositories remain free to name their verifier.
+CORE_MODULE_CONTRACT_PROOF = "flyto.core.module-contract.v1"
 #: Stable host-side classification for a transport-level capability failure.
 #: The route never parses provider prose: the capability adapter reports one
 #: closed machine code and only these values map to a distinct lane reason.
@@ -170,13 +291,47 @@ class RouteLaneStatus(str, Enum):
     FAILED = "failed"
 
 
+#: How many domain-supplied tokens may cross into host evidence at once.
+_MAX_DOMAIN_EVIDENCE = 8
+
+
+def _domain_code_token(value: Any, prefix: str) -> str:
+    """Map one already-valid domain code into the public blocker grammar.
+
+    Two steps, and the order is the whole point. First the raw value has to
+    *already* be a machine identifier - that is a statement about what the
+    capability chose to emit, and it is the only thing separating
+    `fix_intent_ledger:task:unplanned_diff` from `rm -rf workspace`. Only then
+    are the stable separators `.`, `:` and `-` mapped to `_`, which is a
+    lossless spelling change rather than a rescue of invalid input.
+
+    Returns `""` for anything that does not qualify. Nothing is truncated into
+    validity: an overlong or malformed value is dropped entire.
+    """
+
+    if not isinstance(value, str) or not _DOMAIN_CODE_RE.fullmatch(value):
+        return ""
+    token = "{}_{}".format(prefix, re.sub(r"[.:-]", "_", value))
+    return token if _CODE_RE.fullmatch(token) else ""
+
+
 class CodingRouteError(RuntimeError):
     """A lane failed closed. The round must not reach an auditable state."""
 
-    def __init__(self, code: str, lane: RouteLane) -> None:
+    def __init__(
+        self,
+        code: str,
+        lane: RouteLane,
+        blockers: Sequence[str] = (),
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.lane = lane
+        #: Bounded, closed-grammar tokens a domain gate supplied about its own
+        #: refusal. Empty for every infrastructure failure, which is what keeps
+        #: "the capability said no, here is what to amend" distinguishable from
+        #: "the capability could not be reached at all".
+        self.blockers = safe_blockers(blockers)
 
 
 @dataclass(frozen=True)
@@ -188,9 +343,25 @@ class RouteLimits:
     # shape while retaining the independent per-lane call ceiling.
     max_plan_steps: int = 32
     max_gate_remediations: int = 2
-    max_response_bytes: int = 256 * 1024
+    # MCP supervisors already enforce their own 256 KiB wire-message ceiling.
+    # Once decoded, however, the same legitimate payload can grow past that
+    # size when ``json.dumps`` restores separators and materializes mappings.
+    # Keep this route-local, post-decode guard bounded but leave enough room
+    # for that representation overhead; the transport limit remains the
+    # authoritative cap on bytes received from a capability.
+    max_response_bytes: int = 512 * 1024
     max_response_depth: int = 12
-    max_calls_per_lane: int = 32
+    # The pre lane's demand is arithmetic, not taste, and the previous default
+    # made a legal plan impossible to execute: three host discovery calls
+    # (structure, search, task.plan) plus one call per plan step plus the
+    # mandatory canonical gates is already 3 + 32 + 2 = 37 for a maximum-size
+    # plan, so a bound of 32 guaranteed that the largest plan the route is
+    # willing to accept could never be run. It was discovered by spending 33
+    # calls and then refusing, which is the worst of both. The default now
+    # covers that shape with headroom for gate remediation
+    # (`max_gate_remediations` per gate), and :meth:`_plan_budget` refuses any
+    # plan that still cannot fit *before* the first step is dispatched.
+    max_calls_per_lane: int = 64
     max_projection_chars: int = 4000
 
     def __post_init__(self) -> None:
@@ -665,6 +836,13 @@ class _LaneTrace:
 
     lane: RouteLane
     calls: list = field(default_factory=list)
+    #: Real dispatcher invocations, which is what the budget is about. Call
+    #: *records* are evidence and can legitimately differ: a gate that fails and
+    #: is remediated records more than one row for work that cost several
+    #: dispatches, and a refusal records a row for a call that did happen.
+    #: Counting records let the lane physically issue call N+1 and only then
+    #: notice, so the budget is charged here instead, before each dispatch.
+    dispatches: int = 0
 
 
 class CodingRouteOrchestrator:
@@ -696,6 +874,57 @@ class CodingRouteOrchestrator:
         """Open one lane's call trace and return the list it records into."""
         self._trace = _LaneTrace(lane)
         return self._trace.calls
+
+    def _charge(self, lane: RouteLane) -> None:
+        """Reserve one dispatch against this lane's budget, or refuse outright.
+
+        Raises before anything is sent. The reservation is what the bound
+        actually means: a lane whose budget is N may invoke the dispatcher N
+        times and never N+1, whatever the receipt happens to look like.
+        """
+
+        trace = self._trace
+        if trace is None or trace.lane is not lane:  # pragma: no cover - defensive
+            return
+        if trace.dispatches >= self.limits.max_calls_per_lane:
+            raise CodingRouteError("call_bound_exceeded", lane)
+        trace.dispatches += 1
+
+    def _remaining_calls(self, lane: RouteLane) -> int:
+        """How many dispatches this lane may still make."""
+
+        trace = self._trace
+        if trace is None or trace.lane is not lane:  # pragma: no cover - defensive
+            return self.limits.max_calls_per_lane
+        return max(0, self.limits.max_calls_per_lane - trace.dispatches)
+
+    def _require_plan_budget(
+        self,
+        lane: RouteLane,
+        steps: Sequence[Mapping[str, Any]],
+        scheduled: Mapping[str, AbstractSet[str]],
+    ) -> None:
+        """Refuse an unrunnable plan before its first step, not halfway through.
+
+        Every step is mandatory - a plan is never truncated or thinned to fit -
+        so if the arithmetic does not work the honest moment to say so is now,
+        while nothing has been spent. The demand is a *minimum*: one dispatch
+        per step, plus one for each canonical gate the plan did not schedule and
+        the host must therefore run itself. Remediation can only cost more, so a
+        plan that fails this test could never have completed.
+        """
+
+        covered = set()
+        for phases in scheduled.values():
+            covered.update(phases)
+        # Every gate a compound plan schedules is already one of `steps`, so it
+        # is counted once there; only a canonical phase that *no* scope
+        # scheduled adds a host-run call on top.
+        demand = len(steps) + sum(
+            1 for phase in INDEXER_PRE_GATE_PHASES if phase not in covered
+        )
+        if demand > self._remaining_calls(lane):
+            raise CodingRouteError("plan_call_budget_exceeded", lane)
 
     def _failed_call(self, code: str, lane: RouteLane, action: str) -> CodingRouteError:
         """Record the exact call that failed, then return the closing error.
@@ -735,6 +964,14 @@ class CodingRouteOrchestrator:
     ) -> Any:
         """Dispatch one allowlisted call and validate its shape, not its prose."""
         recorded = action or tool
+        # Charged first, and this order is the whole point. Checking a budget
+        # after the call has gone out means the bound describes what the route
+        # *reports*, not what it *does*: a lane configured for N calls could
+        # physically issue N+1 and only then refuse, having already spent the
+        # work, held the tool, and produced side effects the refusal cannot
+        # take back. Nothing is dispatched and no record is fabricated here;
+        # the lane simply stops.
+        self._charge(lane)
         if self._capability_dispatch is None:
             raise self._failed_call("capability_unavailable", lane, recorded)
         raw = await self._capability_dispatch(tool, arguments)
@@ -808,7 +1045,9 @@ class CodingRouteOrchestrator:
     # ---- Indexer ---------------------------------------------------------
 
     async def _indexer_pre(
-        self, request: CodingTaskRequest,
+        self,
+        request: CodingTaskRequest,
+        parent_contract: Optional[Mapping[str, Any]] = None,
     ) -> Tuple[RouteLaneReceipt, Dict[str, Any]]:
         """Run the mandatory pre-work lane against the real Indexer contract.
 
@@ -838,13 +1077,19 @@ class CodingRouteOrchestrator:
         )
         targets = explicit_targets or self._derive_targets(found)
 
-        plan_result = await self._call(lane, "task", {
+        plan_payload: Dict[str, Any] = {
             "action": "plan",
             "description": request.message[:2000],
             "targets": targets,
             "intent": self.infer_intent(request.message),
             "project": project,
-        }, action="task.plan")
+        }
+        if parent_contract:
+            # Amendment, not a new root. The key is absent entirely when there
+            # is no parent, so a first round's request stays byte-for-byte what
+            # it has always been and a legacy Indexer sees no new argument.
+            plan_payload["task_contract"] = dict(parent_contract)
+        plan_result = await self._call(lane, "task", plan_payload, action="task.plan")
         calls.append(RouteCallRecord(lane.value, "task.plan", True, "plan"))
         if not isinstance(plan_result, Mapping):
             raise CodingRouteError("malformed_evidence", lane)
@@ -859,45 +1104,47 @@ class CodingRouteOrchestrator:
 
         state: Dict[str, Any] = {}
         gates_passed: list = []
-        for step in self._plan_steps(plan_result, lane):
-            tool = str(step.get("tool") or "")
-            args = step.get("args")
-            if args is not None and not isinstance(args, Mapping):
-                raise CodingRouteError("malformed_evidence", lane)
-            args = dict(args or {})
-            if tool in INDEXER_PLAN_GATE_STEPS:
-                # The real plan schedules its own gates. Run them through the
-                # gate routine so the exact contract and the accumulated
-                # evidence-backed state are injected, never the step's stub.
-                if tool == "task" and args.get("action") != "gate":
-                    raise CodingRouteError("plan_step_not_allowlisted", lane)
-                phase = str(args.get("next_phase") or "assess")
-                await self._gate(lane, contract, phase, state, calls, project, targets)
-                marker = "task.gate.{}".format(phase)
-                # A real plan can schedule the same phase twice; the receipt
-                # records each distinct gate once.
-                if marker not in gates_passed:
-                    gates_passed.append(marker)
-            else:
-                translated = self._translate_step(tool, args, allowed, project)
-                if translated is None:
-                    # Nothing ran, so nothing is recorded. An operation this
-                    # host cannot execute is refused, required or not.
-                    raise CodingRouteError("plan_step_not_allowlisted", lane)
-                public_tool, public_args = translated
-                await self._call(lane, public_tool, public_args, action=public_tool)
-                calls.append(RouteCallRecord(lane.value, public_tool, True, "plan_step"))
-            if len(calls) > self.limits.max_calls_per_lane:
-                raise CodingRouteError("call_bound_exceeded", lane)
+        groups = self._plan_groups(plan_result, lane)
+        steps = [step for _, scoped in groups for step in scoped]
+        # The gate phases this plan schedules for itself, decided before any of
+        # it runs. Gate expansion is bounded here rather than discovered: the
+        # pre lane has exactly two canonical phases, each may be scheduled at
+        # most once, and anything else is a plan this host will not execute.
+        # An unbounded or duplicated gate set is how a legal-looking plan turns
+        # into an unpredictable number of calls.
+        scheduled_gates = self._scheduled_gate_phases(groups, lane)
+        self._require_plan_budget(lane, steps, scheduled_gates)
+        completed_subtasks: list = []
+        # Declared scope order is absolute: the root plan, then sub-task one in
+        # full, then sub-task two. Each plan was ordered against its own
+        # dependencies, so a step blocked inside one scope can never be answered
+        # by walking on into the next - which is how a later sub-task's gates
+        # once dispatched before an earlier one had finished at all.
+        for scope, scoped_steps in groups:
+            for step in scoped_steps:
+                await self._run_plan_step(
+                    lane, step, scope, contract, state, calls, project, targets,
+                    allowed, gates_passed,
+                )
+            if scope:
+                # Only here, with every step of this compiled plan genuinely
+                # completed, is the sub-task finished. A step that raised never
+                # reaches this line, so the next scope's gate is never told that
+                # an interrupted sub-task is done.
+                completed_subtasks.append(scope)
+                state["completed_subtasks"] = list(completed_subtasks)
 
-        # A plan that scheduled no gate still may not reach the implementer
-        # without the mandatory pre-work gates.
+        # A canonical phase gets a host-run gate only when *no* compiled plan
+        # scheduled it anywhere. A compound plan that gates every sub-task is
+        # already complete and must not be charged two extra global calls.
+        covered = set()
+        for phases in scheduled_gates.values():
+            covered.update(phases)
         for phase in INDEXER_PRE_GATE_PHASES:
-            marker = "task.gate.{}".format(phase)
-            if marker in gates_passed:
+            if phase in covered:
                 continue
             await self._gate(lane, contract, phase, state, calls, project, targets)
-            gates_passed.append(marker)
+            gates_passed.append("task.gate.{}".format(phase))
         return RouteLaneReceipt(
             lane=lane.value, required=True, status=RouteLaneStatus.APPLIED,
             reason_code="completed", calls=tuple(calls),
@@ -909,11 +1156,99 @@ class CodingRouteOrchestrator:
             "state": dict(state),
         }
 
+    async def _run_plan_step(
+        self,
+        lane: RouteLane,
+        step: Mapping[str, Any],
+        scope: str,
+        contract: Mapping[str, Any],
+        state: Dict[str, Any],
+        calls: list,
+        project: str,
+        targets: Sequence[str],
+        allowed: AbstractSet[str],
+        gates_passed: list,
+    ) -> None:
+        """Run exactly one plan step, or refuse the whole lane."""
+
+        tool = str(step.get("tool") or "")
+        args = step.get("args")
+        if args is not None and not isinstance(args, Mapping):
+            raise CodingRouteError("malformed_evidence", lane)
+        args = dict(args or {})
+        if tool in INDEXER_PLAN_GATE_STEPS:
+            # The real plan schedules its own gates. Run them through the gate
+            # routine so the exact contract and the accumulated evidence-backed
+            # state are injected, never the step's stub.
+            if tool == "task" and args.get("action") != "gate":
+                raise CodingRouteError("plan_step_not_allowlisted", lane)
+            phase = str(args.get("next_phase") or "assess")
+            # Scoped so a receipt says *which* compiled plan's gate passed. A
+            # non-compound plan keeps the exact legacy marker, because a reader
+            # of an ordinary receipt should see no difference.
+            marker = "task.gate.{}".format(phase)
+            if scope:
+                marker = "{}:{}".format(marker, scope)
+            await self._gate(
+                lane, contract, phase, state, calls, project, targets, marker,
+            )
+            gates_passed.append(marker)
+        else:
+            translated = self._translate_step(tool, args, allowed, project)
+            if translated is None:
+                # Nothing ran, so nothing is recorded. An operation this host
+                # cannot execute is refused, required or not.
+                raise CodingRouteError("plan_step_not_allowlisted", lane)
+            public_tool, public_args = translated
+            await self._call(lane, public_tool, public_args, action=public_tool)
+            calls.append(RouteCallRecord(lane.value, public_tool, True, "plan_step"))
+        if len(calls) > self.limits.max_calls_per_lane:
+            raise CodingRouteError("call_bound_exceeded", lane)
+
+    @classmethod
+    def _scheduled_gate_phases(
+        cls, groups: Sequence[Any], lane: RouteLane,
+    ) -> Dict[str, AbstractSet[str]]:
+        """Which canonical gates each compiled plan runs itself, keyed by scope.
+
+        Uniqueness is per *scope*, and the scope comes from the walk that found
+        the plan - never from a step id. A compound contract is several
+        independently compiled execution plans, and each legitimately ends with
+        its own canonical `assess` and `implement`; judging that globally
+        refused every multi-sub-task task. But taking the scope from an id let a
+        hostile root plan label two of its own gates `subtask_1:` and
+        `subtask_2:` and buy itself a second `assess`, which is why provenance is
+        assigned here rather than parsed.
+
+        Unchanged: only the two canonical phases exist, a phase repeated within
+        one plan is a duplicate and fails closed, an unrecognised phase is
+        refused, and both refusals happen before a single plan step dispatches.
+        """
+
+        scheduled: Dict[str, list] = {}
+        for scope, steps in groups:
+            seen = scheduled.setdefault(scope, [])
+            for step in steps:
+                tool = str(step.get("tool") or "")
+                if tool not in INDEXER_PLAN_GATE_STEPS:
+                    continue
+                args = step.get("args")
+                if args is not None and not isinstance(args, Mapping):
+                    raise CodingRouteError("malformed_evidence", lane)
+                phase = str((args or {}).get("next_phase") or "assess")
+                if phase not in INDEXER_PRE_GATE_PHASES:
+                    raise CodingRouteError("plan_gate_phase_unknown", lane)
+                if phase in seen:
+                    raise CodingRouteError("plan_gate_phase_repeated", lane)
+                seen.append(phase)
+        return {scope: frozenset(phases) for scope, phases in scheduled.items()}
+
     async def _indexer_post(
         self,
         request: CodingTaskRequest,
         context: Mapping[str, Any],
         result: Optional[CodingTaskResult] = None,
+        changed: Optional[Sequence[str]] = None,
     ) -> RouteLaneReceipt:
         """Validate the real final workspace, then run the strict verify gate."""
         lane = RouteLane.INDEXER_POST
@@ -948,8 +1283,12 @@ class CodingRouteOrchestrator:
             # immediately around this round.  Validate that attributable
             # change set instead of unrelated dirt that pre-dated the job.
             "current_state": {
+                # The cumulative attributable set when the host proved one,
+                # otherwise this round's own snapshot. Either way it is host
+                # evidence, never the model's word.
                 "changed_paths": list(
-                    getattr(result, "files_changed", ()) or ()
+                    changed if changed is not None
+                    else (getattr(result, "files_changed", ()) or ())
                 ),
             },
         }, action="task.validate")
@@ -961,8 +1300,13 @@ class CodingRouteOrchestrator:
             "validate" if validation_passed else self._validation_failure_detail(validated),
         ))
         if not validation_passed:
-            # Absence of a positive result is not success.
-            raise CodingRouteError("validation_failed", lane)
+            # Absence of a positive result is not success. The domain's own
+            # bounded reasons travel with the refusal so the next round can
+            # repair the exact thing and rerun the exact gate.
+            raise CodingRouteError(
+                "validation_failed", lane,
+                blockers=self._domain_evidence(validated),
+            )
 
         # Start from the keys the pre-work lane actually proved, then add only
         # what this lane just proved. `impact_analysis_done` is never asserted
@@ -1038,6 +1382,21 @@ class CodingRouteOrchestrator:
             )
         if public_tool == "structure":
             return public_tool, {"focus": "dependencies", "path": value}
+        if (
+            public_tool == "impact"
+            and project
+            and "/" in value
+            and PurePosixPath(value).suffix
+        ):
+            # Indexer impact is a symbol operation. Passing a bare repository
+            # path makes its partial resolver search every indexed project and
+            # can explode common names such as map.tsx into an oversized,
+            # cross-project response. Every indexed file has this canonical
+            # file-symbol form, so bind the planned path to the current project
+            # before asking for its blast radius.
+            value = "{}:{}:file:{}".format(
+                project, value, PurePosixPath(value).stem,
+            )
         return public_tool, {target: value}
 
     @staticmethod
@@ -1052,6 +1411,36 @@ class CodingRouteOrchestrator:
         return _primary_boolean(validated, "pass", "passed")
 
     @staticmethod
+    def _domain_evidence(validated: Any) -> Tuple[str, ...]:
+        """Project a domain gate's own reasons into host-owned blockers.
+
+        A `pass=false` from a capability is the one refusal a caller can
+        genuinely act on - it names what to amend and rerun - so throwing the
+        detail away makes a fixable failure look like an outage. What crosses is
+        deliberately narrow: a bounded number of short tokens, each normalized
+        into the same closed identifier grammar every other blocker uses, and
+        prefixed by which field it came from. Prose, paths, control characters,
+        nested objects and excessive cardinality are dropped rather than
+        truncated, so nothing arrives here shortened into something that looks
+        like a name it is not.
+        """
+
+        tokens: list = []
+        if not isinstance(validated, Mapping):
+            return ()
+        for source, prefix in (
+            ("reason_codes", "validation"), ("required_actions", "action"),
+        ):
+            values = validated.get(source)
+            if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+                continue
+            for value in list(values)[:_MAX_DOMAIN_EVIDENCE]:
+                token = _domain_code_token(value, prefix)
+                if token and token not in tokens:
+                    tokens.append(token)
+        return tuple(tokens[:_MAX_DOMAIN_EVIDENCE])
+
+    @staticmethod
     def _validation_failure_detail(validated: Any) -> str:
         """Project one bounded Indexer reason into the route receipt.
 
@@ -1063,12 +1452,14 @@ class CodingRouteOrchestrator:
         if isinstance(validated, Mapping):
             reason_codes = validated.get("reason_codes")
             if isinstance(reason_codes, (list, tuple)) and reason_codes:
-                reason = reason_codes[0]
-                if isinstance(reason, str):
-                    normalized = re.sub(r"[^a-z0-9_]+", "_", reason.lower()).strip("_")
-                    detail = "validation_{}".format(normalized)[:64].rstrip("_")
-                    if _CODE_RE.fullmatch(detail):
-                        return detail
+                # Only a value the capability already expressed as a machine
+                # code may become a receipt detail. Anything else - a sentence,
+                # a path, a URL - keeps the generic host-owned detail, because a
+                # normalized sentence is indistinguishable from a real code once
+                # it reaches a caller.
+                token = _domain_code_token(reason_codes[0], "validation")
+                if token:
+                    return token
         return "validation_failed"
 
     def _indexer_catalog(self, lane: RouteLane) -> set:
@@ -1164,23 +1555,81 @@ class CodingRouteOrchestrator:
         targets = cls._explicit_request_targets(message, working_dir)
         return targets[0] if targets else ""
 
+    @staticmethod
+    def _prohibited_spans(text: str) -> Tuple[Tuple[int, int], ...]:
+        """Return the `[start, end)` offsets a target may not begin inside.
+
+        Polarity is a property of the local clause, never of the whole message.
+        A real task is normally both at once: "rewrite the extractor; do not
+        touch the supervisor" grants authority over one file and withholds it
+        over another, and any judgement made over the whole message gets one of
+        the two wrong whichever way it decides. Sentence terminators, semicolons
+        and newlines bound each clause, so a negative clause cannot suppress a
+        later positive one and - equally - a positive clause cannot launder a
+        later prohibition.
+
+        Inside a clause the reach is directional. A leading cue governs from
+        itself to the end of the clause; a trailing cue governs from the start
+        of the clause up to itself. Neither reaches past the clause.
+        """
+
+        clauses: list = []
+        start = 0
+        for boundary in _CLAUSE_BOUNDARY_RE.finditer(text):
+            clauses.append((start, boundary.start()))
+            start = boundary.end()
+        clauses.append((start, len(text)))
+
+        spans: list = []
+        for begin, end in clauses:
+            clause = text[begin:end]
+            leading = _NEGATIVE_LEADING_RE.search(clause)
+            if leading is not None:
+                spans.append((begin + leading.start(), end))
+            # The *last* trailing cue, so a clause naming several fenced paths
+            # covers all of them rather than only the first.
+            last_trailing = 0
+            for trailing in _NEGATIVE_TRAILING_RE.finditer(clause):
+                last_trailing = trailing.end()
+            if last_trailing:
+                spans.append((begin, begin + last_trailing))
+        return tuple(spans)
+
     @classmethod
     def _explicit_request_targets(cls, message: str, working_dir: str) -> list:
-        """Return a bounded set of exact existing repo files named by the task.
+        """Return a bounded set of exact repo file paths named by the task.
 
-        Multiple files, including repository-root files such as ``README.md``,
-        are accepted only when each path is explicit user evidence and passes
-        the same canonical spelling, containment, and regular-file checks as
-        the singular helper. Fuzzy search discovery remains single-target; it
+        Existing files and explicitly named new files are accepted.  A new file
+        is evidence-backed only when its parent already exists and resolves
+        inside the workspace; missing parents, symlink final components and
+        every non-canonical spelling are refused.  This lets the Indexer intent
+        ledger authorize a requested new test or script without widening the
+        plan to a directory.  Fuzzy search discovery remains single-target; it
         cannot broaden edit authority.
+
+        A path named by a *prohibiting* clause is not a target at all.  The
+        polarity test runs before the existing/new split, because both halves
+        were reachable from a negative clause: an existing file was proven by
+        the filesystem regardless of why it was mentioned, and "must not create
+        tests/test_x.py" satisfied the mutation-verb rule on the strength of the
+        word `create` inside the prohibition.  Polarity is bounded to the clause
+        (see :meth:`_prohibited_spans`) so "do not touch a.py; rewrite b.py"
+        still authorizes `b.py`.
         """
 
         try:
             root = Path(working_dir).resolve(strict=True)
         except (OSError, RuntimeError):
             return []
+        text = str(message or "")
+        forbidden = cls._prohibited_spans(text)
         targets = []
-        for match in _EXPLICIT_PATH_RE.finditer(str(message or "")):
+        for match in _EXPLICIT_PATH_RE.finditer(text):
+            if any(begin <= match.start(1) < end for begin, end in forbidden):
+                # Named, and named precisely - but named in order to be left
+                # alone. A prohibition is never authority to edit its own
+                # subject.
+                continue
             raw = match.group(1)
             # A period is legal in a POSIX filename and is also ordinary
             # sentence punctuation.  Prefer the exact spelling when it exists;
@@ -1191,55 +1640,93 @@ class CodingRouteOrchestrator:
                     continue
                 if len(value) > 200 or cls._relative_path({"path": value}) != value:
                     continue
+                spelled = root / PurePosixPath(value)
                 try:
-                    candidate = (root / PurePosixPath(value)).resolve(strict=True)
-                    candidate.relative_to(root)
+                    if spelled.exists():
+                        candidate = spelled.resolve(strict=True)
+                        candidate.relative_to(root)
+                        admissible = candidate.is_file()
+                    else:
+                        # When sentence punctuation followed the path, try the
+                        # punctuation-free spelling before treating the raw
+                        # token as authority to create a different new file.
+                        if value == raw and raw.rstrip(".") != raw:
+                            continue
+                        # Ordinary prose tokens also match the conservative
+                        # path grammar, and so do machine identifiers. A file
+                        # this task wants *created* has to be spelled like a
+                        # file: a real extension, not a dotted namespace. This
+                        # is checked whether or not the token has a directory
+                        # component, because `pkg/check.some_capability` is a
+                        # qualified identifier rather than a path.
+                        suffix = PurePosixPath(value).suffix
+                        if not _NEW_FILE_SUFFIX_RE.fullmatch(suffix):
+                            continue
+                        if not _MUTATION_VERB_RE.search(
+                            text[max(0, match.start(1) - _MUTATION_VERB_WINDOW):match.start(1)],
+                        ):
+                            # Named, but not requested. An identifier that
+                            # merely appears in audit feedback is evidence
+                            # about the round, not authority to create a file.
+                            continue
+                        # ``exists`` is false for a broken final symlink too;
+                        # never mistake that for authority to replace it.
+                        if spelled.is_symlink():
+                            continue
+                        parent = spelled.parent.resolve(strict=True)
+                        parent.relative_to(root)
+                        candidate = parent / spelled.name
+                        admissible = parent.is_dir() and not candidate.exists()
                 except (OSError, RuntimeError, ValueError):
                     continue
-                if candidate.is_file() and value not in targets:
+                if admissible and value not in targets:
                     targets.append(value)
                     break
             if len(targets) >= _MAX_EXPLICIT_REQUEST_TARGETS:
                 break
         return targets
 
-    def _plan_steps(self, plan_result: Mapping[str, Any], lane: RouteLane) -> list:
-        """Flatten ordinary and compound plans, preserving order and bounds.
+    def _plan_groups(
+        self, plan_result: Mapping[str, Any], lane: RouteLane,
+    ) -> list:
+        """Split a contract into its independently compiled plans, in declared order.
 
-        Indexer step ids are unique within one execution plan.  A compound
-        contract contains several independently compiled execution plans, so
-        each sub-task legitimately starts again at ids such as ``step_01_*``.
-        Namespace only the host-local ordering ids and dependencies while
-        keeping the exact contract and every tool argument unchanged.
+        Two properties this has to get right, and the previous version got both
+        wrong in ways only a hostile plan revealed.
+
+        *Provenance is assigned, not read.*  A scope now comes from where this
+        walk found the plan, not from a prefix on a step id.  Deriving it from
+        the id meant an ordinary root plan could name its steps ``subtask_1:g1``
+        and ``subtask_2:g2`` and be treated as two scopes, so two ``assess``
+        gates in one root plan stopped looking like the duplicate they are.  A
+        step id is contract data supplied by the planner; a scope is an
+        authority decision, and the two must not be the same thing.
+
+        *Each plan is ordered on its own.*  Flattening everything and sorting
+        once let a sub-task whose first listed step depended on a later local
+        step be interleaved with the next sub-task - the sorter deferred the
+        blocked step, walked on into ``subtask_2``, and ran its gates first.
+        Ordering per scope keeps declared scope order absolute while still
+        honouring each plan's internal dependencies, and it makes a cross-scope
+        dependency impossible to express rather than merely unlikely: a name
+        from another plan is simply unknown here, and unknown fails closed.
+
+        Nothing is namespaced or rewritten, so the exact contract and every tool
+        argument stay untouched.
         """
-        steps: list = []
 
-        def extend(value: Any, namespace: str = "") -> None:
+        def collect(value: Any) -> list:
             if value is None:
-                return
+                return []
             if not isinstance(value, (list, tuple)):
                 raise CodingRouteError("malformed_evidence", lane)
             for item in value:
                 # A non-object step is malformed, never something to skip.
                 if not isinstance(item, Mapping):
                     raise CodingRouteError("malformed_evidence", lane)
-                if not namespace:
-                    steps.append(item)
-                    continue
-                scoped = dict(item)
-                identifier = item.get("id")
-                if isinstance(identifier, str):
-                    scoped["id"] = "{}:{}".format(namespace, identifier)
-                depends = item.get("depends_on")
-                if isinstance(depends, (list, tuple)):
-                    scoped["depends_on"] = [
-                        "{}:{}".format(namespace, dependency)
-                        if isinstance(dependency, str) else dependency
-                        for dependency in depends
-                    ]
-                steps.append(scoped)
+            return list(value)
 
-        extend(plan_result.get("execution_plan"))
+        groups: list = [(_ROOT_SCOPE, collect(plan_result.get("execution_plan")))]
         sub_tasks = plan_result.get("sub_tasks")
         if sub_tasks is not None:
             if not isinstance(sub_tasks, (list, tuple)):
@@ -1247,10 +1734,26 @@ class CodingRouteOrchestrator:
             for index, sub_task in enumerate(sub_tasks, 1):
                 if not isinstance(sub_task, Mapping):
                     raise CodingRouteError("malformed_evidence", lane)
-                extend(sub_task.get("execution_plan"), "subtask_{}".format(index))
-        if len(steps) > self.limits.max_plan_steps:
+                groups.append((
+                    "subtask_{}".format(index),
+                    collect(sub_task.get("execution_plan")),
+                ))
+        if sum(len(steps) for _, steps in groups) > self.limits.max_plan_steps:
             raise CodingRouteError("plan_bound_exceeded", lane)
-        return self._ordered_steps(steps, lane)
+        return [
+            (scope, self._ordered_steps(steps, lane))
+            for scope, steps in groups
+            if steps
+        ]
+
+    def _plan_steps(self, plan_result: Mapping[str, Any], lane: RouteLane) -> list:
+        """Every step, in the exact order the lane will run it."""
+
+        return [
+            step
+            for _, steps in self._plan_groups(plan_result, lane)
+            for step in steps
+        ]
 
     @staticmethod
     def _ordered_steps(steps: Sequence[Mapping[str, Any]], lane: RouteLane) -> list:
@@ -1300,14 +1803,22 @@ class CodingRouteOrchestrator:
         calls: list,
         project: str,
         targets: Sequence[str],
+        marker: str = "",
     ) -> None:
         """Run one gate, remediate real blockers, and re-run within the bound.
+
+        ``marker`` names this gate in both the call evidence and the receipt.
+        A compound plan passes a scoped one so a reader can tell *which*
+        compiled sub-task's gate passed; an ordinary plan passes nothing and
+        keeps the exact canonical name it always had. The two must be the same
+        string, because a receipt claims a gate ran and the call record is the
+        proof - a marker with no matching record is refused by the receipt.
 
         `pass=false` is never completion. A requested state key is set only
         after the matching real call completed; a key needing human or
         external authority fails closed instead of being asserted.
         """
-        marker = "task.gate.{}".format(phase)
+        marker = marker or "task.gate.{}".format(phase)
         for attempt in range(self.limits.max_gate_remediations + 1):
             result = await self._call(lane, "task", {
                 "action": "gate",
@@ -1320,15 +1831,11 @@ class CodingRouteOrchestrator:
                 raise CodingRouteError("malformed_evidence", lane)
             passed = result.get("pass")
             if passed is True:
-                calls.append(RouteCallRecord(
-                    lane.value, "task.gate.{}".format(phase), True, "gate_pass",
-                ))
+                calls.append(RouteCallRecord(lane.value, marker, True, "gate_pass"))
                 return
             if passed is not False:
                 raise CodingRouteError("malformed_evidence", lane)
-            calls.append(RouteCallRecord(
-                lane.value, "task.gate.{}".format(phase), False, "gate_fail",
-            ))
+            calls.append(RouteCallRecord(lane.value, marker, False, "gate_fail"))
             if attempt >= self.limits.max_gate_remediations:
                 break
             required_state = result.get("required_state")
@@ -1526,7 +2033,7 @@ class CodingRouteOrchestrator:
         return raw
 
     async def _core(
-        self, request: CodingTaskRequest, changed: Sequence[str],
+        self, request: CodingTaskRequest, changed: Sequence[str], result: Any,
     ) -> RouteLaneReceipt:
         """Prove the changed Core contract, or fail closed. Never assume."""
         lane = RouteLane.CORE
@@ -1544,6 +2051,29 @@ class CodingRouteOrchestrator:
                 lane=lane.value, required=self._lane_required(lane),
                 status=RouteLaneStatus.NOT_APPLICABLE,
                 reason_code="no_core_surface_changed",
+            )
+
+        # A new plugin is not installed in the coding service runtime yet, and
+        # importing its worktree here would execute unaudited code in the host.
+        # A repository can instead declare exactly one required verifier as a
+        # Core-contract proof. The declaration is from the pre-edit pinned
+        # contract; the result is host-generated after the implementation.
+        proof_checks = self._pinned_proof_checks(
+            request, result, CORE_MODULE_CONTRACT_PROOF,
+        )
+        if proof_checks is not None:
+            if not proof_checks:
+                raise CodingRouteError("core_validation_failed", lane)
+            proof_calls = tuple(
+                RouteCallRecord(lane.value, name, True, "pinned_check")
+                for name in proof_checks
+            )
+            return RouteLaneReceipt(
+                lane=lane.value, required=self._lane_required(lane),
+                status=RouteLaneStatus.APPLIED,
+                reason_code="pinned_core_contract_proved",
+                calls=proof_calls,
+                gates_passed=proof_checks,
             )
         if self._core_dispatch is None:
             raise CodingRouteError("core_proof_unavailable", lane)
@@ -1595,6 +2125,47 @@ class CodingRouteOrchestrator:
             reason_code="module_params_validated", calls=tuple(calls),
             gates_passed=("validate_params",),
         )
+
+    @staticmethod
+    def _pinned_proof_checks(
+        request: CodingTaskRequest, result: Any, proof_kind: str,
+    ) -> Optional[Tuple[str, ...]]:
+        """Return passed host check names, ``()`` on failure, or no claim.
+
+        ``None`` means the pinned contract made no claim for this evidence
+        kind, so the lane continues with its normal adapter proof. Once a
+        contract does claim it, missing, duplicated, optional, or failed
+        results fail closed instead of falling back to an installed package
+        that may be an older version of the changed worktree.
+        """
+
+        contract = getattr(request, "pinned_contract", None)
+        if contract is None:
+            return None
+        declared = tuple(
+            check.name for check in contract.checks
+            if proof_kind in check.proof_kinds
+        )
+        if not declared:
+            return None
+        # Contract parsing requires global proof-kind uniqueness. Keep the
+        # runtime guard because a hand-built in-process request must not widen
+        # the lane even if it bypassed the YAML reader.
+        if len(declared) != 1:
+            return ()
+        observed = [
+            check for check in (getattr(result, "checks", ()) or ())
+            if getattr(check, "name", None) == declared[0]
+        ]
+        if len(observed) != 1:
+            return ()
+        check = observed[0]
+        if (
+            getattr(check, "required", None) is not True
+            or getattr(check, "passed", None) is not True
+        ):
+            return ()
+        return declared
 
     @staticmethod
     def _validation_proved(proof: Mapping[str, Any]) -> bool:
@@ -1664,24 +2235,64 @@ class CodingRouteOrchestrator:
     # ---- orchestration ---------------------------------------------------
 
     async def run(
-        self, request: CodingTaskRequest, implement: Implement,
+        self,
+        request: CodingTaskRequest,
+        implement: Implement,
+        *,
+        parent_contract: Optional[Mapping[str, Any]] = None,
+        on_pre_contract: Optional[Callable[[Mapping[str, Any]], None]] = None,
+        cumulative_scope: Optional[Callable[[Any], Sequence[str]]] = None,
     ) -> Tuple[CodingTaskResult, CodingRouteReceipt]:
-        """Run pre-lanes, the implementer, then the post-lanes."""
+        """Run pre-lanes, the implementer, then the post-lanes.
+
+        Three optional seams, all host-owned and all provider-neutral:
+
+        `parent_contract`
+            The exact contract a previous round of this same root task proved.
+            Passed to the Indexer so the plan is an amendment rather than a new
+            root. Absent on a first round, and then nothing about the request
+            changes.
+        `on_pre_contract`
+            Called once, only after the pre-lane genuinely succeeded, with the
+            contract this round is authorized against. A lane that raised never
+            reaches it, so a failed pre-lane can never leave amendable
+            authority behind.
+        `cumulative_scope`
+            Turns this round's result into the exact attributable set the
+            *whole* task now owns. Post-work validates that set, not just what
+            the last round happened to touch, because that set is what the
+            service will hash and offer to an auditor.
+        """
+
         lanes: list[RouteLaneReceipt] = []
         try:
-            pre_lane, context = await self._indexer_pre(request)
+            pre_lane, context = await self._indexer_pre(request, parent_contract)
             lanes.append(pre_lane)
+            if on_pre_contract is not None:
+                on_pre_contract(context.get("task_contract") or {})
             blueprint_lane, projection = await self._blueprint(request)
             lanes.append(blueprint_lane)
         except CodingRouteError as exc:
             return self._failed(exc, lanes, request)
 
         result = await implement(request, projection)
-        changed = tuple(str(item) for item in getattr(result, "files_changed", ()) or ())
+        try:
+            # The cumulative set is proven *before* the proof lanes run, so Core
+            # and the Indexer both see exactly what the final revision will
+            # bind. Deriving it afterwards is what let a later round validate a
+            # narrower scope than the one an auditor was eventually offered.
+            changed = tuple(
+                str(item) for item in (
+                    cumulative_scope(result) if cumulative_scope is not None
+                    else (getattr(result, "files_changed", ()) or ())
+                )
+            )
+        except CodingRouteError as exc:
+            return self._failed(exc, lanes, request, result=result)
 
         try:
-            lanes.append(await self._core(request, changed))
-            lanes.append(await self._indexer_post(request, context, result))
+            lanes.append(await self._core(request, changed, result))
+            lanes.append(await self._indexer_post(request, context, result, changed))
         except CodingRouteError as exc:
             return self._failed(exc, lanes, request, result=result)
 
@@ -1734,6 +2345,12 @@ class CodingRouteOrchestrator:
             rounds_used=int(getattr(result, "rounds_used", 0) or 0),
             evidence_path="",
             failure_code="route_{}".format(exc.code)[:64],
+            # The domain's own bounded reasons, carried into the one existing
+            # public identifier-list field rather than a new channel.
+            verification_blockers=safe_blockers(
+                tuple(getattr(exc, "blockers", ()) or ())
+                + tuple(getattr(result, "verification_blockers", ()) or ())
+            ),
             # `failure_code` above names the lane that refused this round. The
             # implementer's own classification is a different fact and the only
             # one that says what the round actually did, so it is carried

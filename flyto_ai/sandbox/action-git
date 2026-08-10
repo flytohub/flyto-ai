@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+manifest=/run/flyto-action/tracked-files
+
+if [ "${1:-}" = "-C" ]; then
+    [ "$#" -ge 3 ] || exit 126
+    shift 2
+fi
+
+if [ "$#" -eq 4 ] \
+    && [ "$1" = "ls-files" ] \
+    && [ "$2" = "--cached" ] \
+    && [ "$3" = "--others" ] \
+    && [ "$4" = "--exclude-standard" ] \
+    && [ -r "$manifest" ]; then
+    exec /bin/cat "$manifest"
+fi
+
+echo "only the isolated tracked-file manifest is available" >&2
+exit 126

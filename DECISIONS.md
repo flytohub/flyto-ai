@@ -1,5 +1,43 @@
 # Decisions
 
+## 2026-08-10: `require_changes` is cumulative across audited rework
+
+`require_changes=true` requires one real attributable job revision; it does not
+require every same-session rework round to produce different bytes. A clean
+rework may promote the adapter's exact `no_changes` result only when all
+required checks pass and the host re-proves the recorded implementation
+session, tenant/job worktree claim, sealed resume envelope, cumulative file
+set, and current content digest. The cumulative files are then passed through
+the ordinary Indexer post validation and exact-revision Codex audit.
+
+Reason: an auditor may correctly request a bounded completion or recheck after
+the implementation is already byte-correct. Treating that recheck as a fresh
+job discarded a verified revision or forced the model to create meaningless
+source churn. Reusing cumulative proof preserves the audit boundary without
+inventing a diff or trusting provider prose.
+
+## 2026-08-09: Repository dotfiles need exact basename authority
+
+Guardian may edit only the three repository dotfiles already named in its
+closed allowlist: `.gitignore`, `.dockerignore`, and `.editorconfig`.
+`os.path.splitext()` treats a leading-dot filename as extensionless, which made
+those existing entries ineffective and prevented required generated-index
+hygiene from being implemented through the audited route. Matching exact
+basenames repairs that contradiction without allowing `.env`, `.bashrc`, or
+any other arbitrary dotfile; the sensitive-path gate still runs first.
+
+## 2026-08-09: Claude implementation rounds use the existing 100-turn ceiling
+
+The audited Claude adapter now defaults to 100 turns, which was already the
+validated hard ceiling in `CC_MAX_TURNS_CEILING` and in the public coding
+request contract. Two fresh, fail-closed robotics verifier jobs exhausted 30
+and 60 turns after producing substantial workspace changes, leaving no provider
+result or auditable revision. Raising the default to the existing ceiling lets
+the provider finish its bounded response; it does not loosen the USD budget,
+grant Bash, broaden edit authority, bypass required checks, skip the four host
+lanes, or weaken exact-revision Codex audit. Operators may still set a lower
+positive value with `FLYTO_AI_CC_MAX_TURNS`.
+
 ## 2026-08-09: The capability control plane is domain-neutral; coding is an adapter
 
 The downstream chain is a statement of responsibility and data flow, not a
@@ -124,11 +162,10 @@ left the active public route on the old deadline.
 
 - One named constant now owns the Indexer transport bound, and both route
   constructors use it.
-- The bound is 60 seconds, the existing contract maximum. It changes only how
-  long the host waits for one allowlisted Indexer call; mandatory lanes, tool
-  permissions, call-count and
-  remediation limits, evidence validation, and fail-closed semantics stay the
-  same.
+- The bound is ten minutes, within the existing 900-second contract maximum.
+  It changes only how long the host waits for one allowlisted Indexer call;
+  mandatory lanes, tool permissions, call-count and remediation limits,
+  evidence validation, and fail-closed semantics stay the same.
 - A real overrun is still classified `capability_timeout` and remains
   non-landable. Green repository checks still cannot replace Indexer post-work
   evidence.
@@ -711,3 +748,131 @@ retaining continuous evidence-backed learning.
 
 - Agent Builder concepts can inform workflow UX, but product code stays code-first and provider-agnostic.
 - Durable primitives are MCP, typed tools, traces, evals, guardrails, approvals, and evidence.
+
+## 2026-08-10: Cross-job continuation is a single-use durable authority
+
+A provider round that stops at a configured ceiling (`provider_job_budget_exhausted`
+or the bounded turn stop) is real, attributable work. Carrying it forward is an
+explicit second `submit` with `resume=true, thread_id=<exact SDK session>`, never
+an implicit retry and never a fallback.
+
+- Permission is a tenant-partitioned, single-use **continuation authority** that
+  binds tenant, backend, exact session, originating job, workspace identity and
+  path, attributable revision, whole-workspace snapshot, snapshot policy,
+  authorized verification contract, request digest, stop code, and a monotonic
+  generation. Holding a session id proves nothing.
+- The monotonic truth lives *outside* the replaceable authority body, in an
+  append-only hash-chained **journal**. Its tail is the only thing allowed to say
+  which generation and state a session is at, so restoring an older-but-validly-
+  signed record is a replay and is refused.
+- Transitions are exact: `open(g) -> claimed(g) | settled(g)`,
+  `claimed(g) -> open(g+1) | settled(g)`, `settled` terminal, sequence always +1.
+  Tenant, backend, session, origin job, workspace, config, request and snapshot
+  policy are invariant across every transition.
+- Claiming is a compare-and-swap against the journal tail under an exclusive
+  `flock`, so many independent Codex processes sharing one state root produce
+  exactly one owner. Every loser gets one non-disclosing code.
+- Generations are bounded (`MAX_CONTINUATION_GENERATION`). Nothing spends a
+  segment automatically and no configured model budget or turn ceiling is raised.
+
+## 2026-08-10: A workspace snapshot has an explicit, digest-bound projection
+
+Continuation re-proves the *whole* workspace before provider contact, because a
+digest of only the attributable change set cannot see an unrelated file another
+agent added between segments.
+
+- The default projection observes every entry that is not root version-control
+  state (`.git`/`.hg`/`.svn`). There is no blanket ignore for `node_modules`,
+  `.venv`, build output or caches: those are exactly where undetected input
+  change would matter.
+- A `SnapshotPolicy` may classify a small number of **exact root-relative**
+  directory names as control-plane runtime state. Only the strict public route
+  with a required Indexer capability is granted one, and only for `.flyto-index`,
+  because that route's mandatory Indexer pre/post gates independently revalidate
+  that tree and record the result in the route receipt. Without the gates there is
+  no justification, so every other configuration gets the default projection.
+- The policy identity is hashed into the manifest digest and frozen into the
+  authority. Policy drift, an added exclusion, a malformed policy, or a
+  strict-route authority replayed on a non-strict service all refuse before the
+  provider is contacted.
+- A classified directory's *presence* is still observed; only its contents are
+  another component's business. A nested directory with the same name stays
+  ordinary source.
+
+Rationale: `flyto-code` carries a live `.flyto-index/task-runs.sqlite` that its
+Indexer rewrites continuously. Under a whole-tree digest that repository could
+never be continued - for a reason that has nothing to do with its source.
+
+## 2026-08-10: Admission is phased; repository observation never holds the global guard
+
+`CodingService.submit` runs in three phases so one large repository cannot stall
+every other tenant and workspace:
+
+1. unlocked idempotent-replay read, so a replay never pays for a scan;
+2. per-workspace admission lock, holding the verification-contract read and the
+   workspace snapshot - the expensive work;
+3. the global state guard, held only for bounded reads and writes: authoritative
+   replay, build-drift, capacity, the continuation compare-and-swap, job lease,
+   record, workspace claim, idempotency record and executor hand-off.
+
+Lock order is **workspace-admission -> state guard**, always. The admission lock is
+never taken while the state guard or a round's workspace lock is held, so there is
+no cycle. The admission lock is deliberately distinct from the per-round workspace
+lock: a submit never queues behind a running model round, and a round never queues
+behind a scan.
+
+## 2026-08-10: A rework is one root task, with cumulative plan authority
+
+Job `job_1be3e31602264f88b617b42a` took three implementation rounds. The third
+passed every host check and was still refused by strict Indexer post-work with
+`unplanned_diff`, surfacing only as `route_domain_failure`. Two defects with the
+same shape produced it, and both are now closed.
+
+- **The pre-lane amends, it does not re-root.** After a genuine pre-lane
+  success the exact contract is sealed into a bounded, integrity-protected,
+  private envelope in the job record, bound to that job, its root request and
+  its workspace. A rework loads and re-proves that envelope and passes it back
+  as `task_contract`, so the root task id and objective are preserved and scope
+  grows only by typed amendment. With no parent the request is byte-for-byte
+  what it always was, so a legacy Indexer sees no new argument.
+- **Post-work validates what the audit will bind.** The cumulative attributable
+  set is proven *before* the proof lanes run and handed to both Core and the
+  Indexer, and `_record_outcome` refuses unless the persisted
+  `implementation_files` equal that exact ordered tuple. Validating a narrower
+  scope than an auditor is later offered is not validating.
+- **Prior authority is re-proven before the implementer edits.** Session,
+  resume envelope, worktree claim, workspace path, bounded prior set and the
+  exact prior revision digest are all checked while the recorded revision still
+  describes the tree. A missing, stale, replayed or tampered parent fails with
+  no provider call.
+- **A machine identifier is not edit-path authority.** A path that does not yet
+  exist needs a real file extension *and* a generic mutation verb adjacent to
+  it, so `check.generated_reference` and `pkg/check.some_capability` are
+  evidence about a round rather than a request to create a file, while
+  `add tests/test_x.py` and `create app/[id]/page.tsx` still work.
+
+## 2026-08-10: Domain diagnostics are validated before they are normalized
+
+A capability's `pass=false` is the one refusal a caller can act on, so its
+`reason_codes` and `required_actions` survive into host-owned
+`verification_blockers` and the receipt detail. What crosses is bounded and
+closed: a value must *already* match a machine-identifier grammar
+(`[a-z0-9][a-z0-9_.:-]{1,63}`) before its separators are mapped into the public
+blocker grammar.
+
+The order matters more than the grammar. Normalizing first turned
+`please open /Users/alice/private token` into
+`validation_please_open_users_alice_private_token`, which reads exactly like a
+token this host owns. Invalid or overlong values are now dropped whole, never
+truncated into validity, and that includes screaming-case values that were
+previously rescued.
+
+## 2026-08-10: Plan-authority failures report `verification`, not `preflight`
+
+`preflight` is documented as "no job exists and no claim was taken". A
+plan-authority refusal happens inside an admitted job that already holds a
+durable worktree claim, after capability startup and before the implementer
+call, so it reports `verification` with `retryable=false` and the existing
+closed action `resubmit_against_current_contract`. An identical rework cannot
+restore a durable fact that is missing or contradicted; a fresh job against
+current authority can.

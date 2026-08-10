@@ -39,15 +39,161 @@ SHA-256 snapshot, score/reason evidence, exclusions, confidence, and
   trust/evidence gate accepts the Blueprint. `module_ids` contains no params or
   execution data.
 - Core discovery always flows through
-  `flyto_ai.tools.core_tools.dispatch_core_tool`. Discovered Core modules are
-  hard-filtered unless `allowed_sources` explicitly includes `flyto-core`.
+  `flyto_ai.tools.core_tools.dispatch_core_tool`. It adds only **installed,
+  registry-declared capability providers** to the routable catalog, and adding a
+  provider to the catalog never adds execution authority: the provider still
+  passes every hard filter, still has to be selected, and is still validated at
+  dispatch.
+
+### Capability identity and provider identity are declared, never derived
+
+`search_modules` results carry two string identity fields that Core normalizes
+to a registry value or `""`: `provides_capability`, declared by the module, and
+`plugin`, stamped by `ModuleRegistry`. This router consumes both verbatim.
+
+- A Core result becomes a capability manifest only when it carries a module ID
+  **and** a non-empty, safe `provides_capability`. `canonical_id` is then
+  exactly that declared value.
+- The projected manifest keeps `provides_capability` and `plugin`.
+- Nothing here reconstructs either identity from `module_id`, `category`, a
+  prefix, or a plugin name. `_canonical_id()` does not synthesize a
+  `core.module.<module_id>@1` fallback, so a manifest whose `source` is
+  `flyto-core` and that declares no explicit safe capability ID is invalid and
+  is excluded as `invalid_or_duplicate_identity`.
+- An unsafe declared ID is excluded deterministically. It is never stripped,
+  repaired, or replaced with an invented one.
+- `provides_capability=""` is a legitimate ordinary Core module, not a
+  capability. It is simply not projected, so it can neither become an invented
+  capability nor appear as a routing exclusion.
+
+A **capability ID** answers "what can be done". A **provider identity** answers
+"which installed module would do it" and is the tuple
+`(canonical_id, runtime_name, plugin, source)`. Several modules or plugins may
+legitimately provide one capability, so only an identical provider identity is
+rejected as a duplicate; two distinct runtime module IDs that share a capability
+ID both stay routable and both stay distinguishable. Route candidates therefore
+carry bounded `plugin` and `source` fields alongside `canonical_id` and
+`runtime_name`, and the ranking tiebreak is the full identity, so co-providers
+keep a deterministic, auditable order.
+
+### Source scope: explicit ceiling, dynamic default
+
+`context.allowed_sources` is an authority ceiling. When a caller supplies it, it
+is preserved exactly and discovery never widens it — a discovered `flyto-core`
+provider is excluded with `source_out_of_scope` unless the caller listed
+`flyto-core`.
+
+When `allowed_sources` is absent, the default scope is the set of sources
+present in the supplied manifests, plus `flyto-core` when this round actually
+verified at least one registry-declared Core capability provider. Arbitrary Core
+search results cannot enter that default scope, because an ordinary module is
+never projected into a manifest in the first place.
+
+### Discovery status is a lane outcome, not an empty list
+
+Both discovery lanes report a bounded machine-readable `status` and a bounded
+`status_reason` in `discovery_evidence`. The status vocabulary is exactly
+`applied`, `not_applicable`, `unavailable`, `failed` and is exported as
+`DISCOVERY_STATUSES`. An unreachable or broken lane is therefore no longer
+indistinguishable from a legitimate no-match. Reason codes are drawn from a
+fixed vocabulary; raw exception text, tracebacks, and bridge internals never
+cross this boundary.
+
+| Lane | `applied` | `not_applicable` | `unavailable` | `failed` |
+| --- | --- | --- | --- | --- |
+| Blueprint | search returned candidates | search returned zero candidates | package or engine absent (`engine_unavailable`) | search raised (`search_failed`), wrong result shape (`invalid_result`), or more than `BLUEPRINT_CANDIDATE_LIMIT` candidates (`result_over_bound`) |
+| Core | valid runtime manifest plus verified capability providers (`discovery_matched`) | valid runtime manifest and zero results (`discovery_empty`), or well-formed results that declare no capability (`no_capability_providers`) | explicit `ok=false` (`runtime_unavailable`), absent runtime evidence (`runtime_missing`), or wrong contract (`runtime_contract_mismatch`) | non-boolean `ok` or non-string contract (`runtime_malformed`), or a malformed search response (`search_malformed`) |
+
+`candidate_count` for the Core lane counts **valid projected capability
+providers**, not raw search hits. A search that returned only ordinary modules
+therefore resolves as `not_applicable` with `candidate_count=0`, which is a
+clean lane outcome rather than a failure.
+
+Core runtime evidence is trusted only when the bridge returns the exact
+`flyto-core-mcp.v1` contract (`CORE_RUNTIME_CONTRACT`) together with an
+explicit boolean `ok=true`. A missing `ok`, a truthy non-boolean `ok`, or a
+different contract version is absent or malformed runtime evidence, never a
+no-match. The Core search response must be an object with a `results` list
+whose every entry carries a safe non-empty `module_id`; a single malformed
+entry fails the lane instead of being silently filtered into
+`not_applicable`. The same rule covers the identity fields: a present
+`provides_capability` or `plugin` that is not a string is a broken bridge and
+fails the search contract, because coercing it with `str()` would manufacture an
+identity that no registry published.
+
+Blueprint discovery is bounded at `BLUEPRINT_CANDIDATE_LIMIT` (32) candidates
+and reads at most one item past that ceiling, so a runaway or streaming bridge
+cannot force an unbounded materialization. Because the trust gate consumes only
+the single highest-ranked trusted procedure, an over-bound result is evidence of
+a broken bridge rather than richer evidence, and it fails closed.
+
+Both lanes stay read-only. Blueprint discovery only re-ranks modules that are
+already installed. Core discovery may extend the routable catalog, but only with
+installed providers the registry itself declares, and never with execution
+authority: a discovered provider still passes the same hard filters, still has
+to win selection, and is still schema-, permission-, and safety-validated at
+dispatch. Discovery never widens an explicit `allowed_sources`. Core calls
+continue to flow through `flyto_ai.tools.core_tools.dispatch_core_tool`, and a
+bridge call that raises is re-raised as a bounded `CapabilityRoutingError`
+rather than a raw provider or transport exception.
+
+### Planner propagation
 
 `prepare_planner_request()` applies this boundary to
 `flyto.robotics.planner-request.v1`. It replaces the catalog with the verified
 shortlist before provider dispatch and attaches the full routing decision as
-evidence. Production robot entry points should set
-`require_goal_frame=True`; the default remains backwards compatible with older
-planner clients.
+evidence.
+
+The shortlist is resolved against the **combined catalog** the route was
+actually decided over — the supplied manifests plus the verified
+Core-discovered providers — not by re-filtering the request's original list. A
+legitimately discovered provider would otherwise be silently dropped after being
+selected. Each selected candidate is matched back by full provider identity
+(`canonical_id`, `runtime_name`, `plugin`, **and** `source`), never by runtime
+name or capability ID alone, so an unselected or unregistered module that
+happens to share a runtime name or a capability ID with a selected provider
+cannot inherit its execution authority. Manifests are emitted in route-candidate
+order, so two distinct providers of one capability both propagate and keep the
+route's deterministic identity order.
+
+Resolution fails closed. Every selected candidate must match **exactly one**
+manifest in the combined catalog. A candidate that matches none, or one that
+matches more than one same-identity manifest, raises a bounded
+`CapabilityRoutingError` carrying only the two counts
+(`unresolved=`, `ambiguous=`); no catalog-controlled identity text crosses that
+boundary. An unresolved candidate is never silently dropped, because a shortlist
+that is quietly narrower than the route it ships with is exactly the mismatch
+downstream validation rejects — `robotics_planning` requires `capabilities` to
+describe `capability_route.candidates` exactly. An ambiguous candidate fails for
+the same reason a duplicate identity is refused during ranking: picking one of
+several same-identity manifests would grant execution authority by catalog
+order. Callers must therefore de-duplicate provider identities before routing;
+supplying a manifest that exactly repeats a discovered Core provider identity is
+an ambiguous catalog, not a hint.
+
+Production robot entry points should set `require_goal_frame=True`; the default
+remains backwards compatible with older planner clients, including callers whose
+environment exposes no discoverable Core capabilities at all.
+
+### Strict discovery mode
+
+`prepare_planner_request(require_discovery=True)` requires both lane statuses to
+be in `{applied, not_applicable}`. An `unavailable` or `failed` lane raises a
+bounded `CapabilityRoutingError` naming only the two statuses, and it raises
+before any provider could run, so a degraded discovery lane cannot silently
+become a narrower shortlist that a model then plans against. Production robot
+and coding entry points that treat Blueprint and Core as required lanes should
+set it alongside `require_goal_frame=True`.
+
+**Compatibility and rollback.** `require_discovery` defaults to `False`, which
+preserves the existing library behavior exactly: `route_with_flyto()` is
+unchanged apart from the additive `status`/`status_reason` evidence fields and
+the typed error wrapping, and existing callers that never read
+`discovery_evidence` see no behavior change. Rolling back strict mode is a
+call-site change — drop `require_discovery=True` — and needs no contract,
+manifest, or catalog migration. Rolling back the contract entirely means
+reverting `flyto_ai/capability_router.py`; the evidence fields are additive, so
+no persisted route or planner request needs rewriting.
 
 Missing semantic coverage or a low-confidence legacy route sets
 `needs_clarification=true`. Robot-side policy must then require a human gate or

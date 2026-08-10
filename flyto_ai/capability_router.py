@@ -17,6 +17,7 @@ import math
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import islice
 from typing import Any
 
 CAPABILITY_ROUTE_VERSION = "flyto.capability-route.v1"
@@ -25,6 +26,31 @@ GOAL_FRAME_VERSION = "flyto.goal-frame.v1"
 GOAL_FRAME_REQUEST_VERSION = "flyto.goal-frame-request.v1"
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,191}$")
+
+# Bounded, machine-readable discovery outcomes.  A lane outcome is derived from
+# a completed bridge call, never from model prose, and never carries raw
+# exception text across the trust boundary.
+DISCOVERY_APPLIED = "applied"
+DISCOVERY_NOT_APPLICABLE = "not_applicable"
+DISCOVERY_UNAVAILABLE = "unavailable"
+DISCOVERY_FAILED = "failed"
+DISCOVERY_STATUSES = (
+    DISCOVERY_APPLIED,
+    DISCOVERY_NOT_APPLICABLE,
+    DISCOVERY_UNAVAILABLE,
+    DISCOVERY_FAILED,
+)
+_DISCOVERY_READY = frozenset({DISCOVERY_APPLIED, DISCOVERY_NOT_APPLICABLE})
+
+# Core runtime evidence is only trusted when the bridge returns this exact
+# contract plus an explicit boolean ok=true.  Anything else is an absent or
+# malformed runtime, never a legitimate no-match.
+CORE_RUNTIME_CONTRACT = "flyto-core-mcp.v1"
+# Conservative ceiling on read-only Blueprint discovery.  Blueprint search is
+# relevance ordered and only one trusted procedure is ever consumed, so an
+# over-bound result is a broken bridge rather than richer evidence.
+BLUEPRINT_CANDIDATE_LIMIT = 32
+_MISSING = object()
 
 CoreDispatch = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 BlueprintSearch = Callable[[str], Sequence[Mapping[str, Any]]]
@@ -205,20 +231,27 @@ def _runtime_name(manifest: Mapping[str, Any]) -> str:
 
 
 def _canonical_id(manifest: Mapping[str, Any]) -> str:
-    runtime_name = _runtime_name(manifest)
-    return str(
-        manifest.get("canonical_id")
-        or (
-            f"core.module.{runtime_name}@1"
-            if manifest.get("source") == "flyto-core"
-            else f"capability.{runtime_name}@1"
-        )
-    )
+    """Return the declared capability ID, never a derived or repaired one.
+
+    A capability ID is an authority-bearing identity.  It is only ever the
+    registry-declared value carried by the manifest.  When a manifest declares
+    no usable ID this returns ``""`` so the caller excludes it, because a
+    synthesized ID would hand execution authority to an identity that no
+    registry ever published.
+    """
+    if "canonical_id" in manifest:
+        explicit = manifest["canonical_id"]
+        return explicit if isinstance(explicit, str) else ""
+    # ``flyto-core`` identities are stamped by ModuleRegistry, so AI must not
+    # reconstruct one from module_id, category, prefix, or plugin name.
+    if manifest.get("source") == "flyto-core":
+        return ""
+    return f"capability.{_runtime_name(manifest)}@1"
 
 
 def _manifest_source(manifest: Mapping[str, Any]) -> str:
-    explicit = str(manifest.get("source", ""))
-    if explicit:
+    explicit = manifest.get("source", "")
+    if isinstance(explicit, str) and explicit:
         return explicit
     canonical_id = _canonical_id(manifest)
     if canonical_id.startswith("robotics."):
@@ -226,6 +259,28 @@ def _manifest_source(manifest: Mapping[str, Any]) -> str:
     if canonical_id.startswith("core."):
         return "flyto-core"
     return "external"
+
+
+def _manifest_plugin(manifest: Mapping[str, Any]) -> str:
+    """Return the registry-stamped plugin identity, or ``""`` when unstamped."""
+    plugin = manifest.get("plugin", "")
+    return plugin if isinstance(plugin, str) else ""
+
+
+def _provider_identity(manifest: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """Return the full provider identity of one manifest.
+
+    A capability ID answers "what can be done"; a provider identity answers
+    "which installed module would do it".  Several modules or plugins may
+    legitimately provide one capability, so only the full tuple may be used for
+    duplicate rejection, tiebreaks, and planner propagation.
+    """
+    return (
+        _canonical_id(manifest),
+        _runtime_name(manifest),
+        _manifest_plugin(manifest),
+        _manifest_source(manifest),
+    )
 
 
 def _catalog_snapshot(manifests: Sequence[Mapping[str, Any]]) -> str:
@@ -452,26 +507,28 @@ def route_capabilities(
     blueprint_hints = _trusted_blueprint_module_hints(blueprint_candidates)
     valid: list[Mapping[str, Any]] = []
     excluded: list[dict[str, object]] = []
-    seen_names: set[str] = set()
-    seen_ids: set[str] = set()
+    seen_providers: set[tuple[str, str, str, str]] = set()
     for manifest in manifests:
         if not isinstance(manifest, Mapping):
             excluded.append({"runtime_name": "", "reasons": ["invalid_manifest"]})
             continue
         runtime_name = _runtime_name(manifest)
         canonical_id = _canonical_id(manifest)
+        plugin = _manifest_plugin(manifest)
+        identity = _provider_identity(manifest)
         if (
             not _SAFE_ID.fullmatch(runtime_name)
             or not _SAFE_ID.fullmatch(canonical_id)
-            or runtime_name in seen_names
-            or canonical_id in seen_ids
+            or (plugin and not _SAFE_ID.fullmatch(plugin))
+            # Two modules may legitimately provide one capability, so only an
+            # identical provider identity is a duplicate.
+            or identity in seen_providers
         ):
             excluded.append(
                 {"runtime_name": runtime_name, "reasons": ["invalid_or_duplicate_identity"]}
             )
             continue
-        seen_names.add(runtime_name)
-        seen_ids.add(canonical_id)
+        seen_providers.add(identity)
         failures = _hard_filter(manifest, active_context)
         if failures:
             excluded.append({"runtime_name": runtime_name, "reasons": list(failures)})
@@ -482,7 +539,9 @@ def route_capabilities(
     for manifest in valid:
         score, reasons = _score(goal, manifest, blueprint_hints, active_goal_frame)
         ranked.append((score, _canonical_id(manifest), manifest, reasons))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
+    # Full provider identity is the tiebreak so co-providers of one capability
+    # keep a stable, auditable order instead of an arbitrary catalog order.
+    ranked.sort(key=lambda item: (-item[0], item[1], *_provider_identity(item[2])[1:]))
     selection_pool = (
         [item for item in ranked if item[0] > 0.0]
         if active_goal_frame is not None
@@ -545,6 +604,8 @@ def route_capabilities(
         {
             "canonical_id": canonical_id,
             "runtime_name": _runtime_name(manifest),
+            "plugin": _manifest_plugin(manifest),
+            "source": _manifest_source(manifest),
             "score": round(score, 4),
             "reasons": list(reasons or ("deterministic_tiebreak",)),
             "selected_by": (
@@ -621,30 +682,57 @@ def _semantic_coverage(
     }
 
 
-def _core_manifests(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _core_text(item: Mapping[str, Any], field: str, default: str = "") -> str:
+    value = item.get(field, default)
+    return value if isinstance(value, str) else default
+
+
+def _core_capability_providers(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Project Core search results into registry-declared capability providers.
+
+    Only a result that carries a module identity *and* a non-empty, safe
+    registry-declared ``provides_capability`` becomes a manifest, and its
+    ``canonical_id`` is exactly that declared value.  An ordinary Core module
+    reports ``provides_capability=""``; that is a legitimate non-capability
+    search hit, so it is skipped rather than turned into an invented
+    capability.  Unsafe declared identities are excluded deterministically and
+    are never stripped or repaired here.
+    """
     manifests: list[dict[str, Any]] = []
     raw_results = result.get("results", [])
     if not isinstance(raw_results, list):
         return manifests
     for item in raw_results:
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
-        module_id = str(item.get("module_id", ""))
-        if not module_id:
+        module_id = item.get("module_id", "")
+        if not isinstance(module_id, str) or not _SAFE_ID.fullmatch(module_id):
             continue
+        capability_id = item.get("provides_capability", "")
+        if not isinstance(capability_id, str) or not capability_id:
+            # An ordinary module, not a capability provider.
+            continue
+        if not _SAFE_ID.fullmatch(capability_id):
+            continue
+        plugin = item.get("plugin", "")
+        if not isinstance(plugin, str) or (plugin and not _SAFE_ID.fullmatch(plugin)):
+            continue
+        category = _core_text(item, "category")
         manifests.append(
             {
                 "manifest_contract": "flyto.capability-manifest.v1",
-                "canonical_id": f"core.module.{module_id}@1",
+                "canonical_id": capability_id,
+                "provides_capability": capability_id,
+                "plugin": plugin,
                 "runtime_name": module_id,
                 "name": module_id,
                 "version": "runtime",
                 "source": "flyto-core",
-                "domain": str(item.get("category", "core")),
-                "description": str(item.get("description", "")),
-                "label": str(item.get("label", "")),
+                "domain": category or "core",
+                "description": _core_text(item, "description"),
+                "label": _core_text(item, "label"),
                 "aliases": [],
-                "tags": [str(item.get("category", ""))],
+                "tags": [category],
                 "control_class": "module",
                 "required_observations": [],
                 "required_resources": [],
@@ -662,6 +750,129 @@ def _core_manifests(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     return manifests
 
 
+def _resolve_blueprint_search(
+    blueprint_search: BlueprintSearch | None,
+) -> tuple[BlueprintSearch, str | None]:
+    """Resolve the read-only Blueprint discovery callable.
+
+    Returns the callable plus a bounded reason code when the Blueprint package
+    or engine is absent.  Absence is a lane outcome, not an error string.
+    """
+    if blueprint_search is not None:
+        return blueprint_search, None
+    try:
+        from flyto_blueprint import get_engine
+
+        engine_search = get_engine().search
+    except Exception:
+        return _empty_blueprint_search, "engine_unavailable"
+    if not callable(engine_search):
+        return _empty_blueprint_search, "engine_unavailable"
+    return engine_search, None
+
+
+def _blueprint_discovery(
+    blueprint_search: BlueprintSearch | None,
+    query: str,
+) -> tuple[list[Mapping[str, Any]], str, str]:
+    """Run read-only Blueprint discovery and classify the outcome."""
+    search, absent_reason = _resolve_blueprint_search(blueprint_search)
+    if absent_reason is not None:
+        return [], DISCOVERY_UNAVAILABLE, absent_reason
+    try:
+        raw = search(query)
+    except Exception:
+        # Never surface raw exception text; the status is the contract.
+        return [], DISCOVERY_FAILED, "search_failed"
+    if isinstance(raw, (str, bytes, bytearray, Mapping)):
+        return [], DISCOVERY_FAILED, "invalid_result"
+    try:
+        # Read at most one item past the ceiling so an unbounded or streaming
+        # bridge cannot force this router to materialize an unbounded list.
+        candidates = list(islice(raw, BLUEPRINT_CANDIDATE_LIMIT + 1))
+    except TypeError:
+        return [], DISCOVERY_FAILED, "invalid_result"
+    if len(candidates) > BLUEPRINT_CANDIDATE_LIMIT:
+        return [], DISCOVERY_FAILED, "result_over_bound"
+    if any(not isinstance(item, Mapping) for item in candidates):
+        return [], DISCOVERY_FAILED, "invalid_result"
+    if not candidates:
+        return [], DISCOVERY_NOT_APPLICABLE, "search_empty"
+    return candidates, DISCOVERY_APPLIED, "search_matched"
+
+
+def _core_runtime_issue(
+    core_runtime_manifest: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Return a bounded (status, reason) when Core runtime evidence is untrusted."""
+    if not isinstance(core_runtime_manifest, Mapping):
+        return DISCOVERY_UNAVAILABLE, "runtime_missing"
+    ok = core_runtime_manifest.get("ok", _MISSING)
+    if ok is not _MISSING and not isinstance(ok, bool):
+        return DISCOVERY_FAILED, "runtime_malformed"
+    if ok is False:
+        return DISCOVERY_UNAVAILABLE, "runtime_unavailable"
+    if ok is _MISSING:
+        return DISCOVERY_UNAVAILABLE, "runtime_missing"
+    contract_version = core_runtime_manifest.get("contract_version", "")
+    if not isinstance(contract_version, str):
+        return DISCOVERY_FAILED, "runtime_malformed"
+    if contract_version != CORE_RUNTIME_CONTRACT:
+        return DISCOVERY_UNAVAILABLE, "runtime_contract_mismatch"
+    return None
+
+
+def _core_results_malformed(core_result: Mapping[str, Any]) -> bool:
+    """Report whether the Core search response violates its bounded shape.
+
+    A malformed entry is a broken bridge, so it must surface as ``failed``.  It
+    must never be silently filtered out and reported as a legitimate no-match.
+    """
+    if not isinstance(core_result, Mapping):
+        return True
+    ok = core_result.get("ok", _MISSING)
+    if ok is not _MISSING and (not isinstance(ok, bool) or ok is False):
+        return True
+    raw_results = core_result.get("results", _MISSING)
+    if raw_results is _MISSING or not isinstance(raw_results, list):
+        return True
+    for item in raw_results:
+        if not isinstance(item, Mapping):
+            return True
+        module_id = item.get("module_id", "")
+        if not isinstance(module_id, str) or not _SAFE_ID.fullmatch(module_id):
+            return True
+        # Core normalizes both identity fields to a registry value or "".  A
+        # present non-string is a broken bridge, and coercing it with str()
+        # would manufacture an identity, so it fails the search contract.
+        for field in ("provides_capability", "plugin"):
+            value = item.get(field, _MISSING)
+            if value is not _MISSING and not isinstance(value, str):
+                return True
+    return False
+
+
+def _core_discovery_status(
+    core_result: Mapping[str, Any],
+    core_runtime_manifest: Mapping[str, Any],
+    core_candidate_count: int,
+) -> tuple[str, str]:
+    """Classify Core discovery from the bridge responses alone."""
+    runtime_issue = _core_runtime_issue(core_runtime_manifest)
+    if runtime_issue is not None:
+        return runtime_issue
+    if _core_results_malformed(core_result):
+        return DISCOVERY_FAILED, "search_malformed"
+    if core_candidate_count:
+        return DISCOVERY_APPLIED, "discovery_matched"
+    raw_results = core_result.get("results", [])
+    if isinstance(raw_results, list) and raw_results:
+        # Well-formed hits that declare no capability are ordinary modules, so
+        # the lane resolved cleanly with nothing routable to contribute.
+        return DISCOVERY_NOT_APPLICABLE, "no_capability_providers"
+    return DISCOVERY_NOT_APPLICABLE, "discovery_empty"
+
+
 async def route_with_flyto(
     goal: str,
     manifests: Sequence[Mapping[str, Any]],
@@ -674,6 +885,37 @@ async def route_with_flyto(
     blueprint_search: BlueprintSearch | None = None,
 ) -> dict[str, Any]:
     """Route with trusted Blueprint hints and Core discovery through existing bridges."""
+    decision, _catalog = await _route_with_flyto_catalog(
+        goal,
+        manifests,
+        goal_frame=goal_frame,
+        context=context,
+        limit=limit,
+        core_limit=core_limit,
+        core_dispatch=core_dispatch,
+        blueprint_search=blueprint_search,
+    )
+    return decision
+
+
+async def _route_with_flyto_catalog(
+    goal: str,
+    manifests: Sequence[Mapping[str, Any]],
+    *,
+    goal_frame: Mapping[str, Any] | None = None,
+    context: Mapping[str, object] | None = None,
+    limit: int = 8,
+    core_limit: int = 12,
+    core_dispatch: CoreDispatch | None = None,
+    blueprint_search: BlueprintSearch | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Route and also return the exact catalog the route was decided over.
+
+    The catalog is the supplied manifests plus the verified Core-discovered
+    capability providers.  Callers that must resolve a selected candidate back
+    to a manifest need this combined view; resolving against the request's
+    original list alone would silently drop a legitimately discovered provider.
+    """
     if not 1 <= core_limit <= 100:
         raise CapabilityRoutingError("core_limit must be between 1 and 100")
     active_goal_frame = (
@@ -683,42 +925,56 @@ async def route_with_flyto(
         _semantic_query(active_goal_frame) if active_goal_frame is not None else goal
     )
     active_context: dict[str, object] = dict(context or {})
-    if "allowed_sources" not in active_context:
-        sources = {_manifest_source(item) for item in manifests}
-        active_context["allowed_sources"] = sorted(
-            sources or {"external"}
-        )
 
-    if blueprint_search is None:
-        try:
-            from flyto_blueprint import get_engine
-
-            blueprint_search = get_engine().search
-        except Exception:
-            blueprint_search = _empty_blueprint_search
-    try:
-        blueprint_candidates = list(blueprint_search(discovery_query))
-    except Exception:
-        blueprint_candidates = []
+    (
+        blueprint_candidates,
+        blueprint_status,
+        blueprint_status_reason,
+    ) = _blueprint_discovery(blueprint_search, discovery_query)
 
     if core_dispatch is None:
-        from flyto_ai.tools.core_tools import dispatch_core_tool
-
+        try:
+            from flyto_ai.tools.core_tools import dispatch_core_tool
+        except Exception as exc:
+            raise CapabilityRoutingError(
+                "flyto-core discovery bridge is unavailable"
+            ) from exc
         core_dispatch = dispatch_core_tool
-    core_search = core_dispatch(
-        "search_modules",
-        {"query": discovery_query, "limit": core_limit},
-    )
-    core_manifest_call = core_dispatch(
-        "get_core_capability_manifest",
-        {"include_tools": False, "include_categories": True},
-    )
-    core_result, core_runtime_manifest = await _gather_calls(
-        core_search,
-        core_manifest_call,
-    )
+    try:
+        core_search = core_dispatch(
+            "search_modules",
+            {"query": discovery_query, "limit": core_limit},
+        )
+        core_manifest_call = core_dispatch(
+            "get_core_capability_manifest",
+            {"include_tools": False, "include_categories": True},
+        )
+        core_result, core_runtime_manifest = await _gather_calls(
+            core_search,
+            core_manifest_call,
+        )
+    except CapabilityRoutingError:
+        raise
+    except Exception as exc:
+        # Bounded, typed failure; the underlying text stays out of the contract.
+        raise CapabilityRoutingError("flyto-core discovery bridge call failed") from exc
     combined = [dict(item) for item in manifests]
-    combined.extend(_core_manifests(core_result))
+    core_candidates = _core_capability_providers(core_result)
+    combined.extend(core_candidates)
+    if "allowed_sources" not in active_context:
+        # An explicit ceiling is preserved exactly.  Only when the caller gave
+        # none may installed, registry-declared Core providers join the default
+        # scope; an ordinary Core search hit never reaches this point because it
+        # is not projected into a manifest at all.
+        sources = {_manifest_source(item) for item in manifests}
+        if core_candidates:
+            sources.add("flyto-core")
+        active_context["allowed_sources"] = sorted(sources or {"external"})
+    core_status, core_status_reason = _core_discovery_status(
+        core_result,
+        core_runtime_manifest,
+        len(core_candidates),
+    )
     route = route_capabilities(
         goal,
         combined,
@@ -728,11 +984,13 @@ async def route_with_flyto(
         blueprint_candidates=blueprint_candidates,
     )
     trusted_hints = _trusted_blueprint_module_hints(blueprint_candidates)
-    return {
+    decision = {
         "contract_version": ROUTING_DECISION_VERSION,
         "route": route,
         "discovery_evidence": {
             "blueprint": {
+                "status": blueprint_status,
+                "status_reason": blueprint_status_reason,
                 "query_mode": (
                     "semantic_frame" if active_goal_frame is not None else "raw_goal"
                 ),
@@ -740,6 +998,8 @@ async def route_with_flyto(
                 "trusted_module_hints": sorted(trusted_hints),
             },
             "core": {
+                "status": core_status,
+                "status_reason": core_status_reason,
                 "query_mode": (
                     "semantic_frame" if active_goal_frame is not None else "raw_goal"
                 ),
@@ -751,11 +1011,62 @@ async def route_with_flyto(
                     core_runtime_manifest.get("tool_fingerprint", "")
                     or core_runtime_manifest.get("fingerprint", "")
                 ),
-                "candidate_count": len(_core_manifests(core_result)),
+                "candidate_count": len(core_candidates),
                 "used_bridge": "flyto_ai.tools.core_tools.dispatch_core_tool",
             },
         },
     }
+    return decision, combined
+
+
+def _selected_manifests(
+    candidates: Sequence[Mapping[str, Any]],
+    catalog: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Resolve every selected candidate back to exactly one catalog manifest.
+
+    The catalog is the exact combined view the route was decided over — the
+    supplied manifests plus the verified Core-discovered providers.  Matching on
+    the full provider identity keeps two providers of one capability distinct
+    and prevents an unselected or unregistered module from inheriting execution
+    authority via a shared runtime name or a shared capability ID.
+
+    Resolution fails closed.  A selected candidate that matches no manifest, or
+    that matches more than one, means the route and the catalog disagree about
+    who would execute it.  Dropping such a candidate would hand the planner a
+    silently narrower shortlist, and picking one of several same-identity
+    manifests would grant authority by catalog order, so both raise a bounded
+    ``CapabilityRoutingError`` that carries counts only.
+    """
+    by_identity: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = {}
+    for manifest in catalog:
+        by_identity.setdefault(_provider_identity(manifest), []).append(manifest)
+    selected: list[Mapping[str, Any]] = []
+    unresolved = 0
+    ambiguous = 0
+    for candidate in candidates:
+        key = (
+            str(candidate.get("canonical_id", "")),
+            str(candidate.get("runtime_name", "")),
+            str(candidate.get("plugin", "")),
+            str(candidate.get("source", "")),
+        )
+        matches = by_identity.get(key, ())
+        if len(matches) == 1:
+            selected.append(matches[0])
+        elif not matches:
+            unresolved += 1
+        else:
+            ambiguous += 1
+    if unresolved or ambiguous:
+        # Raised before any provider could run; identities stay out of the
+        # message so no catalog-controlled text crosses this boundary.
+        raise CapabilityRoutingError(
+            "selected route candidates must resolve to exactly one catalog "
+            f"manifest by provider identity (unresolved={unresolved}, "
+            f"ambiguous={ambiguous})"
+        )
+    return selected
 
 
 async def prepare_planner_request(
@@ -764,6 +1075,7 @@ async def prepare_planner_request(
     context: Mapping[str, object] | None = None,
     limit: int = 8,
     require_goal_frame: bool = False,
+    require_discovery: bool = False,
     core_dispatch: CoreDispatch | None = None,
     blueprint_search: BlueprintSearch | None = None,
 ) -> dict[str, Any]:
@@ -786,7 +1098,7 @@ async def prepare_planner_request(
             "planner request requires flyto.goal-frame.v1 for language-neutral routing"
         )
 
-    decision = await route_with_flyto(
+    decision, catalog = await _route_with_flyto_catalog(
         goal,
         manifests,
         goal_frame=goal_frame,
@@ -795,16 +1107,23 @@ async def prepare_planner_request(
         core_dispatch=core_dispatch,
         blueprint_search=blueprint_search,
     )
+    if require_discovery:
+        evidence = decision["discovery_evidence"]
+        blueprint_status = str(evidence["blueprint"]["status"])
+        core_status = str(evidence["core"]["status"])
+        if (
+            blueprint_status not in _DISCOVERY_READY
+            or core_status not in _DISCOVERY_READY
+        ):
+            # Raised before any provider could run; message stays bounded.
+            raise CapabilityRoutingError(
+                "planner request requires resolved Flyto discovery "
+                f"(blueprint={blueprint_status}, core={core_status})"
+            )
+
     route = decision["route"]
-    selected_names = {
-        str(candidate["runtime_name"]) for candidate in route["candidates"]
-    }
     prepared = dict(request)
-    prepared["capabilities"] = [
-        manifest
-        for manifest in manifests
-        if _runtime_name(manifest) in selected_names
-    ]
+    prepared["capabilities"] = _selected_manifests(route["candidates"], catalog)
     prepared["capability_route"] = route
     prepared["flyto_routing_decision"] = decision
     return prepared
@@ -825,7 +1144,10 @@ async def _gather_calls(
 
 
 __all__ = [
+    "BLUEPRINT_CANDIDATE_LIMIT",
     "CAPABILITY_ROUTE_VERSION",
+    "CORE_RUNTIME_CONTRACT",
+    "DISCOVERY_STATUSES",
     "GOAL_FRAME_REQUEST_VERSION",
     "GOAL_FRAME_VERSION",
     "ROUTING_DECISION_VERSION",

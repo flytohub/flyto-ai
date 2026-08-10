@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from flyto_ai.coding.contracts import ApprovalPolicy, SandboxMode
 from flyto_ai.coding.store import redact_evidence
@@ -40,6 +40,92 @@ _DANGEROUS_ARG_PATTERNS = (
     re.compile(r"^/(?:$|Users(?:/|$)|home(?:/|$)|etc(?:/|$)|var(?:/|$))"),
     re.compile(r"^~(?:/|$)"),
 )
+
+
+#: Where a containerised boundary always sees the workspace.
+CONTAINER_WORKSPACE = "/workspace"
+
+
+def resolve_executable(program: str) -> Optional[str]:
+    """Answer, once, whether an argv[0] can actually be launched on this host.
+
+    This exists to be *shared*. Preflight has to give the same answer as the
+    runner or it is not a preflight at all - it would be a second opinion, and
+    the two would drift the first time either changed. So there is one function,
+    the runner calls it on the path that really executes, and anything that
+    wants to know in advance calls the same one.
+
+    ``shutil.which`` is the whole rule and covers all three spellings a contract
+    can use: a plain name is searched on ``PATH``, and a relative or absolute
+    path is checked directly for existence and the executable bit. ``None``
+    means this argv could not be launched; it never means "probably fine".
+
+    Deliberately does not run anything. A verification command that exits
+    non-zero may be describing the very defect the task was opened to fix, so
+    executing it here would refuse exactly the work that most needs doing.
+    """
+
+    if not isinstance(program, str) or not program:
+        return None
+    return shutil.which(program)
+
+
+def container_hardening_argv(docker: str, cidfile: str) -> List[str]:
+    """The isolation flags every containerised execution boundary shares.
+
+    Factored so the read-only model-command sandbox and the read/write project
+    action sandbox cannot drift into two different security postures. The
+    *only* difference between them is the workspace mount mode and the uid that
+    owns writes; everything that constrains the container - no network,
+    read-only root filesystem, dropped capabilities, no new privileges, bounded
+    pids/memory/cpu - is defined once, here.
+
+    Nothing from the host environment is forwarded. In particular the Docker
+    socket is never mounted: a container that could reach the daemon could
+    start an unconstrained sibling and the whole boundary would be decorative.
+    """
+
+    return [
+        docker, "run", "--rm",
+        "--cidfile", cidfile,
+        # No network at all. A declared action regenerates derived files; it
+        # has no reason to reach a registry, a package index or an exfil host.
+        "--network", "none",
+        "--read-only",
+        "--pids-limit", "128", "--memory", "1g", "--cpus", "2",
+        "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
+    ]
+
+
+def container_runtime_argv() -> List[str]:
+    """Writable scratch and a deterministic in-container environment.
+
+    `HOME` points at a tmpfs path that exists only for this container, so an
+    action resolving `~/.ssh`, `~/.aws` or `~/.gitconfig` finds nothing. The
+    host's real home is never mounted, so there is nothing to find.
+    """
+
+    return [
+        "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
+        "--workdir", CONTAINER_WORKSPACE,
+        "--env", "HOME=/tmp/home",
+        "--env", "TMPDIR=/tmp",
+        "--env", "PYTHONDONTWRITEBYTECODE=1",
+    ]
+
+
+def container_workspace_mount_argv(source: Path, *, writable: bool) -> List[str]:
+    """Bind exactly one directory, and nothing else, at the workspace path.
+
+    `writable` is the entire read/write difference. A read-only boundary must
+    never gain write access by sharing this helper, so the flag is explicit at
+    every call site rather than defaulted.
+    """
+
+    mount = "type=bind,src={},dst={}".format(source, CONTAINER_WORKSPACE)
+    if not writable:
+        mount += ",readonly"
+    return ["--mount", mount]
 
 
 def _sha256(data: bytes) -> str:
@@ -347,7 +433,10 @@ class WorkspaceTools:
         self, argv: List[str], timeout_seconds: int, *, model_command: bool = False,
     ) -> Dict[str, Any]:
         started = time.monotonic()
-        executable = shutil.which(argv[0]) if not Path(argv[0]).is_absolute() else argv[0]
+        # The single resolver, on the path that actually launches the process.
+        # Preflight calls this same function, which is what makes its answer
+        # binding rather than advisory.
+        executable = resolve_executable(argv[0])
         if not executable:
             raise WorkspaceViolation("executable is not installed")
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR") if key in os.environ}
@@ -421,15 +510,13 @@ class WorkspaceTools:
             elif Path(container_command[0]).is_absolute():
                 container_command[0] = executable_name
             wrapped = [
-                shutil.which("docker") or "docker", "run", "--rm",
-                "--cidfile", cidfile, "--network", "none", "--read-only",
-                "--pids-limit", "128", "--memory", "1g", "--cpus", "2",
-                "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
+                *container_hardening_argv(shutil.which("docker") or "docker", cidfile),
+                # Model commands run as `nobody` and see the tree read-only.
+                # Project actions differ only in these two respects; every
+                # other constraint above is shared, by construction.
                 "--user", "65534:65534",
-                "--mount", "type=bind,src={},dst=/workspace,readonly".format(docker_workspace),
-                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
-                "--workdir", "/workspace", "--env", "HOME=/tmp/home",
-                "--env", "TMPDIR=/tmp", "--env", "PYTHONDONTWRITEBYTECODE=1",
+                *container_workspace_mount_argv(docker_workspace, writable=False),
+                *container_runtime_argv(),
             ]
             protected_paths = [] if staged else self._protected_existing_paths()
             denied_file: Path | None = None

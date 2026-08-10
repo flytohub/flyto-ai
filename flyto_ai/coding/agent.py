@@ -8,8 +8,14 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from flyto_ai.coding.capabilities import CapabilityManager
-from flyto_ai.coding.checks import CheckRunner, load_project_config
+from flyto_ai.coding.checks import (
+    CheckRunner,
+    VerificationToolUnavailable,
+    round_contract,
+    unlaunchable_required_checks,
+)
 from flyto_ai.coding.contracts import (
+    VERIFICATION_CONTRACT_CHANGED,
     CapabilitySpec,
     CheckResult,
     CheckSpec,
@@ -18,6 +24,7 @@ from flyto_ai.coding.contracts import (
 )
 from flyto_ai.coding.store import ThreadStore
 from flyto_ai.coding.workspace import WorkspaceTools
+from flyto_ai.coding.store import mark_provider_start
 from flyto_ai.providers.base import LLMProvider
 
 
@@ -39,6 +46,11 @@ External capabilities are detachable and their absence grants no authority.
 class FlytoCodingAgent:
     """Run a model/tool loop followed by mandatory real checks and repair."""
 
+    #: This implementer drives a real `CapabilityManager`, so it can bridge the
+    #: kinds a contract may declare. Preflight reads this to decide whether a
+    #: required capability is feasible before a job exists.
+    attachable_capability_kinds = frozenset({"mcp-stdio", "command"})
+
     def __init__(self, provider: LLMProvider, *, store: Optional[ThreadStore] = None) -> None:
         self.provider = provider
         self.store = store or ThreadStore()
@@ -58,12 +70,34 @@ class FlytoCodingAgent:
             "role": "user", "content": request.message,
         })
 
+        pinned = getattr(request, "pinned_contract", None)
         try:
-            configured_checks, configured_capabilities = load_project_config(
-                request.working_dir, request.config_path,
+            # One resolution per round, so the digest gated below is provably
+            # the digest of the document this round derives its checks from.
+            # With a host pin there is no read at all: the authorized contract
+            # is carried by value, so an edit to the file on disk can neither
+            # authorize itself nor strand this round.
+            contract = round_contract(
+                request.working_dir, request.config_path, pinned=pinned,
             )
         except Exception as exc:
             return self._fail(thread_id, "invalid_config", str(exc), attempts=0)
+
+        authorized = str(getattr(request, "authorized_config_sha256", "") or "")
+        if pinned is None and authorized and contract.digest != authorized:
+            # Before checks are derived and before any provider is contacted.
+            # A round that verified against a contract its job was not
+            # authorized against could weaken its own required checks by
+            # editing them in an earlier round.
+            return self._fail(
+                thread_id,
+                VERIFICATION_CONTRACT_CHANGED,
+                "the repository verification contract changed after this job "
+                "was authorized",
+                attempts=0,
+            )
+        configured_checks = contract.checks
+        configured_capabilities = contract.capabilities
         checks = request.checks or configured_checks
         capabilities = self._merge_capabilities(configured_capabilities, request.capabilities)
         if not checks or not any(check.required for check in checks):
@@ -71,6 +105,19 @@ class FlytoCodingAgent:
                 thread_id, "verification_required",
                 "No required real checks are configured. Add .flyto/coding.yaml or pass CheckSpec values.",
                 attempts=0,
+            )
+        # The contract is pinned and read; now prove its required commands can
+        # actually start, before a workspace, a capability handshake or a
+        # provider call exists. Submit-time preflight already asked this, so
+        # reaching it here means the tool went away in between - a race, not a
+        # new class of problem, and the honest answer is the same one preflight
+        # would have given rather than a verdict on a change nobody made yet.
+        unlaunchable = unlaunchable_required_checks(checks)
+        if unlaunchable:
+            return self._fail(
+                thread_id, "verification_tool_missing",
+                "a required verification tool is not installed on this host",
+                attempts=0, blockers=unlaunchable,
             )
 
         workspace = WorkspaceTools(
@@ -132,6 +179,9 @@ class FlytoCodingAgent:
             for attempt in range(1, request.max_attempts + 1):
                 attempts_used = attempt
                 self.store.append(thread_id, "attempt.started", {"attempt": attempt})
+                # Durable, and before the provider is entered, so a worker that
+                # dies mid-call is still recorded as having started one.
+                mark_provider_start(self.store)
                 try:
                     final_message, tool_log, rounds, usage = await self.provider.chat(
                         messages=messages,
@@ -162,7 +212,21 @@ class FlytoCodingAgent:
                     "role": "assistant", "content": final_message,
                 })
 
-                last_checks = await check_runner.run(checks)
+                try:
+                    last_checks = await check_runner.run(checks)
+                except VerificationToolUnavailable as exc:
+                    # The provider really ran, so the attempt and round counts
+                    # stay honest; what is missing is any basis for a verdict.
+                    # Reporting this as a failed change would blame the round
+                    # for the host, and a round with no verification must never
+                    # become auditable.
+                    return self._fail(
+                        thread_id, "verification_tool_missing",
+                        "a required verification tool is not installed on this host",
+                        attempts=attempt, capabilities=statuses, usage=total_usage,
+                        rounds=total_rounds, blockers=exc.blockers,
+                        command_sandbox=workspace.command_sandbox_backend,
+                    )
                 self.store.append(thread_id, "verification.completed", {
                     "attempt": attempt,
                     "checks": [dataclasses.asdict(result) for result in last_checks],
@@ -221,6 +285,7 @@ class FlytoCodingAgent:
         usage: Optional[Dict[str, int]] = None,
         rounds: int = 0,
         command_sandbox: str = "",
+        blockers: Sequence[str] = (),
     ) -> CodingTaskResult:
         self.store.append(thread_id, "task.failed", {"failure_code": code, "message": message})
         self.store.update(thread_id, status="failed", last_failure_code=code)
@@ -229,7 +294,7 @@ class FlytoCodingAgent:
             status="failed", checks=checks or [], capabilities=capabilities or [],
             files_changed=files_changed or [], usage=usage or {}, rounds_used=rounds,
             evidence_path=self.store.evidence_path(thread_id), failure_code=code,
-            command_sandbox=command_sandbox,
+            command_sandbox=command_sandbox, verification_blockers=tuple(blockers),
         )
 
     @staticmethod

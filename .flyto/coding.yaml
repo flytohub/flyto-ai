@@ -31,3 +31,16 @@ checks:
     argv: [python, -m, pytest, -q]
     timeout_seconds: 900
     required: true
+
+# Deterministic project commands an implementer may ask the host to run, by
+# name only. The argv here is the whole authority: a caller cannot add,
+# replace, or reorder an argument, and there is no shell to interpret one.
+#
+# These are NOT verification. The `generated_reference` check above still runs
+# afterward and is what decides whether the tree is current -- running the
+# generator does not certify its own output.
+actions:
+  - name: generate_reference
+    argv: [python, scripts/generate_reference.py]
+    timeout_seconds: 300
+    description: Rewrite the generated reference docs from current source.

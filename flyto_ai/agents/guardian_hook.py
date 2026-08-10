@@ -55,9 +55,9 @@ BLOCKED_PATHS = [
 
 # ── Allowed file extensions for Edit/Write ──
 ALLOWED_EXTENSIONS: Set[str] = {
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".vue", ".html", ".css", ".scss",
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue", ".html", ".css", ".scss",
     ".json", ".yaml", ".yml", ".md", ".txt", ".toml", ".cfg", ".ini",
-    ".sh", ".bash", ".zsh", ".sql", ".graphql", ".proto",
+    ".sh", ".bash", ".zsh", ".service", ".sql", ".graphql", ".proto",
     ".xml", ".svg", ".csv", ".env.example", ".gitignore",
     ".dockerfile", ".dockerignore", ".editorconfig",
     ".rs", ".go", ".java", ".kt", ".swift", ".c", ".cpp", ".h",
@@ -203,9 +203,15 @@ def _resolve_workspace_path(
 
 
 def _is_extension_allowed(path: str) -> bool:
-    _, ext = os.path.splitext(path.lower())
+    lower = path.lower()
+    base = os.path.basename(lower)
+    # ``splitext('.gitignore')`` returns an empty extension. These exact
+    # repository dotfiles are already present in ALLOWED_EXTENSIONS, so honor
+    # that closed allowlist without treating arbitrary dotfiles as source.
+    if base in {".gitignore", ".dockerignore", ".editorconfig"}:
+        return base in ALLOWED_EXTENSIONS
+    _, ext = os.path.splitext(lower)
     if not ext:
-        base = os.path.basename(path.lower())
         return base in {"dockerfile", "makefile", "gemfile", "rakefile", "procfile"}
     return ext in ALLOWED_EXTENSIONS
 

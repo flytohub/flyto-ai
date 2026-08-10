@@ -283,7 +283,7 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
 Every host-owned Indexer search in this chain is scoped to the workspace
 project. An unscoped smart search fans out across every indexed project and
 can fail the mandatory pre-work lane before any implementer starts. The
-Indexer capability has one shared 60-second transport bound across the stack
+Indexer capability has one shared ten-minute transport bound across the stack
 preset and the public `code-mcp` / `code-serve` route. This accommodates a
 legitimate full strict verification or reindex on a large workspace without
 weakening any gate, call-count bound, or fail-closed result. Lane evidence also
@@ -576,3 +576,46 @@ Flyto2 Robotics routed request
 - `robotics_planner_server.py` is a loopback development adapter, not a public
   authenticated service. It suppresses prompt-bearing access logs and bounds
   request, response, timeout, and error detail sizes.
+
+## Coding continuation boundary
+
+A bounded provider stop keeps its session; carrying it into a second job is an
+explicit, single-use **continuation authority** owned by the host, not a property
+of the session id. The authority is tenant-partitioned, binds the exact backend
+session, workspace, attributable revision, whole-workspace snapshot, snapshot
+policy and verification contract, and advances only through an append-only
+hash-chained journal whose tail is the sole monotonic source. Claiming is a
+compare-and-swap under an exclusive lock, so many Codex processes sharing one
+state root produce exactly one owner.
+
+The projection a snapshot is taken under is explicit and digest-bound. The default
+observes every entry that is not root version-control state. Only the strict public
+route - the one whose mandatory Indexer pre/post gates independently revalidate the
+tree and record it in the route receipt - may classify `.flyto-index` as
+control-plane runtime state, and that classification is frozen into the authority.
+
+This boundary changes no product topology: `flyto-cloud` remains parallel to the
+combined `flyto-code` / `flyto-engine` column, and no repository ownership or
+integration arrow moves. See `docs/CODING_CONTROL_PLANE.md` for the state layout
+and the stated threat limit, and `DECISIONS.md` (2026-08-10) for the rationale.
+
+## Coding rework plan-authority boundary
+
+A multi-round rework is one root Indexer task. After a successful pre-lane the
+exact contract is sealed privately into the job record, bound to that job, its
+root request and its workspace and protected by a content digest; a later round
+re-proves it before the resumed implementer edits anything and passes it back so
+the plan is amended rather than re-rooted. The cumulative attributable set is
+proven before the proof lanes and is the single ordered tuple that Indexer
+post-validation, the persisted attributable files and the audited revision digest
+all bind - equality, not inclusion.
+
+Plan-authority refusals are closed, terminal and report `verification` or
+`workspace` phase with `resubmit_against_current_contract`. A capability's own
+`reason_codes`/`required_actions` reach host-owned blockers only when they
+already are machine codes.
+
+No product topology changes: `flyto-cloud` remains parallel to and level with the
+combined `flyto-code` / `flyto-engine` column, and no repository ownership or
+integration arrow moves. See `docs/CODING_CONTROL_PLANE.md` and `DECISIONS.md`
+(2026-08-10).

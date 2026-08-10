@@ -1,0 +1,35 @@
+FROM node@sha256:798837daa2a12bab9cdf53cf8779a05256c2ce08176f449e239e7577d26225e8
+
+# Repository-declared generators across Flytohub use Node.js or Python and
+# inspect the tracked file set through git. Verification still runs on the
+# trusted host lane; this image exists only for isolated, network-disabled
+# project actions.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        python3 \
+        python3-pip \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/flyto-actions \
+    && mkdir -p /run/flyto-action
+
+# Keep the action runtime deterministic and independent from a repository's
+# host virtualenv.  These are the default (non-optional) Python dependencies
+# needed by repository-declared generators such as flyto-core's registry-backed
+# catalog generator; optional extras remain absent so discovery output cannot
+# vary with an action image rebuild.
+COPY requirements.actions.lock /opt/flyto-actions/requirements.lock
+RUN /opt/flyto-actions/bin/python -m pip install --no-cache-dir \
+        --requirement /opt/flyto-actions/requirements.lock
+
+ENV PATH="/opt/flyto-actions/bin:${PATH}"
+
+# The real repository metadata remains masked. This shim supports only the
+# deterministic file-enumeration command used by project generators and reads
+# the host-validated, read-only manifest mounted by ProjectActionExecutor.
+COPY action-git /usr/local/bin/git
+RUN chmod 0555 /usr/local/bin/git
+
+WORKDIR /workspace

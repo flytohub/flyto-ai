@@ -2,15 +2,28 @@
 
 ## Unreleased
 
-- The mandatory Indexer lane now uses one shared 60-second transport bound in
+- The mandatory Indexer lane now uses one shared ten-minute transport bound in
   both the agent-stack preset and the public `code-mcp` / `code-serve` route.
-  Large-workspace strict verification can finish instead of being killed by a
-  CLI-only 30-second deadline; every gate remains mandatory and genuine
-  timeouts still fail closed as `capability_timeout`.
+  Large-workspace and concurrent-release strict verification can finish instead
+  of being killed by a CLI-only 30-second deadline; every gate remains
+  mandatory and genuine timeouts still fail closed as `capability_timeout`.
 - Blueprint discovery now ranks ordered phrase overlap before catalogue order,
   so direction-bearing reuse such as CSV-to-JSON no longer selects the reverse
   JSON-to-CSV transform when both candidates share the same token set.
-
+- A successful audit rework no longer has to manufacture a second diff when
+  the earlier attributable revision is already correct. The service promotes
+  only the host-generated `no_changes` outcome with passing required checks
+  after re-proving the same implementation session, tenant/job workspace
+  claim, sealed resume envelope, cumulative file set, and live content digest;
+  the Indexer post lane then validates that cumulative set normally.
+- Guardian now permits edits to the exact repository dotfiles already present
+  in its closed allowlist (`.gitignore`, `.dockerignore`, `.editorconfig`).
+  Arbitrary dotfiles and all sensitive-path matches remain denied.
+- Claude implementation rounds now default to the already-enforced 100-turn
+  ceiling. This prevents a complete workspace edit from being discarded as
+  `turn_limit_exceeded` merely because an older supervisor started with the
+  30-turn default. Cost, tools, workspace confinement, required checks,
+  host-owned lanes, exact-revision audit, and rework limits are unchanged.
 - One worktree is now owned by one audited coding job for the whole job, not
   for one implementation round. Previously the cross-process workspace lock was
   released when a round finished, so between `awaiting_codex_audit` and the
@@ -409,3 +422,40 @@
 - Added repo memory and workflow handoff scaffold.
 - Added `docs/architecture-map.md` so Flyto2 workspace release packets can
   verify `flyto-ai` cross-repo architecture and product-line boundaries.
+
+### Added
+- Cross-job continuation of a bounded provider stop: a tenant-partitioned,
+  single-use continuation authority with an append-only transition journal, an
+  explicit `resume=true, thread_id=<session>` second submit, and two additive
+  receipt fields (`continuation_available`, `continuation_generation`). The MCP
+  surface is unchanged.
+- An explicit, digest-bound workspace snapshot policy. The default observes every
+  non-version-control entry; only the strict Indexer-backed route may classify
+  `.flyto-index` as control-plane runtime state.
+
+### Changed
+- `CodingService.submit` is phased: the verification-contract read and the
+  workspace snapshot now run under a per-workspace admission lock instead of the
+  global state guard, so one large repository no longer stalls unrelated tenants
+  and workspaces.
+- The service state root is created component-by-component and refuses a symlinked
+  ancestor rather than resolving through it.
+
+### Fixed
+- A multi-round coding rework no longer re-roots its Indexer plan each round.
+  The pre-lane amends the exact prior contract, so a later round is not refused
+  with `unplanned_diff` for files an earlier round legitimately opened.
+- Indexer post-work now validates the exact cumulative attributable set that the
+  final revision binds, instead of only the last round's changed files.
+- A dotted machine identifier such as `check.generated_reference` is no longer
+  parsed out of audit feedback as a request to create a file.
+
+### Added
+- Durable, private, integrity-protected plan authority per job, re-proven before
+  a resumed implementer edits anything.
+- Closed typed failures for unprovable plan authority and cumulative scope,
+  reporting `verification`/`workspace` phase with
+  `resubmit_against_current_contract`.
+- Bounded domain diagnostics: a capability's own `reason_codes` and
+  `required_actions` reach `verification_blockers` when they already are machine
+  codes, and are dropped whole when they are not.

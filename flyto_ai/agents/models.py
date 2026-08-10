@@ -15,6 +15,7 @@ MAX_SDK_SESSION_ID_CHARS = 128
 #: An SDK session id is opaque. It is bounded and free of separators so it can
 #: also be used as a durable thread identifier, but it is never parsed.
 _SDK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def is_safe_sdk_session_id(value: Any) -> bool:
@@ -44,6 +45,26 @@ class CodeTaskRequest:
     #: Whether the startup sandbox/approval authority permits model edits.
     #: Only the in-process adapter sets this; no remote payload can reach it.
     service_edit_authority: bool = True
+    #: Workspace-relative contract path the service is operating under. Carried
+    #: so the SDK layer reads the same document the service authorized instead
+    #: of a default that may not be the configured one.
+    config_path: str = ".flyto/coding.yaml"
+    #: SHA-256 of the contract this job was authorized against, established once
+    #: at submit. Carried through so the SDK layer binds the action bridge to
+    #: the job's authority rather than re-authorizing whatever is on disk now.
+    #: Empty means "no authority established", which every gate must treat as
+    #: unproven rather than as permission.
+    authorized_config_sha256: str = ""
+    #: Startup-pinned image for the project-action isolation boundary. Carried
+    #: from host authority; never selected by a request, a contract or a model,
+    #: because the image *is* the action's root filesystem.
+    action_sandbox_image: str = ""
+    #: The host-pinned contract, by value, when the service established one.
+    #: Carried so the action bridge authorizes the surface the host validated
+    #: before the first provider edit rather than re-reading a file this very
+    #: session may have rewritten. `None` means "no pin", which keeps the
+    #: historical digest-gated read for every caller that never had one.
+    pinned_contract: Optional[Any] = None
 
     def __post_init__(self) -> None:
         if self.sdk_session_id is not None and not is_safe_sdk_session_id(self.sdk_session_id):
@@ -52,6 +73,15 @@ class CodeTaskRequest:
             raise ValueError("service_mode must be a boolean")
         if not isinstance(self.service_edit_authority, bool):
             raise ValueError("service_edit_authority must be a boolean")
+        if not isinstance(self.config_path, str) or not self.config_path:
+            raise ValueError("config_path must be a non-empty string")
+        if not isinstance(self.authorized_config_sha256, str) or (
+            self.authorized_config_sha256
+            and not _SHA256_RE.fullmatch(self.authorized_config_sha256)
+        ):
+            raise ValueError("authorized_config_sha256 must be a sha256 digest or empty")
+        if not isinstance(self.action_sandbox_image, str):
+            raise ValueError("action_sandbox_image must be a string")
 
 
 @dataclass

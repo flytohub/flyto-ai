@@ -36,6 +36,7 @@ from flyto_ai.coding.emergency import (
     classify_overflow_trigger,
 )
 from flyto_ai.coding.route import CodingRoutePolicy, RouteLane
+from flyto_ai.coding.store import mark_provider_start
 from flyto_ai.coding.route_status import (
     MAX_STATUS_INSTANCES,
     ROUTE_STATUS_CONTRACT_VERSION,
@@ -61,6 +62,25 @@ from tests.test_coding_route import (
 
 
 # ── emergency contract ────────────────────────────────────────────────
+
+
+#: Preflight refuses a repository that never declared how it wants to be
+#: verified, before a job, a worktree claim or an implementer session exists.
+#: A fixture that means to exercise anything past preflight therefore has to
+#: declare a contract, exactly as a real repository does.
+_TEST_VERIFICATION_CONTRACT = """version: flyto.coding-config.v1
+checks:
+  - name: declared
+    argv: [python, --version]
+    timeout_seconds: 30
+    required: true
+"""
+
+
+def _declare_verification(workspace) -> None:
+    config = workspace / ".flyto" / "coding.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(_TEST_VERIFICATION_CONTRACT, encoding="utf-8")
 
 
 def _authority(**overrides) -> EmergencyAuthorityReceipt:
@@ -509,6 +529,7 @@ def test_a_changed_source_build_blocks_new_jobs_before_mutation(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box, enabled=False)
     try:
@@ -535,6 +556,7 @@ def test_a_changed_source_build_still_returns_an_idempotent_existing_job(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box, enabled=False)
     try:
@@ -567,6 +589,12 @@ class EmergencyImplementer:
     async def run(self, request):
         self.rounds += 1
         self.requests.append(request.message)
+        # A real adapter signals the host at its provider boundary, and only
+        # there. This fixture stands in for a backend that reached that
+        # boundary, so it signals before it can succeed *or* explode - which is
+        # what makes "the durable start survives an exception" a real claim
+        # rather than a property of being called at all.
+        mark_provider_start(self.store)
         if self.boom:
             raise RuntimeError("implementer exploded")
         (Path(request.working_dir) / "notes.txt").write_text(
@@ -663,6 +691,7 @@ def _job_record(service, tenant, job_id):
 def test_a_classified_launch_failure_overflows_once_and_reaches_audit(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box)
     try:
@@ -698,6 +727,7 @@ def test_a_classified_launch_failure_overflows_once_and_reaches_audit(tmp_path):
 def test_emergency_rework_stays_in_the_same_session_and_authority(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box)
     try:
@@ -733,6 +763,7 @@ def test_emergency_rework_stays_in_the_same_session_and_authority(tmp_path):
 def test_a_service_without_the_startup_flag_never_overflows(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box, enabled=False)
     try:
@@ -751,6 +782,7 @@ def test_a_service_without_the_startup_flag_never_overflows(tmp_path):
 def test_authority_granted_to_another_backend_never_overflows(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     with pytest.raises(ValueError, match="must match the selected implementation"):
         _emergency_service(
@@ -762,6 +794,7 @@ def test_a_transplanted_authority_starts_no_implementation(tmp_path):
     """A sealed receipt copied into another job must not reach the model."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     donor_box: dict = {}
     donor = _emergency_service(tmp_path, workspace, donor_box, state_dir="donor")
     try:
@@ -807,6 +840,7 @@ def test_a_transplanted_authority_starts_no_implementation(tmp_path):
 def test_an_initial_round_carrying_authority_fails_closed(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box)
     try:
@@ -833,6 +867,7 @@ def test_an_initial_round_carrying_authority_fails_closed(tmp_path):
 def test_tampered_or_empty_authority_is_never_auditable(tmp_path, mutate, cause):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box)
     try:
@@ -855,6 +890,7 @@ def test_tampered_or_empty_authority_is_never_auditable(tmp_path, mutate, cause)
 def test_a_record_claiming_both_authorities_is_refused(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box)
     try:
@@ -877,6 +913,7 @@ def test_a_domain_failure_never_opens_the_lane(tmp_path):
     """A reachable Indexer that refuses is not broken infrastructure."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     fixture = tmp_path / "refusing_indexer.py"
     fixture.write_text(INDEXER_FIXTURE.replace(
         'return {"results": [{"symbol_id": "p:app.py:function:main"}]}, False',
@@ -902,6 +939,7 @@ def test_a_post_implementation_failure_never_overflows_but_keeps_its_proof(tmp_p
     """Indexer post-work refusing is not a reason to re-run the model."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     fixture = tmp_path / "post_failing_indexer.py"
     fixture.write_text(INDEXER_FIXTURE.replace(
         'if action == "validate":\n        return {"pass": True, "checks": []}, False',
@@ -936,6 +974,7 @@ def test_a_post_implementation_failure_never_overflows_but_keeps_its_proof(tmp_p
 def test_a_failed_check_on_the_overflow_lane_is_terminal_and_non_landable(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(
         tmp_path, workspace, box, implementer_kwargs={"fail": True},
@@ -958,6 +997,7 @@ def test_a_failed_check_on_the_overflow_lane_is_terminal_and_non_landable(tmp_pa
 def test_the_durable_start_and_trigger_survive_an_implementer_exception(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(
         tmp_path, workspace, box, implementer_kwargs={"boom": True},
@@ -985,6 +1025,7 @@ def test_the_durable_start_and_trigger_survive_an_implementer_exception(tmp_path
 def test_a_strict_success_carries_no_emergency_fields(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     fixture = tmp_path / "working_indexer.py"
     fixture.write_text(INDEXER_FIXTURE)
     box: dict = {}
@@ -1014,6 +1055,7 @@ def test_a_strict_success_carries_no_emergency_fields(tmp_path):
 def test_status_tracks_a_job_and_survives_a_graceful_close(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box, enabled=False)
     instance_path = service._status.instance_path()
@@ -1051,6 +1093,7 @@ def test_status_tracks_a_job_and_survives_a_graceful_close(tmp_path):
 def test_a_broken_recorder_is_counted_with_a_stable_code_and_recovers(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box, enabled=False)
     try:
@@ -1080,6 +1123,7 @@ def test_two_service_processes_share_one_state_root_without_clobbering(tmp_path)
     """Each instance owns its own file; the shared index lists them both."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     first_box: dict = {}
     second_box: dict = {}
     first = _emergency_service(
@@ -1116,6 +1160,7 @@ def test_an_old_build_row_stays_distinguishable_from_the_repaired_build(tmp_path
     """A pre-upgrade instance keeps its build id; a new one publishes its own."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _declare_verification(workspace)
     box: dict = {}
     service = _emergency_service(tmp_path, workspace, box, enabled=False)
     try:

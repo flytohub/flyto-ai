@@ -12,6 +12,14 @@ from flyto_ai.coding.contracts import (
     MAX_AUDIT_EVIDENCE_REF_CHARS,
     MAX_AUDIT_FINDINGS,
     MAX_AUDIT_MESSAGE_CHARS,
+    MISSION_ID_PATTERN,
+    MISSION_LANES,
+    MISSION_MAX_ACCEPTANCE_CRITERIA,
+    MISSION_MAX_DEPENDENCIES,
+    MISSION_MAX_FIELD_CHARS,
+    MISSION_MAX_PRIORITY,
+    MISSION_MAX_TEXT_CHARS,
+    WORK_ITEM_ID_PATTERN,
     CodingAuditFinding,
     CodingAuditSeverity,
     CodingAuditVerdict,
@@ -53,6 +61,65 @@ _JOB_ID_RE = re.compile(_JOB_ID_PATTERN)
 _AUDIT_ARGUMENT_FIELDS = frozenset({
     "job_id", "implementation_revision_sha256", "verdict", "findings",
 })
+#: The optional mission envelope, declared strictly. Bounds and vocabularies are
+#: read from the contract layer, which reads them from the generic mission
+#: kernel, so a schema this facade publishes cannot drift from what the decoder
+#: will accept. `additionalProperties: false` at both levels; the decoder
+#: enforces the same closed field sets again, because a host may not validate.
+_MISSION_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["scope", "objective", "desired_result", "acceptance_criteria"],
+    "properties": {
+        "scope": {
+            "type": "string", "minLength": 1, "maxLength": MISSION_MAX_FIELD_CHARS,
+        },
+        "objective": {
+            "type": "string", "minLength": 1, "maxLength": MISSION_MAX_TEXT_CHARS,
+        },
+        "desired_result": {
+            "type": "string", "minLength": 1, "maxLength": MISSION_MAX_TEXT_CHARS,
+        },
+        "acceptance_criteria": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": MISSION_MAX_ACCEPTANCE_CRITERIA,
+            # The decoder is stricter still - it refuses two criteria that share
+            # an id even when their statements differ - but a schema that stayed
+            # silent about duplicates would advertise a payload the decoder
+            # rejects.
+            "uniqueItems": True,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "statement"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MISSION_MAX_FIELD_CHARS,
+                    },
+                    "statement": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MISSION_MAX_TEXT_CHARS,
+                    },
+                },
+            },
+        },
+        "priority": {"type": "integer", "minimum": 0, "maximum": MISSION_MAX_PRIORITY},
+        "lane": {"type": "string", "enum": list(MISSION_LANES)},
+        "mission_id": {"type": "string", "pattern": MISSION_ID_PATTERN},
+        "parent_id": {"type": "string", "pattern": WORK_ITEM_ID_PATTERN},
+        "return_to_id": {"type": "string", "pattern": WORK_ITEM_ID_PATTERN},
+        "depends_on_ids": {
+            "type": "array",
+            "maxItems": MISSION_MAX_DEPENDENCIES,
+            "uniqueItems": True,
+            "items": {"type": "string", "pattern": WORK_ITEM_ID_PATTERN},
+        },
+    },
+}
 
 
 def _tool_string(arguments: Mapping[str, Any], field_name: str) -> str:
@@ -202,6 +269,10 @@ class CodingMCPServer:
                                 "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5},
                                 "max_rounds": {"type": "integer", "minimum": 1, "maximum": 100},
                                 "require_changes": {"type": "boolean"},
+                                # Optional and additive. Naming a mission does
+                                # not add a tool, a lane, or an authority: the
+                                # inventory stays exactly submit/get/audit.
+                                "mission": _MISSION_SCHEMA,
                             },
                         },
                     },

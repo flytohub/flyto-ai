@@ -170,6 +170,12 @@ def test_capability_contract_rejects_invalid_direct_python_values(override, mess
         CapabilitySpec(**value)
 
 
+def test_capability_timeout_keeps_a_bounded_release_load_ceiling():
+    assert CapabilitySpec(name="boundary", argv=("runner",), timeout_seconds=900)
+    with pytest.raises(ValueError, match="between 1 and 900"):
+        CapabilitySpec(name="boundary", argv=("runner",), timeout_seconds=901)
+
+
 def test_capability_manager_satisfies_generic_agent_tool_executor(tmp_path):
     manager = CapabilityManager(str(tmp_path))
     assert isinstance(manager, ToolExecutor)

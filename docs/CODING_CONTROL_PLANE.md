@@ -651,6 +651,33 @@ before every verdict. The host/auditor independently inspects and tests that
 workspace revision, then binds its verdict to that digest. A stale, wrong, or
 concurrently mutated revision is rejected without mutating the job.
 
+`require_changes` applies to that cumulative job revision. If a same-session
+rework finishes with the adapter's exact `no_changes` result and all required
+checks pass, the service may reuse the prior attribution only after re-proving
+the session, tenant/job claim, sealed resume envelope, bounded file set, and
+live content digest. Those cumulative paths still enter the normal Indexer
+post-work validation and a new exact-revision Codex verdict; this is not a
+route bypass and does not accept provider prose as evidence.
+
+### Worktree-owned Core contract proof
+
+The Core lane normally validates an installed module through the allowlisted
+`search_modules -> get_module_info -> validate_params` sequence. A brand-new
+plugin in the implementation worktree is not installed in the coding service
+runtime yet. The service must not solve that by adding the worktree to its own
+Python path: importing unaudited plugin code into the host would cross the
+implementation boundary before Codex has reviewed it.
+
+A repository may instead mark exactly one required verification check with
+`proof_kinds: [flyto.core.module-contract.v1]`. The declaration comes from the
+repository contract pinned before the provider starts. The implementation
+adapter runs that exact command and returns a host-generated `CheckResult`.
+Only one matching, required, passing result applies the Core lane; missing,
+optional, duplicate, or failed evidence fails closed. The verifier itself is
+expected to build and install the candidate wheel in an isolated environment,
+then exercise Core discovery, metadata, and parameter validation there.
+Provider text and an unpinned check with the same name are never proof.
+
 A rework verdict must carry at least one typed bounded finding (stable code,
 severity, message, optional evidence reference); an accept verdict must carry
 none. Rework is bounded by `--max-rework-rounds`. Past that ceiling the request
@@ -973,3 +1000,107 @@ fallback when the audited service is unavailable.
 
 Removing `flyto_ai.coding` does not alter provider interfaces, Core execution
 authority, Blueprint contracts, or the legacy Claude adapter.
+
+## Workspace-claim authority and the generic claim kernel
+
+Two claim mechanisms exist in this repository. They are **not** interchangeable,
+and exactly one of them is authoritative for a worktree.
+
+`CodingService`'s own workspace claim is the authority. It is the mechanism the
+audited route depends on: it binds a worktree to one job for the whole audit
+gap, it is understood by `repair_workspace_claim`, `_sweep_workspace_claims`
+and the runtime status row, and its semantics are covered by the ownership
+suites. Nothing in this section changes it.
+
+`flyto_ai.orchestration.resource_claims.ResourceClaimStore` is a
+domain-neutral, multi-process claim kernel: content-addressed records,
+authority-aware resolution, no automatic stealing, no TTL, and a strict
+fail-closed posture on hosts that cannot supply atomic publication or a real
+inter-process lock. It is a general primitive. **It currently has no production
+consumer.** It is exported from `flyto_ai.orchestration` and exercised by
+`tests/test_resource_claims.py`, and that is the whole of its present role.
+
+It is deliberately not wired into the workspace claim yet. Two independent
+stores over one worktree can disagree, and the dangerous direction of that
+disagreement is the cheap one to reach: the generic store answers `free` for a
+resource the service still owns, and a second job edits a tree whose revision
+an auditor is about to read. Introducing that risk to remove a duplication is
+the wrong trade while the audited route is the thing being repaired.
+
+The follow-up, when it is taken, is an **adapter, not a replacement**:
+
+- Model the resource as `ResourceRef(namespace=<state-root digest>,
+  kind="workspace", identity=<workspace digest>)`, so the kernel never learns a
+  path or any caller vocabulary.
+- Supply an `OwnerAuthority` that resolves an owning job id against the durable
+  job record: `held` for a state in `_CLAIM_OWNED_STATES`, `released` for a
+  terminal state, `missing` for a job record that is gone, and `unknown` for a
+  record that cannot be read. Ambiguity must stay ambiguous - the kernel already
+  refuses to release on anything but a positive `released`.
+- Run it in shadow first: acquire and release alongside the existing claim and
+  assert the two never disagree, with the service claim still deciding. Promote
+  only after the shadow has been silent across the ownership suites.
+- Never let a generic-store answer widen access. If the two disagree, the
+  worktree is busy.
+
+Until that adapter exists and has been proven, treat any statement that the
+claim kernel solves concurrent dispatch as false. It solves the primitive; the
+integration is unwritten.
+
+## Cross-job continuation
+
+A bounded provider stop keeps its session, and a second job may re-enter it only
+through an explicit `submit` carrying `resume=true` and the exact SDK session.
+The MCP surface is unchanged: still exactly `flyto_coding_submit`,
+`flyto_coding_get`, `flyto_coding_audit`, and the continuation request uses the
+`thread_id`/`resume` fields the submit schema already had.
+
+State lives under the service state root, partitioned by tenant:
+
+    <state_root>/tenants/<tenant_ref>/continuation/<sha256(session)>.json
+    <state_root>/tenants/<tenant_ref>/continuation/<sha256(session)>.journal
+
+The `.json` body is the current authority; the `.journal` is an append-only
+hash-chained transition log. A body that does not match the journal tail is a
+replay and reads as absent. Lookups happen inside the authenticated caller's own
+partition, so a guessed session from another tenant is indistinguishable from one
+that never existed.
+
+Admission re-proves, before any provider contact: backend, workspace identity and
+path, snapshot policy identity, authorized verification contract, the exact
+attributable revision, and the whole-workspace snapshot. Refusals are bounded
+codes; everything that could confirm somebody else's authority exists collapses to
+`continuation_unavailable`.
+
+Public projection is two additive receipt fields, `continuation_available` and
+`continuation_generation`. The authority record, its generation history and the
+canonical workspace path stay private.
+
+### Threat limit, stated honestly
+
+This is durability and concurrency safety, not a cryptographic signature. An actor
+who can rewrite the entire owner-owned state root *and* the workspace together is
+not excluded by digests the same account can recompute; what is excluded is
+replay, double-spend, silent drift, partial writes, symlink redirection, and the
+ordinary consequences of a crash or a race.
+
+## Cumulative plan authority across rework rounds
+
+The strict route keeps one root Indexer task for the whole life of a job.
+
+- After a successful `indexer_pre`, the exact returned contract is sealed into
+  `indexer_plan_authority` on the private job record: schema version, owning job,
+  root request digest, workspace digest, the contract, and a content digest over
+  all of it. It is bounded (`MAX_PLAN_AUTHORITY_BYTES`) and never appears in a
+  receipt, a prompt, a log, an error message or an audit body.
+- A rework re-proves every binding before the implementer is invoked, then sends
+  the contract back as `task_contract` on `task(action="plan")`. Absent parent
+  means the argument is omitted entirely.
+- The cumulative attributable set is proven before the proof lanes and is the
+  same ordered tuple that `task.validate.current_state.changed_paths`, the
+  persisted `implementation_files` and `implementation_revision_sha256` all
+  bind. Equality is enforced, not inclusion.
+
+Failure codes are closed (`PLAN_AUTHORITY_CODES`) and report `verification` or
+`workspace` phase with `resubmit_against_current_contract`. They are terminal
+for the job and release its claim.

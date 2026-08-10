@@ -125,7 +125,7 @@ point-in-time observation, not a continuously enforced check.
 | Core registration mechanism exists | implemented | `flyto-core` `src/core/modules/registry/core.py` `ModuleRegistry` with registration validation. This proves the mechanism only. |
 | Every `flyto-modules-*` extension actually registers | unverified | No complete module inventory plus per-module registration trace was performed. Do not read the row above as universal compliance. The invariant still governs: every extension must register with Core. |
 | `flyto-indexer` -> `flyto-engine` index feed | implemented | `flyto-engine` `internal/scanner/scanner.go::populateLayer3FromIndexer`. |
-| Indexer / Blueprint / Core surround every public audited coding job | implemented | `flyto_ai/coding/route.py` runs the mandatory Indexer pre/post lanes, Blueprint discovery, and Core validation around whichever implementer startup selected. All four lanes are configured on every strict public route; none is detachable. Blueprint and Core may resolve only `applied` or `not_applicable`. The Indexer preset and public route share a 60-second transport bound so a large strict reindex can finish while every gate remains fail-closed. Blueprint reuse requires token overlap and ranks ordered phrase overlap before catalogue order, so a direction-bearing transform is not replaced by its reverse. Proved by `tests/test_coding_route.py` against the installed Indexer end to end, the real Core adapter (`array.join` validated), and the real Blueprint adapter (`ConvertCSVtoJSON` projected). |
+| Indexer / Blueprint / Core surround every public audited coding job | implemented | `flyto_ai/coding/route.py` runs the mandatory Indexer pre/post lanes, Blueprint discovery, and Core validation around whichever implementer startup selected. All four lanes are configured on every strict public route; none is detachable. Blueprint and Core may resolve only `applied` or `not_applicable`. The Indexer preset and public route share a finite ten-minute transport bound so large or contended strict verification can finish while every gate remains fail-closed. Blueprint reuse requires token overlap and ranks ordered phrase overlap before catalogue order, so a direction-bearing transform is not replaced by its reverse. Proved by `tests/test_coding_route.py` against the installed Indexer end to end, the real Core adapter (`array.join` validated), and the real Blueprint adapter (`ConvertCSVtoJSON` projected). |
 | Long-lived Codex MCP process -> current coding worker | implemented | `flyto_ai/coding/mcp_supervisor.py` keeps host stdio stable, detects coding-source build drift, preserves non-terminal exact-session jobs, and replaces only the inner worker at a safe boundary. `CodingService.submit` independently rejects a stale direct worker before mutation. |
 | `flyto-indexer` scans Core and modules | unverified | Inventory confirms the repositories; the two scan inputs were not separately traced in this pass. |
 | `flyto-admin` manages both projects | partial | Cloud admin surfaces exist and `backend/internal/engine/scans.go::codeOrg` touches the Code side; evidence is not strong enough to claim complete two-product project management. |
@@ -223,3 +223,23 @@ Flyto2 Cloud / CLI / MCP client
   cross-tenant data.
 - Enterprise/airgap mode must have a local-provider or rules-only path and must
   not require external egress by default.
+
+## Coding control plane: phased admission and continuation policy
+
+Runtime note only. No product ownership, repository boundary or integration arrow
+changes here, and `flyto-cloud` remains parallel to - and level with - the combined
+`flyto-code` / `flyto-engine` column.
+
+`CodingService.submit` admits in phases. The verification-contract read and the
+whole-workspace snapshot run under a per-workspace admission lock; the global state
+guard is entered only for the short authoritative transition, which re-proves the
+contract digest and compare-and-swaps the continuation authority before any lease,
+worktree claim or durable record exists. Lock order is admission -> state guard.
+
+Cross-job continuation is a tenant-partitioned, single-use authority advanced by an
+append-only journal, and the snapshot projection it was granted under is digest-bound
+into it. Only the strict Indexer-backed coding route may classify `.flyto-index` as
+control-plane runtime state, because only that route's mandatory Indexer pre/post
+gates revalidate that tree and record the result in the route receipt.
+
+See `ARCHITECTURE.md`, `docs/CODING_CONTROL_PLANE.md` and `DECISIONS.md` (2026-08-10).

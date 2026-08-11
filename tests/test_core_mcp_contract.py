@@ -52,6 +52,297 @@ def _fake_handler(*, validation_result=None, execute_result=None):
     }
 
 
+def _capability_manifest(**overrides):
+    """A schema-valid installed-capability manifest in Core's real wire shape.
+
+    This mirrors `core.capability_manifest.get_capability_manifest`: the
+    contract and digest are stamped under `schema` and `hash`, `modules` is a
+    list of bare module-id strings, each `capabilities` record is a
+    `capability` plus the `providers` that supply it, and each `plugins` record
+    carries `id`, `version`, and `module_count`.
+    """
+    manifest = {
+        "schema": core_tools.CORE_CAPABILITY_MANIFEST_CONTRACT,
+        "hash": "a" * 64,
+        "module_count": 2,
+        "capability_count": 1,
+        "plugin_count": 1,
+        "modules": ["browser.launch", "string.uppercase"],
+        "capabilities": [
+            {
+                "capability": "capability.browse@1",
+                "providers": ["browser.launch"],
+            },
+        ],
+        "plugins": [
+            {"id": "core-browser", "version": "2.26.11", "module_count": 1},
+        ],
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def _with_core_manifest(monkeypatch, reader):
+    monkeypatch.setattr(core_tools, "_get_core_capability_manifest_fn", lambda: reader)
+
+
+def test_installed_module_ids_none_only_for_absent_or_old_core(monkeypatch):
+    _with_core_manifest(monkeypatch, None)
+
+    assert core_tools.get_core_installed_module_ids() is None
+
+
+def test_installed_module_ids_exclude_capability_and_plugin_ids(monkeypatch):
+    _with_core_manifest(monkeypatch, lambda: _capability_manifest())
+
+    module_ids = core_tools.get_core_installed_module_ids()
+
+    assert module_ids == frozenset({"browser.launch", "string.uppercase"})
+    assert isinstance(module_ids, frozenset)
+    # A capability names what a module provides and a plugin names who ships
+    # it. Neither is executable, so neither may reach a Blueprint engine.
+    assert "capability.browse@1" not in module_ids
+    assert "core-browser" not in module_ids
+
+
+def test_valid_empty_manifest_is_empty_frozenset_not_none(monkeypatch):
+    _with_core_manifest(monkeypatch, lambda: _capability_manifest(
+        module_count=0,
+        capability_count=0,
+        plugin_count=0,
+        modules=[],
+        capabilities=[],
+        plugins=[],
+    ))
+
+    assert core_tools.get_core_installed_module_ids() == frozenset()
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        pytest.param("not-a-mapping", id="not_a_mapping"),
+        pytest.param({}, id="no_schema"),
+        pytest.param(_capability_manifest(schema="flyto-core.other.v9"), id="wrong_schema"),
+        pytest.param(_capability_manifest(hash=""), id="missing_hash"),
+        pytest.param(_capability_manifest(hash="not-a-digest"), id="malformed_hash"),
+        pytest.param(_capability_manifest(module_count=99), id="module_count_mismatch"),
+        pytest.param(_capability_manifest(capability_count=99), id="capability_count_mismatch"),
+        pytest.param(_capability_manifest(plugin_count=99), id="plugin_count_mismatch"),
+        pytest.param(_capability_manifest(modules="browser.launch"), id="modules_not_a_list"),
+        pytest.param(
+            _capability_manifest(
+                module_count=1,
+                modules=[{"module_id": "browser.launch"}],
+                capabilities=[],
+                capability_count=0,
+            ),
+            id="modules_are_records_not_strings",
+        ),
+        pytest.param(
+            _capability_manifest(
+                capabilities=[
+                    {
+                        "capability": "capability.browse@1",
+                        "providers": ["ghost.module"],
+                    },
+                ],
+            ),
+            id="capability_claims_uninstalled_provider",
+        ),
+        pytest.param(
+            _capability_manifest(
+                capabilities=[
+                    {"capability": "capability.browse@1", "providers": []},
+                ],
+            ),
+            id="capability_without_providers",
+        ),
+        pytest.param(
+            _capability_manifest(
+                capabilities=[{"capability_id": "capability.browse@1"}],
+            ),
+            id="capability_uses_legacy_key",
+        ),
+        pytest.param(
+            _capability_manifest(plugins=[{"plugin": "core-browser"}]),
+            id="plugin_uses_legacy_key",
+        ),
+        pytest.param(
+            _capability_manifest(plugins=[{"id": "core-browser", "module_count": 1}]),
+            id="plugin_without_version",
+        ),
+        pytest.param(
+            _capability_manifest(
+                plugins=[{"id": "core-browser", "version": "2.26.11"}],
+            ),
+            id="plugin_without_module_count",
+        ),
+        pytest.param(
+            _capability_manifest(
+                module_count=1,
+                modules=["not a safe id"],
+                capabilities=[],
+                capability_count=0,
+            ),
+            id="unsafe_module_identity",
+        ),
+        pytest.param(
+            _capability_manifest(
+                module_count=1,
+                modules=["browser.launch", "browser.launch"],
+            ),
+            id="duplicate_module_identity",
+        ),
+        pytest.param(_capability_manifest(ok=False), id="core_reports_failure"),
+    ],
+)
+def test_malformed_manifest_from_new_core_is_empty_frozenset(monkeypatch, manifest):
+    _with_core_manifest(monkeypatch, lambda: manifest)
+
+    assert core_tools.get_core_installed_module_ids() == frozenset()
+
+
+def test_failing_new_core_reader_is_empty_frozenset(monkeypatch):
+    def boom():
+        raise RuntimeError("core registry unavailable")
+
+    _with_core_manifest(monkeypatch, boom)
+
+    assert core_tools.get_core_installed_module_ids() == frozenset()
+
+
+def test_public_manifest_reports_installed_capability_provenance(monkeypatch):
+    handler = _fake_handler()
+    monkeypatch.setattr(core_tools, "_get_mcp_handler", lambda: handler)
+    _with_core_manifest(monkeypatch, lambda: _capability_manifest())
+
+    manifest = core_tools.get_core_capability_manifest()
+    installed = manifest["installed_capabilities"]
+
+    assert installed["supported"] is True
+    assert installed["status"] == "ok"
+    assert installed["contract"] == core_tools.CORE_CAPABILITY_MANIFEST_CONTRACT
+    assert installed["manifest_hash"] == "a" * 64
+    assert installed["module_count"] == 2
+    assert installed["capability_count"] == 1
+    assert installed["plugin_count"] == 1
+    # Identities stay host side; only counts and Core's digest are published.
+    assert "capability_ids" not in installed
+    assert "module_ids" not in installed
+
+
+def test_public_manifest_marks_old_core_unsupported(monkeypatch):
+    handler = _fake_handler()
+    monkeypatch.setattr(core_tools, "_get_mcp_handler", lambda: handler)
+    _with_core_manifest(monkeypatch, None)
+
+    installed = core_tools.get_core_capability_manifest()["installed_capabilities"]
+
+    assert installed["supported"] is False
+    assert installed["status"] == "unsupported_core"
+    assert installed["capability_count"] == 0
+
+
+def test_public_manifest_marks_malformed_core_invalid(monkeypatch):
+    handler = _fake_handler()
+    monkeypatch.setattr(core_tools, "_get_mcp_handler", lambda: handler)
+    _with_core_manifest(monkeypatch, lambda: {"schema": "wrong"})
+
+    installed = core_tools.get_core_capability_manifest()["installed_capabilities"]
+
+    assert installed["supported"] is True
+    assert installed["status"] == "invalid"
+    assert installed["capability_count"] == 0
+
+
+@pytest.fixture
+def real_core_manifest():
+    """Bind the *installed* Core's manifest reader, bypassing every fixture.
+
+    Fixtures encode what the host believes Core emits, so a fixture can agree
+    with a wrong belief forever. This resolves `core.capability_manifest`
+    itself, resets the module-level bind cache around the test, and restores it
+    afterwards so no later test inherits a real binding.
+    """
+    saved = (
+        core_tools._cached_capability_manifest_contract,
+        core_tools._capability_manifest_contract_checked,
+    )
+    core_tools._cached_capability_manifest_contract = None
+    core_tools._capability_manifest_contract_checked = False
+    try:
+        contract = core_tools._get_core_capability_manifest_contract()
+        if contract is None:
+            pytest.skip("flyto-core is absent or predates the capability manifest")
+        try:
+            raw = contract[0]()
+        except Exception as e:  # pragma: no cover - depends on local install
+            pytest.skip("installed flyto-core cannot report a manifest: {}".format(e))
+        yield raw
+    finally:
+        (
+            core_tools._cached_capability_manifest_contract,
+            core_tools._capability_manifest_contract_checked,
+        ) = saved
+
+
+def test_real_installed_core_manifest_passes_host_validation(real_core_manifest):
+    """A real, non-empty Core must never validate down to an empty set.
+
+    This is the regression that fixtures cannot catch: every host-side key
+    name, entry shape, cross-check, and count rule is exercised against the
+    manifest the installed Core actually emits. If Core reports modules and
+    this host reports none, the bridge is broken even though every fixture
+    still passes.
+    """
+    declared = real_core_manifest.get("module_count")
+    assert isinstance(declared, int) and not isinstance(declared, bool)
+    if declared == 0:
+        pytest.skip("installed flyto-core reports no modules")
+
+    module_ids = core_tools.get_core_installed_module_ids()
+
+    assert module_ids is not None, "a manifest-capable Core must not report None"
+    assert module_ids, (
+        "installed flyto-core declares {} modules but host validation "
+        "produced an empty set".format(declared)
+    )
+    assert len(module_ids) == declared
+
+
+def test_real_installed_core_provenance_counts_are_exact(real_core_manifest):
+    if not real_core_manifest.get("module_count"):
+        pytest.skip("installed flyto-core reports no modules")
+
+    _module_ids, summary = core_tools._read_core_installed_module_ids()
+
+    assert summary["status"] == "ok"
+    assert summary["supported"] is True
+    assert summary["module_count"] == real_core_manifest["module_count"]
+    assert summary["capability_count"] == real_core_manifest["capability_count"]
+    assert summary["plugin_count"] == real_core_manifest["plugin_count"]
+    assert summary["manifest_hash"] == real_core_manifest["hash"].strip().lower()
+
+
+def test_real_installed_core_module_ids_exclude_capabilities_and_plugins(
+    real_core_manifest,
+):
+    if not real_core_manifest.get("module_count"):
+        pytest.skip("installed flyto-core reports no modules")
+
+    module_ids = core_tools.get_core_installed_module_ids()
+    declared_modules = frozenset(real_core_manifest["modules"])
+    capability_ids = {
+        entry["capability"] for entry in real_core_manifest["capabilities"]
+    }
+    plugin_ids = {entry["id"] for entry in real_core_manifest["plugins"]}
+
+    assert module_ids == declared_modules
+    assert not module_ids & (capability_ids - declared_modules)
+    assert not module_ids & (plugin_ids - declared_modules)
+
+
 def test_core_tool_defs_include_manifest_and_metadata(monkeypatch):
     handler = _fake_handler()
     monkeypatch.setattr(core_tools, "_get_mcp_handler", lambda: handler)

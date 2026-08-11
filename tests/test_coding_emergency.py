@@ -481,6 +481,10 @@ def test_the_index_never_grows_past_its_bound(tmp_path):
 def test_liveness_and_staleness_are_annotated_for_local_inspection(tmp_path):
     now = time.time()
     publisher = _publisher(tmp_path, "1" * 24)
+    # Liveness is proven by the crash-released lease, not by the recorded pid,
+    # which can be reused by an unrelated process. An instance that publishes
+    # without taking its lease is deliberately *not* reported alive.
+    assert publisher.acquire_lease() is True
     publisher.publish(_status(instance_id="1" * 24, updated_at=now))
     live = publisher.inspect()[0]
     assert live["stale"] is False
@@ -804,10 +808,20 @@ def test_a_transplanted_authority_starts_no_implementation(tmp_path):
     finally:
         donor.close()
 
+    # Its own tree. Two state roots may not share one workspace root: the
+    # host-global broker refuses the second while the first still has
+    # unresolved work, which is exactly the 2026-08-11 collision. The
+    # transplant under test is about a receipt copied between job *records*,
+    # so the trees are incidental and are kept disjoint here.
+    victim_workspace = tmp_path / "victim-workspace"
+    victim_workspace.mkdir()
+    _declare_verification(victim_workspace)
     victim_box: dict = {}
-    victim = _emergency_service(tmp_path, workspace, victim_box, state_dir="victim")
+    victim = _emergency_service(
+        tmp_path, victim_workspace, victim_box, state_dir="victim",
+    )
     try:
-        target = victim.submit("t", "victim-job", _request(workspace))
+        target = victim.submit("t", "victim-job", _request(victim_workspace))
         path = (
             victim._tenant_dir(victim._tenant_ref("t"))
             / "jobs" / (target.job_id + ".json")

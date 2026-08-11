@@ -592,9 +592,12 @@ def test_a_second_submit_resumes_the_exact_session_and_reaches_audit(tmp_path):
         assert len(backend.requests) == 2
         assert backend.resumed == [None, _SESSION]
 
-        # The authority settles exactly once, on reaching an auditable revision.
+        # The authority stays consumed by this audit loop. It is not resumable
+        # by another submit, but remains available to rotate if a later rework
+        # hits another bounded provider stop.
         authority = _authority_of(service, "t")
-        assert authority is not None and authority.state == STATE_SETTLED
+        assert authority is not None and authority.state == STATE_CLAIMED
+        assert authority.claimed_by_job_id == resumed.job_id
         assert service.get("t", resumed.job_id).continuation_available is False
 
         # Exact-revision audit still governs the accept.
@@ -610,6 +613,7 @@ def test_a_second_submit_resumes_the_exact_session_and_reaches_audit(tmp_path):
         )
         assert accepted.state is CodingJobState.CODEX_ACCEPTED
         assert accepted.landable is True
+        assert _authority_of(service, "t").state == STATE_SETTLED
     finally:
         service.close(wait=True)
 
@@ -665,7 +669,64 @@ def test_a_second_bounded_stop_rotates_the_same_session_forward(tmp_path):
         done = _wait(service, "t", third.job_id)
         assert done.state is CodingJobState.AWAITING_CODEX_AUDIT
         assert backend.resumed == [None, _SESSION, _SESSION]
+        claimed = _authority_of(service, "t")
+        assert claimed.state == STATE_CLAIMED
+        assert claimed.claimed_by_job_id == third.job_id
+        assert done.continuation_available is False
+
+        accepted = service.audit(
+            "t", third.job_id, done.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
         assert _authority_of(service, "t").state == STATE_SETTLED
+    finally:
+        service.close(wait=True)
+
+
+def test_bounded_stop_during_continuation_rework_rotates_forward(tmp_path):
+    """Audit readiness must not discard the session a later rework still needs."""
+
+    service, backend, workspace, stopped = _stopped_job(
+        tmp_path, plan=("budget", "ok", "budget", "ok"),
+    )
+    try:
+        second = service.submit(
+            "t", "segment-2", _request(workspace, thread_id=_SESSION, resume=True),
+        )
+        ready = _wait(service, "t", second.job_id)
+        assert ready.state is CodingJobState.AWAITING_CODEX_AUDIT
+        claimed = _authority_of(service, "t")
+        assert claimed.state == STATE_CLAIMED
+        assert claimed.claimed_by_job_id == second.job_id
+
+        reworked = service.audit(
+            "t", second.job_id, ready.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK,
+            (CodingAuditFinding(
+                code="generated_reference_stale",
+                severity=CodingAuditSeverity.MAJOR,
+                message="regenerate the repository-owned references",
+            ),),
+        )
+        assert reworked.state in {
+            CodingJobState.REWORK_QUEUED, CodingJobState.REWORK_RUNNING,
+        }
+        stopped_again = _wait(service, "t", second.job_id)
+        assert stopped_again.state is CodingJobState.FAILED
+        assert stopped_again.failure_code == _BUDGET
+        rotated = _authority_of(service, "t")
+        assert rotated.state == STATE_OPEN
+        assert rotated.generation == 2
+        assert rotated.job_id == second.job_id
+        assert rotated.origin_job_id == stopped.job_id
+
+        third = service.submit(
+            "t", "segment-3", _request(workspace, thread_id=_SESSION, resume=True),
+        )
+        done = _wait(service, "t", third.job_id)
+        assert done.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert backend.resumed == [None, _SESSION, _SESSION, _SESSION]
     finally:
         service.close(wait=True)
 
@@ -3745,7 +3806,11 @@ def test_source_rewritten_at_the_commit_seam_refuses_before_anything_is_spent(
         )
         assert backend.resumed == [None, _SESSION]
         # Spent exactly once, and only by the admission that actually happened.
-        assert _authority_of(service, "t").state == STATE_SETTLED
+        # The audit-ready claimant retains it without exposing a resume.
+        claimed = _authority_of(service, "t")
+        assert claimed.state == STATE_CLAIMED
+        assert claimed.claimed_by_job_id == resumed.job_id
+        assert service.get("t", resumed.job_id).continuation_available is False
     finally:
         service.close(wait=True)
 

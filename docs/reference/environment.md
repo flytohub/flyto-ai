@@ -7,6 +7,7 @@ Every statically named environment read in package and Python scripts. Credentia
 | Variable | Observed defaults | Owners |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | `'', required/None` | `flyto_ai/config.py`, `flyto_ai/providers/__init__.py` |
+| `CODING_WORKSPACE_AUTHORITY_ROOT` | `''` | `flyto_ai/coding/workspace_authority.py` |
 | `DEEPSEEK_API_KEY` | `required/None` | `flyto_ai/providers/__init__.py` |
 | `DISCORD_BOT_TOKEN` | `''` | `flyto_ai/channels/discord.py` |
 | `DISCORD_WEBHOOK_URL` | `''` | `flyto_ai/channels/discord.py` |
@@ -59,6 +60,7 @@ Every statically named environment read in package and Python scripts. Credentia
 | `FLYTO_CLOSED_LOOP_PERMISSION` | `'workspace_write'` | `flyto_ai/closed_loop_mcp.py` |
 | `FLYTO_CLOSED_LOOP_STATE_DIR` | `'~/.flyto/closed-loop-mcp'` | `flyto_ai/closed_loop_mcp.py` |
 | `FLYTO_ENGINE_URL` | `'http://localhost:8080'` | `flyto_ai/channels/telegram_approvals.py` |
+| `FLYTO_EXTENSIONS_INSTALL_ENABLED` | `''` | `flyto_ai/tools/core_tools.py` |
 | `FLYTO_SERVICE_TOKEN` | `''` | `flyto_ai/channels/telegram_approvals.py` |
 | `FLYTO_VAULT_PASSPHRASE` | `'', required/None` | `flyto_ai/config.py`, `flyto_ai/vault.py` |
 | `GITHUB_ACTIONS` | `required/None` | `flyto_ai/benchmarking_v3.py` |
@@ -69,3 +71,4 @@ Every statically named environment read in package and Python scripts. Credentia
 | `TELEGRAM_BOT_TOKEN` | `''` | `flyto_ai/channels/telegram.py`, `flyto_ai/channels/telegram_approvals.py`, `flyto_ai/cli.py`, `flyto_ai/telegram/service.py` |
 | `USER` | `os.getenv('USERNAME', 'flyto')` | `flyto_ai/vault.py` |
 | `USERNAME` | `'flyto'` | `flyto_ai/vault.py` |
+| `XDG_STATE_HOME` | `''` | `flyto_ai/coding/workspace_authority.py` |

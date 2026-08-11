@@ -2,6 +2,104 @@
 
 ## Unreleased
 
+- Added a host-only adapter for flyto-core extension management:
+  `list_core_extensions`, `list_core_extension_kinds`,
+  `install_core_extension`, and `uninstall_core_extension` in
+  `flyto_ai.tools.core_tools`, bound to `core.plugin.loader`. It is generic over
+  the extension kinds Core declares, preserves Core's normalized extension names
+  and result codes, and returns one fixed envelope — `code`, `name`, `version`,
+  `previous_version`, `install_enabled`, `restart_required`, `rolled_back`,
+  `refresh_failed` — that never contains installer (pip) output. Install accepts
+  an optional pinned `version` and an `upgrade` flag; listing accepts a kind
+  filter, which the host applies itself because Core's `list_extensions` has no
+  such parameter.
+  Operators must set `FLYTO_EXTENSIONS_INSTALL_ENABLED` to allow install or
+  uninstall; listing needs no opt-in. Installation is not exposed to models:
+  install-shaped Core tool names are withheld from the MCP tool catalog and
+  refused at dispatch.
+
+- Host-global workspace ownership is now demand-scoped to durable non-terminal
+  work instead of the lifetime of an MCP worker. An idle worker therefore no
+  longer blocks every Codex using another state root after its last job has
+  settled. Admission acquires the configured-tree authority before its first
+  durable job mutation; restart reacquires it before reconciling open work;
+  running, queued, rework, and audit-pending jobs retain it. The last terminal
+  transition releases it, and a bounded per-process observer also releases an
+  admitting worker's lease when a compatible peer on the same shared state
+  root performs that terminal write. Overlapping foreign state roots, crashed
+  open work, the subtractive release valve, and the three-tool MCP surface stay
+  fail-closed.
+
+- Installed-capability discovery from `flyto-core` now validates the manifest
+  Core actually emits. The host read a shape Core never produces — it expected
+  `manifest_contract` / `manifest_hash` instead of `schema` / `hash`, `modules`
+  as records instead of module-id strings, `capabilities` keyed by
+  `capability_id` instead of `capability` plus `providers`, and `plugins` keyed
+  by `plugin` instead of `id` / `version` / `module_count`. Every real manifest
+  was therefore rejected and a fully installed Core reported zero modules. The
+  digest is still recomputed by Core's own function and all three declared
+  counts must match exactly. Blueprint now receives installed **module ids
+  only**, under `available_module_ids`; capability ids and plugin ids are
+  validated and counted as provenance but never handed to an engine, because
+  neither is executable. An absent or too-old Core still returns `None` so
+  callers leave their filtering alone, and a malformed or failing manifest from
+  a manifest-capable Core still returns an empty set rather than an unfiltered
+  one. `installed_capabilities` provenance drops `declared_capability_count`;
+  `capability_count` is now exactly what Core declared. Rollback: revert
+  `flyto_ai/tools/core_tools.py` and `flyto_ai/tools/blueprint_tools.py`
+  together — they are one contract.
+
+- `flyto-ai code-status` no longer reports a dead coding instance as alive
+  after its process id is reused by an unrelated process. Each service instance
+  now holds a crash-released `flock` lease on its own status lease file, and
+  liveness is read from that lease instead of from the recorded pid. An
+  instance recorded as `closed` is never reported alive. Where `flock` is
+  unavailable, liveness reads as unknown rather than alive. Rollback: revert
+  `flyto_ai/coding/route_status.py` and the `acquire_lease` / `release_lease`
+  calls in `flyto_ai/coding/service.py`; stale `.lease` files are inert and are
+  collected with their status files.
+
+- A coding state root that refuses this build's authority now reaches the MCP
+  client as a bounded, actionable reason naming `code-status` and
+  `code-release`, instead of the generic `-32603 coding worker unavailable`
+  that hid it. `code-mcp` exits `78` for that class of refusal and prints only
+  its stable error code, never the underlying message, which can contain a
+  state-root path. Worker stderr is still never captured or forwarded, and the
+  public MCP inventory is unchanged. Rollback: revert the exit-code branch in
+  `_cmd_code_mcp` and `_unavailable_reason` in
+  `flyto_ai/coding/mcp_supervisor.py`.
+
+- The audited Claude service adapter now uses an explicit finite 8 MiB ceiling
+  for one inbound Agent SDK JSON frame. This prevents a legitimate large
+  host-declared Indexer result from hitting the SDK's 1 MiB default and
+  stranding an attributable implementation session. The change is service-only
+  and does not widen tools or route authority; legacy direct calls retain the
+  SDK default.
+
+- Audit-required Claude service jobs that set `require_changes=true` no longer
+  accept a prose-only provider turn as the end of implementation. When a turn
+  produces no attributable `Edit` / `Write` (or bounded project-action)
+  evidence, the agent resumes the exact SDK session with a fixed host-authored
+  correction while the existing attempt budget remains. Exhaustion returns a
+  stable failure and skips the known-useless required-check run. Jobs that
+  explicitly allow no change and legacy direct callers keep their one-turn
+  behavior; the service adapter carries the host-owned invariant explicitly.
+
+- `flyto-ai code-release` can now retire an orphaned `awaiting_codex_audit` job
+  that a *different* startup authority recorded — the case it was built for and
+  could not reach. It previously constructed an ordinary service, which bound
+  the state root to the operator's own authority; a job left by a strict
+  Claude route therefore forced a rotation, and rotation requires every job
+  terminal, including the one being retired. The command now opens the root
+  through `CodingService.open_host_release_valve`, which takes the authority
+  lease exclusively (refusing with `service_busy` while any live coding service
+  holds it) and never reads, writes, rotates, or reproduces `authority.json`.
+  The marker is byte-for-byte unchanged, other open jobs under that authority
+  are untouched, and only the target worktree is released. The valve constructs
+  no implementer, publishes no status, reconciles nothing, and refuses
+  `submit`, `audit`, and the dispatch pump with `release_valve_refused`. The
+  public MCP inventory remains exactly three tools.
+
 - The supported Python floor is now 3.11, matching the SQLite
   `serialize()` / `deserialize()` primitive used by the pathname-free mission
   authority envelope. CI covers Python 3.11 and 3.12, and the development

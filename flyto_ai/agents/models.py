@@ -45,6 +45,11 @@ class CodeTaskRequest:
     #: Whether the startup sandbox/approval authority permits model edits.
     #: Only the in-process adapter sets this; no remote payload can reach it.
     service_edit_authority: bool = True
+    #: Whether a service round must produce an attributable mutation.  Legacy
+    #: direct callers keep their historical behaviour because the Claude agent
+    #: enforces this only in ``service_mode``; the provider-neutral adapter
+    #: copies the host-owned job invariant into this field.
+    require_changes: bool = False
     #: Workspace-relative contract path the service is operating under. Carried
     #: so the SDK layer reads the same document the service authorized instead
     #: of a default that may not be the configured one.
@@ -73,6 +78,8 @@ class CodeTaskRequest:
             raise ValueError("service_mode must be a boolean")
         if not isinstance(self.service_edit_authority, bool):
             raise ValueError("service_edit_authority must be a boolean")
+        if not isinstance(self.require_changes, bool):
+            raise ValueError("require_changes must be a boolean")
         if not isinstance(self.config_path, str) or not self.config_path:
             raise ValueError("config_path must be a non-empty string")
         if not isinstance(self.authorized_config_sha256, str) or (

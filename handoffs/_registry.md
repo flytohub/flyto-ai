@@ -2,6 +2,11 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-08-12 | Demand-scoped workspace authority repair | 2026-08-12-demand-scoped-workspace-authority.md |
+| 2026-08-11 | Hermetic coding_search boundary and neutral registry HOME | 2026-08-11-hermetic-search-and-registry-home.md |
+| 2026-08-11 | Pid-reuse liveness and supervisor authority reason | 2026-08-11-liveness-lease-authority-reason.md |
+| 2026-08-10 | Required-change Claude same-session retry | 2026-08-10-claude-required-change-retry.md |
+| 2026-08-10 | Host release valve state-root authority | 2026-08-10-host-release-valve-authority.md |
 | 2026-08-10 | Cumulative no-change audit rework | 2026-08-10-cumulative-no-change-rework.md |
 | 2026-08-09 | Claude implementation turn budget | 2026-08-09-claude-turn-budget.md |
 | 2026-08-09 | Route repair, runtime status, emergency overflow | 2026-08-09-route-repair-status-emergency.md |

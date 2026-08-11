@@ -1837,14 +1837,20 @@ def test_both_backends_share_the_same_service_level_route(tmp_path):
     """A Claude adapter double takes the identical host-owned lane path."""
     from flyto_ai.coding.service import CodingService
 
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    _declare_verification(workspace)
     fixture = tmp_path / "indexer_fixture.py"
     fixture.write_text(INDEXER_FIXTURE)
     blueprint_fixture = tmp_path / "blueprint_fixture.py"
     blueprint_fixture.write_text(BLUEPRINT_FIXTURE)
     seen = {}
+    # This test's own workspace-authority registry, taken through the
+    # documented startup-only constructor parameter. The broker is *not*
+    # weakened: it still runs, still takes its registry-wide lock, and still
+    # refuses an overlapping owner -- it simply brokers a private registry
+    # instead of the host-global one. That matters because an official service
+    # may legitimately hold a live claim on a real worktree while this suite
+    # runs, and a route-parity test has no business contending with it. One
+    # registry for both backends, so overlap between them is still decided.
+    registry_root = str((tmp_path / "authority-registry").resolve())
 
     class ClaudeAdapterDouble(ServiceImplementer):
         def __init__(self, store):
@@ -1852,6 +1858,13 @@ def test_both_backends_share_the_same_service_level_route(tmp_path):
 
     for label, factory_cls in (("native", ServiceImplementer),
                                ("claude", ClaudeAdapterDouble)):
+        # One tree per backend. This is a route-parity test, not a workspace
+        # ownership test: the two backends run on separate state roots, and the
+        # broker rightly refuses two state roots on one tree -- privately
+        # registered above, but with exactly the production refusal rules.
+        workspace = tmp_path / ("workspace-" + label)
+        workspace.mkdir()
+        _declare_verification(workspace)
         box = {"agent": None}
 
         def factory(store, cls=factory_cls, box=box):
@@ -1868,6 +1881,7 @@ def test_both_backends_share_the_same_service_level_route(tmp_path):
             max_workers=1, max_queued=4,
             require_codex_audit=True,
             implementation_backend=label,
+            workspace_registry_root=registry_root,
             route_policy=CodingRoutePolicy(
                 strict=True,
                 indexer=_indexer_spec(argv=(sys.executable, str(fixture))),
@@ -2887,6 +2901,7 @@ def test_public_cli_policy_prefers_the_workspace_indexer_checkout(tmp_path):
         shutil.which("env"),
         "PYTHONPATH={}".format(tmp_path / "flyto-indexer"),
         sys.executable,
+        "-P",
         "-m",
         "src.mcp_server",
     )

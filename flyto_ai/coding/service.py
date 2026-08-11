@@ -120,6 +120,15 @@ from flyto_ai.coding.route_status import (
     service_build_id,
     service_version,
 )
+from flyto_ai.coding.workspace_authority import (
+    WorkspaceAuthorityBusy,
+    WorkspaceAuthorityConflict,
+    WorkspaceAuthorityError,
+    WorkspaceRootAuthority,
+    canonical_workspace_root,
+    default_registry_root,
+    state_root_has_open_work,
+)
 from flyto_ai.coding.preflight import (
     FAILURE_PHASE_PREFLIGHT,
     PREFLIGHT_ACTIONS,
@@ -461,6 +470,92 @@ class CodingAuthorityUnavailable(CodingServiceError):
     retryable = False
 
 
+class CodingWorkspaceAuthorityConflict(CodingServiceError):
+    """Another coding state root owns a configured workspace root.
+
+    A state root brokers the jobs inside it; it cannot broker a directory tree,
+    because its workspace claims live under itself. Two services on two state
+    roots therefore each keep a private, self-consistent opinion about the same
+    checkout - which is exactly how two sessions came to edit one tree on
+    2026-08-11. The host-global registry above them refuses the second one.
+
+    Raised before any provider, status row, reconciliation, job record, or
+    workspace edit exists, so a refusal here has changed nothing.
+    """
+
+    code = "workspace_authority_conflict"
+    failure_phase = "startup"
+    retryable = False
+
+
+class CodingWorkspaceAuthorityBusy(CodingServiceError):
+    """The host-global registry was mid-transaction past the bounded deadline.
+
+    Neither a conflict nor a fault: the registry is intact and readable, and
+    another process is simply joining or reporting on it. A join holds the
+    registry-wide lock for a few reads and one small write, so the same request
+    normally succeeds on the next attempt.
+
+    Retryable, and the only one of the three workspace refusals that is. It is
+    kept distinct because the operator actions for the other two -- stop
+    another state root, or repair the registry -- are both wrong here and both
+    destructive to somebody's time.
+    """
+
+    code = "workspace_authority_busy"
+    failure_phase = "startup"
+    retryable = True
+
+
+class CodingWorkspaceAuthorityUnavailable(CodingServiceError):
+    """Workspace ownership cannot be established on this host at all.
+
+    Distinct from a conflict for the same reason `CodingAuthorityUnavailable`
+    is: a conflict names an owner, this says the mechanism that would name one
+    is missing or damaged. Both fail closed.
+    """
+
+    code = "workspace_authority_unavailable"
+    failure_phase = "startup"
+    retryable = False
+
+
+class HostReleaseValveRootUnusable(CodingServiceError):
+    """The valve was pointed at something that is not an established root.
+
+    A release is only ever a *subtraction* from a state root some other service
+    already created. So the valve refuses anything it would otherwise have to
+    bring into existence first: a missing directory, a missing `.service.lock`
+    or `locks/` tree, a missing authority lease, a symlinked component, or a
+    world-reachable directory. Creating them would mean the operator's release
+    silently established a brand new root and then reported success against it,
+    which is the opposite of what they asked for.
+
+    Distinct from `CodingAuthorityUnavailable`: that says the locking primitive
+    is missing, this says there is nothing here worth locking.
+    """
+
+    code = "release_valve_root_unusable"
+    failure_phase = "preflight"
+    retryable = False
+
+
+class HostReleaseValveRefused(CodingServiceError):
+    """A subtractive host release was asked to do something additive.
+
+    The release valve exists to *remove* one piece of durable state - an
+    orphaned audit's job record, or a claim nobody can evaluate. It deliberately
+    starts without a startup authority of its own, so it has no standing to
+    admit work, decide an audit, or run a round, and every one of those entry
+    points refuses here rather than silently running under an authority the
+    valve never proved.
+    """
+
+    code = "release_valve_refused"
+    failure_phase = "startup"
+    retryable = False
+
+
 class CodingServiceReloadRequired(CodingServiceError):
     """The source tree changed after this long-lived service imported it."""
 
@@ -760,6 +855,15 @@ _PUMP_MAX_FOREIGN = 3
 #: the dispatch attempt and the metrics read; two cannot be.
 _PUMP_MAX_IDLE = 2
 
+#: A service can admit a job and another compatible service on the same state
+#: root can execute and settle it.  The admitting process therefore cannot
+#: rely only on its own terminal-transition callbacks to release the
+#: host-global workspace lease.  This bounded monitor observes the shared
+#: durable state under the same cross-process guard as admission and gives an
+#: idle state root back even when a peer performed the final write.
+_WORKSPACE_AUTHORITY_IDLE_POLL_SECONDS = 0.2
+_WORKSPACE_AUTHORITY_MONITOR_JOIN_SECONDS = 1.0
+
 #: What one dispatch attempt did. A pump treats all three differently, so they
 #: are named rather than encoded as a bare boolean.
 _DISPATCH_RAN = "ran"
@@ -818,6 +922,10 @@ EXECUTION_AUTHORITY_UNBOUND = "execution_authority_unbound"
 #: them is alive. The kernel releases it when a process dies, so recovery needs
 #: no TTL, no heartbeat and no guess about liveness.
 AUTHORITY_LOCK_NAME = ".authority.lock"
+#: The per-process state guard file. Named here because the host release valve
+#: must *require* it rather than create it: its absence proves no service has
+#: ever established this root.
+SERVICE_LOCK_NAME = ".service.lock"
 #: The marker naming which authority currently owns this root. Bounded, exact
 #: schema, and secret-free: it carries the same fingerprint a job record does.
 AUTHORITY_MARKER_NAME = "authority.json"
@@ -1099,8 +1207,203 @@ def receipt_to_mapping(receipt: CodingJobReceipt) -> Dict[str, Any]:
     return redact_evidence(projected)
 
 
+def _release_valve_never_implements(store: Any) -> Any:
+    """The agent factory a host release valve is built with.
+
+    Not a placeholder. It is the single, unavoidable proof that this mode cannot
+    construct an implementer: there is no provider, no session and no model
+    behind it, so a code path that somehow reached a round would raise here
+    instead of running one.
+    """
+
+    del store
+    raise HostReleaseValveRefused(
+        "the host release valve never constructs an implementer",
+    )
+
+
 class CodingService:
     """Bounded asynchronous facade; provider credentials never enter a job."""
+
+    @classmethod
+    def open_host_release_valve(
+        cls, *, state_root: str, workspace_roots: Sequence[str],
+    ) -> "CodingService":
+        """Open this state root for one strictly subtractive host release.
+
+        The problem this solves is narrow and was unsolvable before it existed.
+        The release valve is the operator's way to retire an orphaned
+        `awaiting_codex_audit` job, but an ordinary construction has to *bind*
+        the root to its own startup authority first - and a host running the
+        valve is, by definition, not running the strict route that created the
+        stranded job. `_bind_startup_authority` then saw live work under another
+        authority, `_require_all_jobs_terminal` saw the very job the valve
+        exists to retire, and the command refused itself. The release the
+        operator needed was the one thing the command could never do.
+
+        So this mode does not bind, adopt, rotate or even read the marker. It
+        takes the state root's authority lease *exclusively* instead, which
+        proves something stronger than agreement: that no coding service of any
+        authority is alive here at all. Nothing under a live authority can be
+        running, so nothing has to be compared with one - and because the marker
+        is never read and never written, `authority.json` comes out of the
+        operation byte-for-byte as it went in, still naming the authority whose
+        service will resume against it.
+
+        What the mode gives up is everything additive. It constructs no
+        implementer, publishes no runtime status, reconciles no interrupted job,
+        pumps nothing, admits nothing, audits nothing, and makes nothing
+        landable; those entry points refuse rather than run. The two operations
+        that remain - :meth:`abandon` and :meth:`repair_workspace_claim` - are
+        the proven subtractive paths, unchanged, and each still takes the job
+        lease or the claim evaluation it always took.
+
+        The ordinary constructor is deliberately not used. It creates the state
+        root, `.service.lock`, the `locks/` tree, a mission runtime and a
+        thread pool *before* it reaches any authority step, so building one and
+        then arguing the side effects were harmless would mean the valve had
+        already written to a root it had not yet proved was free. Instead the
+        object is allocated without `__init__` and
+        :meth:`_init_release_valve` runs a fixed order: validate an existing
+        root, prove exclusivity, and only then build the little state the two
+        subtractive operations need.
+        """
+
+        valve = cls.__new__(cls)
+        valve._init_release_valve(
+            state_root=state_root, workspace_roots=workspace_roots,
+        )
+        return valve
+
+    def _init_release_valve(
+        self, *, state_root: str, workspace_roots: Sequence[str],
+    ) -> None:
+        """Construct only what a subtractive host release can possibly need.
+
+        The order is the contract, and every step before the lease is a *read*:
+
+        1. validate the workspace roots and the state root, creating nothing;
+        2. require the durable furniture of an established root to exist
+           already - `.service.lock`, `locks/jobs`, `locks/workspaces` and the
+           authority lease - so a typo'd or half-built path refuses instead of
+           being completed into a new root;
+        3. take the authority lease exclusively and non-blocking, which proves
+           no coding service of any authority is alive here;
+        4. only then bind the narrow state `abandon`, `repair_workspace_claim`
+           and `close` actually use.
+
+        Nothing here reads, writes, rotates or reproduces `authority.json`, and
+        no executor, mission runtime, status publisher, dispatcher or
+        reconciliation exists in this mode at all - they are not skipped by a
+        flag, they are never constructed, so there is no code path that could
+        start one later.
+        """
+
+        roots = tuple(Path(path).expanduser().resolve() for path in workspace_roots)
+        if not roots or any(not path.is_dir() for path in roots):
+            raise ValueError("workspace_roots must contain existing directories")
+        self.workspace_roots = roots
+        # `create=False` is the whole point: same link-refusing walk as an
+        # ordinary start, but a missing component raises instead of being
+        # created through the descriptor above it.
+        try:
+            self.state_root = secure_directory(Path(state_root), create=False)
+        except (ContinuationCorrupt, OSError) as exc:
+            raise HostReleaseValveRootUnusable(
+                "the coding state root does not exist or is not a safe"
+                " private directory, so there is nothing to release",
+            ) from exc
+
+        self._release_valve = True
+        self._closed = False
+        # Never joined, never rotated, never adopted. Host-global workspace
+        # ownership is an *additive* claim over a tree, and this mode exists to
+        # subtract from a root that some other state root still owns. Taking it
+        # would be the valve declaring itself that tree's owner in order to
+        # release one job from it.
+        self._workspace_root_authority = None
+        self._workspace_authority_monitor_stop = threading.Event()
+        self._workspace_authority_monitor: Optional[threading.Thread] = None
+        self._workspace_registry_root = None
+        self._authority_fd = -1
+        self._lock_fd = -1
+        # Never built in this mode. `close` and the status helpers are already
+        # written to tolerate their absence, so the valve reuses those paths
+        # rather than introducing a second teardown.
+        self._executor = None
+        self._status = None
+        self._mission = None
+        self._lock = threading.RLock()
+        self._state_lock_depth = 0
+        self._job_leases: Dict[str, int] = {}
+        self._resume: Dict[Tuple[str, str], CodingTaskRequest] = {}
+        self._pending: set[Future[Any]] = set()
+        self._workspace_locks: Dict[str, threading.Lock] = {}
+        self._admission_locks: Dict[str, threading.Lock] = {}
+        # Constructs nothing on disk; it is a symlink-refusing accessor.
+        self._continuation = ContinuationStore(self.state_root)
+        # Inert startup fields the shared subtractive helpers read. No authority
+        # is computed from any of them, because the valve records none.
+        self.agent_factory = _release_valve_never_implements
+        self.require_codex_audit = True
+        self.max_queued = 0
+        self.max_rework_rounds = 1
+        self.route_policy = None
+        self.emergency_policy = EmergencyOverflowPolicy()
+        self._breaker = EmergencyCircuitBreaker(self.emergency_policy)
+        self.snapshot_policy = self._startup_snapshot_policy(None)
+        self.instance_id = uuid.uuid4().hex[:24]
+        self.build_id = service_build_id()
+        self.service_version = service_version()
+        self.started_at = time.time()
+        self._status_published = 0
+        self._status_failures = 0
+        self._status_failure_code = ""
+        self._last_status_record: Dict[str, Any] = {}
+        self._reclaimed = 0
+
+        try:
+            self._lock_fd = self._open_existing_valve_lock(SERVICE_LOCK_NAME)
+            for name in ("jobs", "workspaces"):
+                if not (self.state_root / "locks" / name).is_dir():
+                    raise HostReleaseValveRootUnusable(
+                        "this coding state root has no lock directories, so no"
+                        " service has ever established it",
+                    )
+            self._acquire_state_root_authority_exclusively()
+        except BaseException:
+            # Constructor failure must leave nothing open. `close` is not used
+            # here: it assumes a fully built object, and this one may not be.
+            self._release_valve_descriptors()
+            raise
+
+    def _open_existing_valve_lock(self, name: str) -> int:
+        """Open one required lock file that must already exist.
+
+        No `O_CREAT`: an absent file means this is not an established state
+        root. `O_NOFOLLOW` refuses a symlink at the final component, exactly as
+        the ordinary authority lease does.
+        """
+
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            return os.open(self.state_root / name, flags)
+        except OSError as exc:
+            raise HostReleaseValveRootUnusable(
+                "this coding state root is missing required lock state, so no"
+                " service has ever established it",
+            ) from exc
+
+    def _release_valve_descriptors(self) -> None:
+        """Close every descriptor this mode may have taken, in reverse order."""
+
+        self._release_state_root_authority()
+        if self._lock_fd != -1:
+            try:
+                os.close(self._lock_fd)
+            except OSError:
+                pass
+            self._lock_fd = -1
 
     def __init__(
         self,
@@ -1120,6 +1423,7 @@ class CodingService:
         max_rework_rounds: int = 3,
         route_policy: Optional[CodingRoutePolicy] = None,
         emergency_policy: Optional[EmergencyOverflowPolicy] = None,
+        workspace_registry_root: Optional[str] = None,
     ) -> None:
         if not 1 <= max_workers <= 16:
             raise ValueError("max_workers must be between 1 and 16")
@@ -1128,6 +1432,80 @@ class CodingService:
         roots = tuple(Path(path).expanduser().resolve() for path in workspace_roots)
         if not roots or any(not path.is_dir() for path in roots):
             raise ValueError("workspace_roots must contain existing directories")
+        self.workspace_roots = roots
+        #: Startup-only. `None` uses the host default, which is stable across
+        #: state roots and outside every product worktree. A test passes its
+        #: own so one host can run isolated registries; no job payload reaches
+        #: this, and a running service cannot be redirected.
+        self._workspace_registry_root = workspace_registry_root
+        # Enough state for `close()` to be safe, and nothing more. Everything
+        # below can fail, and every failure has to give back whatever it took.
+        self._lock = threading.RLock()
+        self._state_lock_depth = 0
+        self._closed = False
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._status: Optional[RouteStatusPublisher] = None
+        self._mission = None
+        self._job_leases: Dict[str, int] = {}
+        self._pending: set[Future[Any]] = set()
+        self._lock_fd = -1
+        self._authority_fd = -1
+        self._release_valve = False
+        # Host-global tree ownership is *demand scoped*: it is acquired only
+        # while this state root has durable non-terminal work, never for the
+        # lifetime of an idle service. An idle Codex worker that held its
+        # trees for its whole task lifetime blocked every other state root
+        # indefinitely, even after its one job settled. `_construct` reacquires
+        # before reconciliation when durable open work already exists, and
+        # admission acquires before the first new job's durable write; the last
+        # terminal transition releases it. None here means "not currently
+        # owning any tree".
+        self._workspace_root_authority: Optional[WorkspaceRootAuthority] = None
+        self._workspace_authority_monitor_stop = threading.Event()
+        self._workspace_authority_monitor: Optional[threading.Thread] = None
+        try:
+            self._construct(
+                agent_factory,
+                state_root=state_root,
+                max_workers=max_workers,
+                max_queued=max_queued,
+                approval_policy=approval_policy,
+                sandbox_mode=sandbox_mode,
+                config_path=config_path,
+                sandbox_image=sandbox_image,
+                require_codex_audit=require_codex_audit,
+                implementation_backend=implementation_backend,
+                attachable_capability_kinds=attachable_capability_kinds,
+                max_rework_rounds=max_rework_rounds,
+                route_policy=route_policy,
+                emergency_policy=emergency_policy,
+            )
+        except BaseException:
+            # Includes the global hold taken above: a constructor that refuses
+            # must not keep other state roots off these trees.
+            self.close(wait=False)
+            raise
+
+    def _construct(
+        self,
+        agent_factory: AgentFactory,
+        *,
+        state_root: str,
+        max_workers: int,
+        max_queued: int,
+        approval_policy: ApprovalPolicy,
+        sandbox_mode: SandboxMode,
+        config_path: str,
+        sandbox_image: str,
+        require_codex_audit: bool,
+        implementation_backend: str,
+        attachable_capability_kinds: Optional[Sequence[str]],
+        max_rework_rounds: int,
+        route_policy: Optional[CodingRoutePolicy],
+        emergency_policy: Optional[EmergencyOverflowPolicy],
+    ) -> None:
+        """Construct durable state; workspace ownership remains demand-scoped."""
+
         self.agent_factory = agent_factory
         # Not `.resolve()` + `mkdir(parents=True)`. That pair follows links
         # twice - once to decide where to write, once to write - and the store
@@ -1136,7 +1514,6 @@ class CodingService:
         # service creates state on the far side of a link and only then hands
         # a store that would have said no.
         self.state_root = secure_directory(Path(state_root))
-        self.workspace_roots = roots
         self.max_queued = max_queued
         self.approval_policy = ApprovalPolicy(approval_policy)
         self.sandbox_mode = SandboxMode(sandbox_mode)
@@ -1216,30 +1593,19 @@ class CodingService:
             raise ValueError("config_path must be relative")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*", self.sandbox_image):
             raise ValueError("sandbox_image is invalid")
-        self._lock = threading.RLock()
-        self._state_lock_depth = 0
         self._workspace_locks: Dict[str, threading.Lock] = {}
         #: Per-workspace admission locks, distinct from the per-round locks
         #: above so a submit never queues behind a running model round.
         self._admission_locks: Dict[str, threading.Lock] = {}
-        self._job_leases: Dict[str, int] = {}
         # In-memory resume context is only the fast path. The durable, redacted
         # envelope beside each job record is what makes rework possible from a
         # worker that never implemented it, and it is bound to one exact
         # implementation session so it can continue that session but never
         # start a new one.
         self._resume: Dict[Tuple[str, str], CodingTaskRequest] = {}
-        self._pending: set[Future[Any]] = set()
+        # The first worker thread of this service, and deliberately after the
+        # host-global workspace join: a refused service never creates one.
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="flyto-coding")
-        self._closed = False
-        #: The state-root authority lease. `-1` until taken, so every failure
-        #: path - including one before it is taken - can close it uniformly.
-        self._authority_fd = -1
-        #: Set once the publisher exists. A constructor that fails at the
-        #: authority lease is torn down through the same `close()` as any other,
-        #: and that teardown must not raise over a recorder that was never
-        #: built - an `AttributeError` there would replace the real refusal.
-        self._status: Optional[RouteStatusPublisher] = None
         # The durable, cross-process mission queue. Constructing it creates
         # nothing, so an unsupported host is discovered by asking rather than by
         # leaving half a store behind; admission is where the refusal lands.
@@ -1252,7 +1618,7 @@ class CodingService:
         self._reclaimed = 0
         try:
             self._lock_fd = os.open(
-                self.state_root / ".service.lock", os.O_CREAT | os.O_RDWR, 0o600,
+                self.state_root / SERVICE_LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600,
             )
         except OSError:
             # Never leave worker threads behind when construction fails.
@@ -1276,9 +1642,28 @@ class CodingService:
                 version=self.service_version,
                 started_at=self.started_at,
             )
+            # Take the crash-released liveness lease before the first publish,
+            # so no reader can ever observe an `active` row for this instance
+            # that is not yet backed by a held lease. A refusal here only makes
+            # liveness undecidable, never false, so it must not keep the
+            # service from starting.
+            self._status.acquire_lease()
             with self._state_guard():
+                # Restart with durable non-terminal work must reacquire the
+                # host-global tree authority *before* reconciliation, status
+                # that claims activity, pumping, or provider construction. A
+                # foreign crashed-open owner of the same tree still blocks this
+                # here, exactly as it would block a fresh admission. An idle
+                # restart (no durable open work) takes nothing and stays
+                # unowned, which is what lets other state roots proceed.
+                if state_root_has_open_work(self.state_root):
+                    self._ensure_workspace_authority_locked()
                 self._publish_status({})
                 self._reconcile_interrupted_jobs()
+                # Reconciliation may have settled the last interrupted job, in
+                # which case this service is now idle and must not keep owning
+                # the tree.
+                self._release_workspace_authority_if_idle_locked()
         except BaseException:
             self.close(wait=False)
             raise
@@ -1291,6 +1676,7 @@ class CodingService:
     ) -> CodingJobReceipt:
         """Create or reuse one tenant-owned job and schedule it exactly once."""
 
+        self._refuse_release_valve("accept work")
         tenant_ref = self._tenant_ref(tenant_id)
         if not _SAFE_ID.fullmatch(idempotency_key):
             raise ValueError("idempotency_key must be a safe identifier")
@@ -1611,6 +1997,17 @@ class CodingService:
                 raise VerificationContractChanged(
                     "the repository verification contract changed during admission",
                 )
+            # Host-global tree ownership is taken here, inside the guard and
+            # immediately before the first durable mutation of this new
+            # non-terminal job. Idempotent when this state root already owns the
+            # trees (a peer's open job, or an earlier job of this service). A
+            # refusal -- a foreign owner, a busy or damaged registry -- raises
+            # before the continuation claim, the lease, the worktree claim, the
+            # job record, the idempotency record and the resume envelope, so an
+            # unownable tree leaves no job, no claim, no continuation and no
+            # status behind. It runs after every cheap validation gate above so
+            # a bad request is still rejected without touching the registry.
+            self._ensure_workspace_authority_locked()
             now = time.time()
             job_id = "job_{}".format(uuid.uuid4().hex[:24])
             # The claim is a compare-and-swap against the durable journal tail,
@@ -1730,6 +2127,11 @@ class CodingService:
                 # process could have observed the claim in between.
                 self._revert_continuation_claim(tenant_ref, granted, job_id)
                 self._release_job_lease(job_id)
+                # If this admission is what acquired host-global ownership and
+                # it left no durable non-terminal work behind, give the trees
+                # back. A peer's open job keeps the hold; this state root's own
+                # failure to admit must not.
+                self._release_workspace_authority_if_idle_locked()
                 raise
             # Admission is over, and with it this instance's exclusive hold.
             #
@@ -2152,6 +2554,7 @@ class CodingService:
         stages, commits, pushes, or publishes anything.
         """
 
+        self._refuse_release_valve("decide an audit or make work landable")
         tenant_ref = self._tenant_ref(tenant_id)
         if not _JOB_ID.fullmatch(job_id):
             raise CodingJobNotFound("coding job does not exist")
@@ -2223,6 +2626,13 @@ class CodingService:
             if audit_count > MAX_AUDIT_ROUNDS:
                 raise ReworkLimitReached("coding job exhausted its audit rounds")
             if verdict is CodingAuditVerdict.ACCEPT:
+                # A continuation stays claimed by this job for the whole audit
+                # loop. That prevents another submit from spending the same
+                # provider session while still allowing a later bounded stop
+                # during rework to rotate the authority forward. Acceptance
+                # is where the loop genuinely finishes, so settle the claim
+                # before publishing a landable record.
+                self._settle_continuation(tenant_ref, job_id, path)
                 self._update_record_locked(
                     path,
                     state=CodingJobState.CODEX_ACCEPTED.value,
@@ -2316,6 +2726,15 @@ class CodingService:
             if self._closed:
                 return
             self._closed = True
+            self._workspace_authority_monitor_stop.set()
+            authority_monitor = self._workspace_authority_monitor
+        if (
+            authority_monitor is not None
+            and authority_monitor is not threading.current_thread()
+        ):
+            authority_monitor.join(
+                timeout=_WORKSPACE_AUTHORITY_MONITOR_JOIN_SECONDS,
+            )
         # One outer `finally` over the *whole* teardown. Draining the executor
         # and handing back job leases can both raise, and either one leaving
         # the root descriptors open would keep a service that has already
@@ -2325,7 +2744,8 @@ class CodingService:
             # The state-root lease must outlive active worker writes.
             # `wait=False` cancels jobs that have not started but still drains
             # running jobs.
-            self._executor.shutdown(wait=True, cancel_futures=not wait)
+            if self._executor is not None:
+                self._executor.shutdown(wait=True, cancel_futures=not wait)
             with self._lock:
                 for job_id in tuple(self._job_leases):
                     self._release_job_lease(job_id)
@@ -2344,14 +2764,25 @@ class CodingService:
                 # below on its way out.
                 pass
         finally:
-            try:
-                os.close(self._lock_fd)
-            except OSError:
-                pass
+            # `-1` afterwards, not just closed. A second close of a recycled
+            # descriptor number would shut an unrelated file belonging to
+            # whatever opened it next.
+            descriptor, self._lock_fd = self._lock_fd, -1
+            if descriptor != -1:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
             # Last, and after every other descriptor: while this is held,
             # another authority may not rotate this root, so it must outlive
             # every write above.
             self._release_state_root_authority()
+            # Host-global tree ownership outlives even that: while it is held,
+            # no service on another state root may touch these trees, so it is
+            # released only once this one has finished writing to them.
+            if self._workspace_root_authority is not None:
+                self._workspace_root_authority.release()
+                self._workspace_root_authority = None
 
     def _schedule_rework(
         self,
@@ -2496,6 +2927,10 @@ class CodingService:
         no longer receive.
         """
 
+        # A continuation-backed audit loop may still own a claimed authority.
+        # Close it before the terminal record becomes observable, matching the
+        # accept, abandon, and worker-failure publication order.
+        self._settle_continuation(tenant_ref, job_id, path)
         self._update_record_locked(
             path,
             state=CodingJobState.FAILED.value,
@@ -2706,6 +3141,7 @@ class CodingService:
         than the round it is waiting for.
         """
 
+        self._refuse_release_valve("pump or run a coding round")
         deadline = time.monotonic() + _PUMP_WAIT_SECONDS
         delay = _PUMP_POLL_SECONDS
         foreign = 0
@@ -2908,7 +3344,48 @@ class CodingService:
             "route": self._policy_digest(self.route_policy),
             "emergency": self._policy_digest(self.emergency_policy),
             "max_rework_rounds": int(self.max_rework_rounds),
+            # Two services sharing a state root but pointed at *different*
+            # host-global registries would each broker their trees against a
+            # registry the other cannot see, agree on every field above, and
+            # then edit the same files - the state-root authority would have
+            # certified a pair the workspace broker never compared. Binding
+            # the registry makes that disagreement a startup refusal.
+            #
+            # The configured tree set is bound for the same reason: a service
+            # covering one root is not semantically the same worker as one
+            # covering three, even where they overlap.
+            #
+            # Both are SHA-256 digests. An absolute path is exactly the kind of
+            # host detail this record must never carry, and a digest still
+            # compares equal for semantically identical configurations because
+            # both sides are canonicalised first.
+            "workspace_registry": self._workspace_registry_digest(),
+            "workspace_roots": self._workspace_root_set_digest(),
         }
+
+    def _workspace_registry_digest(self) -> str:
+        """Digest of the canonical host-global registry this service uses."""
+
+        root = (
+            default_registry_root() if self._workspace_registry_root is None
+            else Path(self._workspace_registry_root).expanduser()
+        )
+        canonical = os.path.abspath(os.path.expanduser(str(root)))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _workspace_root_set_digest(self) -> str:
+        """Digest of the canonical configured tree set, order-independent.
+
+        Sorted canonical paths, so an alias, a different ordering, a trailing
+        separator, or a `..` route produce the same digest as the tree they
+        name, and only a genuinely different *set* differs.
+        """
+
+        canonical = sorted(
+            str(canonical_workspace_root(root)) for root in self.workspace_roots
+        )
+        payload = json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @classmethod
     def _policy_digest(cls, policy: Any) -> str:
@@ -3085,6 +3562,184 @@ class CodingService:
             raise
         self._authority_fd = descriptor
 
+    def _join_workspace_root_authority(self, state_root: Path) -> None:
+        """Own every configured workspace root host-globally, or refuse.
+
+        Translation only: the registry raises its own bounded codes so it can
+        stay independent of this service, and they are mapped here onto the
+        service's error surface. The message is the registry's fixed text and
+        never contains a path, so the refusal a client sees names the condition
+        without naming the tree.
+        """
+
+        authority = WorkspaceRootAuthority(self._workspace_registry_root)
+        try:
+            authority.join(
+                state_root=state_root, workspace_roots=self.workspace_roots,
+            )
+        except WorkspaceAuthorityConflict as exc:
+            raise CodingWorkspaceAuthorityConflict(str(exc)) from exc
+        except WorkspaceAuthorityBusy as exc:
+            # Ordered before the base class on purpose. Busy means the registry
+            # is intact and somebody is simply mid-transaction; telling an
+            # operator to go and stop another state root would send them after
+            # a conflict that does not exist.
+            raise CodingWorkspaceAuthorityBusy(str(exc)) from exc
+        except WorkspaceAuthorityError as exc:
+            raise CodingWorkspaceAuthorityUnavailable(str(exc)) from exc
+        self._workspace_root_authority = authority
+
+    def _ensure_workspace_authority_locked(self) -> None:
+        """Own the configured trees host-globally if not already owning them.
+
+        The caller must hold this state root's cross-process guard, so two
+        peers of the same state root cannot both be mid-acquisition. Idempotent
+        within a process: once this process holds the shared lease, a later job
+        rides the same hold rather than taking a second one.
+
+        A refusal (foreign owner, busy registry, damaged registry) raises the
+        bounded service error and takes nothing, so the caller -- admission or
+        restart -- can abort before any durable side effect.
+
+        The subtractive release valve never owns a tree: it exists to *remove*
+        state a foreign owner left behind, and taking ownership to do that would
+        be the very adoption it must not perform.
+        """
+
+        if self._release_valve:
+            return
+        if self._workspace_root_authority is not None:
+            return
+        self._join_workspace_root_authority(self.state_root)
+        self._start_workspace_authority_monitor_locked()
+
+    def _start_workspace_authority_monitor_locked(self) -> None:
+        """Start one bounded idle-release observer for this service process.
+
+        The thread is needed only after this process has acquired a host lease.
+        It stays alive for the service lifetime so a later idle-to-active cycle
+        does not create an unbounded number of threads.  It never mutates job
+        state; its sole operation is the same guarded, durable idle check used
+        by synchronous terminal transitions.
+        """
+
+        if self._release_valve or self._closed:
+            return
+        monitor = self._workspace_authority_monitor
+        if monitor is not None and monitor.is_alive():
+            return
+        self._workspace_authority_monitor_stop.clear()
+        monitor = threading.Thread(
+            target=self._workspace_authority_monitor_loop,
+            name="flyto-workspace-authority-{}".format(self.instance_id),
+            daemon=True,
+        )
+        self._workspace_authority_monitor = monitor
+        monitor.start()
+
+    def _workspace_authority_monitor_loop(self) -> None:
+        """Release a lease after a peer settles this state root's last job."""
+
+        stop = self._workspace_authority_monitor_stop
+        while not stop.wait(_WORKSPACE_AUTHORITY_IDLE_POLL_SECONDS):
+            try:
+                with self._state_guard():
+                    if self._closed:
+                        return
+                    self._release_workspace_authority_if_idle_locked()
+            except (OSError, CodingServiceError):
+                # A transient guard/registry failure cannot authorize a
+                # release.  Keeping the lease and retrying is fail-closed; the
+                # normal status and operator commands remain available.
+                continue
+
+    def _release_workspace_authority_if_idle_locked(self) -> None:
+        """Give the trees back once this state root has no durable open work.
+
+        The caller holds the cross-process guard, and the "open work" question
+        is answered from *durable* state shared by every peer -- non-terminal
+        job records and surviving owner claims -- not from this process's memory.
+        That is what closes the multi-peer gap: a peer that just settled its own
+        last job still sees another peer's open job under the same state root and
+        keeps the hold, so no peer can release the tree while any same-root job
+        is still non-terminal.
+
+        Releasing only drops this process's shared lease. A crashed-open owner
+        remains diagnosable, because the durable non-terminal record is still
+        there for any reader; this method only runs when there is none.
+        """
+
+        if self._release_valve:
+            return
+        if self._workspace_root_authority is None:
+            return
+        if state_root_has_open_work(self.state_root):
+            return
+        self._workspace_root_authority.release()
+        self._workspace_root_authority = None
+
+    def _acquire_state_root_authority_exclusively(self) -> None:
+        """Take the whole state root for one subtractive host release, or refuse.
+
+        Same lease file and same kernel primitive as
+        :meth:`_acquire_state_root_authority`, and deliberately only its first
+        step. A live service of *any* authority holds the shared lock for its
+        whole life, so failing to take the exclusive lock is proof that one is
+        alive - and that is the single condition this mode refuses on. It never
+        falls back to the shared lock, because a peer that agreed with the
+        marker would be a worker, and a valve is not one.
+
+        Everything the ordinary path does after the lock is skipped on purpose,
+        and each omission is a safety property rather than a shortcut:
+
+        * the marker is not read, so a strict route's recorded authority cannot
+          refuse the very release that exists to unblock it;
+        * the marker is not written, so `authority.json` is byte-for-byte
+          unchanged and the strict service still owns this root afterwards;
+        * `_bind_startup_authority` does not run, so no record of another
+          authority is inspected, adopted, stamped or terminalized - a second
+          open job under the same recorded authority is left exactly as found;
+        * `_require_all_jobs_terminal` does not run, which is the actual bug:
+          the one open `awaiting_codex_audit` job the operator is retiring was
+          itself the reason rotation refused.
+
+        Holding the lock exclusively for the valve's life is also what keeps the
+        window safe from the other side: no service can start here until
+        :meth:`close` releases it.
+        """
+
+        if fcntl is None:
+            # Without `flock` there is no way to prove no service is alive, and
+            # a release that cannot prove that could retire a job a live round
+            # is still writing. Same refusal, same reason, as an ordinary start.
+            raise CodingAuthorityUnavailable(
+                "this host has no inter-process lock, so a coding state root"
+                " cannot be released under host authority",
+            )
+        descriptor = self._open_authority_lock()
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise CodingServiceBusy(
+                    "a live coding service holds this state root; stop it"
+                    " before releasing a job or a workspace claim",
+                ) from exc
+        except BaseException:
+            os.close(descriptor)
+            raise
+        self._authority_fd = descriptor
+
+    def _refuse_release_valve(self, operation: str) -> None:
+        """Refuse an additive operation on a service that never bound a root."""
+
+        if self._release_valve:
+            raise HostReleaseValveRefused(
+                "the host release valve is subtractive and cannot {}".format(
+                    operation,
+                ),
+            )
+
     def _open_authority_lock(self) -> int:
         """Open the lease file itself, never something standing in for it.
 
@@ -3095,10 +3750,23 @@ class CodingService:
         """
 
         path = self.state_root / AUTHORITY_LOCK_NAME
-        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        if not self._release_valve:
+            # Only an ordinary start may establish the lease. The valve must
+            # find one already there: creating it would mean proving exclusive
+            # authority over a file this process had just invented, which
+            # proves nothing about any service that ran here before.
+            flags |= os.O_CREAT
         try:
             descriptor = os.open(path, flags, 0o600)
         except OSError as exc:
+            if self._release_valve:
+                # For the valve an absent lease is not "the primitive is
+                # missing", it is "nothing was ever established here".
+                raise HostReleaseValveRootUnusable(
+                    "this coding state root has no authority lease, so no"
+                    " service has ever established it",
+                ) from exc
             raise CodingAuthorityUnavailable(
                 "the coding state root authority lease could not be opened",
             ) from exc
@@ -4491,6 +5159,7 @@ class CodingService:
             outcome = await orchestrator.run(
                 request, implement,
                 parent_contract=parent_contract,
+                prior_scope=prior_scope,
                 on_pre_contract=on_pre_contract,
                 cumulative_scope=cumulative_scope,
             )
@@ -4810,12 +5479,14 @@ class CodingService:
                 str(self._read_json(path).get("request_sha256") or ""),
                 session,
             )
-        # Reaching an auditable revision is where a continuation ends. The
-        # ordinary same-session audit and rework rules own the job from here,
-        # so the authority settles exactly once and can never be spent again -
-        # and it settles before the job becomes visibly auditable, so no reader
-        # ever sees an audit-ready job still advertising a live resume.
-        self._settle_continuation(tenant_ref, job_id, path)
+        # A claimed continuation remains owned by this job while its audit loop
+        # is open. `open_authority()` does not expose claimed records, so an
+        # audit-ready job still advertises no resumable segment and no second
+        # submit can enter its provider session. Keeping the claim is what lets
+        # a later bounded stop during same-job rework rotate to the next
+        # generation instead of irreversibly losing a still-proven session.
+        # Accept, abandon, rework-limit settlement, and unclassified worker
+        # failure all close it before publishing their terminal state.
         # The item closes `fixed` here, on this round's own revision and file
         # set, and the closed projection is published in the same write that
         # makes the job auditable. An auditor therefore never observes an
@@ -5351,6 +6022,10 @@ class CodingService:
         with self._lock:
             last = dict(self._last_status_record)
         self._publish_status(last, lifecycle="closed")
+        # Release only after the `closed` row is durable. If this process dies
+        # between the two, the kernel drops the lease anyway and the row reads
+        # as not alive, so neither order can produce a false `alive`.
+        self._status.release_lease()
 
     def _publish_status(
         self, record: Mapping[str, Any], *, lifecycle: str = "active",
@@ -6268,6 +6943,15 @@ class CodingService:
         # state while the previous round still appears to own the job.
         if state not in _INTERRUPTED_JOB_STATES:
             self._release_job_lease(job_id)
+        # A terminal transition is the only kind that can reduce this state
+        # root's durable open work to zero. When it does -- this job's claim
+        # and lease are already released above -- give the host-global trees
+        # back so an idle service never keeps owning them. Any other
+        # non-terminal job under this state root, including a peer's, keeps the
+        # hold. Guarded by the terminal check so an ordinary running/queued/
+        # rework write never pays for the durable scan.
+        if state in _TERMINAL_STATE_VALUES:
+            self._release_workspace_authority_if_idle_locked()
 
     @staticmethod
     def _decode_result(value: Any) -> Optional[CodingTaskResult]:

@@ -20,6 +20,7 @@ from flyto_ai.intelligence.planner import extract_intent
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.providers.base import dispatch_and_log_tool
 from flyto_ai.providers.failover import ProviderChain
+from flyto_ai.tools import blueprint_tools
 from flyto_ai.tools.blueprint_tools import dispatch_blueprint_tool
 
 
@@ -1267,3 +1268,196 @@ def test_distillation_requires_runtime_evidence_and_preserves_assertions():
     assert decision.workflow["steps"][0]["assertions"][0]["op"] == "truthy"
     assert decision.workflow["distillation"]["evidence_count"] == 6
     assert rejected.eligible is False
+
+
+class _CapabilityAwareEngine:
+    """A Blueprint engine that accepts the host-derived module-id set."""
+
+    def __init__(self):
+        self.calls = []
+
+    def list_blueprints(self, available_module_ids=None):
+        self.calls.append(("list_blueprints", available_module_ids))
+        return [{"id": "learned_copy"}]
+
+    def search(self, query, available_module_ids=None):
+        self.calls.append(("search", query, available_module_ids))
+        return [{"id": "learned_copy"}]
+
+    def expand(self, blueprint_id, args, available_module_ids=None):
+        self.calls.append(("expand", blueprint_id, available_module_ids))
+        return {
+            "ok": True,
+            "data": {
+                "steps": [{"module": "string.uppercase", "params": args}],
+            },
+        }
+
+
+class _LegacyEngine:
+    """A Blueprint engine predating capability filtering."""
+
+    def __init__(self):
+        self.calls = []
+
+    def list_blueprints(self):
+        self.calls.append("list_blueprints")
+        return []
+
+    def search(self, _message):
+        self.calls.append("search")
+        return []
+
+    def expand(self, blueprint_id, args):
+        self.calls.append("expand")
+        return {"ok": True, "data": {"steps": [{"module": "string.uppercase", "params": args}]}}
+
+
+def _install_engine(monkeypatch, engine, module_ids):
+    import flyto_blueprint
+
+    monkeypatch.setattr(flyto_blueprint, "get_engine", lambda: engine)
+    monkeypatch.setattr(
+        blueprint_tools,
+        "get_core_installed_module_ids",
+        lambda: module_ids,
+    )
+
+
+@pytest.mark.asyncio
+async def test_blueprint_discovery_uses_host_derived_module_ids(monkeypatch):
+    engine = _CapabilityAwareEngine()
+    installed = frozenset({"string.uppercase", "browser.launch"})
+    _install_engine(monkeypatch, engine, installed)
+
+    await dispatch_blueprint_tool("list_blueprints", {})
+    await dispatch_blueprint_tool("list_blueprints", {"query": "copy text"})
+    await dispatch_blueprint_tool(
+        "use_blueprint",
+        {"blueprint_id": "learned_copy", "args": {"text": "Flyto"}},
+    )
+
+    assert engine.calls == [
+        ("list_blueprints", installed),
+        ("search", "copy text", installed),
+        ("expand", "learned_copy", installed),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_supplied_availability_never_reaches_the_engine(monkeypatch):
+    engine = _CapabilityAwareEngine()
+    installed = frozenset({"string.uppercase"})
+    _install_engine(monkeypatch, engine, installed)
+
+    await dispatch_blueprint_tool(
+        "list_blueprints",
+        {
+            "query": "copy text",
+            "available_module_ids": ["shell.run", "docker.run"],
+            "available_capabilities": ["shell.run", "docker.run"],
+            "capabilities": ["ssh.connect"],
+        },
+    )
+    await dispatch_blueprint_tool(
+        "use_blueprint",
+        {
+            "blueprint_id": "learned_copy",
+            "args": {"text": "Flyto"},
+            "installed_capabilities": ["shell.run"],
+            "module_ids": ["shell.run"],
+        },
+    )
+
+    assert engine.calls == [
+        ("search", "copy text", installed),
+        ("expand", "learned_copy", installed),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_absent_or_old_core_leaves_blueprint_filtering_untouched(monkeypatch):
+    engine = _CapabilityAwareEngine()
+    _install_engine(monkeypatch, engine, None)
+
+    await dispatch_blueprint_tool("list_blueprints", {})
+    await dispatch_blueprint_tool(
+        "use_blueprint",
+        {"blueprint_id": "learned_copy", "args": {}},
+    )
+
+    assert engine.calls == [
+        ("list_blueprints", None),
+        ("expand", "learned_copy", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_empty_capability_set_is_forwarded_not_dropped(monkeypatch):
+    engine = _CapabilityAwareEngine()
+    _install_engine(monkeypatch, engine, frozenset())
+
+    await dispatch_blueprint_tool("list_blueprints", {})
+
+    assert engine.calls == [("list_blueprints", frozenset())]
+
+
+@pytest.mark.asyncio
+async def test_legacy_engine_is_called_without_the_module_id_keyword(monkeypatch):
+    engine = _LegacyEngine()
+    _install_engine(monkeypatch, engine, frozenset({"string.uppercase"}))
+
+    await dispatch_blueprint_tool("list_blueprints", {})
+    await dispatch_blueprint_tool("list_blueprints", {"query": "copy"})
+    result = await dispatch_blueprint_tool(
+        "use_blueprint",
+        {"blueprint_id": "learned_copy", "args": {"text": "Flyto"}},
+    )
+
+    assert engine.calls == ["list_blueprints", "search", "expand"]
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_module_discovery_failure_narrows_instead_of_widening(monkeypatch):
+    engine = _CapabilityAwareEngine()
+    import flyto_blueprint
+
+    def boom():
+        raise RuntimeError("core bridge exploded")
+
+    monkeypatch.setattr(flyto_blueprint, "get_engine", lambda: engine)
+    monkeypatch.setattr(blueprint_tools, "get_core_installed_module_ids", boom)
+
+    await dispatch_blueprint_tool("list_blueprints", {})
+
+    assert engine.calls == [("list_blueprints", frozenset())]
+
+
+def test_blueprint_tool_schema_hides_every_availability_argument(monkeypatch):
+    tool_defs = [{
+        "name": "list_blueprints",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "available_module_ids": {"type": "array"},
+                "available_capabilities": {"type": "array"},
+            },
+            "required": ["query", "available_module_ids", "available_capabilities"],
+        },
+    }]
+    import flyto_blueprint.tools as blueprint_tool_defs
+
+    monkeypatch.setattr(
+        blueprint_tool_defs, "get_blueprint_tools", lambda: tool_defs,
+    )
+
+    published = blueprint_tools.get_blueprint_tool_defs()
+
+    properties = published[0]["inputSchema"]["properties"]
+    assert "available_module_ids" not in properties
+    assert "available_capabilities" not in properties
+    assert published[0]["inputSchema"]["required"] == ["query"]
+    # The upstream definition is not mutated in place.
+    assert "available_module_ids" in tool_defs[0]["inputSchema"]["properties"]

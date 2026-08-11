@@ -10,25 +10,40 @@ version: flyto.coding-config.v1
 checks:
   # Catches syntax and import-shape breakage anywhere in the package.
   - name: compile
-    argv: [python, -m, compileall, -q, flyto_ai]
+    argv: [.venv/bin/python, -m, compileall, -q, flyto_ai]
     timeout_seconds: 300
     required: true
   # The exact fatal/error Ruff selection this repository's CI enforces.
   - name: lint
-    argv: [python, -m, ruff, check, --select, "E9,F63,F7,F82", flyto_ai, tests]
+    argv: [.venv/bin/python, -m, ruff, check, --select, "E9,F63,F7,F82", flyto_ai, tests]
     timeout_seconds: 120
     required: true
   # Generated reference must stay current with the source it documents.
   - name: generated_reference
-    argv: [python, scripts/generate_reference.py, --check]
+    argv: [.venv/bin/python, scripts/generate_reference.py, --check]
     timeout_seconds: 300
     required: true
+  # Deterministic proof for the in-process Core capability bridge. The strict
+  # coding route treats edits to core_tools as Core-contract relevant; without
+  # one pinned proof it can only search for a module named after the source
+  # file and must fail closed before post-validation.
+  - name: core_capability_bridge
+    argv:
+      - .venv/bin/python
+      - -m
+      - pytest
+      - -q
+      - tests/test_core_mcp_contract.py
+      - tests/test_blueprint_closed_loop.py
+    timeout_seconds: 600
+    required: true
+    proof_kinds: ["flyto.core.module-contract.v1"]
   # The full canonical suite. Source-controlled checks are the trusted host
   # command lane -- they are not model-issued commands and do not run in the
   # network-isolated sandbox -- so loopback-socket suites execute normally
   # here. An arbitrary future change is only auditable once every test passes.
   - name: tests
-    argv: [python, -m, pytest, -q]
+    argv: [.venv/bin/python, -m, pytest, -q]
     timeout_seconds: 900
     required: true
 
@@ -41,6 +56,6 @@ checks:
 # generator does not certify its own output.
 actions:
   - name: generate_reference
-    argv: [python, scripts/generate_reference.py]
+    argv: [.venv/bin/python, scripts/generate_reference.py]
     timeout_seconds: 300
     description: Rewrite the generated reference docs from current source.

@@ -1058,6 +1058,7 @@ class CodingRouteOrchestrator:
         self,
         request: CodingTaskRequest,
         parent_contract: Optional[Mapping[str, Any]] = None,
+        prior_scope: Sequence[str] = (),
     ) -> Tuple[RouteLaneReceipt, Dict[str, Any]]:
         """Run the mandatory pre-work lane against the real Indexer contract.
 
@@ -1085,7 +1086,20 @@ class CodingRouteOrchestrator:
         explicit_targets = self._explicit_request_targets(
             request.message, request.working_dir,
         )
-        targets = explicit_targets or self._derive_targets(found)
+        if parent_contract and prior_scope:
+            # Audit prose normally names only the finding being repaired.  The
+            # host, however, has already re-proved every path this same job
+            # owns.  Carry that cumulative authority into the amendment so the
+            # new contract can validate the same set the final revision binds.
+            # Dropping these paths here leaves a green multi-round job with an
+            # `unplanned_diff` that no later post-lane can repair.
+            targets = list(dict.fromkeys(
+                [str(item) for item in prior_scope] + explicit_targets,
+            ))
+            if len(targets) > _MAX_EXPLICIT_REQUEST_TARGETS:
+                raise CodingRouteError("plan_target_bound_exceeded", lane)
+        else:
+            targets = explicit_targets or self._derive_targets(found)
 
         plan_payload: Dict[str, Any] = {
             "action": "plan",
@@ -2307,6 +2321,7 @@ class CodingRouteOrchestrator:
         implement: Implement,
         *,
         parent_contract: Optional[Mapping[str, Any]] = None,
+        prior_scope: Sequence[str] = (),
         on_pre_contract: Optional[Callable[[Mapping[str, Any]], None]] = None,
         cumulative_scope: Optional[Callable[[Any], Sequence[str]]] = None,
     ) -> Tuple[CodingTaskResult, CodingRouteReceipt]:
@@ -2319,6 +2334,10 @@ class CodingRouteOrchestrator:
             Passed to the Indexer so the plan is an amendment rather than a new
             root. Absent on a first round, and then nothing about the request
             changes.
+        `prior_scope`
+            The host-reproved attributable paths from earlier rounds. Rework
+            planning carries them into the amendment so pre-plan authority and
+            the cumulative revision later sent to post-work cannot diverge.
         `on_pre_contract`
             Called once, only after the pre-lane genuinely succeeded, with the
             contract this round is authorized against. A lane that raised never
@@ -2333,7 +2352,9 @@ class CodingRouteOrchestrator:
 
         lanes: list[RouteLaneReceipt] = []
         try:
-            pre_lane, context = await self._indexer_pre(request, parent_contract)
+            pre_lane, context = await self._indexer_pre(
+                request, parent_contract, prior_scope,
+            )
             lanes.append(pre_lane)
             if on_pre_contract is not None:
                 on_pre_contract(context.get("task_contract") or {})

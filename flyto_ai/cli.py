@@ -225,6 +225,25 @@ def main():
     )
     code_status_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    # Read-only, local, and deliberately not a fourth MCP tool. It answers the
+    # one question a workspace refusal raises and an MCP client can never be
+    # told: which state root owns this tree, and can it be taken over.
+    workspace_status_p = sub.add_parser(
+        "code-workspace-status",
+        help="Show which coding state root owns a workspace tree (read-only)",
+    )
+    workspace_status_p.add_argument(
+        "--workspace", required=True,
+        help="Workspace root to report ownership for",
+    )
+    workspace_status_p.add_argument(
+        "--registry-root", default=None,
+        help="Host-global workspace authority registry (defaults to the host's)",
+    )
+    workspace_status_p.add_argument(
+        "--json", action="store_true", help="Output raw JSON",
+    )
+
     # The host's only release valve for a worktree an audit never closed. It is
     # deliberately a local operator command rather than a fourth MCP tool: the
     # audited route keeps exactly three tools, and nothing reachable by a model
@@ -278,6 +297,8 @@ def main():
         _cmd_code_mcp_supervisor(args)
     elif args.command == "code-status":
         _cmd_code_status(args)
+    elif args.command == "code-workspace-status":
+        _cmd_code_workspace_status(args)
     elif args.command == "code-release":
         _cmd_code_release(args)
     elif args.command == "chat":
@@ -453,6 +474,7 @@ def _build_coding_route_policy(args):
                         env_command,
                         "PYTHONPATH={}".format(checkout),
                         sys.executable,
+                        "-P",
                         "-m",
                         "src.mcp_server",
                     )
@@ -725,7 +747,44 @@ def _cmd_code_mcp(args):
         from flyto_ai.coding.mcp_server import CodingMCPServer, serve_stdio
 
         service = _build_coding_service(args)
-    except (OSError, ValueError, RuntimeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+        from flyto_ai.coding.mcp_supervisor import (
+            WORKER_AUTHORITY_EXIT_CODE,
+            WORKER_WORKSPACE_BUSY_EXIT_CODE,
+            WORKER_WORKSPACE_EXIT_CODE,
+            WORKER_WORKSPACE_REGISTRY_EXIT_CODE,
+        )
+        from flyto_ai.coding.service import (
+            CodingServiceError,
+            CodingWorkspaceAuthorityBusy,
+            CodingWorkspaceAuthorityConflict,
+            CodingWorkspaceAuthorityUnavailable,
+        )
+
+        if not isinstance(exc, (OSError, ValueError, RuntimeError)):
+            raise
+        # Three different conditions with three different remedies, so three
+        # exit statuses. Collapsing them told an operator that somebody owned a
+        # tree when the registry was merely busy, or merely broken.
+        workspace_exits = (
+            (CodingWorkspaceAuthorityConflict, WORKER_WORKSPACE_EXIT_CODE),
+            (CodingWorkspaceAuthorityBusy, WORKER_WORKSPACE_BUSY_EXIT_CODE),
+            (
+                CodingWorkspaceAuthorityUnavailable,
+                WORKER_WORKSPACE_REGISTRY_EXIT_CODE,
+            ),
+        )
+        for error_type, status in workspace_exits:
+            if isinstance(exc, error_type):
+                print("\033[31mError:\033[0m {}".format(exc.code), file=sys.stderr)
+                sys.exit(status)
+        if isinstance(exc, CodingServiceError):
+            # A state-root authority refusal is reported as its stable code and
+            # a distinct exit status, so a supervising parent can name the
+            # condition without parsing prose. The exception message can carry
+            # a state-root path, so it is deliberately not printed here.
+            print("\033[31mError:\033[0m {}".format(exc.code), file=sys.stderr)
+            sys.exit(WORKER_AUTHORITY_EXIT_CODE)
         print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
         sys.exit(2)
     try:
@@ -795,6 +854,69 @@ def _cmd_code_status(args):
     print("  {}".format(report["note"]))
 
 
+def _cmd_code_workspace_status(args):
+    """Report which coding state root owns a workspace tree.
+
+    Read-only by construction: it opens the host-global registry, reads one
+    entry, and probes the lease. It starts no service, joins no authority,
+    creates no state root, and touches no job.
+
+    The four outcomes each have exactly one next step, so an operator never has
+    to edit a registry file by hand:
+
+    * `unregistered` — nobody owns it; just start.
+    * `live` — a process is holding it; stop that process.
+    * `crashed_with_open_work` — the owner died with unresolved work; finish or
+      retire it against the printed state root, using `code-release` for a
+      stranded audit. That path is the subtractive host valve, unchanged.
+    * `adoptable` — the owner is gone and left nothing; the next start takes it.
+    """
+    import json as _json
+
+    from flyto_ai.coding.workspace_authority import (
+        WorkspaceAuthorityError,
+        describe_workspace_root,
+    )
+
+    try:
+        report = describe_workspace_root(args.registry_root, args.workspace)
+    except WorkspaceAuthorityError as exc:
+        print("\033[31mError:\033[0m {}".format(exc.code), file=sys.stderr)
+        sys.exit(2)
+
+    if args.json:
+        print(_json.dumps(report, indent=2, sort_keys=True))
+        return
+
+    remedy = {
+        "unregistered": "no owner recorded; a service may start here",
+        "live": "a live service holds this tree; stop that process first",
+        "crashed_with_open_work": (
+            "owner exited with unresolved work; finish or retire it under that"
+            " state root (flyto-ai code-release for a stranded audit)"
+        ),
+        "adoptable": "no live owner and no unresolved work; the next start adopts it",
+    }
+    print("workspace digest : {}".format(report["workspace_digest"]))
+    print("status           : {}".format(report["status"]))
+    print("owning state root: {}".format(report["state_root"] or "(none)"))
+    print("registry root    : {}".format(report["registry_root"]))
+    print("next step        : {}".format(remedy.get(report["status"], "")))
+    # Every overlapping owner, not just the headline. A legacy incident is
+    # usually several entries at once - an exact one plus a parent, or two
+    # nested children - and an operator who only saw the worst of them would
+    # clear it, start, and be refused again by the next.
+    owners = report.get("owners") or []
+    if owners:
+        print("overlapping owners ({}):".format(len(owners)))
+        for owner in owners:
+            print("  - {:<18} {:<24} {}".format(
+                owner["relationship"],
+                owner["status"],
+                owner["state_root"] or "(none)",
+            ))
+
+
 def _cmd_code_release(args):
     """Release a worktree an audit never closed, on explicit host authority.
 
@@ -803,24 +925,32 @@ def _cmd_code_release(args):
     make anything landable, or let a round skip its audit. `--repair-workspace`
     only clears a claim the service could not evaluate, and refuses outright
     while a live job still owns the tree. Neither is reachable over MCP.
+
+    It opens the state root through the dedicated host release valve rather than
+    as an ordinary service. Constructing a service here meant constructing a
+    *startup authority* here, and a host retiring a stranded job is by
+    definition not running the strict route that stranded it: binding refused on
+    the very job the command exists to retire, so the release was impossible
+    exactly when it was needed. The valve instead proves no coding service is
+    alive - by taking the state root lease exclusively - and never reads,
+    writes, or reproduces `authority.json`, so the strict route still owns this
+    root when the command exits.
     """
     from flyto_ai.coding.service import CodingService, CodingServiceError
 
-    def agent_factory(store):
-        # No implementer is ever constructed: this command reads and retires
-        # durable state and must never be able to start a coding round.
-        raise RuntimeError("code-release never runs a coding round")
-
     try:
-        service = CodingService(
-            agent_factory,
+        service = CodingService.open_host_release_valve(
             state_root=_os.path.abspath(_os.path.expanduser(args.state_dir)),
             workspace_roots=tuple(
                 _os.path.abspath(_os.path.expanduser(path))
                 for path in args.workspace_root
             ),
-            require_codex_audit=True,
         )
+    except CodingServiceError as exc:
+        # A live service holding the lease, or a host without `flock`, is a
+        # bounded stable code - never a traceback and never a path.
+        print("\033[31mError:\033[0m {}".format(exc.code), file=sys.stderr)
+        sys.exit(2)
     except (OSError, ValueError, RuntimeError) as exc:
         print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
         sys.exit(2)

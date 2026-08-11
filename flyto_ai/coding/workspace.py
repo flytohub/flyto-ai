@@ -46,7 +46,7 @@ _DANGEROUS_ARG_PATTERNS = (
 CONTAINER_WORKSPACE = "/workspace"
 
 
-def resolve_executable(program: str) -> Optional[str]:
+def resolve_executable(program: str, workspace: Optional[str] = None) -> Optional[str]:
     """Answer, once, whether an argv[0] can actually be launched on this host.
 
     This exists to be *shared*. Preflight has to give the same answer as the
@@ -55,10 +55,12 @@ def resolve_executable(program: str) -> Optional[str]:
     the runner calls it on the path that really executes, and anything that
     wants to know in advance calls the same one.
 
-    ``shutil.which`` is the whole rule and covers all three spellings a contract
-    can use: a plain name is searched on ``PATH``, and a relative or absolute
-    path is checked directly for existence and the executable bit. ``None``
-    means this argv could not be launched; it never means "probably fine".
+    A plain name is searched on ``PATH``. An absolute path is checked directly.
+    A relative path containing a separator is resolved from the repository
+    workspace, because the real check process runs with that workspace as its
+    cwd; resolving it from the long-lived MCP service cwd makes feasibility
+    depend on where the supervisor happened to be launched. ``None`` means the
+    argv could not be launched; it never means "probably fine".
 
     Deliberately does not run anything. A verification command that exits
     non-zero may be describing the very defect the task was opened to fix, so
@@ -67,6 +69,11 @@ def resolve_executable(program: str) -> Optional[str]:
 
     if not isinstance(program, str) or not program:
         return None
+    if workspace and not os.path.isabs(program) and os.path.dirname(program):
+        try:
+            program = str(Path(workspace).expanduser().resolve() / program)
+        except (OSError, RuntimeError, ValueError):
+            return None
     return shutil.which(program)
 
 

@@ -275,6 +275,38 @@ def test_a_rework_amends_the_exact_parent_and_keeps_the_root(repo):
     assert amended["chain_sha256"] != parent["chain_sha256"]
 
 
+def test_a_rework_plan_carries_host_proven_prior_scope(repo):
+    """Audit prose cannot silently narrow paths the same job already owns."""
+
+    indexer = FakeIndexer()
+    route = _orchestrator(indexer)
+    request = CodingTaskRequest(
+        message="edit docs/reference/python/coding.md", working_dir=str(repo),
+    )
+    _, first = asyncio.run(route._indexer_pre(request))
+
+    second_request = CodingTaskRequest(
+        message="rework: also edit docs/reference/python/README.md",
+        working_dir=str(repo),
+    )
+    _, second = asyncio.run(route._indexer_pre(
+        second_request,
+        first["task_contract"],
+        ("README.md", "docs/reference/python/coding.md"),
+    ))
+
+    assert indexer.plans[-1]["targets"] == [
+        "README.md",
+        "docs/reference/python/coding.md",
+        "docs/reference/python/README.md",
+    ]
+    assert set(second["task_contract"]["intent_ledger"]) == {
+        "README.md",
+        "docs/reference/python/coding.md",
+        "docs/reference/python/README.md",
+    }
+
+
 def test_post_validation_receives_exactly_the_supplied_cumulative_set(repo):
     """The defect in one assertion: validate what the audit will bind."""
 
@@ -552,6 +584,8 @@ def test_three_rounds_stay_one_root_task_with_a_growing_cumulative_scope(story):
         # One root task across all three plans, growing by amendment.
         assert len(indexer.plans) == 3
         assert "task_contract" not in indexer.plans[0]
+        assert indexer.plans[1]["targets"] == ["a.py", "b.py"]
+        assert indexer.plans[2]["targets"] == ["a.py", "b.py", "c.py"]
         for index in (1, 2):
             parent = indexer.plans[index]["task_contract"]
             assert parent["root_task_id"] == FakeIndexer.ROOT

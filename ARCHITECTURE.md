@@ -293,6 +293,13 @@ one failed call naming the exact host-derived action (`structure`, `search`,
 transport timeout is classified `capability_timeout` instead of collapsing
 into `domain_failure`.
 
+The Claude service adapter also gives one inbound Agent SDK JSON frame an
+explicit 8 MiB ceiling. The SDK's 1 MiB default can truncate a legitimate
+host-declared Indexer result and strand an otherwise attributable strict-route
+session. The larger bound applies only to audited service mode, remains finite,
+and changes neither the tool catalog nor any request, evidence, or authority
+budget. Legacy direct Claude calls keep the SDK default.
+
 The pre-work route accepts the two published Indexer gate vocabularies:
 legacy `assess` / `implement` and current `plan_changes` / `apply_changes`. The
 exact execution plan selects one complete family before its first step runs.
@@ -343,6 +350,18 @@ and bounded session/revision ids — never a message, path, error text, file
 list, environment, or credential. Per-job JSON stays authoritative; this is a
 pointer for a Codex that restarted, read by `flyto-ai code-status`.
 
+Liveness is proven, not inferred. Each instance also holds an exclusive `flock`
+on `status/instance-<id>.lease` for its whole life; the kernel releases it
+however the process dies, so an uncontended lease is proof the instance is
+gone. A reader resolves `alive` as: `closed` lifecycle is never alive, a held
+lease is alive, an uncontended lease is not alive, and anything else is
+`unknown`. The recorded process id may only lower that answer, never raise it,
+because pids are reused — the 2026-08-11 incident reused one for an unrelated
+process and made a closed row look live. Where `flock` is unavailable, or the
+state root is on a filesystem that does not honour it (NFS in particular),
+liveness is `unknown` rather than alive, and the host release valve refuses
+outright rather than acting on an unprovable claim.
+
 For a long-lived local MCP host, `code-mcp-supervisor` owns the stable stdio
 edge shown above. It compares the current coding-source digest at request
 boundaries, replaces only a terminal/idle worker, and replays initialization.
@@ -350,6 +369,12 @@ A known non-terminal job keeps its worker and exact implementation session;
 only a competing new submission is denied until that job terminates. A direct
 worker also compares its immutable startup build with disk before accepting a
 new job, so source drift cannot silently run stale implementation logic.
+A worker that refuses at the state-root authority exits `78`, and the
+supervisor turns that one exit code into a bounded fixed reason naming
+`code-status` and `code-release`. Every other fault keeps the generic
+`coding worker unavailable`. The reason is selected by exit code alone; worker
+stderr is never captured or forwarded, so this path cannot carry a path,
+prompt, secret, raw error, or job content.
 
 The lanes are host-owned, not a prompt convention. `flyto_ai.coding.route`
 owns the typed policy, the allowlists, the bounded loops, and the evidence.
@@ -448,6 +473,26 @@ automatically, including by startup reconciliation: discarding it would convert
 concurrent-edit hazard the claim exists to prevent. Only the host-owned
 `flyto-ai code-release` command clears one.
 
+`code-release` opens the state root through a dedicated **host release valve**
+(`CodingService.open_host_release_valve`) instead of constructing an ordinary
+service. An ordinary construction binds the root to the constructing process's
+startup authority, and an operator retiring an orphaned job is not running the
+strict route that stranded it — so binding refused on the very job the command
+existed to retire. The valve instead takes the state-root authority lease
+*exclusively*: success proves no coding service of any authority is alive here,
+and failure is a bounded `service_busy` refusal. Because no authority has to be
+compared, `authority.json` is never read, written, rotated, or reproduced, and
+the strict route still owns the root when the command exits. Neither
+`_bind_startup_authority` nor `_require_all_jobs_terminal` runs, so exactly one
+requested `awaiting_codex_audit` job may be abandoned while other open jobs
+under the recorded authority are left untouched. The mode is strictly
+subtractive: its agent factory raises rather than constructing an implementer,
+it publishes no runtime status row, it reconciles no interrupted job, and
+`submit`, `audit`, and the dispatch pump refuse with `release_valve_refused`.
+The two surviving operations are the proven ones — `abandon` still takes the
+job lease and still releases the workspace claim, resume envelope, and
+continuation authority; `repair_workspace_claim` still refuses a live owner.
+
 Because the claim protects the audit gap, only an audit-required job takes one.
 A legacy direct-library service takes no claim and keeps its per-round
 serialization, but it still honours a claim another job holds, so it can never
@@ -510,6 +555,30 @@ Core contract:
 - `get_core_capability_manifest` reports contract version, installed core version, tool fingerprint, recipes support, module categories, and per-tool risk metadata.
 - `execute_module` validates params before execution when `flyto-core` exposes `validate_params`.
 - Tool logs include `mcp.source`, `mcp.contract_version`, and module or recipe identity.
+- Core extension management (`flyto.core.extension-management.v1`) is a
+  host-only adapter in `flyto_ai.tools.core_tools`: `list_core_extensions`,
+  `list_core_extension_kinds`, `install_core_extension(name, version, upgrade)`,
+  and `uninstall_core_extension(name)`. It binds `core.plugin.loader` —
+  `get_plugin_loader`, `EXTENSION_KINDS`, `normalize_extension_name`,
+  `ExtensionResult` — and calls the loader's own methods
+  (`list_extensions`, `install_extension`, `uninstall_extension`) through
+  `asyncio.to_thread`. `list_extensions` returns a plain list and takes no kind
+  argument, so the kind filter is applied host-side after normalization.
+  `EXTENSION_KINDS` records carry `kind`, `prefix`, and `entry_point_group`;
+  the adapter is generic over whatever they declare and holds no taxonomy of
+  its own. Core normalizes the requested name and Core's own code is preserved.
+  Every outcome uses one fixed envelope carrying `code`, `name`, `version`,
+  `previous_version`, `restart_required`, `rolled_back`, `refresh_failed`, and
+  the host's own `install_enabled`, and no installer (pip) stdout, stderr, log,
+  or exception text.
+- Extension mutation is opt-in per host through
+  `FLYTO_EXTENSIONS_INSTALL_ENABLED`, which gates install *and* uninstall and
+  is checked before a request is validated or Core is imported.
+- Installation is host authority, never model authority. These four functions
+  are not MCP tools, and `get_core_tool_defs` withholds — and
+  `dispatch_core_tool` refuses — any Core tool whose name is an install,
+  uninstall, or reinstall verb, so a future `flyto-core` cannot widen this
+  host's LLM surface by upgrade alone.
 
 ## Adaptive security campaign boundary
 
@@ -654,6 +723,15 @@ then the authority lease, so a failure draining the executor, releasing job
 leases or writing the closing status row can never leave a stopped service
 holding the root against its successor.
 
+Host-global workspace authority is separate from this lifetime state-root
+authority. It is held only while the shared state root has durable
+non-terminal work. Admission acquires it before the first job mutation;
+restart reacquires before reconciling open work; final settlement releases it.
+Since a peer can settle a job admitted by another process, each holder runs a
+bounded guarded idle observer so the submitter cannot retain a stale lease.
+Idle MCP workers therefore coexist without reserving product trees, while
+overlapping foreign state roots and crashed open work remain fail-closed.
+
 Where the host has no inter-process lock the service refuses to start at all
 (`CodingAuthorityUnavailable`, `execution_authority_unavailable`) rather than
 degrading: advertising multi-process isolation a host cannot keep is worse than
@@ -714,6 +792,13 @@ the plan is amended rather than re-rooted. The cumulative attributable set is
 proven before the proof lanes and is the single ordered tuple that Indexer
 post-validation, the persisted attributable files and the audited revision digest
 all bind - equality, not inclusion.
+
+That same proven prior set is also an input to every rework pre-plan. Audit
+findings normally name only the immediate repair, so using their prose alone as
+the amendment target list can narrow the intent ledger below files earlier
+rounds already attributed to the job. The host therefore unions the bounded,
+revision-proven prior paths with the explicit targets parsed from the new audit
+finding before `task(action="plan")`; first-round requests remain unchanged.
 
 Plan-authority refusals are closed, terminal and report `verification` or
 `workspace` phase with `resubmit_against_current_contract`. A capability's own

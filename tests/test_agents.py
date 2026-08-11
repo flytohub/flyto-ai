@@ -452,6 +452,89 @@ class TestClaudeCodeAgentRun:
         assert result.total_cost_usd == 0.05
         mock_sdk.assert_called_once()
 
+    def test_service_required_change_resumes_same_session_after_prose_only_answer(
+        self, event_loop, tmp_path,
+    ):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+
+        agent = ClaudeCodeAgent()
+        sessions = []
+        feedback = []
+
+        async def mock_sdk(**kwargs):
+            sessions.append(kwargs["session_id"])
+            feedback.append(kwargs["feedback"])
+            if len(sessions) == 2:
+                kwargs["evidence"].track_file_change(str(tmp_path / "app.py"))
+            return {
+                "session_id": "sdk-required-change",
+                "message": "Done.",
+                "cost": 0.01,
+                "num_turns": 1,
+                "duration_ms": 100,
+                "usage": None,
+            }
+
+        agent._run_claude_code = mock_sdk
+        result = event_loop.run_until_complete(agent.run(CodeTaskRequest(
+            message="fix", working_dir=str(tmp_path), service_mode=True,
+            require_changes=True, max_fix_attempts=3,
+        )))
+
+        assert result.ok is True
+        assert result.attempts == 2
+        assert sessions == [None, "sdk-required-change"]
+        assert feedback[0] == ""
+        assert "made no attributable workspace change" in feedback[1]
+
+    def test_service_required_change_fails_after_bounded_prose_only_attempts(
+        self, event_loop, tmp_path,
+    ):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+
+        agent = ClaudeCodeAgent()
+        agent._run_claude_code = AsyncMock(return_value={
+            "session_id": "sdk-no-change",
+            "message": "Explained only.",
+            "cost": 0.01,
+            "num_turns": 1,
+            "duration_ms": 100,
+            "usage": None,
+        })
+        result = event_loop.run_until_complete(agent.run(CodeTaskRequest(
+            message="fix", working_dir=str(tmp_path), service_mode=True,
+            require_changes=True, max_fix_attempts=2,
+        )))
+
+        assert result.ok is False
+        assert result.attempts == 2
+        assert result.claude_session_id == "sdk-no-change"
+        assert "no attributable workspace change" in result.message
+        assert agent._run_claude_code.call_count == 2
+
+    def test_service_job_that_allows_no_change_keeps_one_attempt_behavior(
+        self, event_loop, tmp_path,
+    ):
+        from flyto_ai.agents.claude_code import ClaudeCodeAgent
+
+        agent = ClaudeCodeAgent()
+        agent._run_claude_code = AsyncMock(return_value={
+            "session_id": "sdk-readonly-result",
+            "message": "No change needed.",
+            "cost": 0.01,
+            "num_turns": 1,
+            "duration_ms": 100,
+            "usage": None,
+        })
+        result = event_loop.run_until_complete(agent.run(CodeTaskRequest(
+            message="inspect", working_dir=str(tmp_path), service_mode=True,
+            require_changes=False,
+        )))
+
+        assert result.ok is True
+        assert result.attempts == 1
+        agent._run_claude_code.assert_called_once()
+
     def test_verification_pass_first_attempt(self, event_loop):
         from flyto_ai.agents.claude_code import ClaudeCodeAgent
         agent = ClaudeCodeAgent()
@@ -803,6 +886,8 @@ class TestClaudeSdkSessionContinuation:
             CodeTaskRequest(message="m", working_dir="/tmp", sdk_session_id="../escape")
         with pytest.raises(ValueError, match="service_mode must be a boolean"):
             CodeTaskRequest(message="m", working_dir="/tmp", service_mode="yes")
+        with pytest.raises(ValueError, match="require_changes must be a boolean"):
+            CodeTaskRequest(message="m", working_dir="/tmp", require_changes="yes")
 
 
 class TestClaudeSdkOptions:
@@ -862,7 +947,10 @@ class TestClaudeSdkOptions:
             )
 
     def test_service_mode_has_no_process_execution_tool(self, tmp_path):
-        from flyto_ai.agents.claude_code import SERVICE_ALLOWED_TOOLS
+        from flyto_ai.agents.claude_code import (
+            SERVICE_ALLOWED_TOOLS,
+            SERVICE_MAX_BUFFER_SIZE_BYTES,
+        )
         _, options = self._options(
             tmp_path, service_mode=True, sdk_session_id="sdk-1",
         )
@@ -873,6 +961,12 @@ class TestClaudeSdkOptions:
         assert "system_prompt" not in options
         assert options["model"] == "claude-opus-5"
         assert options["strict_mcp_config"] is True
+        assert SERVICE_MAX_BUFFER_SIZE_BYTES == 8 * 1024 * 1024
+        assert options["max_buffer_size"] == SERVICE_MAX_BUFFER_SIZE_BYTES
+
+    def test_legacy_mode_keeps_sdk_default_buffer_limit(self, tmp_path):
+        _, options = self._options(tmp_path)
+        assert "max_buffer_size" not in options
 
     def test_service_mode_uses_only_host_declared_mcp_servers(self, tmp_path):
         from flyto_ai.agents.claude_code import ClaudeCodeAgent

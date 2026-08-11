@@ -39,6 +39,12 @@ StreamCallback = Optional[Callable[[Dict[str, Any]], None]]
 #: silently run a different one.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: The SDK defaults to a 1 MiB JSON-message buffer. A strict service round can
+#: legitimately receive a larger, single framed result from its host-declared
+#: Indexer MCP server, so the audited route uses an explicit finite ceiling.
+#: Legacy direct calls retain the SDK default and this is not a request/body or
+#: tool-authority limit; it only bounds one already-authorized SDK frame.
+SERVICE_MAX_BUFFER_SIZE_BYTES = 8 * 1024 * 1024
 #: Service mode inspects and edits; host-owned checks run afterward. Process
 #: execution is not delegated to the model.
 #: Service-mode content search is limited by the guardian to one explicit,
@@ -566,15 +572,19 @@ class ClaudeCodeAgent:
         total_turns = 0
         total_duration_ms = 0
         last_usage: Optional[Dict[str, Any]] = None
+        no_change_feedback = ""
 
         for attempt in range(1, max_attempts + 1):
             # Phase 2: Claude Code writes code
             self._emit(on_stream, "phase_start", {"phase": "coding", "attempt": attempt})
             evidence.record("coding", "attempt_start", {"attempt": attempt})
 
-            feedback_prefix = ""
+            feedback_parts: List[str] = []
+            if no_change_feedback:
+                feedback_parts.append(no_change_feedback)
             if attempt > 1 and verification_results:
-                feedback_prefix = self._build_feedback(verification_results[-1])
+                feedback_parts.append(self._build_feedback(verification_results[-1]))
+            feedback_prefix = "\n\n".join(feedback_parts)
 
             sdk_result = await self._run_claude_code(
                 request=request,
@@ -642,6 +652,48 @@ class ClaudeCodeAgent:
                     claude_duration_ms=total_duration_ms,
                     claude_usage=last_usage,
                     provider_failure_code=incomplete,
+                )
+
+            # A detached service job that requires a change cannot treat a
+            # prose-only answer as an implementation.  The provider-neutral
+            # host will independently prove the final diff from snapshots, but
+            # waiting until after this method returns used to spend every
+            # required check on a known-empty tree and then strand the job as
+            # ``no_changes``.  Continue the exact SDK session while its bounded
+            # attempt budget remains so the implementer receives one explicit,
+            # host-authored correction instead.
+            if (
+                service_mode
+                and bool(getattr(request, "require_changes", True))
+                and not self._has_mutation_evidence(evidence)
+            ):
+                evidence.record("coding", "no_mutation", {"attempt": attempt})
+                if attempt < max_attempts:
+                    no_change_feedback = (
+                        "The prior attempt made no attributable workspace change. "
+                        "This service job requires an implementation, not an "
+                        "explanation. Inspect the requested files and use the "
+                        "available Edit or Write tool to make the smallest correct "
+                        "change before responding."
+                    )
+                    continue
+                await self._save_evidence(evidence, service_mode)
+                return CodeTaskResponse(
+                    ok=False,
+                    message=(
+                        "Claude made no attributable workspace change after "
+                        "{} attempts.".format(max_attempts)
+                    ),
+                    session_id=session_id,
+                    attempts=max_attempts,
+                    verification_results=verification_results,
+                    evidence=evidence.to_list(),
+                    files_changed=evidence.files_changed,
+                    total_cost_usd=total_cost,
+                    claude_session_id=sdk_session_id,
+                    claude_num_turns=total_turns,
+                    claude_duration_ms=total_duration_ms,
+                    claude_usage=last_usage,
                 )
 
             # Phase 3: Verification
@@ -724,6 +776,24 @@ class ClaudeCodeAgent:
             claude_num_turns=total_turns,
             claude_duration_ms=total_duration_ms,
             claude_usage=last_usage,
+        )
+
+    @staticmethod
+    def _has_mutation_evidence(evidence: EvidenceCollector) -> bool:
+        """Return whether the provider used an attributable mutation path.
+
+        File edits are recorded directly by the SDK post hook.  A repository
+        project action is also a host-owned mutation path; its exact resulting
+        diff is proved later by the service snapshot, so seeing that bounded
+        tool is enough to avoid an unnecessary provider retry here.
+        """
+
+        if evidence.files_changed:
+            return True
+        return any(
+            record.action == "tool_used"
+            and record.data.get("tool") == PROJECT_ACTION_TOOL_ID
+            for record in evidence.to_list()
         )
 
     # ── Private helpers ──
@@ -1007,6 +1077,8 @@ class ClaudeCodeAgent:
             # exists. Leave it absent and let the SDK's filtering stand.
             "env": {},
         }
+        if service_mode:
+            options_kwargs["max_buffer_size"] = SERVICE_MAX_BUFFER_SIZE_BYTES
         if mcp_servers:
             options_kwargs["mcp_servers"] = mcp_servers
         # Resume existing session or start new
@@ -1214,6 +1286,7 @@ class ClaudeCodingAgent:
             sdk_session_id=thread_id if request.resume and thread_id else None,
             service_mode=True,
             service_edit_authority=writable,
+            require_changes=bool(request.require_changes),
             # The two host-owned facts the SDK layer cannot re-derive safely:
             # which contract this service is operating under, and which exact
             # revision of it this job was authorized against. Without them the

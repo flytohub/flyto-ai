@@ -130,7 +130,19 @@ def test_workspace_exact_replace_and_snapshot_preserve_existing_dirty_state(tmp_
         tools.replace_text("app.py", "missing", "x")
 
 
-def test_workspace_search_contract_is_literal_and_guides_empty_results(tmp_path):
+def test_workspace_search_contract_is_literal_and_guides_empty_results(
+    tmp_path, monkeypatch,
+):
+    """The literal-search contract, decided by argv rather than by the host.
+
+    Only the process boundary is faked. The argv under assertion is the one
+    production builds, so the fake cannot pass while `--fixed-strings` or the
+    credential globs are missing, and the ripgrep precondition is still
+    exercised against the real code path.
+    """
+
+    from flyto_ai.coding import workspace as workspace_module
+
     (tmp_path / "service.py").write_text("'count': len(ordered),\n")
     tools = WorkspaceTools(str(tmp_path))
     search_tool = next(
@@ -138,6 +150,33 @@ def test_workspace_search_contract_is_literal_and_guides_empty_results(tmp_path)
         for definition in tools.definitions
         if definition["name"] == "coding_search"
     )
+
+    observed = []
+    monkeypatch.setattr(
+        workspace_module.shutil, "which", lambda name: "/usr/bin/{}".format(name),
+    )
+
+    async def fake_run_process(self, argv, timeout_seconds, *, model_command=False):
+        observed.append(list(argv))
+        assert argv[0] == "rg"
+        assert "--fixed-strings" in argv, "coding_search must stay a literal search"
+        for glob in ("!.env", "!**/.git/**", "!**/.ssh/**", "!**/.aws/**"):
+            assert glob in argv, "coding_search must keep its credential globs"
+        separator = argv.index("--")
+        query = argv[separator + 1]
+        target = Path(argv[separator + 2])
+        # A literal matcher, exactly as `--fixed-strings` promises.
+        lines = [
+            "{}:{}:{}".format(target.name, number, text)
+            for number, text in enumerate(target.read_text().splitlines(), start=1)
+            if query in text
+        ]
+        return {
+            "ok": bool(lines), "exit_code": 0 if lines else 1, "timed_out": False,
+            "output": "\n".join(lines),
+        }
+
+    monkeypatch.setattr(WorkspaceTools, "_run_process", fake_run_process)
 
     assert "literal" in search_tool["description"].lower()
     missing = run(tools.search(r"count: \\d+", "service.py"))
@@ -155,6 +194,12 @@ def test_workspace_search_contract_is_literal_and_guides_empty_results(tmp_path)
     assert found["query_mode"] == "literal"
     assert len(found["matches"]) == 1
     assert "next_action" not in found
+    assert observed and all("--fixed-strings" in argv for argv in observed)
+
+    # Faking the boundary must not soften the precondition in front of it.
+    monkeypatch.setattr(workspace_module.shutil, "which", lambda name: None)
+    with pytest.raises(WorkspaceViolation, match="ripgrep"):
+        run(tools.search("len(ordered)", "service.py"))
 
 
 def test_read_only_and_approval_policies_fail_closed(tmp_path):

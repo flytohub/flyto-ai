@@ -489,7 +489,7 @@ def test_a_timeout_kills_the_whole_process_group(tmp_path):
 def test_this_repository_declares_generate_reference():
     actions, digest = load_project_actions(str(_REPO))
     assert [action.name for action in actions] == ["generate_reference"]
-    assert actions[0].argv == ("python", "scripts/generate_reference.py")
+    assert actions[0].argv == (".venv/bin/python", "scripts/generate_reference.py")
     assert digest == config_digest(str(_REPO))
     # It is an action, not a check -- the check that decides currency is
     # separate and still declared.
@@ -530,12 +530,21 @@ def test_the_real_generator_action_is_runnable_as_declared():
     Run with `--check` so the live worktree is never rewritten by a test: the
     point is that the declaration resolves and executes, not that generation
     happens here.
+
+    The declared interpreter is used *as declared*. Substituting
+    `sys.executable` here would make this test pass for any `argv[0]`
+    whatsoever -- including one that does not exist -- which is the opposite of
+    what it claims to prove. `argv[0]` is pinned explicitly for the same
+    reason: the repository's contract commits to the in-tree interpreter, and a
+    silent drift back to a PATH-resolved `python` would run these checks under
+    whichever interpreter happened to be first on PATH.
     """
 
     actions, _digest = load_project_actions(str(_REPO))
     declared = actions[0]
+    assert declared.argv[0] == ".venv/bin/python"
     completed = subprocess.run(  # noqa: S603 - argv-direct, mirrors the executor
-        [sys.executable, declared.argv[1], "--check"],
+        [declared.argv[0], declared.argv[1], "--check"],
         cwd=str(_REPO), capture_output=True, text=True, timeout=300,
     )
     assert completed.returncode in (0, 1), completed.stderr[-2000:]

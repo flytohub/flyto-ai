@@ -159,6 +159,7 @@ def test_the_adapter_carries_the_config_path_and_job_digest(tmp_path):
     assert carried.config_path == ".flyto/coding.yaml"
     assert carried.service_mode is True
     assert carried.service_edit_authority is True
+    assert carried.require_changes is True
 
 
 def test_a_non_default_config_path_is_carried_too(tmp_path):

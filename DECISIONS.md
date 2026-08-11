@@ -1,5 +1,243 @@
 # Decisions
 
+## 2026-08-12: Installing Core extensions is host authority, not model authority
+
+An agent that can install software can grant itself capability. So the Core
+extension adapter is a host API and never an MCP tool, and the rule is
+structural rather than a list of known names: any Core tool whose name is an
+install, uninstall, or reinstall verb is withheld from `get_core_tool_defs`
+*and* refused by `dispatch_core_tool`. The catalog filter alone would not be a
+boundary, because a model or a forwarding client can type a name it never saw.
+The word boundary is explicit so read-only reporting (`list_installed_modules`)
+stays callable.
+
+Uninstall shares the `FLYTO_EXTENSIONS_INSTALL_ENABLED` opt-in with install:
+both change what the installed Core can execute, and a host that may not add
+capability may not silently remove it. The gate is checked before the request
+is validated, so a disabled host has exactly one observable behaviour.
+
+The envelope is fixed and deliberately poorer than Core's answer. Installer
+output is attacker-influenced, unbounded, and frequently carries internal index
+URLs and paths; it is not something to render in a cloud UI or hand back to a
+model. Only bounded tokens leave: Core's normalized name, Core's own `code`,
+and a version. Exception text is dropped even from the host log, where only the
+exception type is recorded.
+
+The bridge binds `core.plugin.loader` — the module Core actually owns this
+surface in — and not an invented `core.extensions`. Core's shapes are taken as
+given: `list_extensions` answers with a plain list and has no kind parameter,
+`EXTENSION_KINDS` records carry `kind` / `prefix` / `entry_point_group`,
+`install_extension` takes `(name, version, upgrade)` and `uninstall_extension`
+takes `(name)`, and `normalize_extension_name` decides identity. The host's
+operation names and Core's method names are different words, so the mapping is
+an explicit constant; deriving the method from the operation is what made an
+earlier revision call an `install` method that does not exist.
+
+Because Core cannot filter a listing, the host does — after normalization, so
+the filter matches the bounded token it publishes rather than a raw value.
+
+Where the host must name a field of `ExtensionResult` it uses exactly one name
+with no alias fallback, because a look-alike fallback lets a Core rename pass
+silently as "field absent". The published set is Core's own:
+`previous_version`, `restart_required`, `rolled_back`, `refresh_failed`. We do
+not publish an `install_enabled` sourced from Core, because Core does not
+report one — that field is the host's opt-in state and says so. A real-contract
+test binds the installed `ExtensionResult` and fails, listing Core's actual
+declared fields, when a published name is not among them; that test is what
+caught two rounds of invented contract in this work.
+
+We kept the adapter generic over whatever kinds Core declares rather than
+enumerating today's extension families, and we kept Core as the authority on
+name normalization — a host-side rename would make an operator's installed set
+unaddressable in Core's own terms. We did not add a bypass flag, did not import
+sibling `flyto-core` source, and did not let a malformed Core answer degrade
+into a partial list: list and kinds fail closed to `invalid_core_result`.
+
+## 2026-08-12: Workspace authority follows work, not an idle MCP process
+
+The first host-global broker held every configured workspace root for the
+entire `CodingService` process lifetime. Codex keeps an MCP worker alive for a
+task lifetime, so a custom state root remained the live owner of all of
+`flytohub` after its only job was terminal. Other Codex tasks were refused
+indefinitely; restarting that idle worker simply reacquired the same hold.
+
+Ownership now starts immediately before the first durable mutation that admits
+non-terminal work and survives queued, running, rework, and audit-pending
+states. Startup with open durable work reacquires before reconciliation. Once
+the state root has no non-terminal job or surviving workspace claim, ownership
+is released. A small bounded observer is required because the shared queue
+allows worker A to admit and worker B to settle the job; relying only on B's
+terminal callback would leave A's process-owned lease held forever. The
+observer takes the same cross-process state guard as admission, so it cannot
+release between authority acquisition and the first job record.
+
+We kept one shared state root as the normal multi-Codex queue and kept the
+configured-root boundary for different state roots. We did not introduce
+per-thread state roots, a native/Codex fallback, another public MCP tool, or a
+distributed lock. Cross-host operation remains future work and requires a
+database lease rather than `flock` or NFS.
+
+## 2026-08-11: Rework planning carries the scope the host already proved
+
+A final strict validation reported `unplanned_diff` after every required check
+passed. The amended contract did include the file named by the last audit
+finding, but it did not include several files the same job had attributed in
+earlier rounds. Audit prose is intentionally narrow and cannot be the sole
+source of cumulative plan authority.
+
+Before a rework starts, the service already proves the prior file tuple against
+the bound session, resume envelope, worktree claim, workspace and exact
+revision digest. That tuple now travels to the Indexer pre-lane, which unions it
+with explicit targets from the new finding before requesting the same-root
+amendment. The existing finite target bound applies to the union and refuses
+instead of truncating. A first-round plan has no prior tuple and its payload is
+unchanged. Post-work, persistence and exact-revision audit continue binding the
+same cumulative tuple.
+
+## 2026-08-11: The Core manifest contract is Core's, and Blueprint gets module ids only
+
+Two decisions, recorded together because one caused the other.
+
+**The wire shape is read from `core.capability_manifest`, never from a
+fixture.** A prior round reconciled the host validator toward the test
+fixtures, which had invented `manifest_contract` / `manifest_hash`,
+record-shaped `modules`, `capability_id`, and `plugin`. Fixtures and validator
+then agreed with each other and disagreed with Core, so every real manifest was
+rejected and a fully installed Core reported zero modules with every test
+green. The validator now reads `schema` / `hash`, string `modules`,
+`capability` + `providers`, and `id` + `version` + `module_count`. A fixture
+that disagrees is the thing that is wrong.
+
+**Only module ids cross into Blueprint, under `available_module_ids`.**
+`get_core_installed_capabilities` unioned module ids with capability ids so a
+step named by capability would still match. That is backwards: a capability id
+names what a module provides and a plugin id names who ships it, and neither
+can be executed. Handing either to an engine lets it offer a step nothing
+installed can run. Both are still validated and counted as provenance. The
+function is removed rather than deprecated, because its only caller was the
+bridge that must not use it.
+
+Fail-closed direction is unchanged: `None` only for an absent or too-old Core,
+an empty frozenset for every failure of a manifest-capable Core.
+
+## 2026-08-11: Instance liveness is a crash-released lease, never a pid
+
+`code-status` reported a historical, already-`closed` instance as alive because
+the recorded pid had been reused by an unrelated process (`cloudphotod`). The
+probe was `os.kill(pid, 0)`, which answers "does some process hold this pid",
+not "is that process the instance that recorded it". Those differ precisely
+when it matters — after a crash, which is when the status is read.
+
+Each `RouteStatusPublisher` now holds `LOCK_EX` on its own
+`status/instance-<id>.lease` for the life of the process. The kernel releases
+that lock however the process dies, including `SIGKILL`, so an uncontended
+lease is positive proof the instance is gone rather than an inference. A reader
+decides in this order: a `closed` lifecycle is never alive; a held lease is
+alive; otherwise an uncontended lease is not alive; otherwise the answer is
+`None`. A pid probe may now only *lower* an answer to `False` and can never
+raise one to `True`, which is exactly the reuse bug removed.
+
+Honest limitation: `flock` is advisory and per-host. On NFS it may be emulated
+via `fcntl` byte locks or silently degrade, and a state root shared across
+hosts is outside what this proves. Where `flock` is unavailable the answer is
+`None` — undecidable — and never `True`. `code-status` therefore reports
+`unknown` rather than inventing liveness, and the host release valve continues
+to refuse outright without `flock` rather than acting on an unprovable claim.
+
+## 2026-08-11: A state-root authority refusal survives the supervisor
+
+`code-mcp-supervisor` collapsed every worker fault into
+`-32603 coding worker unavailable`. During the rotation incident that hid the
+one actionable condition — the state root refusing this build's authority —
+behind the same generic string as a broken pipe, so the client could not tell
+an operator what to do.
+
+`code-mcp` now exits `78` (`EX_CONFIG`) when construction fails with a
+`CodingServiceError`, printing only the stable `exc.code`; the exception
+message can carry a state-root path and is deliberately not printed. The
+supervisor keeps the reaped worker's exit status — an integer from a closed
+set — and substitutes one fixed sentence naming `code-status` and
+`code-release`. Worker stderr is still never captured or forwarded, so no path,
+prompt, secret, raw error, or job content can travel this channel. Every other
+fault keeps the generic reason, and the public MCP inventory stays exactly
+`flyto_coding_submit`, `flyto_coding_get`, `flyto_coding_audit`.
+
+## 2026-08-11: The audited Claude route has a finite larger SDK frame ceiling
+
+The Agent SDK defaults one JSON message to 1 MiB. That is smaller than a
+legitimate single response from the strict route's host-declared Indexer MCP
+server and caused a live attributable implementation session to fail before
+revision sealing. Service-mode `ClaudeAgentOptions` therefore sets a fixed
+8 MiB `max_buffer_size`.
+
+This is a transport framing bound, not new execution authority. It applies only
+to the audited service adapter, remains finite, and does not change allowed
+tools, MCP selection, workspace scope, evidence, request, turn, cost, or route
+budgets. Legacy direct calls intentionally retain the SDK default so this
+production incident does not silently alter their compatibility contract.
+
+## 2026-08-10: A required-change service turn cannot end in prose
+
+`require_changes` is a host-owned job invariant, not merely a final snapshot
+check. The Claude compatibility agent previously returned success immediately
+when no browser verification recipe was attached, even when the provider used
+no repository tool. The service then ran every required subprocess against a
+known-empty diff and eventually failed as `no_changes` or, under strict route
+projection, `cumulative_scope_unbounded`.
+
+Service mode now treats absence of attributable mutation evidence as bounded
+rework inside the exact Claude SDK session. It sends one fixed host-authored
+instruction to inspect and edit the requested files, preserving session,
+attempt, turn, cost, workspace, route, and startup authority. `Edit` and
+`Write` post-hook evidence satisfy the local boundary; a named project action
+also qualifies because the outer service independently proves its resulting
+snapshot. Final authority still comes only from the host snapshot, required
+checks, strict route lanes, exact revision digest, and Codex audit.
+
+We rejected silently resubmitting a new provider conversation: it would lose
+the session identity an audit must attribute. We also rejected making this the
+default for legacy direct callers or explicit `require_changes=false` jobs,
+because inspection-only work legitimately has no mutation.
+
+## 2026-08-10: The release valve opens a state root without binding it
+
+`flyto-ai code-release` built an ordinary `CodingService`, which meant it also
+built an ordinary *startup authority*. A host retiring an orphaned job is by
+definition not running the strict route that stranded it, so the recorded
+authority never matched: `_bind_startup_authority` saw live work under another
+authority and rotation demanded every job be terminal — including the one open
+`awaiting_codex_audit` job the command existed to retire. The only operation
+that could release the root was refused by the state the release was for.
+
+`CodingService.open_host_release_valve` is now a distinct construction mode.
+
+- It takes the state-root authority lease **exclusively** and refuses with
+  `service_busy` if any live coding service holds it. Exclusivity proves
+  something stronger than agreement — that no service of any authority is alive
+  here — so no authority has to be compared, and none is invented.
+- It never reads, writes, rotates, or reproduces `authority.json`. The marker
+  comes out of the operation byte-for-byte as it went in and the strict route
+  still owns the root afterwards.
+- `_bind_startup_authority` and `_require_all_jobs_terminal` do not run, so a
+  second open job under the same recorded authority is left exactly as found
+  and one requested `awaiting_codex_audit` job may still be abandoned.
+- It publishes no runtime status, reconciles no interrupted job, and refuses
+  `submit`, `audit`, and `_pump_dispatch` with `release_valve_refused`. Its
+  agent factory raises, so no implementer can be constructed at all.
+- `abandon` and `repair_workspace_claim` are unchanged. The abandon path still
+  takes the job lease, still moves only `awaiting_codex_audit` to
+  `failed`/`job_abandoned` with `landable: false`, and still releases the
+  workspace claim, the resume envelope, and the continuation authority.
+
+We rejected relaxing `_require_all_jobs_terminal` for the audit-ready state:
+that would have weakened rotation for every service, not just the valve, and
+rotation is what keeps two route semantics off one root. We also rejected
+having the valve reproduce the strict authority so it could match the marker —
+a host that can synthesize another route's authority can also adopt its work.
+
+The MCP inventory is unchanged at exactly three tools; the valve remains a
+local operator command and is not reachable by a model.
+
 ## 2026-08-10: Mission authority sets the Python floor at 3.11
 
 The public package and coding service require Python 3.11 or newer. The mission

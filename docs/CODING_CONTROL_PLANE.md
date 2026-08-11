@@ -1001,6 +1001,83 @@ fallback when the audited service is unavailable.
 Removing `flyto_ai.coding` does not alter provider interfaces, Core execution
 authority, Blueprint contracts, or the legacy Claude adapter.
 
+## Host-global workspace root authority
+
+A state root brokers the jobs inside it. It cannot broker a directory tree,
+because its workspace claims live under itself: point two services at two state
+roots and each keeps a private, self-consistent opinion about the same
+checkout, and both edit it.
+
+A host-global registry sits above every state root and owns each canonical
+workspace tree. Ownership is demand-scoped: an idle service holds nothing;
+admission acquires every configured root before the first durable non-terminal
+job mutation, and restart reacquires before reconciling existing open work.
+Queued, running, rework, and audit-pending work keep the ownership. The last
+terminal transition releases it. A bounded observer also releases the
+submitter's lease when another compatible process on the shared state root
+performs the final transition. A newcomer takes the entry exclusively first;
+getting it proves nobody is alive, and only then may the recorded owning state
+root be written or rotated.
+Ancestor and descendant overlap are refused in both directions, decided
+atomically under a registry-wide lock with a bounded acquisition deadline.
+
+The registry lives at `$XDG_STATE_HOME/coding-workspace-authority` (or
+`~/.local/state/...`), outside every worktree. `CODING_WORKSPACE_AUTHORITY_ROOT`
+overrides it at startup only, for isolated tests; no job payload reaches it.
+
+An admission refusal occurs before continuation, job lease, workspace claim,
+job/idempotency record, resume envelope, status mutation, or provider contact.
+An idle service can therefore remain available without reserving a tree it is
+not using.
+
+### Three refusal classes
+
+They are separate because their remedies are, and conflating them sends an
+operator after a problem that does not exist.
+
+| Condition | Code | Retryable | Remedy |
+| --- | --- | --- | --- |
+| Another state root owns an overlapping tree | `workspace_authority_conflict` | no | `code-workspace-status` to identify the owner |
+| Registry mid-transaction past the deadline | `workspace_authority_busy` | yes | retry shortly |
+| Registry missing, damaged, or unlockable | `workspace_authority_unavailable` | no | `code-workspace-status` to inspect the registry |
+
+Each has its own worker exit status, and the MCP client receives one short
+fixed sentence selected by exit code alone — never a path, prompt, raw error,
+or job content. The public MCP inventory stays exactly `flyto_coding_submit`,
+`flyto_coding_get`, `flyto_coding_audit`.
+
+### Diagnosing and recovering
+
+```bash
+# Read-only. Starts no service, joins no authority, mutates nothing.
+flyto-ai code-workspace-status --workspace /path/to/tree
+flyto-ai code-workspace-status --workspace /path/to/tree --json
+```
+
+It reports every bounded overlapping owner with its relationship (`exact`,
+`owner_is_ancestor`, `owner_is_descendant`), status, and owning state root, in
+deterministic order. The headline status is the most blocking overlap, so an
+adoptable exact entry never masks a live parent.
+
+| Status | Meaning | Next step |
+| --- | --- | --- |
+| `unregistered` | nobody has claimed it | start normally |
+| `live` | a process holds the lease now | stop that process |
+| `crashed_with_open_work` | owner died leaving non-terminal jobs or claims | finish or retire them under *that* state root |
+| `adoptable` | owner gone, nothing unresolved | the next start adopts it |
+
+Recovery never involves editing a registry file. For a stranded audit under the
+previous owner, use the subtractive host release valve, which does not join,
+rotate, or adopt workspace authority:
+
+```bash
+flyto-ai code-release --state-dir <owner state root> --abandon-job <job id>
+flyto-ai code-release --state-dir <owner state root> --repair-workspace <tree>
+```
+
+Once that state root has no non-terminal job and no surviving workspace owner
+claim, the tree reports `adoptable` and the next start takes it.
+
 ## Workspace-claim authority and the generic claim kernel
 
 Two claim mechanisms exist in this repository. They are **not** interchangeable,

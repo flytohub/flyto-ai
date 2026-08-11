@@ -163,8 +163,18 @@ def test_different_worktrees_stay_parallel_across_workers(tmp_path: Path) -> Non
 
     alpha = _workspace(tmp_path, "alpha")
     beta = _workspace(tmp_path, "beta")
-    first = _audited_service(tmp_path, alpha, provider=ReworkingProvider())
-    second = _audited_service(tmp_path, beta, provider=ReworkingProvider())
+    first = _audited_service(
+        tmp_path,
+        alpha,
+        provider=ReworkingProvider(),
+        extra_roots=(beta,),
+    )
+    second = _audited_service(
+        tmp_path,
+        beta,
+        provider=ReworkingProvider(),
+        extra_roots=(alpha,),
+    )
     try:
         one = _awaiting(first, "tenant-audit", "par-001", alpha)
         two = _awaiting(second, "tenant-audit", "par-002", beta)

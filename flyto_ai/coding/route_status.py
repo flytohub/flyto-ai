@@ -28,12 +28,18 @@ environment, command line, or credential has a representation here.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
 import tempfile
 import time
+
+try:  # pragma: no cover - platform dependent
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None  # type: ignore[assignment]
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -61,9 +67,24 @@ MAX_STATUS_INDEX_BYTES = 256 * 1024
 #: Route lanes and job modes are stable vocabularies, not free text.
 ROUTE_STATUS_MODES = ("strict", "emergency")
 #: `active` while the instance is serving; `closed` after a graceful shutdown.
-#: A crashed instance keeps its last `active` row, which is why readers also
-#: consult the recorded pid and timestamp rather than this field alone.
+#: A crashed instance keeps its last `active` row, which is why liveness is
+#: decided by the per-instance lease below rather than by this field alone.
 ROUTE_STATUS_LIFECYCLES = ("active", "closed")
+#: Each publisher holds an exclusive `flock` on its own lease file for the whole
+#: life of the process. The kernel drops that lock when the owning process dies
+#: for any reason, including `SIGKILL` and a panic, so an uncontended lease is
+#: positive proof the instance is gone rather than an inference from its pid.
+#: A recorded pid can be reused by an unrelated process (the 2026-08-11 incident
+#: reused one for `cloudphotod`), so a pid probe alone can never prove liveness.
+ROUTE_STATUS_LEASE_SUFFIX = ".lease"
+#: The only errnos that prove another owner holds the lease. POSIX allows
+#: either `EWOULDBLOCK`/`EAGAIN` or `EACCES` for a contended non-blocking lock,
+#: and on Linux `EWOULDBLOCK` and `EAGAIN` are the same value. Anything else --
+#: `ENOTSUP`/`EOPNOTSUPP` on a filesystem without `flock`, `EIO`, `EBADF`,
+#: `ENOLCK` -- means the probe failed, not that somebody is holding it.
+_LEASE_CONTENDED_ERRNOS = frozenset({
+    errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES,
+})
 #: Stable codes for a recorder that could not publish. Exception class names
 #: are not a contract, so they never reach a persisted or reported field.
 STATUS_FAILURE_CODES = ("status_write_failed", "status_validation_failed")
@@ -392,9 +413,11 @@ def project_index_row(value: Any) -> Optional[Dict[str, Any]]:
 def process_alive(process_id: int) -> Optional[bool]:
     """Best-effort local liveness for one recorded pid.
 
-    `None` means undecidable, not alive. A pid can be reused after a crash, so
-    a reader treats this as one signal beside `lifecycle`, `started_at`, and
-    `updated_at` rather than as proof.
+    `None` means undecidable, not alive. This answers "does *some* process hold
+    this pid", which is strictly weaker than "is that process the instance that
+    recorded it": pids are reused. It is retained only as a negative
+    corroborator — a false here is still a true absence — and must never be the
+    sole basis for reporting an instance alive. Use `lease_alive` for that.
     """
     if isinstance(process_id, bool) or not isinstance(process_id, int) or process_id <= 0:
         return None
@@ -407,6 +430,74 @@ def process_alive(process_id: int) -> Optional[bool]:
     except OSError:
         return None
     return True
+
+
+def lease_alive(lease_path: Path) -> Optional[bool]:
+    """Decide liveness from an instance's lease file, immune to pid reuse.
+
+    A live publisher holds `LOCK_EX` on this file for its whole life, so:
+
+    * acquiring `LOCK_EX | LOCK_NB` here proves *nobody* holds it — the owner
+      exited or crashed, and the kernel released it. Returns `False`.
+    * failing to acquire it *with a contention errno* proves someone still
+      holds it. Returns `True`.
+    * `None` means undecidable — no `flock` on this platform, the file cannot
+      be opened, or the lock failed for any non-contention reason such as
+      `ENOTSUP` on a filesystem without `flock`. Never reported as alive.
+
+    The probe never creates the file: a missing lease is a publisher that never
+    started one, which is undecidable rather than dead, so an instance written
+    by an older build is not silently declared gone.
+    """
+    if fcntl is None:
+        # Without `flock` there is no crash-released proof of any kind. Claiming
+        # liveness from a pid alone is exactly the reuse bug this replaces.
+        return None
+    try:
+        descriptor = os.open(str(lease_path), os.O_RDWR)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            # Only lock contention proves a holder. Every other errno means the
+            # probe itself failed — an unsupported filesystem, a bad
+            # descriptor, an I/O error — and reports undecidable. Treating
+            # those as `True` would let a filesystem that cannot lock at all
+            # report every dead instance as alive, which is the same class of
+            # false positive as the pid reuse this replaces.
+            return True if exc.errno in _LEASE_CONTENDED_ERRNOS else None
+        # Uncontended: release immediately so this probe never becomes the
+        # thing that keeps a dead instance looking alive to the next reader.
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def lease_collectable(lease_path: Path) -> bool:
+    """Whether an instance's files may be removed by deterministic pruning.
+
+    Distinct from `lease_alive`, which conflates two different `None`s. Here
+    they must be told apart:
+
+    * the lease file does not exist -- nothing holds a lock and there is no
+      liveness proof to destroy, so the row is collectable. This is how an
+      instance published by a build older than the lease is retired.
+    * the lease exists but the probe could not decide (`ENOTSUP`, `EIO`, a
+      permission failure) -- removing it could strip a live instance's only
+      proof and let a second live instance create a fresh inode at the same
+      path, where both would hold uncontended locks. Not collectable.
+    """
+    if not lease_path.exists():
+        return True
+    return lease_alive(lease_path) is False
 
 
 def route_progress(record: Mapping[str, Any]) -> Tuple[str, str]:
@@ -487,6 +578,7 @@ class RouteStatusPublisher:
         self.service_version = version or service_version()
         self.process_id = int(os.getpid() if process_id is None else process_id)
         self.started_at = float(time.time() if started_at is None else started_at)
+        self._lease_fd: Optional[int] = None
 
     @property
     def index_path(self) -> Path:
@@ -494,6 +586,60 @@ class RouteStatusPublisher:
 
     def instance_path(self, instance_id: str = "") -> Path:
         return self.root / "instance-{}.json".format(instance_id or self.instance_id)
+
+    def lease_path(self, instance_id: str = "") -> Path:
+        return self.instance_path(instance_id).with_suffix(ROUTE_STATUS_LEASE_SUFFIX)
+
+    def acquire_lease(self) -> bool:
+        """Take this instance's crash-released liveness lease.
+
+        Held for the life of the process and released by the kernel however it
+        dies, which is what lets a later reader distinguish a running instance
+        from a crashed one without trusting a reusable pid.
+
+        Returns `False` when no lease could be taken (no `flock`, or the file
+        could not be opened). That degrades liveness to *undecidable*, never to
+        a false *alive*, so it is not fatal to publishing status.
+        """
+        if self._lease_fd is not None:
+            return True
+        if fcntl is None:
+            return False
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            descriptor = os.open(
+                str(self.lease_path()), os.O_RDWR | os.O_CREAT, 0o600,
+            )
+        except OSError:
+            return False
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Another live process already owns this instance id. Do not hold a
+            # descriptor we did not lock.
+            os.close(descriptor)
+            return False
+        self._lease_fd = descriptor
+        return True
+
+    def release_lease(self) -> None:
+        """Drop the liveness lease on graceful shutdown.
+
+        Closing the descriptor releases the `flock`, so a reader sees this
+        instance as not alive immediately rather than at the retention window.
+        A crash reaches the same state without running this.
+        """
+        descriptor, self._lease_fd = self._lease_fd, None
+        if descriptor is None:
+            return
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except (OSError, AttributeError):
+            pass
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
     def publish(self, status: CodingRouteStatus) -> CodingRouteStatus:
         """Write this instance's status, then refresh the bounded index."""
@@ -576,7 +722,7 @@ class RouteStatusPublisher:
                 moment - _row_timestamp(row) > STATUS_INSTANCE_TTL_SECONDS
             )
             build_stale = entry.get("build_id") != self.build_id
-            alive = process_alive(entry.get("process_id", 0))
+            alive = self._instance_alive(entry)
             entry["age_stale"] = age_stale
             entry["build_stale"] = build_stale
             entry["stale"] = age_stale or build_stale
@@ -589,6 +735,37 @@ class RouteStatusPublisher:
             entry["current"] = row.get("instance_id") == self.instance_id
             annotated.append(entry)
         return annotated
+
+    def _instance_alive(self, entry: Mapping[str, Any]) -> Optional[bool]:
+        """Decide one row's liveness without ever trusting a bare pid.
+
+        Order matters, and each step is a proof rather than a hint:
+
+        1. `lifecycle == "closed"` is a durable record that the instance shut
+           down and republished on the way out. A closed row is never alive, so
+           no probe can resurrect it after its pid is reused.
+        2. This reader's own row is alive while it holds its own lease. A
+           read-only reader (`code-status`) holds none, so it falls through to
+           the same lease probe as any other row rather than answering from an
+           instance id that merely happens to match.
+        3. Otherwise the crash-released lease decides.
+        4. If the lease is undecidable, a pid probe may only *lower* the answer
+           to `False`. It can never raise it to `True`, because that is the
+           reuse bug: an unrelated process inheriting the pid would look alive.
+        """
+        if entry.get("lifecycle") == "closed":
+            return False
+        instance_id = str(entry.get("instance_id", ""))
+        if instance_id == self.instance_id and self._lease_fd is not None:
+            return True
+        if not _ID_RE.fullmatch(instance_id):
+            # Never fall through to `lease_path("")`, which would probe this
+            # reader's own lease and report a foreign row as alive.
+            return None
+        leased = lease_alive(self.lease_path(instance_id))
+        if leased is not None:
+            return leased
+        return False if process_alive(entry.get("process_id", 0)) is False else None
 
     def _refresh_index(self, status: CodingRouteStatus) -> None:
         """Replace this instance's row, then prune stale and excess instances."""
@@ -610,11 +787,22 @@ class RouteStatusPublisher:
         for instance_id in {str(row.get("instance_id")) for row in rows} - kept_ids:
             if instance_id == self.instance_id or not _ID_RE.fullmatch(instance_id):
                 continue
-            try:
-                self.instance_path(instance_id).unlink()
-            except OSError:
-                # A file another process already collected is not an error.
-                pass
+            lease = self.lease_path(instance_id)
+            # Collect an instance only once its lease proves it is gone. A
+            # quiet process can fall out of the index on age or capacity while
+            # still running; unlinking its lease would strip the only proof it
+            # is alive and let a later publisher create a new inode at the same
+            # path, so two live instances would each hold an uncontended lock.
+            # `None` is undecidable and is treated as live, which costs one
+            # retained file and never costs a false liveness answer.
+            if not lease_collectable(lease):
+                continue
+            for path in (self.instance_path(instance_id), lease):
+                try:
+                    path.unlink()
+                except OSError:
+                    # A file another process already collected is not an error.
+                    pass
         _atomic_write_json(self.index_path, {
             "contract_version": ROUTE_STATUS_CONTRACT_VERSION,
             "updated_at": now,

@@ -49,6 +49,7 @@ from flyto_ai.coding.service import (
     AuditBlockersUnresolved,
     AuditNotEnabled,
     AuditStateConflict,
+    CodingAuthorityConflict,
     CodingJobNotFound,
     CodingService,
     IdempotencyConflict,
@@ -58,7 +59,6 @@ from flyto_ai.coding.service import (
     ReworkLimitReached,
     ReworkNotResumable,
     VerificationRequired,
-    WorkspaceDenied,
     error_details,
     request_from_mapping,
     receipt_to_mapping,
@@ -204,6 +204,7 @@ def _service(
     provider: object = None,
     require_codex_audit: bool = False,
     max_rework_rounds: int = 3,
+    extra_roots: tuple = (),
 ) -> CodingService:
     config = workspace / ".flyto" / "coding.yaml"
     config.parent.mkdir(exist_ok=True)
@@ -220,7 +221,11 @@ def _service(
     return CodingService(
         lambda store: FlytoCodingAgent(provider or RealToolProvider(delay=delay), store=store),
         state_root=str(tmp_path / "service-state"),
-        workspace_roots=(str(workspace),),
+        # The configured tree set is part of startup authority, so two services
+        # sharing a state root must declare the same one. `extra_roots` lets a
+        # fixture that drives several worktrees through one root do exactly
+        # that, rather than presenting two semantically different workers.
+        workspace_roots=(str(workspace), *(str(root) for root in extra_roots)),
         max_workers=2,
         max_queued=8,
         require_codex_audit=require_codex_audit,
@@ -314,6 +319,58 @@ def test_services_share_one_state_root_without_reconciling_live_jobs(
     finally:
         if second is not None:
             second.close()
+        first.close()
+
+
+def test_admitter_releases_host_authority_after_a_peer_settles_last_job(
+    tmp_path: Path,
+) -> None:
+    """A peer's terminal write cannot leave the submitter holding forever."""
+
+    from flyto_ai.coding.workspace_authority import describe_workspace_root
+
+    workspace = tmp_path / "workspace-peer-release"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    state_root = tmp_path / "shared-peer-release-state"
+    registry = tmp_path / "shared-peer-release-registry"
+    provider = ReworkingProvider()
+    kwargs = {
+        "state_root": str(state_root),
+        "workspace_roots": (str(workspace),),
+        "workspace_registry_root": str(registry),
+        "max_workers": 2,
+        "max_queued": 8,
+        "require_codex_audit": True,
+    }
+    first = CodingService(
+        lambda store: FlytoCodingAgent(provider, store=store), **kwargs,
+    )
+    second = CodingService(
+        lambda store: FlytoCodingAgent(provider, store=store), **kwargs,
+    )
+    try:
+        awaiting = _awaiting(first, "tenant-peer", "peer-release-001", workspace)
+        assert first._workspace_root_authority is not None
+        assert second._workspace_root_authority is None
+        assert describe_workspace_root(registry, workspace)["status"] == "live"
+
+        accepted = second.audit(
+            "tenant-peer",
+            awaiting.job_id,
+            awaiting.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT,
+            (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+
+        deadline = time.monotonic() + 3
+        while first._workspace_root_authority is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert first._workspace_root_authority is None
+        assert describe_workspace_root(registry, workspace)["status"] == "adoptable"
+    finally:
+        second.close()
         first.close()
 
 
@@ -1162,6 +1219,7 @@ def test_claude_read_only_authority_runs_with_read_only_tools_and_no_edits(
         assert len(backend.requests) == 1
         code_request = backend.requests[0]
         assert code_request.service_edit_authority is False
+        assert code_request.require_changes is False
         options = ClaudeCodeAgent()._option_kwargs(
             code_request, session_id=None, system_prompt="s", max_turns=1, max_budget=1.0,
         )
@@ -2462,7 +2520,7 @@ def test_rework_revision_stays_cumulative_over_earlier_attributable_files(
         service.close()
 
 
-def test_restart_revalidates_the_persisted_workspace_before_reading_it(
+def test_restart_refuses_a_changed_workspace_root_set_before_reading_a_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -2476,34 +2534,29 @@ def test_restart_revalidates_the_persisted_workspace_before_reading_it(
 
     narrowed = tmp_path / "narrowed"
     narrowed.mkdir()
-    restarted = CodingService(
-        lambda store: FlytoCodingAgent(RealToolProvider(), store=store),
-        state_root=str(tmp_path / "service-state"),
-        workspace_roots=(str(narrowed),),
-        require_codex_audit=True,
-    )
 
     def forbidden(*args, **kwargs):
         raise AssertionError("the old workspace must not be hashed")
 
     monkeypatch.setattr(CodingService, "_revision_digest", staticmethod(forbidden))
-    try:
-        with pytest.raises(WorkspaceDenied):
-            restarted.audit(
-                "tenant-audit", awaiting.job_id, awaiting.implementation_revision_sha256,
-                CodingAuditVerdict.ACCEPT, (),
-            )
-        with pytest.raises(WorkspaceDenied):
-            restarted.audit(
-                "tenant-audit", awaiting.job_id, awaiting.implementation_revision_sha256,
-                CodingAuditVerdict.REWORK, (_blocker(),),
-            )
-        still_awaiting = restarted.get("tenant-audit", awaiting.job_id)
-        assert still_awaiting.state is CodingJobState.AWAITING_CODEX_AUDIT
-        assert still_awaiting.audit_count == 0
-        assert still_awaiting.landable is False
-    finally:
-        restarted.close()
+    with pytest.raises(CodingAuthorityConflict):
+        CodingService(
+            lambda store: FlytoCodingAgent(RealToolProvider(), store=store),
+            state_root=str(tmp_path / "service-state"),
+            workspace_roots=(str(narrowed),),
+            require_codex_audit=True,
+        )
+
+    # Refusal is before audit/rework code can read or hash the old workspace,
+    # and the audit-ready record remains untouched for a compatible restart.
+    record = json.loads(
+        (tmp_path / "service-state" / "tenants"
+         / CodingService._tenant_ref("tenant-audit") / "jobs"
+         / (awaiting.job_id + ".json")).read_text(encoding="utf-8"),
+    )
+    assert record["state"] == CodingJobState.AWAITING_CODEX_AUDIT.value
+    assert record["audit_count"] == 0
+    assert record["landable"] is False
 
 
 def _fake_stat(source: os.stat_result, **overrides):

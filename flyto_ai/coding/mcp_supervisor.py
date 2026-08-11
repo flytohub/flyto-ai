@@ -55,6 +55,50 @@ _JOB_ID_RE = re.compile(r"^job_[a-f0-9]{24}$")
 _SAFE_TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
+#: Exit status `code-mcp` uses when it refused at the state-root authority
+#: rather than failing for an ordinary reason. Chosen as `EX_CONFIG` from
+#: `sysexits`, which is what this is: the durable configuration of the state
+#: root disagrees with this build. Distinct from the generic `2` the CLI uses
+#: for malformed arguments, so the supervisor can tell the two apart.
+WORKER_AUTHORITY_EXIT_CODE = 78
+#: The single bounded sentence the supervisor is allowed to substitute for the
+#: generic transport failure. Fixed text: it is selected by exit code and never
+#: built from worker output, so it cannot carry a path, prompt, or job content.
+WORKER_AUTHORITY_REASON = (
+    "coding state root refused this build's authority; "
+    "run flyto-ai code-status, then flyto-ai code-release to retire orphaned work"
+)
+#: Exit status `code-mcp` uses when a *workspace* root is owned by a different
+#: coding state root. Distinct from the state-root refusal above because the
+#: remedy is different and lives somewhere else: `code-status` and
+#: `code-release` act on *this* state root and can never identify, or clean up,
+#: the other one holding the tree.
+WORKER_WORKSPACE_EXIT_CODE = 79
+#: Fixed text, selected by exit code alone. It names the local read-only
+#: command that can identify the owner; it cannot name the owner itself,
+#: because a state-root or workspace path must never cross this boundary.
+WORKER_WORKSPACE_REASON = (
+    "another coding state root owns a configured workspace tree; "
+    "run flyto-ai code-workspace-status to identify the owner"
+)
+#: Transient: the host-global registry was mid-transaction. Separate from both
+#: the ownership conflict and the registry fault, because the only correct
+#: advice here is to try again -- sending an operator to stop another state
+#: root, or to repair a registry that is intact, is wrong in both directions.
+WORKER_WORKSPACE_BUSY_EXIT_CODE = 75
+WORKER_WORKSPACE_BUSY_REASON = (
+    "the host workspace authority registry is busy; retry shortly"
+)
+#: The registry itself cannot answer -- missing, damaged, unreadable, or on a
+#: host without working file locks. Deliberately claims no owner, because no
+#: ownership was ever established to claim.
+WORKER_WORKSPACE_REGISTRY_EXIT_CODE = 77
+WORKER_WORKSPACE_REGISTRY_REASON = (
+    "the host workspace authority registry is unavailable or damaged; "
+    "run flyto-ai code-workspace-status to inspect it"
+)
+
+
 class CodingMCPWorkerUnavailable(RuntimeError):
     """The replaceable worker could not serve a request deterministically."""
 
@@ -257,6 +301,7 @@ class CodingMCPWorkerSupervisor:
         self._initialized_notification: Optional[Dict[str, Any]] = None
         self._initialized = False
         self._active_jobs: Dict[str, str] = {}
+        self._last_worker_exit: Optional[int] = None
         self.reload_count = 0
         self.timeout_count = 0
 
@@ -316,7 +361,9 @@ class CodingMCPWorkerSupervisor:
             # Release it for the same reason a timeout does, and for the same
             # reason do not resend — delivery of this request is uncertain.
             self._stop_worker(graceful=False)
-            return self._protocol_error(request.get("id"), -32603, "coding worker unavailable")
+            return self._protocol_error(
+                request.get("id"), -32603, self._unavailable_reason(),
+            )
 
         if response is not None:
             self._observe_job(response, request)
@@ -364,6 +411,10 @@ class CodingMCPWorkerSupervisor:
                 self._active_jobs.pop(job_id, None)
 
     def _start_worker(self, build_id: str, *, replay: bool) -> None:
+        # Forget the previous worker's exit status before spawning. A spawn
+        # that fails outright must not inherit an earlier authority refusal and
+        # report a reason this worker never gave.
+        self._last_worker_exit = None
         self._channel = _WorkerChannel(self.worker_argv)
         self._worker_build_id = build_id
         if replay:
@@ -380,6 +431,36 @@ class CodingMCPWorkerSupervisor:
         self._worker_build_id = ""
         if channel is not None:
             channel.stop(graceful=graceful)
+            # Read the status only after `stop` has reaped the process, so a
+            # worker that refused at startup reports its real exit code rather
+            # than `None`. This is the one fact the supervisor keeps from a
+            # dead worker, and it is an integer from a closed set — never
+            # output, never a path, never job content.
+            self._last_worker_exit = channel.process.returncode
+
+    def _unavailable_reason(self) -> str:
+        """Name why the worker is gone, when it named itself on the way out.
+
+        `code-mcp` exits with `WORKER_AUTHORITY_EXIT_CODE` when it refused at
+        the state-root authority — a changed semantic route digest, a busy
+        root, or a missing `flock`. That is an operator-actionable condition
+        with a specific remedy, and collapsing it into the generic transport
+        failure is what made the 2026-08-11 incident unreadable from the
+        client: every symptom looked like `-32603 coding worker unavailable`.
+
+        The reason is a fixed string chosen by exit code alone. Worker stderr
+        is never captured or forwarded, so no path, prompt, secret, raw error,
+        or job content can travel this way.
+        """
+        if self._last_worker_exit == WORKER_AUTHORITY_EXIT_CODE:
+            return WORKER_AUTHORITY_REASON
+        if self._last_worker_exit == WORKER_WORKSPACE_EXIT_CODE:
+            return WORKER_WORKSPACE_REASON
+        if self._last_worker_exit == WORKER_WORKSPACE_BUSY_EXIT_CODE:
+            return WORKER_WORKSPACE_BUSY_REASON
+        if self._last_worker_exit == WORKER_WORKSPACE_REGISTRY_EXIT_CODE:
+            return WORKER_WORKSPACE_REGISTRY_REASON
+        return "coding worker unavailable"
 
     def _replay_handshake(self) -> None:
         if self._initialize_request is None:

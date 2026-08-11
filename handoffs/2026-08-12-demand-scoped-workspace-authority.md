@@ -41,11 +41,11 @@ observability, state archival/migrations, and eventual distributed leases.
 ## Verification
 
 - flyto-ai: compile, fatal Ruff and all 23 generated references pass; full
-  pytest is **3493 passed, 17 skipped**.
+  pytest is **3496 passed, 17 skipped**.
 - The continuation/workspace/demand-scope audit set is **263 passed**; a
   continuation-backed job keeps its claim through the Codex audit loop and
   settles it only at a real terminal boundary.
-- The installed-Core extension contract is **90 passed**; the host calls the
+- The installed-Core extension contract is **91 passed**; the host calls the
   real loader methods, publishes only real result fields, and refuses a
   module-style success alias that conflicts with `ExtensionResult.ok`.
 - Demand-scope coverage includes idle startup, admission-before-mutation,

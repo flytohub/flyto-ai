@@ -112,7 +112,7 @@ class FlytoCodingAgent:
         # reaching it here means the tool went away in between - a race, not a
         # new class of problem, and the honest answer is the same one preflight
         # would have given rather than a verdict on a change nobody made yet.
-        unlaunchable = unlaunchable_required_checks(checks)
+        unlaunchable = unlaunchable_required_checks(checks, request.working_dir)
         if unlaunchable:
             return self._fail(
                 thread_id, "verification_tool_missing",

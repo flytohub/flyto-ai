@@ -331,7 +331,9 @@ class VerificationToolUnavailable(RuntimeError):
         self.blockers = tuple(blockers)
 
 
-def unlaunchable_required_checks(checks: Sequence[CheckSpec]) -> Tuple[str, ...]:
+def unlaunchable_required_checks(
+    checks: Sequence[CheckSpec], workspace: Optional[str] = None,
+) -> Tuple[str, ...]:
     """Required checks whose program cannot be launched, by name.
 
     Delegates to the one resolver the runner itself uses, so this can never
@@ -342,7 +344,10 @@ def unlaunchable_required_checks(checks: Sequence[CheckSpec]) -> Tuple[str, ...]
     for check in checks:
         if not getattr(check, "required", False) or not check.argv:
             continue
-        if resolve_executable(check.argv[0]) is None and check.name not in blocked:
+        if (
+            resolve_executable(check.argv[0], workspace) is None
+            and check.name not in blocked
+        ):
             blocked.append(check.name)
     return tuple(blocked)
 
@@ -365,7 +370,9 @@ class CheckRunner:
         would have given and the same work it would have asked for.
         """
 
-        unlaunchable = unlaunchable_required_checks(checks)
+        unlaunchable = unlaunchable_required_checks(
+            checks, str(self.workspace_tools.root),
+        )
         if unlaunchable:
             raise VerificationToolUnavailable(unlaunchable)
         results: List[CheckResult] = []

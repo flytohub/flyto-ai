@@ -202,7 +202,7 @@ def preflight_repository(
             code=CODE_CAPABILITY_UNAVAILABLE,
             required_actions=(ACTION_INSTALL_REQUIRED_CAPABILITY,),
         )
-    unlaunchable = unlaunchable_required_checks(checks)
+    unlaunchable = unlaunchable_required_checks(checks, workspace)
     if unlaunchable:
         # Proving the check *exists* was never the same as proving it can run.
         # A required check whose program is not installed is a defect of the
@@ -224,7 +224,9 @@ def preflight_repository(
     )
 
 
-def unlaunchable_required_checks(checks: Tuple[CheckSpec, ...]) -> Tuple[str, ...]:
+def unlaunchable_required_checks(
+    checks: Tuple[CheckSpec, ...], workspace: Optional[str] = None,
+) -> Tuple[str, ...]:
     """Name the required checks whose program cannot be launched on this host.
 
     Uses :func:`flyto_ai.coding.workspace.resolve_executable` - the same
@@ -239,7 +241,7 @@ def unlaunchable_required_checks(checks: Tuple[CheckSpec, ...]) -> Tuple[str, ..
     defect the task exists to fix.
     """
 
-    return _unlaunchable(checks)[:MAX_PREFLIGHT_BLOCKERS]
+    return _unlaunchable(checks, workspace)[:MAX_PREFLIGHT_BLOCKERS]
 
 
 def _infeasible_required_capability(

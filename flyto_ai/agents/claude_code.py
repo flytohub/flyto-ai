@@ -1257,7 +1257,7 @@ class ClaudeCodingAgent:
         # has been read, and nothing has been asked of a provider yet. A tool
         # that vanished between submit and here is a host defect, and saying so
         # now costs no session, no turns and no revision.
-        unlaunchable = unlaunchable_required_checks(checks)
+        unlaunchable = unlaunchable_required_checks(checks, request.working_dir)
         if unlaunchable:
             return self._failed(
                 thread_id, "verification_tool_missing", blockers=unlaunchable,

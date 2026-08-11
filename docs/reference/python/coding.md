@@ -280,7 +280,7 @@ A required check cannot be launched, so no verification verdict exists.
 
 ### `unlaunchable_required_checks` (public)
 
-`unlaunchable_required_checks(checks: Sequence[CheckSpec]) -> Tuple[str, ...]`
+`unlaunchable_required_checks(checks: Sequence[CheckSpec], workspace: Optional[str] = None) -> Tuple[str, ...]`
 Source: [`flyto_ai/coding/checks.py:334`](../../../flyto_ai/coding/checks.py#L334)
 
 Required checks whose program cannot be launched, by name.
@@ -289,15 +289,15 @@ Required checks whose program cannot be launched, by name.
 
 `class CheckRunner`
 
-Source: [`flyto_ai/coding/checks.py:350`](../../../flyto_ai/coding/checks.py#L350)
+Source: [`flyto_ai/coding/checks.py:355`](../../../flyto_ai/coding/checks.py#L355)
 
 Execute declared checks and retain content-addressed evidence.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(workspace_tools: WorkspaceTools) -> None` | internal | Internal `__init__` implementation on `CheckRunner`; the linked source is authoritative. | [`flyto_ai/coding/checks.py:353`](../../../flyto_ai/coding/checks.py#L353) |
-| `async run(checks: Sequence[CheckSpec]) -> List[CheckResult]` | public | Run declared checks, refusing outright if a required one cannot start. | [`flyto_ai/coding/checks.py:356`](../../../flyto_ai/coding/checks.py#L356) |
-| `passed(results: Sequence[CheckResult]) -> bool` | public | Public `passed` implementation on `CheckRunner`; the linked source is authoritative. | [`flyto_ai/coding/checks.py:401`](../../../flyto_ai/coding/checks.py#L401) |
+| `__init__(workspace_tools: WorkspaceTools) -> None` | internal | Internal `__init__` implementation on `CheckRunner`; the linked source is authoritative. | [`flyto_ai/coding/checks.py:358`](../../../flyto_ai/coding/checks.py#L358) |
+| `async run(checks: Sequence[CheckSpec]) -> List[CheckResult]` | public | Run declared checks, refusing outright if a required one cannot start. | [`flyto_ai/coding/checks.py:361`](../../../flyto_ai/coding/checks.py#L361) |
+| `passed(results: Sequence[CheckResult]) -> bool` | public | Public `passed` implementation on `CheckRunner`; the linked source is authoritative. | [`flyto_ai/coding/checks.py:408`](../../../flyto_ai/coding/checks.py#L408) |
 
 ## `flyto_ai.coding.conformance`
 
@@ -1891,7 +1891,7 @@ Decide whether this repository has declared a usable way to verify itself.
 
 ### `unlaunchable_required_checks` (public)
 
-`unlaunchable_required_checks(checks: Tuple[CheckSpec, ...]) -> Tuple[str, ...]`
+`unlaunchable_required_checks(checks: Tuple[CheckSpec, ...], workspace: Optional[str] = None) -> Tuple[str, ...]`
 Source: [`flyto_ai/coding/preflight.py:227`](../../../flyto_ai/coding/preflight.py#L227)
 
 Name the required checks whose program cannot be launched on this host.
@@ -1899,7 +1899,7 @@ Name the required checks whose program cannot be launched on this host.
 ### `_infeasible_required_capability` (internal)
 
 `_infeasible_required_capability(capabilities: Tuple[CapabilitySpec, ...], attachable_capability_kinds: Optional[AbstractSet[str]]) -> bool`
-Source: [`flyto_ai/coding/preflight.py:245`](../../../flyto_ai/coding/preflight.py#L245)
+Source: [`flyto_ai/coding/preflight.py:247`](../../../flyto_ai/coding/preflight.py#L247)
 
 Whether a required capability cannot be attached *by the selected backend*.
 
@@ -3142,7 +3142,7 @@ Register complete sessions atomically and reject provider-name collisions.
 
 ### `resolve_executable` (public)
 
-`resolve_executable(program: str) -> Optional[str]`
+`resolve_executable(program: str, workspace: Optional[str] = None) -> Optional[str]`
 Source: [`flyto_ai/coding/workspace.py:49`](../../../flyto_ai/coding/workspace.py#L49)
 
 Answer, once, whether an argv[0] can actually be launched on this host.
@@ -3150,28 +3150,28 @@ Answer, once, whether an argv[0] can actually be launched on this host.
 ### `container_hardening_argv` (public)
 
 `container_hardening_argv(docker: str, cidfile: str) -> List[str]`
-Source: [`flyto_ai/coding/workspace.py:73`](../../../flyto_ai/coding/workspace.py#L73)
+Source: [`flyto_ai/coding/workspace.py:80`](../../../flyto_ai/coding/workspace.py#L80)
 
 The isolation flags every containerised execution boundary shares.
 
 ### `container_runtime_argv` (public)
 
 `container_runtime_argv() -> List[str]`
-Source: [`flyto_ai/coding/workspace.py:100`](../../../flyto_ai/coding/workspace.py#L100)
+Source: [`flyto_ai/coding/workspace.py:107`](../../../flyto_ai/coding/workspace.py#L107)
 
 Writable scratch and a deterministic in-container environment.
 
 ### `container_workspace_mount_argv` (public)
 
 `container_workspace_mount_argv(source: Path, *, writable: bool) -> List[str]`
-Source: [`flyto_ai/coding/workspace.py:117`](../../../flyto_ai/coding/workspace.py#L117)
+Source: [`flyto_ai/coding/workspace.py:124`](../../../flyto_ai/coding/workspace.py#L124)
 
 Bind exactly one directory, and nothing else, at the workspace path.
 
 ### `_sha256` (internal)
 
 `_sha256(data: bytes) -> str`
-Source: [`flyto_ai/coding/workspace.py:131`](../../../flyto_ai/coding/workspace.py#L131)
+Source: [`flyto_ai/coding/workspace.py:138`](../../../flyto_ai/coding/workspace.py#L138)
 
 Internal `_sha256` implementation on this module; the linked source is authoritative.
 
@@ -3179,7 +3179,7 @@ Internal `_sha256` implementation on this module; the linked source is authorita
 
 `class WorkspaceViolation(RuntimeError)`
 
-Source: [`flyto_ai/coding/workspace.py:135`](../../../flyto_ai/coding/workspace.py#L135)
+Source: [`flyto_ai/coding/workspace.py:142`](../../../flyto_ai/coding/workspace.py#L142)
 
 Public `WorkspaceViolation` implementation on this module; the linked source is authoritative.
 
@@ -3187,37 +3187,37 @@ Public `WorkspaceViolation` implementation on this module; the linked source is 
 
 `class WorkspaceTools`
 
-Source: [`flyto_ai/coding/workspace.py:139`](../../../flyto_ai/coding/workspace.py#L139)
+Source: [`flyto_ai/coding/workspace.py:146`](../../../flyto_ai/coding/workspace.py#L146)
 
 Bounded local tools; every path resolves under exactly one workspace.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(root: str, *, sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE, approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER, sandbox_image: str = 'python:3.12-slim') -> None` | internal | Internal `__init__` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:142`](../../../flyto_ai/coding/workspace.py#L142) |
-| `definitions() -> List[Dict[str, Any]]` | public | Public `definitions` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:163`](../../../flyto_ai/coding/workspace.py#L163) |
-| `async dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]` | public | Public `dispatch` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:209`](../../../flyto_ai/coding/workspace.py#L209) |
-| `resolve(raw_path: str, *, allow_missing: bool = False) -> Path` | public | Public `resolve` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:236`](../../../flyto_ai/coding/workspace.py#L236) |
-| `list_files(raw_path: str = '.', limit: int = 200) -> Dict[str, Any]` | public | Public `list_files` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:251`](../../../flyto_ai/coding/workspace.py#L251) |
-| `read_file(raw_path: str) -> Dict[str, Any]` | public | Public `read_file` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:274`](../../../flyto_ai/coding/workspace.py#L274) |
-| `async search(query: str, raw_path: str = '.', limit: int = 100) -> Dict[str, Any]` | public | Public `search` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:285`](../../../flyto_ai/coding/workspace.py#L285) |
-| `replace_text(raw_path: str, old_text: str, new_text: str) -> Dict[str, Any]` | public | Public `replace_text` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:316`](../../../flyto_ai/coding/workspace.py#L316) |
-| `write_file(raw_path: str, content: str, overwrite: bool = False) -> Dict[str, Any]` | public | Public `write_file` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:336`](../../../flyto_ai/coding/workspace.py#L336) |
-| `async run(argv: Sequence[str], timeout_seconds: int = 120) -> Dict[str, Any]` | public | Run the primary operation implemented by `WorkspaceTools`. | [`flyto_ai/coding/workspace.py:354`](../../../flyto_ai/coding/workspace.py#L354) |
-| `async run_check(argv: Sequence[str], timeout_seconds: int) -> Dict[str, Any]` | public | Run a predeclared verification command regardless of interactive approval. | [`flyto_ai/coding/workspace.py:369`](../../../flyto_ai/coding/workspace.py#L369) |
-| `async git_diff() -> Dict[str, Any]` | public | Public `git_diff` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:374`](../../../flyto_ai/coding/workspace.py#L374) |
-| `snapshot() -> Dict[str, str]` | public | Hash bounded source state so pre-existing dirty files are not misattributed. | [`flyto_ai/coding/workspace.py:384`](../../../flyto_ai/coding/workspace.py#L384) |
-| `changed_since(before: Mapping[str, str], after: Mapping[str, str]) -> List[str]` | public | Public `changed_since` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:411`](../../../flyto_ai/coding/workspace.py#L411) |
-| `_require_write() -> None` | internal | Internal `_require_write` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:414`](../../../flyto_ai/coding/workspace.py#L414) |
-| `_validate_argv(argv: Sequence[str]) -> None` | internal | Internal `_validate_argv` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:420`](../../../flyto_ai/coding/workspace.py#L420) |
-| `async _run_process(argv: List[str], timeout_seconds: int, *, model_command: bool = False) -> Dict[str, Any]` | internal | Internal `_run_process` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:432`](../../../flyto_ai/coding/workspace.py#L432) |
-| `_sandbox_command(command: List[str], runtime_home: str) -> List[str]` | internal | Internal `_sandbox_command` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:502`](../../../flyto_ai/coding/workspace.py#L502) |
-| `_docker_workspace(runtime_home: str) -> tuple[Path, bool]` | internal | Stage macOS paths that the local Docker VM cannot bind directly. | [`flyto_ai/coding/workspace.py:557`](../../../flyto_ai/coding/workspace.py#L557) |
-| `async _cleanup_docker_container(runtime_home: str) -> None` | internal | Internal `_cleanup_docker_container` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:585`](../../../flyto_ai/coding/workspace.py#L585) |
-| `_protected_existing_paths() -> List[Path]` | internal | Internal `_protected_existing_paths` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:604`](../../../flyto_ai/coding/workspace.py#L604) |
-| `_is_protected_relative(path: Path) -> bool` | internal | Internal `_is_protected_relative` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:624`](../../../flyto_ai/coding/workspace.py#L624) |
-| `_detect_command_sandbox() -> str` | internal | Internal `_detect_command_sandbox` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:638`](../../../flyto_ai/coding/workspace.py#L638) |
-| `_atomic_write(path: Path, content: str) -> None` | internal | Internal `_atomic_write` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:662`](../../../flyto_ai/coding/workspace.py#L662) |
-| `_tool(name: str, description: str, schema: Dict[str, Any]) -> Dict[str, Any]` | internal | Internal `_tool` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:680`](../../../flyto_ai/coding/workspace.py#L680) |
+| `__init__(root: str, *, sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE, approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER, sandbox_image: str = 'python:3.12-slim') -> None` | internal | Internal `__init__` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:149`](../../../flyto_ai/coding/workspace.py#L149) |
+| `definitions() -> List[Dict[str, Any]]` | public | Public `definitions` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:170`](../../../flyto_ai/coding/workspace.py#L170) |
+| `async dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]` | public | Public `dispatch` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:216`](../../../flyto_ai/coding/workspace.py#L216) |
+| `resolve(raw_path: str, *, allow_missing: bool = False) -> Path` | public | Public `resolve` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:243`](../../../flyto_ai/coding/workspace.py#L243) |
+| `list_files(raw_path: str = '.', limit: int = 200) -> Dict[str, Any]` | public | Public `list_files` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:258`](../../../flyto_ai/coding/workspace.py#L258) |
+| `read_file(raw_path: str) -> Dict[str, Any]` | public | Public `read_file` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:281`](../../../flyto_ai/coding/workspace.py#L281) |
+| `async search(query: str, raw_path: str = '.', limit: int = 100) -> Dict[str, Any]` | public | Public `search` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:292`](../../../flyto_ai/coding/workspace.py#L292) |
+| `replace_text(raw_path: str, old_text: str, new_text: str) -> Dict[str, Any]` | public | Public `replace_text` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:323`](../../../flyto_ai/coding/workspace.py#L323) |
+| `write_file(raw_path: str, content: str, overwrite: bool = False) -> Dict[str, Any]` | public | Public `write_file` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:343`](../../../flyto_ai/coding/workspace.py#L343) |
+| `async run(argv: Sequence[str], timeout_seconds: int = 120) -> Dict[str, Any]` | public | Run the primary operation implemented by `WorkspaceTools`. | [`flyto_ai/coding/workspace.py:361`](../../../flyto_ai/coding/workspace.py#L361) |
+| `async run_check(argv: Sequence[str], timeout_seconds: int) -> Dict[str, Any]` | public | Run a predeclared verification command regardless of interactive approval. | [`flyto_ai/coding/workspace.py:376`](../../../flyto_ai/coding/workspace.py#L376) |
+| `async git_diff() -> Dict[str, Any]` | public | Public `git_diff` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:381`](../../../flyto_ai/coding/workspace.py#L381) |
+| `snapshot() -> Dict[str, str]` | public | Hash bounded source state so pre-existing dirty files are not misattributed. | [`flyto_ai/coding/workspace.py:391`](../../../flyto_ai/coding/workspace.py#L391) |
+| `changed_since(before: Mapping[str, str], after: Mapping[str, str]) -> List[str]` | public | Public `changed_since` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:418`](../../../flyto_ai/coding/workspace.py#L418) |
+| `_require_write() -> None` | internal | Internal `_require_write` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:421`](../../../flyto_ai/coding/workspace.py#L421) |
+| `_validate_argv(argv: Sequence[str]) -> None` | internal | Internal `_validate_argv` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:427`](../../../flyto_ai/coding/workspace.py#L427) |
+| `async _run_process(argv: List[str], timeout_seconds: int, *, model_command: bool = False) -> Dict[str, Any]` | internal | Internal `_run_process` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:439`](../../../flyto_ai/coding/workspace.py#L439) |
+| `_sandbox_command(command: List[str], runtime_home: str) -> List[str]` | internal | Internal `_sandbox_command` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:509`](../../../flyto_ai/coding/workspace.py#L509) |
+| `_docker_workspace(runtime_home: str) -> tuple[Path, bool]` | internal | Stage macOS paths that the local Docker VM cannot bind directly. | [`flyto_ai/coding/workspace.py:564`](../../../flyto_ai/coding/workspace.py#L564) |
+| `async _cleanup_docker_container(runtime_home: str) -> None` | internal | Internal `_cleanup_docker_container` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:592`](../../../flyto_ai/coding/workspace.py#L592) |
+| `_protected_existing_paths() -> List[Path]` | internal | Internal `_protected_existing_paths` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:611`](../../../flyto_ai/coding/workspace.py#L611) |
+| `_is_protected_relative(path: Path) -> bool` | internal | Internal `_is_protected_relative` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:631`](../../../flyto_ai/coding/workspace.py#L631) |
+| `_detect_command_sandbox() -> str` | internal | Internal `_detect_command_sandbox` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:645`](../../../flyto_ai/coding/workspace.py#L645) |
+| `_atomic_write(path: Path, content: str) -> None` | internal | Internal `_atomic_write` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:669`](../../../flyto_ai/coding/workspace.py#L669) |
+| `_tool(name: str, description: str, schema: Dict[str, Any]) -> Dict[str, Any]` | internal | Internal `_tool` implementation on `WorkspaceTools`; the linked source is authoritative. | [`flyto_ai/coding/workspace.py:687`](../../../flyto_ai/coding/workspace.py#L687) |
 
 ## `flyto_ai.coding.workspace_authority`
 

@@ -1217,3 +1217,14 @@ call, so it reports `verification` with `retryable=false` and the existing
 closed action `resubmit_against_current_contract`. An identical rework cannot
 restore a durable fact that is missing or contradicted; a fresh job against
 current authority can.
+
+## 2026-08-12: Resolve repository-relative check programs from the workspace
+
+The source-controlled verification contract is interpreted in the repository
+whose change it governs. Therefore an argv program containing a relative path
+separator is resolved from `request.working_dir`; a plain program name still
+uses `PATH`, and an absolute path remains absolute. The same resolver and
+workspace argument are used by submit preflight, the native implementation
+agent, the Claude implementation adapter, and the real check runner. Using the
+service process cwd is forbidden because it makes the same contract pass or
+fail solely according to the supervisor launch directory.

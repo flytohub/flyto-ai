@@ -50,7 +50,7 @@ from flyto_ai.coding.route import (
     RouteLimits,
 )
 from flyto_ai.coding.contracts import CapabilitySpec
-from flyto_ai.coding.workspace import resolve_executable
+from flyto_ai.coding.workspace import WorkspaceTools, resolve_executable
 
 # --------------------------------------------------------------------------
 # incident A: the route may never issue call N+1 when the bound is N
@@ -331,7 +331,7 @@ def test_the_resolver_is_the_one_the_runner_uses():
 
     source = Path(workspace_module.__file__).read_text(encoding="utf-8")
     body = source.split("async def _run_process", 1)[1][:600]
-    assert "resolve_executable(argv[0])" in body
+    assert "resolve_executable(argv[0], str(self.root))" in body
     assert "shutil.which(argv[0]) if not" not in source
 
 
@@ -441,7 +441,7 @@ def test_the_runner_refuses_an_impossible_verifier_typed(tmp_path):
     assert unlaunchable_required_checks(checks) == ("unit",)
 
     class _Tools:
-        pass
+        root = tmp_path
 
     with pytest.raises(VerificationToolUnavailable) as excinfo:
         asyncio.run(CheckRunner(_Tools()).run(checks))
@@ -459,6 +459,48 @@ def test_preflight_and_runner_share_one_answer(tmp_path):
     )
     assert unlaunchable_required_checks(checks) == ("alpha", "beta")
     assert preflight_module.unlaunchable_required_checks(checks) == ("alpha", "beta")
+
+
+def test_workspace_relative_verifier_ignores_the_service_cwd(tmp_path, monkeypatch):
+    """A supervisor launched above the repo must still find repo-local tools."""
+
+    workspace = tmp_path / "repo"
+    foreign_cwd = tmp_path / "supervisor-cwd"
+    tool = workspace / ".venv" / "bin" / "verify"
+    tool.parent.mkdir(parents=True)
+    foreign_cwd.mkdir()
+    tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    (workspace / ".flyto").mkdir()
+    (workspace / ".flyto" / "coding.yaml").write_text(
+        "\n".join((
+            "version: flyto.coding-config.v1",
+            "checks:",
+            "  - name: local",
+            "    argv: [.venv/bin/verify]",
+            "    required: true",
+        )),
+        encoding="utf-8",
+    )
+    checks = (
+        CheckSpec(name="local", argv=(".venv/bin/verify",), required=True),
+    )
+
+    monkeypatch.chdir(foreign_cwd)
+
+    assert resolve_executable(".venv/bin/verify") is None
+    assert resolve_executable(".venv/bin/verify", str(workspace)) == str(tool)
+    assert unlaunchable_required_checks(checks, str(workspace)) == ()
+    assert preflight_module.unlaunchable_required_checks(
+        checks, str(workspace),
+    ) == ()
+    assert preflight_repository(str(workspace)).ok is True
+
+    executed = asyncio.run(
+        WorkspaceTools(str(workspace)).run_check((".venv/bin/verify",), 5),
+    )
+    assert executed["ok"] is True
+    assert executed["exit_code"] == 0
 
 
 # --------------------------------------------------------------------------

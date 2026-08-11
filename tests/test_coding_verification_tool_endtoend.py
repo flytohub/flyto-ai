@@ -321,6 +321,30 @@ def test_claude_adapter_refuses_before_any_session(tmp_path):
     assert _ABSENT not in (result.message or "")
 
 
+def test_claude_adapter_resolves_repo_local_tool_outside_service_cwd(
+    tmp_path, monkeypatch,
+):
+    """The optional backend uses the repository cwd, just like preflight."""
+
+    workspace = _claude_workspace(tmp_path, [".venv/bin/verify"])
+    tool = workspace / ".venv" / "bin" / "verify"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    foreign_cwd = tmp_path / "service-cwd"
+    foreign_cwd.mkdir()
+    monkeypatch.chdir(foreign_cwd)
+    backend = _Backend()
+
+    result = asyncio.run(
+        _claude_agent(tmp_path, backend).run(_claude_request(workspace)),
+    )
+
+    assert backend.signalled == 1
+    assert len(backend.requests) == 1
+    assert result.failure_code != _CODE
+
+
 def test_claude_adapter_late_race_keeps_every_number_honest(tmp_path, monkeypatch):
     """Case 2: the session really ran; the verifier vanished before it was used."""
 

@@ -13,10 +13,10 @@ capability-manifest bridge once validated a shape Core never emitted and
 reported a fully installed Core as empty. These tests fail loudly instead.
 
 The behaviour half drives the host logic through a fake loader that answers in
-the real contract's shape: `list_extensions` returns a plain list, `install` and
-`uninstall` return a result object read structurally, and kinds come from a
-records constant. Three invariants are load-bearing and each is tested on its
-own rather than implied by a happy path:
+the real contract's shape: `list_extensions` returns a plain list,
+`install_extension` and `uninstall_extension` return a result object read
+structurally, and kinds come from a records constant. Three invariants are
+load-bearing and each is tested on its own rather than implied by a happy path:
 
 * installation is host authority — never in a model-facing tool catalog and
   refused at the MCP dispatch boundary;
@@ -280,6 +280,55 @@ class TestRealCoreContract:
         assert result["code"] != core_tools.EXTENSION_CODE_CORE_UNAVAILABLE
         assert result["code"] != core_tools.EXTENSION_CODE_INVALID_RESULT
         assert result["ok"] is True
+
+    def test_mutation_is_denied_against_the_installed_core(self, monkeypatch):
+        """Reads stay live on a real Core while mutation is refused.
+
+        This is the pair the opt-in gate exists for, proven against the
+        installed Core rather than a fake: with `FLYTO_EXTENSIONS_INSTALL_ENABLED`
+        unset, `install`/`uninstall` answer `install_disabled` without ever
+        binding Core's plugin loader — so nothing on this host is installed or
+        removed by running the suite — while `list`/`kinds` still read the same
+        Core live in the same test.
+        """
+        monkeypatch.setattr(core_tools, "_extension_manager_checked", False)
+        monkeypatch.setattr(core_tools, "_cached_extension_manager", None)
+        _disable(monkeypatch)
+
+        real_binder = core_tools._get_core_extension_manager
+        consulted = []
+
+        def watched():
+            consulted.append(True)
+            return real_binder()
+
+        monkeypatch.setattr(core_tools, "_get_core_extension_manager", watched)
+
+        installed = asyncio.run(
+            core_tools.install_core_extension("flyto-modules-vision"),
+        )
+        removed = asyncio.run(
+            core_tools.uninstall_core_extension("flyto-modules-vision"),
+        )
+
+        for result, operation in ((installed, "install"), (removed, "uninstall")):
+            _assert_envelope(result, operation)
+            assert result["ok"] is False
+            assert result["code"] == core_tools.EXTENSION_CODE_INSTALL_DISABLED
+            assert result["install_enabled"] is False
+        # Core was never bound, so no installer could have been reached.
+        assert consulted == []
+
+        listed = asyncio.run(core_tools.list_core_extensions())
+        kinds = asyncio.run(core_tools.list_core_extension_kinds())
+
+        assert listed["ok"] is True
+        assert kinds["ok"] is True
+        assert kinds["kinds"]
+        assert listed["install_enabled"] is False
+        assert kinds["install_enabled"] is False
+        # The reads did reach Core; only the mutations were stopped short.
+        assert consulted == [True, True]
 
 
 # ---------------------------------------------------------------------------

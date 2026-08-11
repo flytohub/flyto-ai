@@ -443,7 +443,7 @@ class WorkspaceTools:
         # The single resolver, on the path that actually launches the process.
         # Preflight calls this same function, which is what makes its answer
         # binding rather than advisory.
-        executable = resolve_executable(argv[0])
+        executable = resolve_executable(argv[0], str(self.root))
         if not executable:
             raise WorkspaceViolation("executable is not installed")
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR") if key in os.environ}

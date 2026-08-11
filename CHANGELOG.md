@@ -597,6 +597,10 @@
   ancestor rather than resolving through it.
 
 ### Fixed
+- Repository-relative verification programs (for example
+  `.venv/bin/python`) are now resolved from the requested workspace in
+  preflight, both implementation adapters, and the real check runner, rather
+  than from the MCP supervisor's launch directory.
 - A multi-round coding rework no longer re-roots its Indexer plan each round.
   The pre-lane amends the exact prior contract, so a later round is not refused
   with `unplanned_diff` for files an earlier round legitimately opened.

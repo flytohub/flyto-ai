@@ -2125,6 +2125,43 @@ def test_admission_releases_its_lease_before_any_pump_can_dispatch(
 
 
 @needs_host
+def test_a_stale_round_finally_cannot_release_a_reacquired_job_lease(
+    tmp_path: Path,
+) -> None:
+    """A terminal publish and its round ``finally`` cannot ABA a new owner.
+
+    Terminal settlement deliberately releases the execution lease before the
+    worker future returns. Another operation may then acquire the same job
+    lease while the old round is still unwinding. The old round must release
+    only the token it acquired, never the replacement lease.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    service = _service(state, workspace, provider=_Provider(tag="aba"))
+    job_id = "job_" + "a" * 24
+    try:
+        assert service._claim_round(job_id) is True
+        old_token = service._round_lease_tokens[(job_id, threading.get_ident())]
+
+        # Mirrors the release performed by a terminal record publication.
+        service._release_job_lease(job_id)
+        assert service._acquire_job_lease(job_id) is True
+        replacement_token = service._job_lease_tokens[job_id]
+        assert replacement_token is not old_token
+
+        # Mirrors the old worker's later ``finally: _release_round(...)``.
+        service._release_round(job_id)
+        assert service._job_lease_tokens[job_id] is replacement_token
+        assert job_id in service._job_leases
+    finally:
+        service._release_job_lease(job_id)
+        service.close()
+
+
+@needs_host
 def test_a_live_running_round_cannot_be_stolen_by_another_instance(
     tmp_path: Path,
 ) -> None:

@@ -1336,6 +1336,8 @@ class CodingService:
         self._lock = threading.RLock()
         self._state_lock_depth = 0
         self._job_leases: Dict[str, int] = {}
+        self._job_lease_tokens: Dict[str, object] = {}
+        self._round_lease_tokens: Dict[Tuple[str, int], object] = {}
         self._resume: Dict[Tuple[str, str], CodingTaskRequest] = {}
         self._pending: set[Future[Any]] = set()
         self._workspace_locks: Dict[str, threading.Lock] = {}
@@ -1447,6 +1449,8 @@ class CodingService:
         self._status: Optional[RouteStatusPublisher] = None
         self._mission = None
         self._job_leases: Dict[str, int] = {}
+        self._job_lease_tokens: Dict[str, object] = {}
+        self._round_lease_tokens: Dict[Tuple[str, int], object] = {}
         self._pending: set[Future[Any]] = set()
         self._lock_fd = -1
         self._authority_fd = -1
@@ -4511,10 +4515,18 @@ class CodingService:
         """
 
         with self._lock:
-            return self._acquire_job_lease(job_id)
+            if not self._acquire_job_lease(job_id):
+                return False
+            key = (job_id, threading.get_ident())
+            self._round_lease_tokens[key] = self._job_lease_tokens[job_id]
+            return True
 
     def _release_round(self, job_id: str) -> None:
         with self._lock:
+            key = (job_id, threading.get_ident())
+            token = self._round_lease_tokens.pop(key, None)
+            if token is None or self._job_lease_tokens.get(job_id) is not token:
+                return
             self._release_job_lease(job_id)
 
     async def _run_round(
@@ -6828,10 +6840,12 @@ class CodingService:
                 os.close(fd)
                 return False
         self._job_leases[job_id] = fd
+        self._job_lease_tokens[job_id] = object()
         return True
 
     def _release_job_lease(self, job_id: str) -> None:
         fd = self._job_leases.pop(job_id, None)
+        self._job_lease_tokens.pop(job_id, None)
         if fd is None:
             return
         if fcntl is not None:

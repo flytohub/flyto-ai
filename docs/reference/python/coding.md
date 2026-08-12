@@ -2886,9 +2886,9 @@ Bounded asynchronous facade; provider credentials never enter a job.
 | `_public_receipt(tenant_ref: str, record: Mapping[str, Any]) -> CodingJobReceipt` | internal | Project one job, including whether anything is left to continue. | [`flyto_ai/coding/service.py:7222`](../../../flyto_ai/coding/service.py#L7222) |
 | `_receipt(record: Mapping[str, Any]) -> CodingJobReceipt` | internal | Internal `_receipt` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7252`](../../../flyto_ai/coding/service.py#L7252) |
 | `_reconcile_interrupted_jobs() -> None` | internal | Internal `_reconcile_interrupted_jobs` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7296`](../../../flyto_ai/coding/service.py#L7296) |
-| `_reclaim_mission_item(path: Path, record: Mapping[str, Any]) -> None` | internal | Return one interrupted job's work item to the queue, on proof. | [`flyto_ai/coding/service.py:7358`](../../../flyto_ai/coding/service.py#L7358) |
-| `_reconcile_continuation_claims() -> None` | internal | Resolve authorities whose claiming job died before it could settle. | [`flyto_ai/coding/service.py:7393`](../../../flyto_ai/coding/service.py#L7393) |
-| `_force_settle(authority: ContinuationAuthority) -> None` | internal | Settle forward. | [`flyto_ai/coding/service.py:7456`](../../../flyto_ai/coding/service.py#L7456) |
+| `_reclaim_mission_item(path: Path, record: Mapping[str, Any]) -> None` | internal | Return one interrupted job's work item to the queue, on proof. | [`flyto_ai/coding/service.py:7374`](../../../flyto_ai/coding/service.py#L7374) |
+| `_reconcile_continuation_claims() -> None` | internal | Resolve authorities whose claiming job died before it could settle. | [`flyto_ai/coding/service.py:7409`](../../../flyto_ai/coding/service.py#L7409) |
+| `_force_settle(authority: ContinuationAuthority) -> None` | internal | Settle forward. | [`flyto_ai/coding/service.py:7472`](../../../flyto_ai/coding/service.py#L7472) |
 
 ## `flyto_ai.coding.stack`
 

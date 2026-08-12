@@ -426,7 +426,15 @@ def test_a_legacy_request_is_unchanged(tmp_path: Path) -> None:
         "message": "do the work", "working_dir": str(tmp_path),
     })
     assert request.mission is None
+    assert request.max_rounds == 100
     assert dataclasses.asdict(request)["mission"] is None
+
+    explicitly_bounded = request_from_mapping({
+        "message": "do the bounded work",
+        "working_dir": str(tmp_path),
+        "max_rounds": 7,
+    })
+    assert explicitly_bounded.max_rounds == 7
 
 
 def test_a_request_may_carry_a_mission(tmp_path: Path) -> None:

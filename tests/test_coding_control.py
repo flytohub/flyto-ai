@@ -58,6 +58,7 @@ def test_contract_is_versioned_and_resume_requires_thread(tmp_path):
     request = CodingTaskRequest(message="fix", working_dir=str(tmp_path))
     assert request.sandbox_mode == SandboxMode.WORKSPACE_WRITE
     assert request.approval_policy == ApprovalPolicy.NEVER
+    assert request.max_rounds == 100
 
 
 def test_thread_store_is_append_only_redacted_and_workspace_bound(tmp_path):

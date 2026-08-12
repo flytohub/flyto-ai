@@ -974,13 +974,13 @@ Provider-neutral request used by every coding backend.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingTaskRequest`; the linked source is authoritative. | [`flyto_ai/coding/contracts.py:1578`](../../../flyto_ai/coding/contracts.py#L1578) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingTaskRequest`; the linked source is authoritative. | [`flyto_ai/coding/contracts.py:1581`](../../../flyto_ai/coding/contracts.py#L1581) |
 
 ### `CheckResult` (public)
 
 `class CheckResult`
 
-Source: [`flyto_ai/coding/contracts.py:1648`](../../../flyto_ai/coding/contracts.py#L1648)
+Source: [`flyto_ai/coding/contracts.py:1651`](../../../flyto_ai/coding/contracts.py#L1651)
 
 Public `CheckResult` implementation on this module; the linked source is authoritative.
 
@@ -988,14 +988,14 @@ Public `CheckResult` implementation on this module; the linked source is authori
 
 `class CapabilityStatus`
 
-Source: [`flyto_ai/coding/contracts.py:1660`](../../../flyto_ai/coding/contracts.py#L1660)
+Source: [`flyto_ai/coding/contracts.py:1663`](../../../flyto_ai/coding/contracts.py#L1663)
 
 Public `CapabilityStatus` implementation on this module; the linked source is authoritative.
 
 ### `safe_blockers` (public)
 
 `safe_blockers(values: Any) -> Tuple[str, ...]`
-Source: [`flyto_ai/coding/contracts.py:1674`](../../../flyto_ai/coding/contracts.py#L1674)
+Source: [`flyto_ai/coding/contracts.py:1677`](../../../flyto_ai/coding/contracts.py#L1677)
 
 Bound and validate check names for a durable or public projection.
 
@@ -1003,27 +1003,27 @@ Bound and validate check names for a durable or public projection.
 
 `class CodingTaskResult`
 
-Source: [`flyto_ai/coding/contracts.py:1696`](../../../flyto_ai/coding/contracts.py#L1696)
+Source: [`flyto_ai/coding/contracts.py:1699`](../../../flyto_ai/coding/contracts.py#L1699)
 
 Public `CodingTaskResult` implementation on this module; the linked source is authoritative.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingTaskResult`; the linked source is authoritative. | [`flyto_ai/coding/contracts.py:1721`](../../../flyto_ai/coding/contracts.py#L1721) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingTaskResult`; the linked source is authoritative. | [`flyto_ai/coding/contracts.py:1724`](../../../flyto_ai/coding/contracts.py#L1724) |
 
 ### `CodingJobReceipt` (public)
 
 `class CodingJobReceipt`
 
-Source: [`flyto_ai/coding/contracts.py:1726`](../../../flyto_ai/coding/contracts.py#L1726)
+Source: [`flyto_ai/coding/contracts.py:1729`](../../../flyto_ai/coding/contracts.py#L1729)
 
 Secret-free snapshot returned by HTTP and MCP service facades.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `job_terminal() -> bool` | public | Whether this *job* will never change state again without a new job. | [`flyto_ai/coding/contracts.py:1787`](../../../flyto_ai/coding/contracts.py#L1787) |
-| `failure_semantics() -> Tuple[str, bool, Tuple[str, ...]]` | public | Phase, retryability and required actions for this job's outcome. | [`flyto_ai/coding/contracts.py:1803`](../../../flyto_ai/coding/contracts.py#L1803) |
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingJobReceipt`; the linked source is authoritative. | [`flyto_ai/coding/contracts.py:1842`](../../../flyto_ai/coding/contracts.py#L1842) |
+| `job_terminal() -> bool` | public | Whether this *job* will never change state again without a new job. | [`flyto_ai/coding/contracts.py:1790`](../../../flyto_ai/coding/contracts.py#L1790) |
+| `failure_semantics() -> Tuple[str, bool, Tuple[str, ...]]` | public | Phase, retryability and required actions for this job's outcome. | [`flyto_ai/coding/contracts.py:1806`](../../../flyto_ai/coding/contracts.py#L1806) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingJobReceipt`; the linked source is authoritative. | [`flyto_ai/coding/contracts.py:1845`](../../../flyto_ai/coding/contracts.py#L1845) |
 
 ## `flyto_ai.coding.emergency`
 

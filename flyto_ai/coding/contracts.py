@@ -1553,7 +1553,10 @@ class CodingTaskRequest:
     checks: Tuple[CheckSpec, ...] = ()
     capabilities: Tuple[CapabilitySpec, ...] = ()
     max_attempts: int = 3
-    max_rounds: int = 30
+    # Keep the public coding request aligned with the Claude adapter's bounded
+    # default. A transport-level 30 here silently overrode the adapter's 100
+    # and stranded complete implementations as turn_limit_exceeded.
+    max_rounds: int = 100
     require_changes: bool = True
     config_path: str = ".flyto/coding.yaml"
     command_sandbox_image: str = "python:3.12-slim"

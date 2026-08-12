@@ -1138,7 +1138,7 @@ def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:
         thread_id=str(value["thread_id"]) if value.get("thread_id") is not None else None,
         resume=bool(value.get("resume", False)),
         max_attempts=int(value.get("max_attempts", 3)),
-        max_rounds=int(value.get("max_rounds", 30)),
+        max_rounds=int(value.get("max_rounds", 100)),
         require_changes=bool(value.get("require_changes", True)),
         mission=mission,
     )

@@ -20,6 +20,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -1157,6 +1158,56 @@ def test_queued_work_survives_the_submitter_and_is_run_by_another_worker(
             CodingMissionProjection.from_mapping(settled.mission or {}).work_item_id
         ]
         assert item.status == STATUS_CLOSED and item.attempts == 1
+    finally:
+        worker.close()
+
+
+@needs_host
+def test_queued_job_reclaims_a_dispatch_lost_before_the_record_advanced(
+    tmp_path: Path,
+) -> None:
+    """A crash between mission dispatch and job transition cannot strand work."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        submitter = _service(state, workspace, provider=_Provider(tag="gone"))
+        try:
+            receipt = submitter.submit(_TENANT, "key-dispatch-crash", _request(workspace))
+            assert submitter.get(_TENANT, receipt.job_id).state is CodingJobState.QUEUED
+        finally:
+            submitter.close()
+
+    # Reproduce the exact durable split: MissionStore committed `dispatched`,
+    # then the process vanished before CodingService could write `running`.
+    script = (
+        "import os\n"
+        "from flyto_ai.coding.mission_runtime import CodingMissionRuntime\n"
+        "runtime = CodingMissionRuntime({!r}, worker='w-crashed')\n"
+        "with runtime.dispatch() as work:\n"
+        "    assert work is not None\n"
+        "    os._exit(0)\n"
+    ).format(str(state))
+    subprocess.run([sys.executable, "-c", script], check=True)
+    stranded = _items(state)
+    work_item_id = CodingMissionProjection.from_mapping(
+        receipt.mission or {},
+    ).work_item_id
+    item = stranded[work_item_id]
+    assert item.status == STATUS_DISPATCHED
+    assert item.attempts == 1
+
+    provider = _Provider(tag="recovered")
+    worker = _service(state, workspace, provider=provider)
+    try:
+        settled = _wait(worker, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        assert provider.rounds == 1
+        recovered = _items(state)[item.work_item_id]
+        assert recovered.status == STATUS_CLOSED
+        assert recovered.attempts == 2
     finally:
         worker.close()
 

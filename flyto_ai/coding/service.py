@@ -7311,7 +7311,23 @@ class CodingService:
                         # exited" indistinguishable from "the round died", and
                         # it threw away work nobody had begun.
                         if self._may_execute(record):
-                            self._reclaimed += 1
+                            projection = self._record_projection(record)
+                            item = (
+                                self._mission.work_item(projection.work_item_id)
+                                if projection is not None else None
+                            )
+                            if item is not None and item.status == MISSION_STATUS_DISPATCHED:
+                                # A process can die after MissionStore commits
+                                # the dispatch but before the coding record is
+                                # advanced from queued.  That is still queued
+                                # work, but the scheduler will not offer it
+                                # again until its now-free execution lease is
+                                # reclaimed.  Use the same proof-based path as
+                                # interrupted running jobs; a live holder is
+                                # never stolen and therefore schedules no pump.
+                                self._reclaim_mission_item(path, record)
+                            else:
+                                self._reclaimed += 1
                         continue
                     if record.get("state") in _EXECUTING_JOB_STATES:
                         job_id = str(record.get("job_id") or "")

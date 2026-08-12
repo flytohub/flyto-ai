@@ -12,3 +12,4 @@ Scripts are operator tools, not stable Python APIs. Review side effects and requ
 | [`run_blueprint_benchmark.py`](../../scripts/run_blueprint_benchmark.py) | Run the trusted Flyto2 host for Blueprint benchmark evidence. |
 | [`run_blueprint_benchmark_matrix.py`](../../scripts/run_blueprint_benchmark_matrix.py) | Run the real multi-model Flyto2 Blueprint benchmark matrix. |
 | [`run_blueprint_benchmark_v3.py`](../../scripts/run_blueprint_benchmark_v3.py) | Run the real-workload Flyto2 Blueprint v3 benchmark host. |
+| [`stack_lock.py`](../../scripts/stack_lock.py) | Validate and project the one cross-repository dependency lock. |

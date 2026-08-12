@@ -127,7 +127,8 @@ from flyto_ai.coding.workspace_authority import (
     WorkspaceRootAuthority,
     canonical_workspace_root,
     default_registry_root,
-    state_root_has_open_work,
+    state_root_open_workspace_roots,
+    workspace_digest,
 )
 from flyto_ai.coding.preflight import (
     FAILURE_PHASE_PREFLIGHT,
@@ -166,8 +167,8 @@ _PROJECTABLE_TOKENS = frozenset(PREFLIGHT_ACTIONS) | frozenset(JOB_FAILURE_ACTIO
 _IDENTIFIER_DETAIL_KEYS = frozenset({"verification_blockers"})
 _BACKEND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ALLOWED_REQUEST_FIELDS = frozenset({
-    "message", "working_dir", "thread_id", "resume", "max_attempts",
-    "max_rounds", "require_changes",
+    "message", "working_dir", "repository_roots", "owner_ref", "thread_id",
+    "resume", "max_attempts", "max_rounds", "require_changes",
 })
 #: What a public payload may *decode*. Deliberately wider than
 #: `_ALLOWED_REQUEST_FIELDS`, which is also the resume-envelope field list: the
@@ -1118,9 +1119,22 @@ def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:
         mission = CodingMissionEnvelope.from_mapping(mission_value)
     else:
         mission = None
+    repositories_value = value.get("repository_roots", ())
+    if (
+        isinstance(repositories_value, (str, bytes))
+        or not isinstance(repositories_value, (list, tuple))
+        or any(not isinstance(item, str) for item in repositories_value)
+        or ("repository_roots" in value and not 1 <= len(repositories_value) <= 16)
+    ):
+        raise ValueError("repository_roots must be an array of paths")
+    owner_ref = value.get("owner_ref")
+    if owner_ref is not None and not isinstance(owner_ref, str):
+        raise ValueError("owner_ref must be a string")
     return CodingTaskRequest(
         message=str(value.get("message", "")),
         working_dir=str(value.get("working_dir", "")),
+        repository_roots=tuple(repositories_value),
+        owner_ref=owner_ref,
         thread_id=str(value["thread_id"]) if value.get("thread_id") is not None else None,
         resume=bool(value.get("resume", False)),
         max_attempts=int(value.get("max_attempts", 3)),
@@ -1660,8 +1674,15 @@ class CodingService:
                 # here, exactly as it would block a fresh admission. An idle
                 # restart (no durable open work) takes nothing and stays
                 # unowned, which is what lets other state roots proceed.
-                if state_root_has_open_work(self.state_root):
-                    self._ensure_workspace_authority_locked()
+                open_roots = state_root_open_workspace_roots(self.state_root)
+                if open_roots is None:
+                    # Unattributable legacy/corrupt state stays conservative:
+                    # own the configured boundary until an operator repairs it.
+                    self._ensure_workspace_authority_locked(self.workspace_roots)
+                elif open_roots:
+                    for repository in open_roots:
+                        self._assert_workspace(str(repository))
+                    self._ensure_workspace_authority_locked(open_roots)
                 self._publish_status({})
                 self._reconcile_interrupted_jobs()
                 # Reconciliation may have settled the last interrupted job, in
@@ -1685,6 +1706,7 @@ class CodingService:
         if not _SAFE_ID.fullmatch(idempotency_key):
             raise ValueError("idempotency_key must be a safe identifier")
         self._assert_workspace(request.working_dir)
+        request = self._with_repository_authority(request)
         request = self._with_startup_authority(request)
         request_digest = self._request_digest(request)
         tenant_dir = self._tenant_dir(tenant_ref)
@@ -2011,7 +2033,7 @@ class CodingService:
             # unownable tree leaves no job, no claim, no continuation and no
             # status behind. It runs after every cheap validation gate above so
             # a bad request is still rejected without touching the registry.
-            self._ensure_workspace_authority_locked()
+            self._ensure_workspace_authority_locked(request.repository_roots)
             now = time.time()
             job_id = "job_{}".format(uuid.uuid4().hex[:24])
             # The claim is a compare-and-swap against the durable journal tail,
@@ -2029,6 +2051,11 @@ class CodingService:
                 "request_sha256": request_digest,
                 "workspace_sha256": hashlib.sha256(request.working_dir.encode()).hexdigest(),
                 "working_dir": request.working_dir,
+                "repository_roots": list(request.repository_roots),
+                "repository_digests": [
+                    workspace_digest(root) for root in request.repository_roots
+                ],
+                "owner_ref": request.owner_ref or "",
                 "thread_id": "",
                 "evidence_sha256": "",
                 "result": None,
@@ -2076,6 +2103,12 @@ class CodingService:
                 "execution_authority": self._execution_authority(),
             }
             try:
+                # The mission placement is durable.  Refuse a competing repo
+                # claim before creating it, while the state guard makes this
+                # observation and the later claim one atomic admission.  The
+                # create path rechecks all members before writing any claim.
+                for repository in request.repository_roots:
+                    self._assert_workspace_available(job_id, repository)
                 # Every job gets a mission. A caller that named one has its
                 # immutable contract honoured and validated; a caller that named
                 # none gets the coding adapter's synthesized contract, which is
@@ -2101,11 +2134,12 @@ class CodingService:
                 # rounds remain serialized by the per-round workspace lock,
                 # which is the behaviour that flow has always had.
                 if self.require_codex_audit:
-                    self._create_workspace_claim(
-                        tenant_ref, job_id, request.working_dir, record["state"],
+                    self._create_repository_claims(
+                        tenant_ref, job_id, request.repository_roots, record["state"],
                     )
                 else:
-                    self._assert_workspace_available(job_id, request.working_dir)
+                    for repository in request.repository_roots:
+                        self._assert_workspace_available(job_id, repository)
                 self._write_json(tenant_dir / "jobs" / (job_id + ".json"), record)
                 self._publish_status(record)
                 self._write_json(
@@ -2123,7 +2157,9 @@ class CodingService:
                     tenant_ref, job_id, admission.work_item_id, rework=False,
                 )
             except BaseException:
-                self._release_workspace_claim(job_id, request.working_dir)
+                self._release_repository_claims(
+                    job_id, {"repository_roots": list(request.repository_roots)},
+                )
                 self._discard_resume(tenant_ref, job_id)
                 # A job that never came into existence never consumed a
                 # generation. Returning the authority to `open` is safe because
@@ -2209,17 +2245,16 @@ class CodingService:
 
         if not self.require_codex_audit:
             return
-        workspace = str(record.get("working_dir") or "")
         job_id = str(record.get("job_id") or "")
-        if not _JOB_ID.fullmatch(job_id) or not workspace:
+        if not _JOB_ID.fullmatch(job_id):
             # A record that cannot even name its own job or worktree cannot
             # prove ownership of one. Returning here would let an unidentified
             # record be audited without any claim at all.
             raise WorkspaceClaimUnresolved(
                 "the coding job record cannot identify its own workspace claim",
             )
-        self._reassert_workspace_claim(
-            tenant_ref, job_id, workspace, str(record.get("state")),
+        self._reassert_repository_claims(
+            tenant_ref, job_id, record, str(record.get("state")),
         )
 
     def _with_startup_authority(self, request: CodingTaskRequest) -> CodingTaskRequest:
@@ -2695,7 +2730,7 @@ class CodingService:
             finally:
                 self._release_job_lease(job_id)
             self._discard_resume(tenant_ref, job_id)
-            self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
+            self._release_repository_claims(job_id, record)
             # An abandoned predecessor leaves nothing to continue. Settling here
             # is what makes a later resume of its session refuse rather than
             # re-enter a conversation whose operator has walked away from it.
@@ -2951,7 +2986,7 @@ class CodingService:
         # and releasing a claim this job no longer holds are both no-ops, so a
         # retried settlement cannot release somebody else's later claim.
         self._discard_resume(tenant_ref, job_id)
-        self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
+        self._release_repository_claims(job_id, record)
 
     @staticmethod
     def _rework_message(original: str, findings: Sequence[CodingAuditFinding]) -> str:
@@ -3072,6 +3107,9 @@ class CodingService:
                 workspace_sha256=self._workspace_digest(request.working_dir),
                 envelope=request.mission,
                 message=request.message,
+                repository_sha256s=tuple(
+                    workspace_digest(root) for root in request.repository_roots
+                ),
             )
         except MissionRouteError as exc:
             raise MissionRouteRefused(exc) from exc
@@ -3099,6 +3137,7 @@ class CodingService:
                 ),
                 projection=projection,
                 round_index=int(rework_count),
+                repository_sha256s=self._record_repository_digests(record),
             )
         except MissionRouteError as exc:
             raise MissionRouteRefused(exc) from exc
@@ -3566,8 +3605,10 @@ class CodingService:
             raise
         self._authority_fd = descriptor
 
-    def _join_workspace_root_authority(self, state_root: Path) -> None:
-        """Own every configured workspace root host-globally, or refuse.
+    def _join_workspace_root_authority(
+        self, state_root: Path, workspace_roots: Sequence[Any],
+    ) -> None:
+        """Atomically add one job's repository set to this process's holds.
 
         Translation only: the registry raises its own bounded codes so it can
         stay independent of this service, and they are mapped here onto the
@@ -3576,10 +3617,12 @@ class CodingService:
         without naming the tree.
         """
 
-        authority = WorkspaceRootAuthority(self._workspace_registry_root)
+        authority = self._workspace_root_authority or WorkspaceRootAuthority(
+            self._workspace_registry_root,
+        )
         try:
             authority.join(
-                state_root=state_root, workspace_roots=self.workspace_roots,
+                state_root=state_root, workspace_roots=workspace_roots,
             )
         except WorkspaceAuthorityConflict as exc:
             raise CodingWorkspaceAuthorityConflict(str(exc)) from exc
@@ -3593,8 +3636,10 @@ class CodingService:
             raise CodingWorkspaceAuthorityUnavailable(str(exc)) from exc
         self._workspace_root_authority = authority
 
-    def _ensure_workspace_authority_locked(self) -> None:
-        """Own the configured trees host-globally if not already owning them.
+    def _ensure_workspace_authority_locked(
+        self, workspace_roots: Sequence[Any],
+    ) -> None:
+        """Atomically own the repositories one durable job can touch.
 
         The caller must hold this state root's cross-process guard, so two
         peers of the same state root cannot both be mid-acquisition. Idempotent
@@ -3612,9 +3657,7 @@ class CodingService:
 
         if self._release_valve:
             return
-        if self._workspace_root_authority is not None:
-            return
-        self._join_workspace_root_authority(self.state_root)
+        self._join_workspace_root_authority(self.state_root, workspace_roots)
         self._start_workspace_authority_monitor_locked()
 
     def _start_workspace_authority_monitor_locked(self) -> None:
@@ -3658,7 +3701,7 @@ class CodingService:
                 continue
 
     def _release_workspace_authority_if_idle_locked(self) -> None:
-        """Give the trees back once this state root has no durable open work.
+        """Retain exactly the repo leases durable open work still needs.
 
         The caller holds the cross-process guard, and the "open work" question
         is answered from *durable* state shared by every peer -- non-terminal
@@ -3677,10 +3720,20 @@ class CodingService:
             return
         if self._workspace_root_authority is None:
             return
-        if state_root_has_open_work(self.state_root):
+        required = state_root_open_workspace_roots(self.state_root)
+        if required is None:
+            # An ambiguous record can never authorize release.
             return
-        self._workspace_root_authority.release()
-        self._workspace_root_authority = None
+        try:
+            for repository in required:
+                self._assert_workspace(str(repository))
+        except WorkspaceDenied:
+            # A record outside startup authority is corruption, never release
+            # authority on its strength.
+            return
+        self._workspace_root_authority.retain(required)
+        if not self._workspace_root_authority.held_digests:
+            self._workspace_root_authority = None
 
     def _acquire_state_root_authority_exclusively(self) -> None:
         """Take the whole state root for one subtractive host release, or refuse.
@@ -4100,7 +4153,7 @@ class CodingService:
         )
         self._discard_resume(tenant_ref, job_id)
         self._reclaim_mission_item(path, record)
-        self._release_workspace_claim(job_id, str(record.get("working_dir") or ""))
+        self._release_repository_claims(job_id, record)
 
     def _may_execute(self, record: Mapping[str, Any]) -> bool:
         """Whether this service shares the authority this job was admitted under.
@@ -6342,6 +6395,73 @@ class CodingService:
             if job_id:
                 self._release_job_lease(job_id)
 
+    def _with_repository_authority(
+        self, request: CodingTaskRequest,
+    ) -> CodingTaskRequest:
+        """Resolve and validate the atomic repository set for one job.
+
+        The default is the nearest real Git boundary containing the working
+        directory.  This is what lets ``flyto-code`` and ``flyto-engine`` run
+        concurrently even though one configured parent contains both.  A
+        caller may declare several repositories for a cross-repo change, but
+        every member must be a real, non-overlapping Git checkout under the
+        startup-configured workspace boundary.  The set is then persisted by
+        value and reacquired on restart; it is never inferred a second time.
+
+        A non-Git workspace keeps the legacy conservative fallback of claiming
+        its exact working directory.  This preserves existing library users
+        and fixtures without turning absence of Git metadata into a broader or
+        narrower claim than the request named.
+        """
+
+        working = Path(request.working_dir).resolve()
+        if request.repository_roots:
+            repositories = tuple(
+                sorted({Path(value).resolve() for value in request.repository_roots})
+            )
+            if len(repositories) != len(request.repository_roots):
+                raise WorkspaceDenied("repository_roots must be unique")
+            for repository in repositories:
+                self._assert_workspace(str(repository))
+                marker = repository / ".git"
+                if marker.is_symlink() or not (marker.is_dir() or marker.is_file()):
+                    raise WorkspaceDenied(
+                        "repository_roots must name Git repository boundaries",
+                    )
+            for index, left in enumerate(repositories):
+                for right in repositories[index + 1:]:
+                    if left in right.parents or right in left.parents:
+                        raise WorkspaceDenied(
+                            "repository_roots must not overlap",
+                        )
+            if not (
+                any(working == root or root in working.parents for root in repositories)
+                or all(working == root or working in root.parents for root in repositories)
+            ):
+                raise WorkspaceDenied(
+                    "working_dir must contain or be contained by the repository set",
+                )
+        else:
+            repositories = ()
+            current = working
+            while True:
+                marker = current / ".git"
+                if not marker.is_symlink() and (marker.is_dir() or marker.is_file()):
+                    repositories = (current,)
+                    break
+                if current.parent == current or not any(
+                    current.parent == root or root in current.parent.parents
+                    for root in self.workspace_roots
+                ):
+                    break
+                current = current.parent
+            if not repositories:
+                repositories = (working,)
+        return dataclasses.replace(
+            request,
+            repository_roots=tuple(str(path) for path in repositories),
+        )
+
     def _assert_workspace(self, workspace: str) -> None:
         target = Path(workspace).resolve()
         if not any(target == root or root in target.parents for root in self.workspace_roots):
@@ -6370,6 +6490,54 @@ class CodingService:
     @staticmethod
     def _workspace_digest(workspace: str) -> str:
         return hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()
+
+    def _record_repository_roots(
+        self, record: Mapping[str, Any],
+    ) -> Tuple[str, ...]:
+        """Decode the exact private repo set, with a v1 workspace fallback."""
+
+        values = record.get("repository_roots")
+        if values is None:
+            working = record.get("working_dir")
+            if not isinstance(working, str) or not working:
+                raise WorkspaceClaimUnresolved(
+                    "the coding job record cannot identify its repository claims",
+                )
+            return (str(Path(working).resolve()),)
+        if (
+            not isinstance(values, list)
+            or not 1 <= len(values) <= 16
+            or any(not isinstance(value, str) or not value for value in values)
+        ):
+            raise WorkspaceClaimUnresolved(
+                "the coding job record has an invalid repository claim set",
+            )
+        roots = tuple(sorted({str(Path(value).resolve()) for value in values}))
+        if len(roots) != len(values):
+            raise WorkspaceClaimUnresolved(
+                "the coding job record has a duplicate repository claim",
+            )
+        return roots
+
+    def _record_repository_digests(
+        self, record: Mapping[str, Any],
+    ) -> Tuple[str, ...]:
+        """Re-prove the persisted path/digest binding for one repo set."""
+
+        roots = self._record_repository_roots(record)
+        expected = tuple(self._workspace_digest(root) for root in roots)
+        values = record.get("repository_digests")
+        if values is None and record.get("repository_roots") is None:
+            return expected
+        if (
+            not isinstance(values, list)
+            or tuple(values) != expected
+            or any(not isinstance(value, str) or not _SHA256_RE.fullmatch(value) for value in values)
+        ):
+            raise WorkspaceClaimUnresolved(
+                "the coding job record cannot prove its repository claim digests",
+            )
+        return expected
 
     def _workspace_claim_path(self, workspace: str) -> Path:
         return self.state_root / "locks" / "workspaces" / (
@@ -6495,12 +6663,16 @@ class CodingService:
             # The record's own two spellings of its workspace must agree before
             # either is trusted to answer for a claim.
             return False
-        working_dir = str(record.get("working_dir") or "")
-        if not working_dir:
-            return False
         try:
-            return self._workspace_digest(working_dir) == digest
-        except (OSError, ValueError, RuntimeError):
+            roots = tuple(Path(root) for root in self._record_repository_roots(record))
+            working = Path(str(record.get("working_dir") or "")).resolve()
+            if not (
+                any(working == root or root in working.parents for root in roots)
+                or all(working == root or working in root.parents for root in roots)
+            ):
+                return False
+            return digest in self._record_repository_digests(record)
+        except (OSError, ValueError, RuntimeError, WorkspaceClaimUnresolved):
             return False
 
     def _assert_workspace_available(self, job_id: str, workspace: str) -> str:
@@ -6540,6 +6712,31 @@ class CodingService:
         now = time.time()
         self._write_claim(tenant_ref, job_id, workspace, state, claimed_at=now, now=now)
 
+    def _create_repository_claims(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        repositories: Sequence[str],
+        state: str,
+    ) -> None:
+        """Atomically claim a job's whole repo set under the state guard."""
+
+        for repository in repositories:
+            self._assert_workspace_available(job_id, repository)
+        claimed = []
+        now = time.time()
+        try:
+            for repository in repositories:
+                self._write_claim(
+                    tenant_ref, job_id, repository, state,
+                    claimed_at=now, now=now,
+                )
+                claimed.append(repository)
+        except BaseException:
+            for repository in claimed:
+                self._release_workspace_claim(job_id, repository)
+            raise
+
     def _reassert_workspace_claim(
         self, tenant_ref: str, job_id: str, workspace: str, state: str,
     ) -> None:
@@ -6562,6 +6759,25 @@ class CodingService:
             tenant_ref, job_id, workspace, state,
             claimed_at=float(claim["claimed_at"]), now=time.time(),
         )
+
+    def _reassert_repository_claims(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+        state: str,
+    ) -> None:
+        """Require every member of the persisted set to remain this job's."""
+
+        repositories = self._record_repository_roots(record)
+        # Prove the complete set before restating any member.  If one vanished
+        # or changed owner, no partial refresh can make the set look whole.
+        for repository in repositories:
+            self._require_owned_claim(tenant_ref, job_id, repository)
+        for repository in repositories:
+            self._reassert_workspace_claim(
+                tenant_ref, job_id, repository, state,
+            )
 
     def _require_owned_claim(
         self, tenant_ref: str, job_id: str, workspace: str,
@@ -6632,6 +6848,18 @@ class CodingService:
             return
         if str(claim["job_id"]) == job_id:
             self._discard_path(path)
+
+    def _release_repository_claims(
+        self, job_id: str, record: Mapping[str, Any],
+    ) -> None:
+        """Release exactly this job's valid repo claims, never a foreign set."""
+
+        try:
+            repositories = self._record_repository_roots(record)
+        except WorkspaceClaimUnresolved:
+            return
+        for repository in repositories:
+            self._release_workspace_claim(job_id, repository)
 
     def _sweep_workspace_claims(self) -> None:
         """Drop only the claims whose owning record proves the job has settled.
@@ -6929,8 +7157,7 @@ class CodingService:
         record["updated_at"] = time.time()
         job_id = str(record.get("job_id") or "")
         state = str(record.get("state"))
-        workspace = str(record.get("working_dir") or "")
-        claims = bool(job_id and workspace and self.require_codex_audit)
+        claims = bool(job_id and self.require_codex_audit)
         # Ownership is asserted *before* the record is published, inside the
         # guard the caller already holds. A claim-owned state is a promise that
         # this job exclusively owns the worktree, so a transition that cannot
@@ -6942,8 +7169,8 @@ class CodingService:
             # reassertion, never a creation: only `submit` may claim a free
             # worktree, so a live job whose claim vanished fails closed instead
             # of silently taking the tree back.
-            self._reassert_workspace_claim(
-                path.parent.parent.name, job_id, workspace, state,
+            self._reassert_repository_claims(
+                path.parent.parent.name, job_id, record, state,
             )
         self._write_json(path, record)
         self._publish_status(record)
@@ -6951,7 +7178,7 @@ class CodingService:
         # removes this job's own valid claim; a foreign or unresolved one is
         # left for a host operator.
         if claims and state not in _CLAIM_OWNED_STATES:
-            self._release_workspace_claim(job_id, workspace)
+            self._release_repository_claims(job_id, record)
         # Publish the settled record before releasing its execution lease.
         # A second process therefore cannot observe an auditable/terminal
         # state while the previous round still appears to own the job.

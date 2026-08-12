@@ -25,10 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from flyto_ai.coding.service import (
-    CodingService,
-    CodingWorkspaceAuthorityConflict,
-)
+from flyto_ai.coding.service import CodingService
 from flyto_ai.coding.workspace_authority import (
     WORKSPACE_AUTHORITY_VERSION,
     WorkspaceAuthorityConflict,
@@ -266,6 +263,72 @@ def test_a_terminal_owner_is_recovered_without_editing_json(tmp_path: Path) -> N
         assert entry["state_root"] == str(other_root)
     finally:
         successor.release()
+
+
+def test_inactive_legacy_parent_does_not_serialize_new_repo_set_children(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path)
+    parent = _tree(tmp_path, "flytohub")
+    alpha = _tree(parent, "flyto-code")
+    beta = _tree(parent, "flyto-engine")
+    owner_root = _tree(tmp_path, "owner-state")
+    other_root = _tree(tmp_path, "other-state")
+
+    historical = WorkspaceRootAuthority(registry)
+    historical.join(state_root=owner_root, workspace_roots=(parent,))
+    historical.release()
+
+    jobs = owner_root / "tenants" / "tenant-a" / "jobs"
+    jobs.mkdir(parents=True)
+    (jobs / "job_a.json").write_text(json.dumps({
+        "job_id": "job_" + "a" * 24,
+        "state": "running",
+        "working_dir": str(alpha),
+        "repository_roots": [str(alpha)],
+        "repository_digests": [workspace_digest(alpha)],
+    }), encoding="utf-8")
+    current = WorkspaceRootAuthority(registry)
+    current.join(state_root=owner_root, workspace_roots=(alpha,))
+
+    parallel = WorkspaceRootAuthority(registry)
+    try:
+        parallel.join(state_root=other_root, workspace_roots=(beta,))
+        assert parallel.held_digests == [workspace_digest(beta)]
+    finally:
+        parallel.release()
+        current.release()
+
+
+def test_incremental_repo_set_failure_keeps_old_holds_and_takes_no_partial_set(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path)
+    alpha = _tree(tmp_path, "alpha")
+    beta = _tree(tmp_path, "beta")
+    blocked = _tree(tmp_path, "blocked")
+    owner_root = _tree(tmp_path, "owner-state")
+    foreign_root = _tree(tmp_path, "foreign-state")
+
+    owner = WorkspaceRootAuthority(registry)
+    owner.join(state_root=owner_root, workspace_roots=(alpha,))
+    foreign = WorkspaceRootAuthority(registry)
+    foreign.join(state_root=foreign_root, workspace_roots=(blocked,))
+    try:
+        with pytest.raises(WorkspaceAuthorityConflict):
+            owner.join(
+                state_root=owner_root, workspace_roots=(beta, blocked),
+            )
+        assert owner.held_digests == [workspace_digest(alpha)]
+        report = describe_workspace_root(registry, beta)
+        assert report["status"] == "adoptable"
+        assert any(
+            item["relationship"] == "exact" and item["status"] == "adoptable"
+            for item in report["owners"]
+        )
+    finally:
+        foreign.release()
+        owner.release()
 
 
 def test_a_surviving_workspace_claim_keeps_legacy_work_fail_closed(

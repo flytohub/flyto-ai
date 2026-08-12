@@ -3198,6 +3198,24 @@ class MissionStore:
             metrics = self._metrics(conn)
         return MissionSnapshot(tuple(missions), tuple(items), truncated, metrics)
 
+    def scheduler_order(self, *, limit: int = DEFAULT_SNAPSHOT_LIMIT) -> Tuple[str, ...]:
+        """Read the current preferred ready-work order without dispatching.
+
+        This executes the same fairness/lane/priority query as dispatch but
+        takes no lease, advances no fence, rotates no scope and writes no
+        receipt.  It is therefore an observability hint, not authority and not
+        a reservation: a concurrent dispatcher may change the order as soon as
+        this snapshot returns.
+        """
+
+        _check_int(limit, "limit", 1, MAX_SNAPSHOT_ITEMS)
+        with self._read() as txn:
+            conn = None if txn is None else txn.conn
+            if conn is None:
+                return ()
+            rows = conn.execute(_SELECT_READY, (limit,)).fetchall()
+        return tuple(str(row["work_item_id"]) for row in rows)
+
     def metrics(self) -> MissionMetrics:
         """Bounded, secret-free counters for the whole store."""
 

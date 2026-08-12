@@ -1,0 +1,20 @@
+{
+  "schema": "flyto.stack-lock.v1",
+  "dependencies": {
+    "flyto-blueprint": {
+      "repository": "flytohub/flyto-blueprint",
+      "path": "flyto-blueprint",
+      "revision": "f9cc7859b1230079c14682f1000d80f0552b31e8"
+    },
+    "flyto-core": {
+      "repository": "flytohub/flyto-core",
+      "path": "flyto-core",
+      "revision": "c8aa93634cb56ff14dccfd3e1c667d22c5f0727b"
+    },
+    "flyto-indexer": {
+      "repository": "flytohub/flyto-indexer",
+      "path": "flyto-indexer",
+      "revision": "dfb1c41a9996111703a04bf27bdf9f07094b9e2e"
+    }
+  }
+}

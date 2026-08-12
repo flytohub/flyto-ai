@@ -8,6 +8,12 @@
 # would make every audited round fail before Claude is ever contacted.
 version: flyto.coding-config.v1
 checks:
+  # Local audited jobs and GitHub Actions read the same cross-repository lock.
+  # This refuses stale sibling checkouts before a result can be audited.
+  - name: stack_lock
+    argv: [.venv/bin/python, scripts/stack_lock.py, --workspace-parent, ..]
+    timeout_seconds: 60
+    required: true
   # Catches syntax and import-shape breakage anywhere in the package.
   - name: compile
     argv: [.venv/bin/python, -m, compileall, -q, flyto_ai]

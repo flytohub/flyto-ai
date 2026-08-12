@@ -1539,6 +1539,13 @@ class CodingTaskRequest:
 
     message: str
     working_dir: str
+    #: Repositories this job may touch, as an atomic lease set.  Empty means
+    #: the host derives the nearest Git boundary from ``working_dir`` before
+    #: admission; it never means "all configured workspaces".
+    repository_roots: Tuple[str, ...] = ()
+    #: Optional safe label for the submitting client/task.  Observability only:
+    #: it grants no authority and is never put into an implementer prompt.
+    owner_ref: Optional[str] = None
     thread_id: Optional[str] = None
     resume: bool = False
     approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER
@@ -1576,6 +1583,21 @@ class CodingTaskRequest:
         if not root.is_dir():
             raise ValueError("working_dir must be an existing directory")
         self.working_dir = str(root)
+        if len(self.repository_roots) > 16:
+            raise ValueError("repository_roots cannot exceed 16 items")
+        repositories = []
+        for value in self.repository_roots:
+            if not isinstance(value, str):
+                raise ValueError("repository_roots must contain paths")
+            repository = Path(value).expanduser().resolve()
+            if not repository.is_dir():
+                raise ValueError("repository_roots must contain existing directories")
+            repositories.append(str(repository))
+        if len(set(repositories)) != len(repositories):
+            raise ValueError("repository_roots must not contain duplicates")
+        self.repository_roots = tuple(repositories)
+        if self.owner_ref is not None and not _NAME_RE.fullmatch(self.owner_ref):
+            raise ValueError("owner_ref must be a safe identifier")
         if self.thread_id is not None and not _NAME_RE.fullmatch(self.thread_id):
             raise ValueError("thread_id must be a safe identifier")
         if self.resume and not self.thread_id:

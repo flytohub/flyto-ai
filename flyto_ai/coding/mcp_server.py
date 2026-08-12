@@ -264,6 +264,19 @@ class CodingMCPServer:
                             "properties": {
                                 "message": {"type": "string", "minLength": 1, "maxLength": 200000},
                                 "working_dir": {"type": "string", "minLength": 1, "maxLength": 4096},
+                                "repository_roots": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 16,
+                                    "uniqueItems": True,
+                                    "items": {
+                                        "type": "string", "minLength": 1, "maxLength": 4096,
+                                    },
+                                },
+                                "owner_ref": {
+                                    "type": "string",
+                                    "pattern": r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                                },
                                 "thread_id": {"type": "string", "minLength": 1, "maxLength": 64},
                                 "resume": {"type": "boolean"},
                                 "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5},

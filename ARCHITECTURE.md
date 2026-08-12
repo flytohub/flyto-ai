@@ -725,12 +725,22 @@ holding the root against its successor.
 
 Host-global workspace authority is separate from this lifetime state-root
 authority. It is held only while the shared state root has durable
-non-terminal work. Admission acquires it before the first job mutation;
-restart reacquires before reconciling open work; final settlement releases it.
+non-terminal work. The configured root is only the allowed boundary: admission
+leases the nearest Git repository, or an explicitly declared atomic set of up
+to sixteen non-overlapping Git repositories, before the first job mutation.
+The exact set is durable; restart reacquires open sets and final settlement
+releases only repositories no remaining job needs.
 Since a peer can settle a job admitted by another process, each holder runs a
 bounded guarded idle observer so the submitter cannot retain a stale lease.
 Idle MCP workers therefore coexist without reserving product trees, while
 overlapping foreign state roots and crashed open work remain fail-closed.
+
+MissionStore remains the scheduler of record. `code-task-window` is a host-only
+read projection that joins its main-axis/branch/order state with path-free job,
+repo-set and audit summaries. It is not an MCP tool and never becomes model
+context. CI and local audited verification likewise share one dependency
+authority, `stack-lock.json`, rather than separately embedded sibling
+revisions.
 
 Where the host has no inter-process lock the service refuses to start at all
 (`CodingAuthorityUnavailable`, `execution_authority_unavailable`) rather than

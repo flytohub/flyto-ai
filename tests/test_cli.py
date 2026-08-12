@@ -100,6 +100,19 @@ def test_help_shows_serve(capsys):
     assert "--plan" in out
 
 
+def test_code_task_window_is_host_only_read_only_json(tmp_path, capsys):
+    state = tmp_path / "missing-task-window"
+    sys.argv = [
+        "flyto-ai", "code-task-window", "--state-dir", str(state),
+        "--limit", "3", "--json",
+    ]
+    main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema"] == "flyto.coding-task-window.v1"
+    assert report["tasks"] == []
+    assert not state.exists()
+
+
 def test_webhook_post():
     """_post_webhook sends JSON POST to target URL."""
     received = {}

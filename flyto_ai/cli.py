@@ -225,6 +225,20 @@ def main():
     )
     code_status_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    task_window_p = sub.add_parser(
+        "code-task-window",
+        help="Show the shared mission, queue, repo-lease and audit window (read-only)",
+    )
+    task_window_p.add_argument(
+        "--state-dir", default="~/.flyto/coding-service",
+        help="Durable service state root to inspect (read-only)",
+    )
+    task_window_p.add_argument(
+        "--limit", type=int, default=50,
+        help="Maximum missions, work items and jobs to project (1-200)",
+    )
+    task_window_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # Read-only, local, and deliberately not a fourth MCP tool. It answers the
     # one question a workspace refusal raises and an MCP client can never be
     # told: which state root owns this tree, and can it be taken over.
@@ -297,6 +311,8 @@ def main():
         _cmd_code_mcp_supervisor(args)
     elif args.command == "code-status":
         _cmd_code_status(args)
+    elif args.command == "code-task-window":
+        _cmd_code_task_window(args)
     elif args.command == "code-workspace-status":
         _cmd_code_workspace_status(args)
     elif args.command == "code-release":
@@ -852,6 +868,48 @@ def _cmd_code_status(args):
             ),
         )
     print("  {}".format(report["note"]))
+
+
+def _cmd_code_task_window(args):
+    """Print the host-only shared task window without starting a worker."""
+
+    from flyto_ai.coding.task_window import TaskWindowCorrupt, read_task_window
+
+    try:
+        report = read_task_window(args.state_dir, limit=args.limit)
+    except (ValueError, TaskWindowCorrupt) as exc:
+        print("\033[31mError:\033[0m {}".format(exc), file=sys.stderr)
+        sys.exit(2)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    metrics = report.get("metrics", {})
+    print(
+        "coding task window: missions={} queue={} tasks={} truncated={}".format(
+            len(report.get("missions", [])), metrics.get("queue_depth", 0),
+            len(report.get("tasks", [])), report.get("truncated", False),
+        )
+    )
+    if not report.get("tasks"):
+        print("  no durable coding jobs")
+        return
+    for task in report["tasks"]:
+        rank = task.get("scheduler_rank")
+        print(
+            "  {} owner={} state={} mission={} lane={} priority={} queue={} "
+            "repos={} backend={} session={} audit={} rework={} return={} failure={}".format(
+                task.get("job_id", ""), task.get("owner_ref", "unassigned"),
+                task.get("state", ""), task.get("mission_id", "") or "-",
+                task.get("lane", "") or "-", task.get("priority", 0),
+                rank if rank is not None else "-",
+                len(task.get("repository_digests", [])),
+                task.get("implementation_backend", "") or "-",
+                task.get("implementation_session_bound", False),
+                task.get("audit_count", 0), task.get("rework_count", 0),
+                task.get("returned_to_main_axis", False),
+                task.get("failure_code", "") or "-",
+            )
+        )
 
 
 def _cmd_code_workspace_status(args):

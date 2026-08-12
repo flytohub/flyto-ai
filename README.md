@@ -448,6 +448,19 @@ submits a verdict through the `flyto_coding_audit` MCP tool or
 receipt; `rework` returns typed findings to the same job and implementation
 session for another bounded round.
 
+Many local Codex frontends coordinate through repository-set leases rather
+than one broad parent lock. The nearest Git repository is inferred by default;
+a cross-repository request can declare its complete atomic set. Inspect the
+shared main-axis/branch/queue/audit view without starting a worker or exposing
+another task's prompt:
+
+```bash
+flyto-ai code-task-window --state-dir ~/.flyto/coding-service
+flyto-ai code-task-window --state-dir ~/.flyto/coding-service --json
+```
+
+The public MCP inventory remains submit/get/audit only.
+
 A provider or check failure is terminal `failed`. Work interrupted while queued
 or running becomes `failed` with `failure_code=service_restarted`. A rework
 request past the ceiling is **rejected** rather than recorded: the job keeps its

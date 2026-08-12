@@ -1,5 +1,39 @@
 # Decisions
 
+## 2026-08-12: Repository-set leases, one task window, and one stack lock
+
+A configured workspace root is an admission boundary, not a concurrency unit.
+Treating `/.../flytohub` as the one leased tree forced unrelated jobs in
+`flyto-code` and `flyto-engine` to serialize even though their files do not
+overlap. Admission now derives the nearest real Git boundary from
+`working_dir`. A genuine cross-repository job may name up to sixteen real,
+non-overlapping Git roots; the host-global registry acquires that complete set
+under one registry transaction and releases any newly acquired descriptors if
+one member refuses. The exact canonical set and its digests are persisted in
+the private job record and reacquired from that record after restart. Legacy
+records fall back to `working_dir`, while their inactive historical ancestor
+entry remains conservative only for legacy work; it cannot serialize unrelated
+new child-repository records forever.
+
+Coordination is visible through host-only `flyto-ai code-task-window`. It joins
+the generic MissionStore main-axis/branch/order projection with coding job
+state, repo digests, implementation-session presence and audit/rework counters.
+An optional bounded `owner_ref` labels the submitting Codex/task but grants no
+authority. The window carries no prompt, path, evidence, worker identity or
+provider session id, starts no service, and is not a fourth MCP tool. Other
+Codex tasks can therefore see that work exists without receiving another
+task's conversational context.
+
+Finally, `stack-lock.json` is the single dependency revision source for
+Blueprint, Core and Indexer. GitHub checkout refs are read from it and the
+repository verification contract checks local sibling HEADs against it. A
+green local audit and a green CI run can no longer mean different dependency
+commits because three SHAs were copied into two places.
+
+We did not add a task taxonomy, automatic Codex implementation fallback,
+cross-host lease, or model-visible fleet tool. Multi-host remains a database
+lease problem; the local repo-set protocol remains `flock`-based.
+
 ## 2026-08-12: Installing Core extensions is host authority, not model authority
 
 An agent that can install software can grant itself capability. So the Core

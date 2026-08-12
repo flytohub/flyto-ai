@@ -495,6 +495,17 @@ def test_durable_state_is_owner_only_on_disk(tmp_path):
 # --------------------------------------------------------------------------
 
 
+def test_scheduler_order_is_the_same_read_only_preference_as_dispatch(tmp_path):
+    store = MissionStore(tmp_path)
+    mission = _mission(store)
+    lower = _root(store, mission.mission_id, priority=1)
+    higher = _side(store, mission.mission_id, lower, priority=9)
+    before = store.metrics()
+
+    assert store.scheduler_order() == (higher.work_item_id, lower.work_item_id)
+    assert store.metrics() == before
+
+
 def test_dispatch_order_is_priority_then_age(tmp_path):
     store = MissionStore(tmp_path)
     mission = _mission(store)

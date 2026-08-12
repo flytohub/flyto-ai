@@ -574,6 +574,29 @@ def test_service_mapping_forbids_authority_fields_and_capability_contract_is_typ
             "message": "task", "working_dir": str(workspace),
             "checks": [{"name": "unsafe", "argv": ["sh"]}],
         })
+    decoded = request_from_mapping({
+        "message": "task",
+        "working_dir": str(workspace),
+        "repository_roots": [str(workspace)],
+        "owner_ref": "codex-task-1",
+    })
+    assert decoded.repository_roots == (str(workspace),)
+    assert decoded.owner_ref == "codex-task-1"
+    with pytest.raises(ValueError, match="array of paths"):
+        request_from_mapping({
+            "message": "task",
+            "working_dir": str(workspace),
+            "repository_roots": str(workspace),
+        })
+    with pytest.raises(ValueError, match="array of paths"):
+        request_from_mapping({
+            "message": "task", "working_dir": str(workspace),
+            "repository_roots": [],
+        })
+    with pytest.raises(ValueError, match="owner_ref must be a string"):
+        request_from_mapping({
+            "message": "task", "working_dir": str(workspace), "owner_ref": 7,
+        })
     capability = CapabilitySpec.from_mapping({
         "name": "core",
         "argv": ["flyto-core", "mcp"],

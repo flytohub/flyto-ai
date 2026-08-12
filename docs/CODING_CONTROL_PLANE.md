@@ -1009,15 +1009,20 @@ roots and each keeps a private, self-consistent opinion about the same
 checkout, and both edit it.
 
 A host-global registry sits above every state root and owns each canonical
-workspace tree. Ownership is demand-scoped: an idle service holds nothing;
-admission acquires every configured root before the first durable non-terminal
-job mutation, and restart reacquires before reconciling existing open work.
-Queued, running, rework, and audit-pending work keep the ownership. The last
-terminal transition releases it. A bounded observer also releases the
-submitter's lease when another compatible process on the shared state root
-performs the final transition. A newcomer takes the entry exclusively first;
-getting it proves nobody is alive, and only then may the recorded owning state
-root be written or rotated.
+repository tree. Configured workspace roots remain the outer admission
+boundary, but are not leased as one broad concurrency unit. A normal job leases
+the nearest Git boundary containing `working_dir`; a cross-repository request
+may declare an atomic set of up to sixteen real, non-overlapping Git roots
+inside that boundary. Ownership is demand-scoped: an idle service holds
+nothing; admission acquires the whole job set before the first durable
+non-terminal mutation, and restart reacquires the exact persisted sets needed
+by existing open work. Queued, running, rework, and audit-pending work keep the
+ownership. A terminal transition releases that repository while retaining sets
+another job still needs. A bounded observer also releases the submitter's
+leases when another compatible process on the shared state root performs the
+final transition. A newcomer takes each entry exclusively first; getting it
+proves nobody is alive, and only then may the recorded owning state root be
+written or rotated.
 Ancestor and descendant overlap are refused in both directions, decided
 atomically under a registry-wide lock with a bounded acquisition deadline.
 
@@ -1045,6 +1050,27 @@ Each has its own worker exit status, and the MCP client receives one short
 fixed sentence selected by exit code alone — never a path, prompt, raw error,
 or job content. The public MCP inventory stays exactly `flyto_coding_submit`,
 `flyto_coding_get`, `flyto_coding_audit`.
+
+### Unified task window
+
+```bash
+flyto-ai code-task-window --state-dir /ABSOLUTE/PATH/TO/STATE
+flyto-ai code-task-window --state-dir /ABSOLUTE/PATH/TO/STATE --limit 100 --json
+```
+
+This local read-only command is the shared coordination window for many Codex
+frontends. It shows immutable main-axis digests, side/repair return edges,
+current scheduler rank, an optional safe `owner_ref`, path-free repository
+digests, implementation-session presence, stable failure codes and audit/rework
+counters. It does not show the task prompt, objective prose, repository path,
+evidence, worker identity or provider session id. Snapshot identifiers grant no
+mutation authority and the projection is never injected into another model's
+conversation.
+
+Local and CI cross-stack dependency authority comes from
+`stack-lock.json`. `scripts/stack_lock.py --workspace-parent ..` proves
+the three sibling checkouts equal the manifest; GitHub Actions derives those
+same checkout refs from the manifest before running the suite.
 
 ### Diagnosing and recovering
 

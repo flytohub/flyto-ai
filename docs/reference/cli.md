@@ -133,15 +133,19 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code-status` | `command` | Inspect the bounded runtime status of coding service instances | [`flyto_ai/cli.py:218`](../../flyto_ai/cli.py#L218) |
 | `code-status` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:222`](../../flyto_ai/cli.py#L222) |
 | `code-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:226`](../../flyto_ai/cli.py#L226) |
-| `code-workspace-status` | `command` | Show which coding state root owns a workspace tree (read-only) | [`flyto_ai/cli.py:231`](../../flyto_ai/cli.py#L231) |
-| `code-workspace-status` | `--workspace` | Workspace root to report ownership for | [`flyto_ai/cli.py:235`](../../flyto_ai/cli.py#L235) |
-| `code-workspace-status` | `--registry-root` | Host-global workspace authority registry (defaults to the host's) | [`flyto_ai/cli.py:239`](../../flyto_ai/cli.py#L239) |
-| `code-workspace-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:243`](../../flyto_ai/cli.py#L243) |
-| `code-release` | `command` | Fail an orphaned audit-ready coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:251`](../../flyto_ai/cli.py#L251) |
-| `code-release` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:255`](../../flyto_ai/cli.py#L255) |
-| `code-release` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:256`](../../flyto_ai/cli.py#L256) |
-| `code-release` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:260`](../../flyto_ai/cli.py#L260) |
-| `release_target` | `--abandon-job` | Move one awaiting_codex_audit job to failed/job_abandoned | [`flyto_ai/cli.py:265`](../../flyto_ai/cli.py#L265) |
-| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:269`](../../flyto_ai/cli.py#L269) |
-| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:273`](../../flyto_ai/cli.py#L273) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:276`](../../flyto_ai/cli.py#L276) |
+| `code-task-window` | `command` | Show the shared mission, queue, repo-lease and audit window (read-only) | [`flyto_ai/cli.py:228`](../../flyto_ai/cli.py#L228) |
+| `code-task-window` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:232`](../../flyto_ai/cli.py#L232) |
+| `code-task-window` | `--limit` | Maximum missions, work items and jobs to project (1-200) | [`flyto_ai/cli.py:236`](../../flyto_ai/cli.py#L236) |
+| `code-task-window` | `--json` | Output raw JSON | [`flyto_ai/cli.py:240`](../../flyto_ai/cli.py#L240) |
+| `code-workspace-status` | `command` | Show which coding state root owns a workspace tree (read-only) | [`flyto_ai/cli.py:245`](../../flyto_ai/cli.py#L245) |
+| `code-workspace-status` | `--workspace` | Workspace root to report ownership for | [`flyto_ai/cli.py:249`](../../flyto_ai/cli.py#L249) |
+| `code-workspace-status` | `--registry-root` | Host-global workspace authority registry (defaults to the host's) | [`flyto_ai/cli.py:253`](../../flyto_ai/cli.py#L253) |
+| `code-workspace-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:257`](../../flyto_ai/cli.py#L257) |
+| `code-release` | `command` | Fail an orphaned audit-ready coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:265`](../../flyto_ai/cli.py#L265) |
+| `code-release` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:269`](../../flyto_ai/cli.py#L269) |
+| `code-release` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:270`](../../flyto_ai/cli.py#L270) |
+| `code-release` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:274`](../../flyto_ai/cli.py#L274) |
+| `release_target` | `--abandon-job` | Move one awaiting_codex_audit job to failed/job_abandoned | [`flyto_ai/cli.py:279`](../../flyto_ai/cli.py#L279) |
+| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:283`](../../flyto_ai/cli.py#L283) |
+| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:287`](../../flyto_ai/cli.py#L287) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:290`](../../flyto_ai/cli.py#L290) |

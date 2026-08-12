@@ -30,27 +30,32 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           path: flyto-ai
+      - name: Read shared stack lock
+        id: stack_lock
+        run: python scripts/stack_lock.py --github-output "$GITHUB_OUTPUT"
       - name: Check out flyto-blueprint test dependency
         uses: actions/checkout@v7.0.1
         with:
-          repository: flytohub/flyto-blueprint
-          ref: f9cc7859b1230079c14682f1000d80f0552b31e8
-          path: flyto-blueprint
+          repository: ${{ steps.stack_lock.outputs.flyto_blueprint_repository }}
+          ref: ${{ steps.stack_lock.outputs.flyto_blueprint_revision }}
+          path: ${{ steps.stack_lock.outputs.flyto_blueprint_path }}
       - name: Check out flyto-core test dependency
         uses: actions/checkout@v7.0.1
         with:
-          repository: flytohub/flyto-core
-          ref: c8aa93634cb56ff14dccfd3e1c667d22c5f0727b
-          path: flyto-core
+          repository: ${{ steps.stack_lock.outputs.flyto_core_repository }}
+          ref: ${{ steps.stack_lock.outputs.flyto_core_revision }}
+          path: ${{ steps.stack_lock.outputs.flyto_core_path }}
       - name: Check out flyto-indexer test dependency
         uses: actions/checkout@v7.0.1
         with:
-          repository: flytohub/flyto-indexer
-          ref: dfb1c41a9996111703a04bf27bdf9f07094b9e2e
-          path: flyto-indexer
+          repository: ${{ steps.stack_lock.outputs.flyto_indexer_repository }}
+          ref: ${{ steps.stack_lock.outputs.flyto_indexer_revision }}
+          path: ${{ steps.stack_lock.outputs.flyto_indexer_path }}
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Verify checked-out stack matches the shared lock
+        run: python scripts/stack_lock.py --workspace-parent ..
       - name: Provision deterministic command runtime
         run: |
           sudo apt-get update

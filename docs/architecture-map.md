@@ -286,3 +286,15 @@ absences. A host without an inter-process lock refuses to start
 no-op.
 
 See `ARCHITECTURE.md` and `DECISIONS.md` (2026-08-10).
+
+## Multi-Codex repository scheduling note (2026-08-12)
+
+The outer Flytohub topology above is unchanged. Locally, the coding control
+plane now leases the nearest Git repository (or one explicitly declared atomic
+repo set) instead of leasing the whole Flytohub parent, so `flyto-cloud`,
+`flyto-code`, and `flyto-engine` can execute in parallel at the same
+architectural level when their sets do not overlap. MissionStore remains the
+generic source of main-axis, side-branch and ordering truth; host-only
+`code-task-window` projects that truth without adding a model-visible tool or a
+domain taxonomy. Blueprint/Core/Indexer CI and local verification revisions
+come from the same `stack-lock.json`.

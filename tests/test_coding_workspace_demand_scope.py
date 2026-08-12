@@ -11,15 +11,18 @@ root behaviour, the same-state-root peer gap, and the audit-versus-release race.
 """
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from flyto_ai.coding.contracts import CodingAuditVerdict, CodingJobState
+from flyto_ai.coding.contracts import CodingTaskRequest
 from flyto_ai.coding.service import (
     AbandonStateConflict,
     CodingService,
     CodingWorkspaceAuthorityConflict,
+    WorkspaceBusy,
 )
 from flyto_ai.coding.workspace_authority import (
     describe_workspace_root,
@@ -48,6 +51,15 @@ def _accept(service: CodingService, tenant: str, receipt):
         tenant, receipt.job_id, receipt.implementation_revision_sha256,
         CodingAuditVerdict.ACCEPT, (),
     )
+
+
+def _init_git(workspace: Path) -> None:
+    subprocess.run(["git", "-C", str(workspace), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(workspace), "add", "."], check=True)
+    subprocess.run([
+        "git", "-C", str(workspace), "-c", "user.name=Flyto Test",
+        "-c", "user.email=flyto@example.invalid", "commit", "-qm", "fixture",
+    ], check=True)
 
 
 def test_an_idle_audited_service_owns_no_configured_tree(tmp_path: Path) -> None:
@@ -134,6 +146,68 @@ def test_one_terminal_job_does_not_release_while_another_is_open(
         assert _owns(service) is False
     finally:
         service.close()
+
+
+def test_parent_config_uses_nearest_git_repo_leases_for_parallel_children(
+    tmp_path: Path,
+) -> None:
+    parent = _workspace(tmp_path, "flytohub")
+    alpha = _workspace(parent, "flyto-code")
+    beta = _workspace(parent, "flyto-engine")
+    for workspace in (alpha, beta):
+        _declare_verification(workspace)
+        _init_git(workspace)
+    first = _audited_service(tmp_path / "A", parent, provider=ReworkingProvider())
+    second = _audited_service(tmp_path / "B", parent, provider=ReworkingProvider())
+    try:
+        alpha_job = _awaiting(first, "tenant-audit", "alpha-001", alpha)
+        beta_job = _awaiting(second, "tenant-audit", "beta-001", beta)
+        assert alpha_job.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert beta_job.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert describe_workspace_root(None, alpha)["status"] == "live"
+        assert describe_workspace_root(None, beta)["status"] == "live"
+        assert describe_workspace_root(None, parent)["status"] == "live"
+    finally:
+        second.close()
+        first.close()
+
+
+def test_cross_repo_set_is_atomic_and_blocks_each_member(tmp_path: Path) -> None:
+    parent = _workspace(tmp_path, "flytohub")
+    alpha = _workspace(parent, "alpha")
+    beta = _workspace(parent, "beta")
+    for workspace in (alpha, beta):
+        _declare_verification(workspace)
+        _init_git(workspace)
+    owner = _audited_service(tmp_path / "A", parent, provider=ReworkingProvider())
+    peer = _audited_service(tmp_path / "A", parent, provider=ReworkingProvider())
+    intruder = _audited_service(tmp_path / "B", parent, provider=ReworkingProvider())
+    try:
+        request = CodingTaskRequest(
+            message="cross repository repair",
+            working_dir=str(alpha),
+            repository_roots=(str(alpha), str(beta)),
+            owner_ref="codex-main-axis",
+        )
+        queued = owner.submit("tenant-audit", "set-001", request)
+        held = _wait(owner, "tenant-audit", queued.job_id)
+        assert held.state is CodingJobState.AWAITING_CODEX_AUDIT
+        with pytest.raises(WorkspaceBusy):
+            peer.submit("tenant-audit", "beta-peer-001", _request(beta))
+        with pytest.raises(CodingWorkspaceAuthorityConflict):
+            intruder.submit("tenant-audit", "beta-001", _request(beta))
+
+        tenant_ref = owner._tenant_ref("tenant-audit")
+        record = owner._read_json(
+            owner.state_root / "tenants" / tenant_ref / "jobs" / (held.job_id + ".json"),
+        )
+        assert record["repository_roots"] == sorted([str(alpha), str(beta)])
+        assert len(record["repository_digests"]) == 2
+        assert record["owner_ref"] == "codex-main-axis"
+    finally:
+        intruder.close()
+        peer.close()
+        owner.close()
 
 
 def test_an_idle_state_root_does_not_block_a_second_one(tmp_path: Path) -> None:

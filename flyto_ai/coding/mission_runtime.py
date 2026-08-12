@@ -484,6 +484,7 @@ class CodingMissionRuntime:
         workspace_sha256: str,
         envelope: Optional[CodingMissionEnvelope],
         message: str,
+        repository_sha256s: Sequence[str] = (),
     ) -> MissionAdmission:
         """Create or validate the mission, then place exactly one work item.
 
@@ -504,7 +505,10 @@ class CodingMissionRuntime:
                 mission.mission_id,
                 operation=self._key("place", job_id),
                 coordinates=self._coordinates(tenant_ref, job_id, workspace_sha256),
-                resources=(self.resource(workspace_sha256),),
+                resources=tuple(
+                    self.resource(value)
+                    for value in (tuple(repository_sha256s) or (workspace_sha256,))
+                ),
                 lane=envelope.lane,
                 priority=envelope.priority,
                 root=envelope.is_root,
@@ -567,6 +571,7 @@ class CodingMissionRuntime:
         workspace_sha256: str,
         projection: CodingMissionProjection,
         round_index: int,
+        repository_sha256s: Sequence[str] = (),
     ) -> MissionAdmission:
         """Place one repair child under the same mission, in the repair lane.
 
@@ -603,7 +608,10 @@ class CodingMissionRuntime:
                 mission_id,
                 operation=key,
                 coordinates=self._coordinates(tenant_ref, job_id, workspace_sha256),
-                resources=(self.resource(workspace_sha256),),
+                resources=tuple(
+                    self.resource(value)
+                    for value in (tuple(repository_sha256s) or (workspace_sha256,))
+                ),
                 lane=LANE_REPAIR,
                 priority=projection.priority,
                 root=False,
@@ -959,6 +967,16 @@ class CodingMissionRuntime:
                 "capacity_rejects": snapshot.metrics.capacity_rejects,
             },
         }
+
+    def scheduler_order(self, *, limit: int = 50) -> Tuple[str, ...]:
+        """Current ready-work preference, read-only and non-authoritative."""
+
+        if not self.supported():
+            return ()
+        try:
+            return self._store.scheduler_order(limit=limit)
+        except MissionError:
+            return ()
 
     def context(
         self, *, tenant_ref: str, job_id: str, work_item_id: str,

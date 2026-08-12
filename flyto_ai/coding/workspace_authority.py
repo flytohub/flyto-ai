@@ -46,7 +46,7 @@ import stat
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - platform dependent
     import fcntl
@@ -182,7 +182,106 @@ def workspace_digest(path: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def state_root_has_open_work(state_root: Any) -> bool:
+def state_root_open_workspace_roots(
+    state_root: Any,
+) -> Optional[Tuple[Path, ...]]:
+    """Return the canonical trees durable work still needs.
+
+    ``None`` means the state could not be attributed safely.  Callers must then
+    retain or refuse the broad configured boundary; an unreadable record must
+    never be converted into permission to release a lease.  Records written
+    before repo-set leases existed fall back to their one ``working_dir`` and
+    therefore retain the exact conservative behaviour they had before.
+    """
+
+    root = Path(os.path.abspath(os.path.expanduser(str(state_root))))
+    if not root.is_dir():
+        return ()
+    terminal = {"completed", "failed", "codex_accepted"}
+    required: Dict[str, Path] = {}
+    records: Dict[str, Optional[Tuple[Path, ...]]] = {}
+    tenants = root / "tenants"
+    try:
+        tenant_dirs = sorted(tenants.iterdir()) if tenants.is_dir() else []
+    except OSError:
+        return None
+    for tenant in tenant_dirs:
+        jobs = tenant / "jobs"
+        try:
+            entries = sorted(jobs.glob("*.json")) if jobs.is_dir() else []
+        except OSError:
+            return None
+        for entry in entries:
+            try:
+                record = json.loads(entry.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if not isinstance(record, dict):
+                return None
+            job_id = str(record.get("job_id") or "")
+            if not job_id:
+                if str(record.get("state")) in terminal:
+                    # Historical terminal fixtures/records can predate opaque
+                    # job ids.  They carry no live claim to attribute and do
+                    # not prevent adoption merely because they are old.
+                    continue
+                return None
+            if job_id in records:
+                return None
+            values = record.get("repository_roots")
+            if values is None:
+                values = [record.get("working_dir")]
+            if (
+                not isinstance(values, list)
+                or not 1 <= len(values) <= 16
+                or any(not isinstance(value, str) or not value for value in values)
+            ):
+                workspace_roots = None
+            else:
+                workspace_roots = tuple(
+                    sorted({canonical_workspace_root(value) for value in values})
+                )
+                if record.get("repository_roots") is not None:
+                    digests = record.get("repository_digests")
+                    if (
+                        not isinstance(digests, list)
+                        or digests != [workspace_digest(value) for value in workspace_roots]
+                    ):
+                        workspace_roots = None
+            records[job_id] = workspace_roots
+            if str(record.get("state")) not in terminal:
+                if workspace_roots is None:
+                    return None
+                for workspace in workspace_roots:
+                    required[str(workspace)] = workspace
+
+    # A surviving worktree owner claim is open work too.  Bind it back to the
+    # owning job record so a stale exact claim does not broaden one unrelated
+    # repository into a parent-wide lock.  A missing/malformed binding remains
+    # ambiguous and therefore fail-closed.
+    claims = root / "locks" / "workspaces"
+    try:
+        owner_paths = sorted(claims.glob("*.owner.json")) if claims.is_dir() else []
+    except OSError:
+        return None
+    for claim in owner_paths:
+        try:
+            value = json.loads(claim.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        workspace_roots = records.get(str(value.get("job_id") or ""))
+        if workspace_roots is None:
+            return None
+        for workspace in workspace_roots:
+            required[str(workspace)] = workspace
+    return tuple(required[key] for key in sorted(required))
+
+
+def state_root_has_open_work(
+    state_root: Any, workspace_root: Optional[Any] = None,
+) -> bool:
     """Whether a state root still holds work that must not be orphaned.
 
     Fail-closed in every ambiguous direction: an unreadable record, a malformed
@@ -198,36 +297,51 @@ def state_root_has_open_work(state_root: Any) -> bool:
     stops migration from making audit-pending work look free.
     """
 
-    root = Path(os.path.abspath(os.path.expanduser(str(state_root))))
-    if not root.is_dir():
-        # Nothing recorded there at all. Nothing to strand.
-        return False
-    terminal = {"completed", "failed", "codex_accepted"}
-    tenants = root / "tenants"
-    try:
-        tenant_dirs = sorted(tenants.iterdir()) if tenants.is_dir() else []
-    except OSError:
+    required = state_root_open_workspace_roots(state_root)
+    if required is None:
         return True
-    for tenant in tenant_dirs:
-        jobs = tenant / "jobs"
-        try:
-            entries = sorted(jobs.glob("*.json")) if jobs.is_dir() else []
-        except OSError:
-            return True
-        for entry in entries:
-            try:
-                record = json.loads(entry.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                return True
-            if not isinstance(record, dict):
-                return True
-            if str(record.get("state")) not in terminal:
-                return True
+    if workspace_root is None:
+        return bool(required)
+    target = canonical_workspace_root(workspace_root)
+    if target in required:
+        return True
+
+    # A v1 job written before repository sets acquired a configured ancestor
+    # but persisted only ``working_dir``.  Preserve that conservative ancestor
+    # relationship during migration.  New records name their exact repo set,
+    # so an inactive historical parent entry does not keep serialising two
+    # unrelated child repos merely because another new child job is open.
+    root = Path(os.path.abspath(os.path.expanduser(str(state_root))))
+    terminal = {"completed", "failed", "codex_accepted"}
+    claimed_jobs = set()
     claims = root / "locks" / "workspaces"
     try:
-        if claims.is_dir() and any(claims.glob("*.owner.json")):
-            return True
-    except OSError:
+        for claim in sorted(claims.glob("*.owner.json")) if claims.is_dir() else ():
+            value = json.loads(claim.read_text(encoding="utf-8"))
+            if not isinstance(value, dict) or not isinstance(value.get("job_id"), str):
+                return True
+            claimed_jobs.add(value["job_id"])
+        tenants = root / "tenants"
+        for tenant in sorted(tenants.iterdir()) if tenants.is_dir() else ():
+            jobs = tenant / "jobs"
+            for entry in sorted(jobs.glob("*.json")) if jobs.is_dir() else ():
+                record = json.loads(entry.read_text(encoding="utf-8"))
+                if not isinstance(record, dict):
+                    return True
+                if "repository_roots" in record:
+                    continue
+                if (
+                    str(record.get("state")) in terminal
+                    and str(record.get("job_id") or "") not in claimed_jobs
+                ):
+                    continue
+                working = record.get("working_dir")
+                if not isinstance(working, str) or not working:
+                    return True
+                legacy = canonical_workspace_root(working)
+                if target == legacy or target in legacy.parents:
+                    return True
+    except (OSError, ValueError):
         return True
     return False
 
@@ -254,7 +368,7 @@ class WorkspaceRootAuthority:
         *,
         state_root: Any,
         workspace_roots: Sequence[Any],
-        has_open_work: Callable[[str], bool] = state_root_has_open_work,
+        has_open_work: Callable[[str, Optional[str]], bool] = state_root_has_open_work,
     ) -> None:
         """Take authority over every root, or take none and refuse.
 
@@ -275,6 +389,7 @@ class WorkspaceRootAuthority:
             return
         directory = self._registry_directory()
         coordination = -1
+        held_before = set(self._descriptors)
         try:
             # One registry-wide lock, taken first and held for the whole join.
             #
@@ -292,11 +407,13 @@ class WorkspaceRootAuthority:
                 directory, owner, canonical, has_open_work,
             )
             for root in canonical:
+                if workspace_digest(root) in held_before:
+                    continue
                 self._join_one(directory, owner, root, has_open_work)
         except BaseException:
-            # All or nothing. A half-joined process would hold one tree while
-            # believing it owned two.
-            self.release()
+            # All or nothing for this incremental request.  Existing holds are
+            # not collateral damage when one new repository conflicts.
+            self.release_digests(set(self._descriptors) - held_before)
             raise
         finally:
             self._release_coordination_lock(coordination)
@@ -318,8 +435,15 @@ class WorkspaceRootAuthority:
     def release(self) -> None:
         """Drop every hold. Safe to call twice, and on a failed join."""
 
-        for digest, descriptor in tuple(self._descriptors.items()):
-            self._descriptors.pop(digest, None)
+        self.release_digests(set(self._descriptors))
+
+    def release_digests(self, digests: Sequence[str]) -> None:
+        """Drop a selected set of holds; unknown digests are harmless."""
+
+        for digest in tuple(sorted(set(digests))):
+            descriptor = self._descriptors.pop(digest, None)
+            if descriptor is None:
+                continue
             try:
                 if fcntl is not None:
                     fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -329,6 +453,12 @@ class WorkspaceRootAuthority:
                 os.close(descriptor)
             except OSError:
                 pass
+
+    def retain(self, workspace_roots: Sequence[Any]) -> None:
+        """Release every hold not present in the desired canonical repo set."""
+
+        desired = {workspace_digest(root) for root in workspace_roots}
+        self.release_digests(set(self._descriptors) - desired)
 
     @property
     def held_digests(self) -> List[str]:
@@ -352,7 +482,7 @@ class WorkspaceRootAuthority:
         directory: Path,
         owner: str,
         root: Path,
-        has_open_work: Callable[[str], bool],
+        has_open_work: Callable[[str, Optional[str]], bool],
     ) -> None:
         digest = workspace_digest(root)
         descriptor = self._open_entry_lock(directory, digest)
@@ -401,7 +531,7 @@ class WorkspaceRootAuthority:
                 # whoever restarts first while the previous owner's work stands.
                 if recorded is not None and recorded.get("state_root") != owner:
                     previous = str(recorded.get("state_root") or "")
-                    if not previous or has_open_work(previous):
+                    if not previous or has_open_work(previous, str(root)):
                         raise WorkspaceAuthorityConflict(
                             "this workspace root belongs to another coding state"
                             " root that still has unresolved work",
@@ -459,7 +589,7 @@ class WorkspaceRootAuthority:
         directory: Path,
         owner: str,
         canonical: Sequence[Path],
-        has_open_work: Callable[[str], bool],
+        has_open_work: Callable[[str, Optional[str]], bool],
     ) -> None:
         """Refuse any registered tree that overlaps one of mine.
 
@@ -494,7 +624,7 @@ class WorkspaceRootAuthority:
                     " overlapping workspace root",
                     workspace_digest=digest,
                 )
-            if not previous or has_open_work(previous):
+            if not previous or has_open_work(previous, registered):
                 raise WorkspaceAuthorityConflict(
                     "an overlapping workspace root belongs to another coding"
                     " state root that still has unresolved work",
@@ -746,7 +876,7 @@ def describe_workspace_root(
     registry_root: Optional[Any],
     workspace_root: Any,
     *,
-    has_open_work: Callable[[str], bool] = state_root_has_open_work,
+    has_open_work: Callable[[str, Optional[str]], bool] = state_root_has_open_work,
 ) -> Dict[str, Any]:
     """Read-only ownership report for one tree, for an operator to act on.
 
@@ -802,7 +932,7 @@ def describe_workspace_root(
             state_root = str(recorded.get("state_root") or "")
             if authority._entry_is_live(directory, entry_digest):
                 status = "live"
-            elif not state_root or has_open_work(state_root):
+            elif not state_root or has_open_work(state_root, registered):
                 status = "crashed_with_open_work"
             else:
                 status = "adoptable"

@@ -2,6 +2,27 @@
 
 Last updated: 2026-08-12
 
+## Repo-set concurrency and unified task window (2026-08-12)
+
+Host-global ownership is now per durable repository set instead of per
+configured parent. A normal job infers the nearest Git root; a cross-repository
+job can atomically declare up to sixteen non-overlapping Git roots. Private job
+state persists canonical roots plus path-free digests, restart reacquires only
+open sets, and terminal transitions retain only repositories still needed by
+durable work. Pre-set records migrate conservatively from `working_dir`.
+
+`flyto-ai code-task-window --state-dir <dir> [--limit N] [--json]` is the one
+host-only view of missions, branches, current scheduler preference, owning
+client label, repository claims, implementation presence, failures and
+audit/rework counts. Active work sorts before terminal history. It is read-only,
+secret-free, bounded, not conversational context, and does not change the
+three-tool MCP inventory.
+
+`stack-lock.json` now pins Blueprint, Core and Indexer once. CI reads
+checkout refs from that file and verifies all three checked-out HEADs; the
+repo-owned coding contract performs the same sibling verification locally.
+This replaces duplicated workflow SHA literals.
+
 ## Host-only Core extension management (2026-08-12)
 
 `flyto_ai/tools/core_tools.py` gained a generic adapter for Core's extension

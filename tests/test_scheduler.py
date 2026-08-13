@@ -3,6 +3,8 @@
 """Tests for the proactive scheduling system."""
 import asyncio
 import time
+from datetime import datetime, timezone
+
 import pytest
 
 from flyto_ai.scheduler.tasks import (
@@ -39,7 +41,43 @@ def test_schedule_one_shot_future():
     assert s.next_run_time() == future
 
 
+def test_schedule_rejects_zero_interval():
+    with pytest.raises(ValueError):
+        TaskSchedule(type=ScheduleType.INTERVAL, interval_seconds=0)
+
+
+def test_schedule_full_wildcard_step_preserves_weekday_semantics():
+    schedule = TaskSchedule(type=ScheduleType.CRON, cron_expression="0 8 */1 * 0")
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp()
+
+    assert schedule.next_slot(0, now=now) == datetime(
+        2024, 1, 7, 8, tzinfo=timezone.utc
+    ).timestamp()
+
+
+def test_schedule_rejects_impossible_calendar_date():
+    with pytest.raises(ValueError):
+        TaskSchedule(type=ScheduleType.CRON, cron_expression="0 0 31 2 *")
+
+
+def test_schedule_accepts_and_finds_leap_day():
+    schedule = TaskSchedule(type=ScheduleType.CRON, cron_expression="0 0 29 2 *")
+    now = datetime(2023, 3, 1, tzinfo=timezone.utc).timestamp()
+
+    assert schedule.next_slot(0, now=now) == datetime(
+        2024, 2, 29, tzinfo=timezone.utc
+    ).timestamp()
+
+
 # --- ScheduledTask tests ---
+
+@pytest.mark.parametrize("field", ["name", "instruction"])
+def test_task_rejects_whitespace_only_required_text(field):
+    values = {"name": "test", "instruction": "test"}
+    values[field] = " \t\n"
+
+    with pytest.raises(ValueError):
+        ScheduledTask(**values)
 
 def test_task_from_dict():
     task = ScheduledTask.from_dict({

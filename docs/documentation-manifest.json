@@ -27,12 +27,12 @@
     {
       "id": "agent-runtime",
       "description": "Agent loop, assistant middleware, deterministic intelligence, shared models, configuration, session, cache, transcript, audit, validation, and steering.",
-      "paths": ["flyto_ai/agent.py", "flyto_ai/assistant/**", "flyto_ai/intelligence/**", "flyto_ai/models.py", "flyto_ai/config*.py", "flyto_ai/session.py", "flyto_ai/cache.py", "flyto_ai/transcript.py", "flyto_ai/audit.py", "flyto_ai/validation.py", "flyto_ai/steer.py"],
+      "paths": ["flyto_ai/agent.py", "flyto_ai/assistant/**", "flyto_ai/intelligence/**", "flyto_ai/models.py", "flyto_ai/config*.py", "flyto_ai/session.py", "flyto_ai/execution_session.py", "flyto_ai/capability_catalog.py", "flyto_ai/cache.py", "flyto_ai/transcript.py", "flyto_ai/audit.py", "flyto_ai/validation.py", "flyto_ai/steer.py"],
       "documentation": ["docs/FEATURES.md#agent-runtime", "docs/API.md", "docs/WHITEPAPER.md", "docs/reference/python/README.md"]
     },
     {
       "id": "providers-tools-mcp",
-      "description": "Provider adapters and failover, static/local tools, Flyto2 Core tool bridge, tool registry, MCP client/server, and capability manifests.",
+      "description": "Provider adapters and failover, static/local tools, Flyto2 Core tool bridge, tool registry, MCP client/server, capability manifests, and bounded capability-group routing.",
       "paths": ["flyto_ai/providers/**", "flyto_ai/tools/**", "flyto_ai/mcp_client.py", "flyto_ai/mcp_server.py", "flyto_ai/protocols.py"],
       "documentation": ["docs/FEATURES.md#providers-and-failover", "docs/FEATURES.md#flyto2-core-and-mcp", "docs/CLI_AND_MCP.md", "docs/reference/tools-and-mcp.md"]
     },
@@ -163,6 +163,26 @@
       "source": ["flyto_ai/mission_interpretation.py", "flyto_ai/robotics_planning.py"],
       "documentation": ["docs/API.md#mission-station-card-interpretation", "docs/FEATURES.md#physical-mission-interpretation-and-planning"],
       "tests": ["tests/test_mission_interpretation.py", "tests/test_robotics_planning.py"]
+    },
+    {
+      "id": "capability-card-catalog",
+      "title": "Capability Card/catalog trust boundary",
+      "kind": "library",
+      "status": "active",
+      "description": "Validates exact bounded semantic claims, binds them to explicitly verified frozen host authority, and revalidates canonical claim and authority fields before emitting detached, secret-free search projections without persistence, retrieval, routing, or execution.",
+      "source": ["flyto_ai/capability_catalog.py"],
+      "documentation": ["ARCHITECTURE.md#capability-cardcatalog-boundary-phase-1-2026-08-13", "docs/reference/python/package-root.md"],
+      "tests": ["tests/test_capability_catalog.py"]
+    },
+    {
+      "id": "capability-retrieval-routing",
+      "title": "Capability retrieval-to-routing boundary",
+      "kind": "library",
+      "status": "active",
+      "description": "Preserves distinct Blueprint request/page/candidate and Cloud context/feasibility/result digest meanings under frozen host validation; narrows installed manifests with candidate-only evidence, exact producer bounds, an independent 32-group limit, and an atomic 32-provider-row ceiling.",
+      "source": ["flyto_ai/capability_router.py"],
+      "documentation": ["docs/CAPABILITY_ROUTING.md#bounded-retrieval-handoff", "ARCHITECTURE.md#capability-retrieval-to-routing-boundary-phase-2-2026-08-13", "docs/reference/python/package-root.md"],
+      "tests": ["tests/test_capability_router.py"]
     }
   ]
 }

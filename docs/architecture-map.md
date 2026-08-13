@@ -122,12 +122,13 @@ point-in-time observation, not a continuously enforced check.
 | `flyto-engine` -> `flyto-ai` as the only AI gateway | **partial / migration gap** | `flyto-engine` still contains `internal/ai/openai.go::OpenAIProvider`, a direct provider path that bypasses the gateway. Treat single-gateway routing as target until that is migrated. |
 | `flyto-ai` -> `flyto-blueprint` | implemented | `flyto_ai/tools/blueprint_tools.py`. |
 | `flyto-ai` -> `flyto-core` | implemented | `flyto_ai/tools/core_tools.py`. |
+| Host-validated capability retrieval -> `flyto-ai` routing | implemented | `flyto_ai/capability_router.py` preserves Blueprint-owned request/model/index/snapshot/page/candidate digest meanings and Cloud-owned query-context/requirements/feasibility/result meanings under frozen host validation. The producer dialect includes 128-character model IDs, `/`-capable identifiers, and active/ACL/risk/resource filters; results remain candidate-only without execution authority. Empty capability IDs mean open discovery; Cloud feasibility is bounded independently of page membership. `CAPABILITY_GROUP_LIMIT` caps 32 groups and independent `EMITTED_PROVIDER_ROW_LIMIT` caps 32 rows without partial groups. Locked producers: Blueprint `f3eb62eff97fac3b3f19d2f1c8d7c1e71664894b`, Core `a048bc47de158c096b7010642452e4d41d21748c`, Indexer `b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`. Cloud stays parallel to Code/Engine. |
 | Core registration mechanism exists | implemented | `flyto-core` `src/core/modules/registry/core.py` `ModuleRegistry` with registration validation. This proves the mechanism only. |
 | Every `flyto-modules-*` extension actually registers | unverified | No complete module inventory plus per-module registration trace was performed. Do not read the row above as universal compliance. The invariant still governs: every extension must register with Core. |
 | Core extension management is host-only | implemented | `flyto_ai/tools/core_tools.py` exposes `list_core_extensions`, `list_core_extension_kinds`, `install_core_extension`, and `uninstall_core_extension` as host functions under `flyto.core.extension-management.v1`, bound to `core.plugin.loader` (`get_plugin_loader`, `EXTENSION_KINDS`, `normalize_extension_name`, `ExtensionResult`) and calling `list_extensions` / `install_extension` / `uninstall_extension`. `list_extensions` takes no kind argument, so the kind filter is host-side. They are generic over the kinds Core declares (`kind`, `prefix`, `entry_point_group`), preserve Core's normalized names and result codes, and return one fixed envelope (`code`, `name`, `version`, `previous_version`, `install_enabled`, `restart_required`, `rolled_back`, `refresh_failed`) with no installer output. Mutation requires `FLYTO_EXTENSIONS_INSTALL_ENABLED`. No install-shaped tool reaches `get_core_tool_defs` or `dispatch_core_tool`. |
 | `flyto-indexer` -> `flyto-engine` index feed | implemented | `flyto-engine` `internal/scanner/scanner.go::populateLayer3FromIndexer`. |
-| Indexer / Blueprint / Core surround every public audited coding job | implemented | `flyto_ai/coding/route.py` runs the mandatory Indexer pre/post lanes, Blueprint discovery, and Core validation around whichever implementer startup selected. All four lanes are configured on every strict public route; none is detachable. Blueprint and Core may resolve only `applied` or `not_applicable`. The Indexer preset and public route share a finite ten-minute transport bound so large or contended strict verification can finish while every gate remains fail-closed. The Claude service adapter accepts one already-authorized SDK JSON frame up to a fixed 8 MiB ceiling so a legitimate large Indexer result does not hit the SDK's 1 MiB default; legacy direct calls retain that default, and no tool or route authority is widened. One execution plan may select the published legacy (`assess` / `implement`) or current (`plan_changes` / `apply_changes`) Indexer gate family; unknown, duplicate, or mixed-family plans fail before dispatch. On rework, the host unions the revision-proven prior attributable paths with the new finding's explicit targets before asking Indexer to amend the root plan, so the pre-plan ledger and cumulative post-validation scope stay equal; a first round has no added argument. Post validation accepts the legacy Boolean verdict or the current `overall=pass` envelope only when both bounded ruff/pytest statuses agree. Blueprint reuse requires token overlap and ranks ordered phrase overlap before catalogue order, so a direction-bearing transform is not replaced by its reverse. Proved by `tests/test_coding_route.py` against the installed Indexer end to end, the real Core adapter (`array.join` validated), and the real Blueprint adapter (`ConvertCSVtoJSON` projected). |
-| Long-lived Codex MCP process -> current coding worker | implemented | `flyto_ai/coding/mcp_supervisor.py` keeps host stdio stable, detects coding-source build drift, preserves non-terminal exact-session jobs, and replaces only the inner worker at a safe boundary. `CodingService.submit` independently rejects a stale direct worker before mutation. |
+| Indexer / Blueprint / Core surround every public audited coding job | implemented | `flyto_ai/coding/route.py` runs the mandatory Indexer pre/post lanes, Blueprint discovery, and Core validation around whichever implementer startup selected. All four lanes are configured on every strict public route; none is detachable. Blueprint and Core may resolve only `applied` or `not_applicable`. The Indexer preset and public route share a finite ten-minute transport bound so large or contended strict verification can finish while every gate remains fail-closed. The Claude service adapter accepts one already-authorized SDK JSON frame up to a fixed 8 MiB ceiling so a legitimate large Indexer result does not hit the SDK's 1 MiB default; legacy direct calls retain that default, and no tool or route authority is widened. The explicit `codex` backend starts a separate logged-in Codex CLI thread with user config/rules ignored, no MCP/plugins/web search, a scrubbed environment and a bounded workspace sandbox; the host still owns session binding, snapshots, checks, route lanes and the independent exact-revision audit. One execution plan may select the published legacy (`assess` / `implement`) or current (`plan_changes` / `apply_changes`) Indexer gate family; unknown, duplicate, or mixed-family plans fail before dispatch. On rework, the host unions the revision-proven prior attributable paths with the new finding's explicit targets before asking Indexer to amend the root plan, so the pre-plan ledger and cumulative post-validation scope stay equal; a first round has no added argument. Post validation accepts the legacy Boolean verdict or the current `overall=pass` envelope only when both bounded ruff/pytest statuses agree. Blueprint reuse requires token overlap and ranks ordered phrase overlap before catalogue order, so a direction-bearing transform is not replaced by its reverse. Proved by `tests/test_coding_route.py` against the installed Indexer end to end, the real Core adapter (`array.join` validated), and the real Blueprint adapter (`ConvertCSVtoJSON` projected), plus `tests/test_codex_cli_backend.py` for the Codex process boundary. |
+| Long-lived Codex MCP process -> current coding worker | implemented | `flyto_ai/coding/mcp_supervisor.py` keeps host stdio stable, detects coding-source build drift, and preserves non-terminal work owned by that connection: its successful submits plus a correctly addressed successful `flyto_coding_audit(verdict=rework)` returning the same job in `rework_queued` or `rework_running`. Reads and other audit outcomes never adopt foreign work; only exact submit/get/audit responses may observe a job, so unknown tools cannot clear a pin. Matching terminal get/audit observation or durable state releases an existing pin before safe inner-worker replacement. `CodingService.submit` independently rejects a stale direct worker before mutation. |
 | `flyto-indexer` scans Core and modules | unverified | Inventory confirms the repositories; the two scan inputs were not separately traced in this pass. |
 | `flyto-admin` manages both projects | partial | Cloud admin surfaces exist and `backend/internal/engine/scans.go::codeOrg` touches the Code side; evidence is not strong enough to claim complete two-product project management. |
 
@@ -298,3 +299,38 @@ generic source of main-axis, side-branch and ordering truth; host-only
 `code-task-window` projects that truth without adding a model-visible tool or a
 domain taxonomy. Blueprint/Core/Indexer CI and local verification revisions
 come from the same `stack-lock.json`.
+
+## Coding observability note (2026-08-12)
+
+The product topology remains unchanged. A host-only, non-AI `code-watchdog`
+now observes the bounded coding status and unified task window from outside all
+Codex and Claude sessions. It records only aggregate health transitions and can
+publish a secret-free GitHub Actions variable heartbeat. A deterministic
+scheduled GitHub workflow is the remote dead-man switch and opens one incident
+when local health is degraded/critical or the heartbeat stops. This observer
+has no scheduling, implementation, audit, repair, commit or push authority, so
+it is not another layer in `flyto-ai -> LLM -> flyto-blueprint -> flyto-core ->
+modules -> flyto-indexer`; it is an external operational witness around the
+existing coding adapter.
+
+## Scheduler convergence onto MissionStore (2026-08-12)
+
+```text
+validated schedule definition
+        |
+        v
+bounded durable catalog ---- task + UTC due-slot key ----+
+        |                                                 |
+        | mission generation / work-item mapping          |
+        v                                                 v
+MissionStore queue -> DispatchHandle lease + fence -> async executor
+        ^                                                 |
+        +------ fixed or blocked closure + evidence ref --+
+```
+
+The catalog is deliberately not another scheduler state machine. It owns
+definition, enablement, cursor/slot claim, bounded public result projection and
+MissionStore identifier mapping only. MissionStore alone owns ready/dispatched/
+closed state, worker selection, resources, live leases, fencing, heartbeats and
+closure authority. This runtime diagram does not change the canonical Flytohub
+product topology above.

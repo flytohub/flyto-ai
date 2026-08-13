@@ -52,6 +52,12 @@ def _targets(message, workspace):
     return CodingRouteOrchestrator._explicit_request_targets(message, str(workspace))
 
 
+def _amendment_targets(message, workspace):
+    return CodingRouteOrchestrator._explicit_amendment_targets(
+        message, str(workspace),
+    )
+
+
 @pytest.fixture()
 def repo(tmp_path):
     root = tmp_path / "repo"
@@ -59,9 +65,13 @@ def repo(tmp_path):
     (root / "app" / "(tabs)").mkdir(parents=True)
     (root / "app" / "[id]").mkdir(parents=True)
     (root / "pkg").mkdir()
+    (root / "artifacts").mkdir()
+    (root / "tools").mkdir()
     (root / "README.md").write_text("# root\n", encoding="utf-8")
     (root / "docs" / "reference" / "python" / "README.md").write_text("x\n", encoding="utf-8")
     (root / "docs" / "reference" / "python" / "coding.md").write_text("y\n", encoding="utf-8")
+    (root / "artifacts" / "result.txt").write_text("result\n", encoding="utf-8")
+    (root / "tools" / "builder.py").write_text("pass\n", encoding="utf-8")
     return root
 
 
@@ -118,6 +128,99 @@ def test_the_target_bound_still_holds(repo):
     found = _targets(" ".join(names), repo)
     assert len(found) == 64
     assert found == names[:64]
+
+
+def test_rework_evidence_and_command_only_paths_grant_no_authority(repo):
+    message = (
+        "Run `python3 tools/builder.py`, then attach artifacts/result.txt as "
+        "evidence."
+    )
+    assert _targets(message, repo) == [
+        "tools/builder.py", "artifacts/result.txt",
+    ]
+    assert _amendment_targets(message, repo) == []
+
+
+def test_rework_explicitly_modifying_a_command_program_grants_authority(repo):
+    assert _amendment_targets(
+        "Modify tools/builder.py, then run its canonical command.", repo,
+    ) == ["tools/builder.py"]
+
+
+@pytest.mark.parametrize(
+    "syntax",
+    [
+        "using",
+        "via",
+        "use",
+        "call",
+        "calling",
+        "run",
+        "execute",
+        "invoke",
+        "with",
+        "through",
+        "by",
+        "by running",
+        "by executing",
+        "by invoking",
+    ],
+)
+def test_rework_output_through_program_authorizes_only_output(repo, syntax):
+    message = "Regenerate artifacts/result.txt {} tools/builder.py".format(syntax)
+    assert _amendment_targets(message, repo) == ["artifacts/result.txt"]
+
+
+@pytest.mark.parametrize(
+    "syntax",
+    [
+        "using", "via", "use", "call", "calling", "run", "execute",
+        "invoke", "with", "through", "by", "by running", "by executing",
+        "by invoking",
+    ],
+)
+def test_rework_updated_output_through_program_authorizes_only_output(repo, syntax):
+    message = "Update artifacts/result.txt {} tools/builder.py".format(syntax)
+    assert _amendment_targets(message, repo) == ["artifacts/result.txt"]
+
+
+def test_rework_explicitly_modifying_output_and_program_authorizes_both(repo):
+    assert _amendment_targets(
+        "Modify artifacts/result.txt and tools/builder.py.", repo,
+    ) == ["artifacts/result.txt", "tools/builder.py"]
+
+
+@pytest.mark.parametrize("mutation", ["modifying", "editing", "updating", "changing"])
+def test_rework_by_explicit_program_mutation_authorizes_program(repo, mutation):
+    message = "Regenerate artifacts/result.txt by {} tools/builder.py".format(mutation)
+    assert _amendment_targets(message, repo) == [
+        "artifacts/result.txt", "tools/builder.py",
+    ]
+
+
+def test_rework_regenerate_live_form_authorizes_the_tracked_output(repo):
+    message = (
+        "Regenerate and include that tracked generated target "
+        "artifacts/result.txt using the repository canonical action"
+    )
+    assert _amendment_targets(message, repo) == ["artifacts/result.txt"]
+
+
+def test_rework_fix_by_running_keeps_the_command_program_excluded(repo):
+    assert _amendment_targets(
+        "Fix tracked outputs by running tools/builder.py", repo,
+    ) == []
+    assert _amendment_targets(
+        "tools/builder.py must be repaired.", repo,
+    ) == ["tools/builder.py"]
+
+
+def test_rework_polarity_and_normal_positive_targets_remain_intact(repo):
+    message = (
+        "Do not modify tools/builder.py; repair artifacts/result.txt."
+    )
+    assert _amendment_targets(message, repo) == ["artifacts/result.txt"]
+    assert _amendment_targets("modify ../../outside.py", repo) == []
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -305,6 +408,24 @@ def test_a_rework_plan_carries_host_proven_prior_scope(repo):
         "docs/reference/python/coding.md",
         "docs/reference/python/README.md",
     }
+
+
+def test_rework_without_a_mutation_target_retains_prior_scope_exactly(repo):
+    indexer = FakeIndexer()
+    route = _orchestrator(indexer)
+    request = CodingTaskRequest(
+        message="edit docs/reference/python/coding.md", working_dir=str(repo),
+    )
+    _, first = asyncio.run(route._indexer_pre(request))
+
+    rework = CodingTaskRequest(
+        message="Run python3 tools/builder.py and attach evidence.",
+        working_dir=str(repo),
+    )
+    prior = ("README.md", "docs/reference/python/coding.md")
+    asyncio.run(route._indexer_pre(rework, first["task_contract"], prior))
+
+    assert indexer.plans[-1]["targets"] == list(prior)
 
 
 def test_post_validation_receives_exactly_the_supplied_cumulative_set(repo):

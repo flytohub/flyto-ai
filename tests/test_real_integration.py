@@ -582,7 +582,7 @@ class TestSchedulerReal:
         task = ScheduledTask(
             name="Counter",
             instruction="count",
-            schedule=TaskSchedule(type=ScheduleType.INTERVAL, interval_seconds=0),
+            schedule=TaskSchedule(type=ScheduleType.INTERVAL, interval_seconds=1),
         )
         scheduler.add_task(task)
 

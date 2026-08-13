@@ -76,6 +76,14 @@ carry bounded `plugin` and `source` fields alongside `canonical_id` and
 `runtime_name`, and the ranking tiebreak is the full identity, so co-providers
 keep a deterministic, auditable order.
 
+The `limit` argument counts canonical capability groups and is bounded by the
+public `CAPABILITY_GROUP_LIMIT` (32), not by provider rows. Selecting one
+capability expands every distinct exact installed co-provider in full-identity
+order. `EMITTED_PROVIDER_ROW_LIMIT` independently caps the final projection at
+32 rows; if a complete group would cross that ceiling, routing fails closed and
+emits no partial group. The separately named constants prevent a future
+group-limit change from silently widening the provider-row boundary.
+
 ### Source scope: explicit ceiling, dynamic default
 
 `context.allowed_sources` is an authority ceiling. When a caller supplies it, it
@@ -201,6 +209,73 @@ reject the plan. A provider cannot select a capability that was filtered out
 or absent from the exact registry snapshot.
 
 ## Stack profiles and routing manifests are separate layers
+
+## Bounded retrieval handoff
+
+`route_capabilities()` optionally accepts a
+`flyto.ai.capability-retrieval-handoff.v2` object plus a frozen
+`CapabilityRetrievalAuthority`. This is the only
+retrieval-to-route contract. It is provider and domain neutral and imports no
+sibling Cloud or Blueprint implementation.
+
+The handoff preserves the accepted Blueprint query and page and the complete
+Cloud result and feasibility objects. Their `request_digest`,
+`query_context_digest`, `requirements_digest`, `result_digest`, candidate
+digests, model/index/snapshot digests, integer scores, fields, and meanings are
+not recomputed as AI concepts. The frozen host authority binds those exact
+upstream values and tenant/workspace/Space. Separate versioned `goal_digest`,
+`routing_context_digest`, and `goal_frame_digest` fields bind AI-local input.
+Those AI-local context and normalized Goal Frame inputs are detached through
+the same exact-JSON depth, node, byte, finite-number, and integer boundary
+before digesting or route projection; hostile values expose only the stable
+handoff error. Blueprint model ID and version retain their exact 128-character
+producer ceiling, while tenant, Space, and capability IDs retain 192.
+
+Only a terminal full top-k window is admitted: `top_k` is 1..32,
+`page_size == top_k`, Blueprint input/next cursor and Cloud continuation are
+null, and every layer is candidate-only without execution authority. Cloud
+feasibility must be true and its exact `candidate_resources` remain candidate
+truth; independent requirements may be satisfied by distinct resources and
+are never treated as a co-location demand or required to occur on the returned
+page. Candidates retain the exact Blueprint field set and model dialect
+(`model_id`, `model_version`, `dimensions`, `model_digest`). Their accepted
+document digests resolve to every distinct installed full provider identity,
+ordered deterministically; duplicate identities and unknown documents fail
+closed.
+
+The boundary rebuilds the upstream active status, nonempty ACL principal/scope,
+risk ceiling, resource subset, capability filter, identifier bound, and
+candidate-agreement invariants. An empty `capability_ids` list is exact upstream
+open discovery; membership is enforced only when the list is nonempty. Upstream
+identifiers use Blueprint's `/`-capable syntax with the field-specific 128/192
+limits rather than the router-local manifest grammar. Unknown fields, hostile containers,
+non-finite or boolean numbers, duplicates, stale/mixed bindings, truncation,
+and digest or authority drift fail with only
+`invalid capability retrieval handoff`.
+
+The result set may only narrow installed manifests. Its normalized score adds
+at most one point after an existing semantic match; it cannot make a
+Goal-Frame-zero candidate eligible. Distinct providers of one capability stay
+distinct, and final resolution still uses `(canonical_id, runtime_name,
+plugin, source)`. Installed safety and human-gate controls remain available,
+but retrieval never grants them or any other provider authority. Empty results
+are non-routable. Evidence is versioned and digest-only, repeats
+`candidate_only=true` and `execution_authority=false`, and states that planning,
+permission, and execution closure remain required.
+
+This producer-compatible edge is locked to Blueprint
+`f3eb62eff97fac3b3f19d2f1c8d7c1e71664894b`, Core
+`a048bc47de158c096b7010642452e4d41d21748c`, and Indexer
+`b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`. Blueprint owns the request,
+model, index, snapshot, page, and candidate digest meanings; Cloud owns the
+query-context, requirements, feasibility, and complete result meanings. Flyto
+AI validates both against frozen host authority but receives only candidate
+evidence, never execution authority.
+
+This edge does not turn a million-row backend into a router input: only the
+host-validated <=32-candidate terminal handoff crosses the boundary. Rollback
+is removal of the two optional arguments; existing callers and route contracts
+remain compatible.
 
 `flyto.agent-stack.v2` answers “which external capability processes and tools
 may this agent instance attach, and what minimum permission does each tool

@@ -1,0 +1,199 @@
+name: Coding watchdog
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: coding-watchdog
+  # Never cancel a run in flight. This job's product is an incident, not a
+  # build artefact: a manual dispatch landing while the scheduled run is
+  # between "heartbeat is stale" and "open the issue" would cancel the only
+  # step that reports it, and the dead-man switch would stay silent for the
+  # one interval that mattered. Runs are seconds long, so queueing costs
+  # nothing and each queued run re-reads the variable for itself.
+  cancel-in-progress: false
+
+jobs:
+  dead-man-check:
+    name: External heartbeat
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate heartbeat
+        id: health
+        env:
+          HEARTBEAT: ${{ vars.FLYTO_CODING_HEARTBEAT }}
+          MAX_AGE_SECONDS: "2700"
+          MAX_CLOCK_SKEW_SECONDS: "300"
+          MAX_HEARTBEAT_BYTES: "65536"
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          from pathlib import Path
+
+          # The heartbeat is untrusted input. It is a repository variable that
+          # any actor able to write repository variables can set, and it is
+          # parsed here into a step output that later steps interpolate. Every
+          # field is therefore bounded, type-checked and character-checked
+          # before use; nothing from the variable reaches a shell, an issue
+          # body or GITHUB_OUTPUT without passing an allowlist.
+          EXPECTED_SCHEMA = "flyto.coding-watchdog-heartbeat.v1"
+          HEALTH_LEVELS = ("healthy", "degraded", "critical")
+          SAFE_CODE = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
+          MAX_OBSERVED_AT = 4_102_444_800  # 2100-01-01T00:00:00Z
+
+          # Workflow-owned settings are parsed outside the heartbeat try-block.
+          # A typo here is a workflow defect and must not be reported as a bad
+          # heartbeat, which would send an operator to the wrong machine.
+          max_age = int(os.environ["MAX_AGE_SECONDS"])
+          max_skew = int(os.environ["MAX_CLOCK_SKEW_SECONDS"])
+          max_bytes = int(os.environ["MAX_HEARTBEAT_BYTES"])
+
+          reason = "heartbeat_missing"
+          observed_at = 0
+          raw = os.environ.get("HEARTBEAT", "")
+          if not raw.strip():
+              reason = "heartbeat_missing"
+          elif len(raw.encode("utf-8", "replace")) > max_bytes:
+              # Refuse to parse before allocating: an oversized variable is
+              # never a heartbeat this watchdog wrote.
+              reason = "heartbeat_oversized"
+          else:
+              try:
+                  value = json.loads(raw)
+              except (ValueError, RecursionError):
+                  # Deeply nested JSON raises RecursionError, not ValueError.
+                  # Letting it escape would abort the step before it can open
+                  # the incident, turning a malformed variable into silence.
+                  value = None
+              if not isinstance(value, dict):
+                  reason = "heartbeat_invalid"
+              elif value.get("schema") != EXPECTED_SCHEMA:
+                  reason = "heartbeat_schema_invalid"
+              else:
+                  stamp = value.get("observed_at")
+                  health = value.get("health")
+                  codes = value.get("reason_codes")
+                  if (
+                      isinstance(stamp, bool)
+                      or not isinstance(stamp, int)
+                      or not 0 < stamp <= MAX_OBSERVED_AT
+                  ):
+                      reason = "heartbeat_timestamp_invalid"
+                  elif health not in HEALTH_LEVELS:
+                      # An unknown level is never optimistically treated as a
+                      # fourth, benign state.
+                      reason = "heartbeat_health_invalid"
+                  elif codes is not None and not isinstance(codes, list):
+                      reason = "heartbeat_invalid"
+                  else:
+                      observed_at = stamp
+                      age = int(time.time()) - observed_at
+                      if age < -max_skew:
+                          reason = "heartbeat_clock_invalid"
+                      elif age > max_age:
+                          reason = "heartbeat_stale"
+                      elif health != "healthy":
+                          safe = [
+                              code for code in (codes or [])
+                              if isinstance(code, str) and SAFE_CODE.match(code)
+                          ][:8]
+                          reason = "local_{}:{}".format(
+                              health, ",".join(safe) or "unknown",
+                          )
+                      else:
+                          reason = "healthy"
+
+          # Defence in depth. Every branch above already produces this shape,
+          # so a value that fails here means the validation above regressed;
+          # fail closed rather than emit an unconstrained step output. Without
+          # this, a newline in `reason` would let the heartbeat forge
+          # `healthy=true` in GITHUB_OUTPUT and silence the dead-man switch.
+          # 1024 comfortably exceeds the widest legitimate reason -- eight
+          # 64-character codes, their separators and the `local_<level>:`
+          # prefix -- so a real unhealthy report is never relabelled invalid.
+          if not re.fullmatch(r"[a-z0-9_,:]{1,1024}", reason):
+              reason = "heartbeat_invalid"
+          healthy = reason == "healthy"
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
+              stream.write("healthy={}\n".format(str(healthy).lower()))
+              stream.write("reason={}\n".format(reason))
+              stream.write("observed_at={}\n".format(int(observed_at)))
+          body = (
+              "## Flyto coding watchdog\n\n"
+              "- Result: `{}`\n"
+              "- Reason: `{}`\n"
+              "- Last local observation: `{}`\n".format(
+                  "healthy" if healthy else "unhealthy",
+                  reason,
+                  observed_at or "unavailable",
+              )
+          )
+          Path(os.environ["RUNNER_TEMP"], "coding-watchdog.md").write_text(
+              body, encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+              stream.write(body)
+          PY
+
+      - name: Open or refresh one incident
+        if: steps.health.outputs.healthy != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create coding-watchdog \
+            --repo "$GITHUB_REPOSITORY" \
+            --color D73A4A \
+            --description "Flyto coding route health incident" \
+            --force
+          issue_number="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --label coding-watchdog \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [ -z "$issue_number" ]; then
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Coding watchdog requires attention" \
+              --label coding-watchdog \
+              --body-file "$RUNNER_TEMP/coding-watchdog.md"
+          else
+            gh issue edit "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body-file "$RUNNER_TEMP/coding-watchdog.md"
+          fi
+
+      - name: Close recovered incident
+        if: steps.health.outputs.healthy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue_number="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --label coding-watchdog \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [ -n "$issue_number" ]; then
+            gh issue close "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --comment "The external heartbeat is healthy again; closing automatically."
+          fi
+
+      - name: Fail when unhealthy
+        if: steps.health.outputs.healthy != 'true'
+        env:
+          REASON: ${{ steps.health.outputs.reason }}
+        run: |
+          echo "Coding watchdog failed: $REASON" >&2
+          exit 1

@@ -3,7 +3,9 @@
 `flyto_ai.coding` is a provider-neutral coding loop. The native implementer uses
 the configured Flyto2 provider (OpenAI, Anthropic, Ollama, or a compatible
 adapter) and requires no vendor agent SDK. An optional Claude adapter is its
-peer behind the same contracts; the operator selects exactly one at startup.
+peer behind the same contracts. A Codex CLI adapter can use an existing
+ChatGPT login in a separate non-interactive implementation session. The
+operator selects exactly one backend at startup.
 
 The public `code-mcp` and `code-serve` commands are one audit-required route:
 an implementer round ends at `awaiting_codex_audit`, and only an authenticated
@@ -328,6 +330,7 @@ authenticated loopback HTTP / configured-tenant MCP stdio
   -> exactly one startup-selected implementer
        native  -> FlytoCodingAgent
        claude  -> ClaudeCodingAgent (optional adapter)
+       codex   -> CodexCliCodingAgent (logged-in CLI adapter)
   -> real checks + evidence
   -> awaiting_codex_audit
   -> host/auditor verdict
@@ -339,12 +342,12 @@ authenticated loopback HTTP / configured-tenant MCP stdio
 The operator picks the implementer once, when the process starts:
 
 ```text
---implementation-backend native|claude      (default: native)
-FLYTO_AI_CODING_BACKEND=native|claude       (optional bounded default)
+--implementation-backend native|claude|codex      (default: native)
+FLYTO_AI_CODING_BACKEND=native|claude|codex       (optional bounded default)
 ```
 
 There is no per-job backend field, no provider/model auto-routing, and no
-fallback in either direction. An invalid or unavailable selection fails
+fallback among backends. An invalid or unavailable selection fails
 startup. `--max-rework-rounds` (default 3) is a process option too; a remote
 request cannot override either.
 
@@ -356,6 +359,18 @@ Its tool catalog is Read/Edit/Write/Glob with write authority and Read/Glob
 without; it never receives Bash, content search (`Grep`), or the audit tool, so
 an implementer cannot approve its own work. Rework continues in the exact same
 Claude SDK session; a changed or missing session identity fails closed.
+
+Selecting `codex` requires an explicit bounded `--model`; `--codex-command`
+can pin the installed executable. Startup verifies both without making a model
+call. Each round runs a separate `codex exec` process with user configuration
+and personal exec-policy rules ignored, no configured MCP/plugins/web search,
+a scrubbed runtime environment, and only Codex's `read-only` or
+`workspace-write` sandbox. Flyto binds the first structured `thread.started`
+identifier durably, derives changes from host snapshots, runs the same pinned
+checks, and stops at the same independent audit. Rework uses `codex exec
+resume` on that exact id. A missing/changed id, malformed or oversized JSONL,
+required unattached capability, unavailable check, or unexpected read-only
+write fails closed.
 
 ### Host-owned route lanes
 
@@ -903,6 +918,9 @@ a live leased job is left untouched.
   `..` escape, and symlink escape are rejected.
 - Native mode exposes only `read-only` and `workspace-write`; it has no
   unrestricted filesystem mode.
+- Codex CLI mode likewise exposes only `read-only` and `workspace-write`,
+  never danger-full. The implementation child ignores personal config/rules,
+  receives no Flyto MCP or audit tool, and inherits no provider or CI token.
 - Model-issued development commands use `execve`-style argv dispatch inside a
   detected OS sandbox (a pinned local Docker image or `bwrap` on Linux). They can
   read installed tooling and the workspace, but network access and workspace or
@@ -1071,6 +1089,122 @@ Local and CI cross-stack dependency authority comes from
 `stack-lock.json`. `scripts/stack_lock.py --workspace-parent ..` proves
 the three sibling checkouts equal the manifest; GitHub Actions derives those
 same checkout refs from the manifest before running the suite.
+
+### External coding watchdog
+
+`code-status` and `code-task-window` make failures inspectable, but a dead
+Codex cannot inspect itself. `code-watchdog` is the independent, deterministic
+observer for that gap. It never invokes an LLM and has no path to submit,
+audit, abandon, repair, commit or push anything. It only reads the two bounded
+host projections above and writes:
+
+```text
+~/.flyto/health/coding/latest.json    current secret-free aggregate health
+~/.flyto/health/coding/history.jsonl  transition-only, size-rotated history
+~/.flyto/health/coding/github.json    last successful remote heartbeat cursor
+```
+
+Records contain aggregate counts, stable reason codes, the local reader build
+digest and timestamps. They exclude prompts, repository paths, job/session
+identifiers, source, commands, evidence, credentials and provider responses.
+An executing task with no provably live owner becomes `critical` after the
+short orphan grace. Slow live execution, overdue Codex audit, a rolling stale
+build, status-recorder failure or emergency-spillway activation is
+`degraded`. No live Codex process is healthy when there is no stranded work;
+the observer never keeps a model process alive merely to satisfy itself.
+
+Run one observation or install the macOS LaunchAgent:
+
+```bash
+flyto-ai code-watchdog --state-dir ~/.flyto/coding-service --json
+flyto-ai code-watchdog --install --notify \
+  --state-dir ~/.flyto/coding-service \
+  --github-repository OWNER/REPOSITORY
+flyto-ai code-watchdog --uninstall --state-dir ~/.flyto/coding-service
+```
+
+The health directory and the state root must be disjoint. Neither may be the
+other or live inside it, and `--install` refuses the same overlap the one-shot
+run refuses (`watchdog_paths_overlap`). The observer would otherwise write
+health records into the durable coding-service tree it is forbidden to mutate,
+and would then observe its own writes as route activity.
+
+Both roots are resolved through their symlinks before that comparison, and the
+same resolved state root is what derives the LaunchAgent label. A path is
+compared as a directory, never as a spelling: an unresolved comparison lets
+`--health-dir` reach inside the state root through a link while the guard sees
+two unrelated strings, and lets `--install` and `--uninstall` compute two
+different labels for one state root — an uninstall that reports success and
+removes nothing while the agent keeps waking.
+
+`--install` validates every value it bakes into the plist — polling interval,
+stuck and orphan thresholds, heartbeat interval, repository, and variable name
+— against exactly the bounds the observing run applies. An option that the
+run path would reject can never be installed, because an agent that fails on
+every unattended wake is indistinguishable from no watchdog at all.
+
+The LaunchAgent runs once per minute by default. Unchanged healthy runs update
+`latest.json` but do not append history. A GitHub heartbeat is sent at most
+once every five minutes unless the fingerprint changes. It is written with a
+single `gh variable set` upsert through the already authenticated `gh` CLI, so
+a missing and an existing `FLYTO_CODING_HEARTBEAT` take the identical path; no
+token is placed in the plist or health files. The projection is refused
+locally if it ever exceeds GitHub's 48 KB variable limit rather than being
+silently truncated remotely.
+
+`state_readable` judges the status index by the publisher's own
+`MAX_STATUS_INDEX_BYTES`, not by the watchdog's smaller record limit. The
+writer owns that bound; applying a stricter one here would report a large but
+perfectly valid index as a route failure and manufacture an incident.
+
+The health directory is created `0o700`, but `--health-dir` is operator-supplied
+and may point under a world-writable parent, so the watchdog does not assume it
+owns every name inside it. `latest.json`, `github.json`, `history.jsonl` and
+`watchdog.lock` are opened `O_NOFOLLOW`, rotation tests each name with `lexists`
+so a planted link is rotated away instead of blocking every later append, and
+reads measure and drain a single descriptor rather than checking a name and then
+reading it. A refused history append reports `watchdog_history_unwritable`, and
+it is raised only after `latest.json` is already durable.
+
+Nothing secondary may cost the turn its local record. A hung `gh`, and a
+`github.json` cursor that cannot be written after the heartbeat has already been
+published, are both recorded as a `github_heartbeat` warning — the latter as
+`github_state_unrecordable` — rather than allowed to end the run. Losing the
+send-interval bookkeeping only means the next turn republishes an unchanged
+heartbeat; losing the record means the remote switch reads `healthy` while the
+local evidence a human would inspect was never written.
+
+`.github/workflows/coding-watchdog.yml` is the external dead-man switch. Every
+15 minutes it checks that the heartbeat is healthy and no older than 45
+minutes. Failure opens or refreshes one labelled issue and fails the Actions
+run; recovery closes that issue. This remote witness catches the case the
+local machine or LaunchAgent dies. Runs are serialized but never cancelled: the
+job's product is an incident, so a dispatch arriving between "the heartbeat is
+stale" and "open the issue" must not cancel the only step that reports it. It uses ordinary deterministic Actions, not
+GitHub Agentic Workflows, so healthy polling consumes no Claude, Codex,
+Copilot or Gemini quota. AI diagnosis can be added after an incident without
+placing an AI inside the liveness path.
+
+The workflow treats the repository variable as untrusted input, because any
+actor who can write repository variables can set it. Before anything is
+rendered it bounds the raw size, requires an object with the exact heartbeat
+schema, requires `observed_at` to be a plain in-range integer, requires
+`health` to be one of `healthy`, `degraded`, `critical`, and keeps only reason
+codes matching `[a-z][a-z0-9_]*`. The emitted `reason` is then re-checked
+against a single-line allowlist before it reaches `GITHUB_OUTPUT`. Without
+that last check a newline inside any rendered field would let the variable
+append its own `healthy=true` line and silence the dead-man switch it exists
+to trip. Each rejection has its own code — `heartbeat_missing`,
+`heartbeat_oversized`, `heartbeat_invalid`, `heartbeat_schema_invalid`,
+`heartbeat_timestamp_invalid`, `heartbeat_health_invalid`,
+`heartbeat_clock_invalid`, `heartbeat_stale` — so an operator can tell a bad
+publisher from a dead host. A malformed heartbeat is never optimistically
+treated as healthy.
+
+The first release is alert-only. Automatic job abandonment, workspace repair,
+service restart, audit acceptance and code mutation are intentionally absent;
+operators use the existing explicit, subtractive recovery commands after
+reading the stable reason codes.
 
 ### Diagnosing and recovering
 

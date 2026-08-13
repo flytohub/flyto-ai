@@ -9,11 +9,12 @@ replaceable ``code-mcp`` child. When the coding source digest changes, it
 restarts only that child at a safe job boundary and replays the MCP handshake.
 
 The proxy never retries a request whose delivery is uncertain and never
-replaces a worker while a job *this connection submitted* is non-terminal. New
-submissions are failed closed with ``service_reload_pending`` until that
+replaces a worker while a job this connection submitted, or explicitly sent
+back to implementation with a successful ``audit(rework)``, is non-terminal.
+New submissions are failed closed with ``service_reload_pending`` until that
 exact-session job reaches a terminal state. Jobs merely observed through the
-tenant-visible ``flyto_coding_get`` and ``flyto_coding_audit`` tools belong to
-other supervisors and never hold this worker back.
+tenant-visible ``flyto_coding_get`` tool or a non-rework audit belong to other
+supervisors and never hold this worker back.
 
 Every read from the worker is deadlined. This service only schedules or
 inspects background work, so a call that has not answered within seconds is a
@@ -46,6 +47,10 @@ WORKER_RESPONSE_TIMEOUT_SECONDS = 30.0
 #: The handshake is a pure in-process reply, so it is held to the same bound.
 WORKER_HANDSHAKE_TIMEOUT_SECONDS = 30.0
 TERMINAL_JOB_STATES = frozenset({"completed", "failed", "codex_accepted"})
+REWORK_JOB_STATES = frozenset({"rework_queued", "rework_running"})
+OBSERVABLE_JOB_TOOLS = frozenset({
+    "flyto_coding_submit", "flyto_coding_get", "flyto_coding_audit",
+})
 #: Mirrors the `--state-dir` default of `code-mcp` in `flyto_ai.cli`. It is a
 #: literal rather than an import so this module does not drag the CLI into
 #: every supervisor process; `tests/test_coding_mcp_supervisor.py` asserts the
@@ -513,22 +518,19 @@ class CodingMCPWorkerSupervisor:
     def _observe_job(self, raw: bytes, request: Mapping[str, Any]) -> None:
         """Update tracked jobs from one response, bounded by its own request.
 
-        Ownership is decided by the request a response answers, never by the
-        response alone. `flyto_coding_get` and `flyto_coding_audit` are
-        tenant-visible: they answer truthfully about jobs a *different*
-        supervisor submitted, on a different workspace, over a different
-        connection. Registering a non-terminal job seen through them would pin
-        this connection's worker to work it does not own, so every submission
-        here would be refused with `service_reload_pending` until somebody
-        else's job settled.
+        Ownership is decided jointly by the request and its truthful response.
+        A successful local submit owns its non-terminal job. A successful
+        `flyto_coding_audit` which explicitly requested `verdict=rework` also
+        owns the same requested job only when the response reports one of the
+        two non-terminal rework states: that call starts the next implementation
+        round even when another connection submitted the original job.
 
-        Only a successful `flyto_coding_submit` on this connection registers a
-        job. `_active_jobs` is therefore exactly the set of jobs submitted
-        locally and still non-terminal: a terminal observation may clear an
-        entry — including through `get` or `audit`, which is how a caller
-        reports its own job settled — but no observation can ever create one.
-        An idempotent submit replay names the same locally submitted job, so it
-        re-registers it and tracking survives the replay.
+        Reads, accept audits, unknown tools, malformed receipts, mismatched job
+        ids, and states inferred from response content alone never create
+        ownership. Only submit/get/audit responses may observe a job at all, so
+        a terminal receipt from an unknown tool cannot clear a pin. A terminal
+        truthful get/audit observation may clear only the matching entry
+        already tracked. Idempotent submit replay remains owned.
         """
 
         observed = self._observed_job(raw, request)
@@ -539,9 +541,11 @@ class CodingMCPWorkerSupervisor:
             # Clears only what is already tracked; a foreign job is not.
             self._active_jobs.pop(job_id, None)
             return
-        if self._tool_name(request) != "flyto_coding_submit":
-            return
-        self._active_jobs[job_id] = state
+        tool_name = self._tool_name(request)
+        if tool_name == "flyto_coding_submit":
+            self._active_jobs[job_id] = state
+        elif self._is_rework_audit(request) and state in REWORK_JOB_STATES:
+            self._active_jobs[job_id] = state
 
     @staticmethod
     def _observed_job(
@@ -555,6 +559,10 @@ class CodingMCPWorkerSupervisor:
         the job-id pattern check keeps a tracked job reconcilable: an id the
         durable reader would refuse could never be released again.
         """
+
+        tool_name = CodingMCPWorkerSupervisor._tool_name(request)
+        if tool_name not in OBSERVABLE_JOB_TOOLS:
+            return None
 
         try:
             response = json.loads(raw)
@@ -579,6 +587,14 @@ class CodingMCPWorkerSupervisor:
             return None
         if not _JOB_ID_RE.fullmatch(job_id):
             return None
+        if tool_name in {"flyto_coding_get", "flyto_coding_audit"}:
+            params = request.get("params")
+            arguments = params.get("arguments") if isinstance(params, Mapping) else None
+            requested_job_id = (
+                arguments.get("job_id") if isinstance(arguments, Mapping) else None
+            )
+            if requested_job_id != job_id:
+                return None
         return job_id, state
 
     @staticmethod
@@ -594,6 +610,14 @@ class CodingMCPWorkerSupervisor:
     @classmethod
     def _is_submit(cls, request: Mapping[str, Any]) -> bool:
         return cls._tool_name(request) == "flyto_coding_submit"
+
+    @classmethod
+    def _is_rework_audit(cls, request: Mapping[str, Any]) -> bool:
+        if cls._tool_name(request) != "flyto_coding_audit":
+            return False
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        return isinstance(arguments, Mapping) and arguments.get("verdict") == "rework"
 
     @staticmethod
     def _protocol_error(request_id: Any, code: int, message: str) -> bytes:

@@ -2,6 +2,106 @@
 
 Last updated: 2026-08-12
 
+## Host-only coding watchdog and remote dead-man switch (2026-08-12)
+
+`flyto-ai code-watchdog --state-dir <dir> [--health-dir <dir>] [--json]` is the
+independent, non-AI observer of the coding control plane. It reads the same
+bounded status index and task window as `code-status` / `code-task-window`,
+invokes no model, and cannot submit, audit, abandon, repair, commit or push.
+
+It writes only `~/.flyto/health/coding/`: `latest.json` every run,
+`history.jsonl` on transitions (size-rotated, 4 archives), and `github.json` as
+the heartbeat cursor. All three hold aggregate counts, stable reason codes, the
+reader build digest and timestamps — no prompts, paths, job/session ids,
+evidence or credentials. A single `flock` prevents overlapping runs.
+
+`--install` / `--uninstall` manage a per-state-root macOS LaunchAgent (60s
+default). `--github-repository OWNER/REPO` publishes the secret-free heartbeat
+to a GitHub Actions repository variable via the already-authenticated `gh` CLI;
+no token reaches the plist or any health file.
+`.github/workflows/coding-watchdog.yml` polls that variable every 15 minutes
+and opens, refreshes or closes one labelled issue. It is deterministic Actions,
+not an agentic workflow, so healthy polling consumes no model quota.
+
+Alert-only in this release: recovery stays with the existing explicit
+subtractive commands. The MCP tool inventory is unchanged.
+
+Hardening applied 2026-08-12 (uncommitted): the workflow validates the
+untrusted heartbeat variable field by field and re-checks the emitted `reason`
+against a single-line allowlist before writing `GITHUB_OUTPUT`, closing a
+forged-`healthy=true` path; `state_readable` uses the publisher's
+`MAX_STATUS_INDEX_BYTES` rather than the watchdog's record limit; the state
+root and health directory must be disjoint (`watchdog_paths_overlap`) and are
+now compared and labelled after symlink resolution, so neither a linked
+`--health-dir` nor a linked `--state-dir` can defeat the overlap guard or split
+one state root into two LaunchAgent labels; `--install` validates every plist
+value through the same validator the observing run uses; and the remote
+heartbeat is one bounded `gh variable set` upsert with a 48 KB local ceiling.
+
+Consolidation pass 2026-08-12 (uncommitted): the health directory is now
+treated as a location the watchdog does not own exclusively, because
+`--health-dir` may legitimately be given a world-writable parent. Every record
+opened by name — `latest.json`, `github.json`, `history.jsonl`,
+`watchdog.lock` — is opened `O_NOFOLLOW`, `_read_json` measures and reads one
+descriptor instead of checking a name and then reading it, and rotation uses
+`lexists` so a planted link is rotated away rather than left for the next
+append. A refused append reports `watchdog_history_unwritable` after
+`latest.json` is already durable. A failed heartbeat-cursor write is a
+`github_heartbeat` warning (`github_state_unrecordable`) rather than a lost
+turn, so the remote switch can never read `healthy` while the local record was
+silently skipped. The workflow no longer sets `cancel-in-progress`.
+
+Coverage added 2026-08-12: one test drives a full `run_watchdog_once` turn
+against a real state root and asserts the observed tree is byte-identical
+afterwards; one asserts the `code-watchdog` parser hands the observer the
+module's own default thresholds rather than a drifting second copy; and four
+cover the consolidation pass — a symlinked `latest.json`, `history.jsonl` and
+`watchdog.lock`, and an unrecordable heartbeat cursor.
+
+Known gaps: LaunchAgent install/uninstall is macOS-only and its `launchctl`
+path is not exercised by automated tests; the GitHub workflow's live behaviour
+has not been observed against a real repository variable yet, and its
+`gh issue` create/refresh/close steps are untested (its heartbeat validator is
+extracted from the YAML and executed by the suite).
+
+Verification status — READ BEFORE COMMITTING.
+
+Passing evidence exists, but it was not produced by Claude. Codex independently
+reran the repository suite against this working tree on 2026-08-12 and reported
+**3564 passed, 17 skipped in 629.53s** with fail-fast, and **80 passed in
+70.08s** for the focused `tests/test_coding_watchdog.py tests/test_cli.py`
+pair. That is the current best evidence that this revision is green, and it
+covers every test added for the watchdog.
+
+The host implementation verifier separately reported the full suite at exit 1.
+That result and Codex's green run disagree, and the disagreement is not yet
+explained by any observed failing test — no failing node id has been captured
+by anyone. The most likely non-source explanation is the declared budget:
+`.flyto/coding.yaml` gives `check.tests` `timeout_seconds: 900`, Codex measured
+629.53s, and `core_capability_bridge` runs pytest immediately before it. A
+suite sitting at ~70% of its own timeout will exceed it under load, and a
+timeout kill is indistinguishable from a test failure in the exit code. That
+file is outside the change scope for this work and was deliberately not
+touched; whoever owns the verification contract should decide whether the
+budget is right.
+
+Claude has still never executed a check here. Across all five sessions that
+touched this work, `pytest`, `ruff`, `compileall`, `stack_lock.py`,
+`generate_reference.py --check`, `mcp__flyto-indexer__verify` and
+`mcp__flyto-indexer__task validate` were refused by the local approval gate —
+in the last two sessions through direct invocation, through both indexer MCP
+tools, and through a subagent, which hit the same gate. The only command that
+has ever run from Claude is `run_project_action generate_reference` (exit 0,
+23 files rewritten). No strict post-indexer gate has been evaluated from this
+side, so the consolidation pass above is static review only and Codex's green
+run predates it.
+
+Before committing, run every declared check in `.flyto/coding.yaml` —
+`stack_lock`, `compile`, `lint`, `generated_reference`,
+`core_capability_bridge`, `tests` — and if `tests` fails, capture the failing
+node id rather than the exit code, so the timeout hypothesis above is either
+confirmed or replaced by a real defect.
+
 ## Repo-set concurrency and unified task window (2026-08-12)
 
 Host-global ownership is now per durable repository set instead of per
@@ -449,7 +549,7 @@ Codex
   -> flyto-ai coding service (code-mcp / code-serve, audit-required)
   -> host-owned Indexer pre-work gate (mandatory, before any model edit)
   -> host-owned Blueprint discovery (mandatory lane, read-only projection)
-  -> startup-selected implementer: native or claude
+  -> startup-selected implementer: native, claude, or codex
      + required source-controlled checks
   -> host-owned Core validation (mandatory lane, allowlisted validation calls)
   -> host-owned Indexer post-work gate (mandatory, final workspace state)
@@ -463,6 +563,15 @@ eligibility evidence for the caller, not an action the service performs.
 
 ### Implemented and covered by focused tests
 
+- Explicit `codex` implementation backend for the audited service route. It
+  pins one startup executable and model, opens a separate non-interactive Codex
+  CLI thread using the existing ChatGPT login, ignores user configuration and
+  personal exec-policy rules, scrubs ambient provider/CI credentials, loads no
+  MCP/plugins/web search, and uses only `read-only` / `workspace-write` sandbox
+  modes. Host-owned snapshots, required checks, route lanes, exact-session
+  rework, and independent audit remain unchanged. Focused adapter tests pass,
+  and real initial/resume probes succeeded with the bundled Codex CLI and
+  `gpt-5.6-sol` under the scrubbed environment.
 - The public package and coding service now require Python 3.11 or newer.
   Mission continuation uses SQLite `serialize()` / `deserialize()` to bind its
   in-memory authority database into a pathname-free byte envelope; CPython
@@ -504,10 +613,11 @@ eligibility evidence for the caller, not an action the service performs.
   can be landable.
 - Guarded Claude SDK adapter with stable same-session identity, workspace-
   confined tools, no Bash, no content search, and no audit tool.
-- Startup backend selector `--implementation-backend native|claude` with the
+- Startup backend selector `--implementation-backend native|claude|codex` with the
   bounded `FLYTO_AI_CODING_BACKEND` default, no per-job override and no
   fallback; the Claude route is pinned to `claude-opus-5` and reads only
-  bounded `FLYTO_AI_CC_*` settings.
+  bounded `FLYTO_AI_CC_*` settings, while Codex requires an explicit model and
+  optionally pins `--codex-command`.
 - Public audit surface on both transports: `flyto_coding_submit`,
   `flyto_coding_get`, `flyto_coding_audit`, and authenticated
   `POST /v1/coding/jobs/{job_id}/audit`.
@@ -955,6 +1065,30 @@ Implemented:
   only trusted Blueprint module hints, queries Core through `core_tools`, and
   emits a bounded, snapshot-bound shortlist with semantic coverage and
   ambiguity evidence. Alias matching remains legacy fallback only.
+- Capability routing now also accepts the exact optional
+  `flyto.ai.capability-retrieval-handoff.v2` terminal handoff under frozen host
+  authority. It preserves and validates the real Blueprint request/page and
+  Cloud result/feasibility contracts, including exact upstream digest meanings,
+  producer model and hard-filter dialect, terminal dual-continuation state,
+  open discovery via empty capability IDs, `/`-capable upstream identifiers,
+  exact 128-character model identifiers, bounded detached AI-local context and
+  Goal Frame digest inputs,
+  cross-resource feasibility independent of page membership, and deterministic
+  expansion to all distinct installed providers bound to the accepted
+  document. Cloud feasibility is bounded to 128 canonical capability keys.
+  `CAPABILITY_GROUP_LIMIT` caps 32 groups, while independent
+  `EMITTED_PROVIDER_ROW_LIMIT` caps 32 provider rows and fails closed before a
+  group could be partially emitted. Blueprint retains request/model/index/
+  snapshot/page/candidate digest meaning; Cloud retains query-context/
+  requirements/feasibility/result digest meaning. Host validation grants the
+  candidate-only result no execution authority. Exact pins are Blueprint
+  `f3eb62eff97fac3b3f19d2f1c8d7c1e71664894b`, Core
+  `a048bc47de158c096b7010642452e4d41d21748c`, and Indexer
+  `b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`. Separate AI-local goal/context/frame digests
+  prevent upstream field overloading. The <=32 candidates only narrow and
+  boundedly hint the existing route;
+  vector score is non-authoritative and the existing planning, permission,
+  safety/human-gate, and execution closure remains required.
 - Tool permissions enforce the selected route at dispatch time, so a provider
   cannot turn a denied answer-only request into a raw MCP action.
 - Learned Blueprint trust evidence fails closed for malformed types, non-finite
@@ -1107,7 +1241,7 @@ no local test establishes.
 ### Workspace-relative verification tools (2026-08-12)
 
 Repository contracts may name an executable relative to the repository, such
-as `.venv/bin/python`. Submit preflight, both native and Claude adapters, and
+as `.venv/bin/python`. Submit preflight, the native, Claude, and Codex adapters, and
 the post-implementation runner now resolve that path from the requested
 workspace, matching the cwd used by the real check process; the result no
 longer depends on where the long-lived MCP supervisor was started. A live
@@ -1131,3 +1265,34 @@ Generated references regenerated with the canonical generator.
 Not yet proven live: the sibling Indexer package's real `task_contract`
 behaviour. The declared contract is exercised with a faithful fake at the
 capability boundary; Codex owns the controlled package load.
+
+## 2026-08-12 — Scheduler durable convergence implementation
+
+- Scheduler now has an explicit durable mode backed by an owner-only bounded
+  catalog plus the existing generic MissionStore. Definitions, enablement,
+  cursors, deterministic slot claims, bounded public results, and MissionStore
+  identifiers survive restart; executor authority does not exist in the
+  catalog.
+- The durable path uses idempotent mission/work-item operations, stable slot
+  keys, real dispatch leases and fencing, automatic heartbeat, strict untrusted
+  result validation, budget-as-policy failure, and blocked rather than fixed
+  closure for unsuccessful occurrences.
+- Cron is a dependency-free strict five-field UTC evaluator. Interval and
+  one-shot slots advance from persisted cursors, with at most one missed slot
+  admitted per scheduler pass.
+- Rollback is source-level: callers can omit `state_root` to retain the clearly
+  labelled legacy ephemeral behavior; removing the durable adapter does not
+  require or permit weakening MissionStore schema v1.
+## 2026-08-13 coding MCP cross-connection rework ownership
+
+- The stable supervisor now treats a successful, correctly addressed
+  `flyto_coding_audit` with explicit `verdict=rework` as the mutating start of
+  the next implementation round. It pins only the same well-formed job returned
+  in `rework_queued` or `rework_running`, preserving that worker across source
+  drift until truthful matching terminal observation or durable terminal state.
+- Tenant-visible `get`, accept and error observations, malformed/wrong-job
+  responses and response-state inference remain non-owning. Unknown tools have
+  no observation authority at all and cannot clear a tracked pin with a
+  terminal-shaped receipt; only exact submit/get/audit responses are observed.
+  Existing submit ownership, polling, reload-pending behavior, and the exact
+  three-tool public inventory are unchanged.

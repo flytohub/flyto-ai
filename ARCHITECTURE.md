@@ -271,6 +271,7 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
        -> exactly one startup-selected implementer
             native -> the FlytoCodingAgent control flow above
             claude -> ClaudeCodingAgent (optional adapter, same contracts)
+            codex  -> CodexCliCodingAgent (logged-in CLI, same contracts)
           + required source-controlled checks
        Core validation         (allowlisted calls closed by validate_params)
        Indexer post-work       (mandatory: task.validate, task.gate.verify,
@@ -299,6 +300,16 @@ host-declared Indexer result and strand an otherwise attributable strict-route
 session. The larger bound applies only to audited service mode, remains finite,
 and changes neither the tool catalog nor any request, evidence, or authority
 budget. Legacy direct Claude calls keep the SDK default.
+
+The Codex service adapter is a separate non-interactive CLI session, never the
+auditor session. Startup pins one executable and model. The child ignores user
+configuration and personal exec-policy rules, receives only the small runtime
+environment needed for ChatGPT authentication, loads no MCP/plugin/web-search
+authority, and runs in Codex's `read-only` or `workspace-write` sandbox. The
+host binds the first structured `thread.started` id before accepting work,
+derives changed paths from its own before/after snapshots, runs the same
+source-controlled checks, and still stops at `awaiting_codex_audit`. Rework
+resumes that exact CLI thread; missing or changed identity fails closed.
 
 The pre-work route accepts the two published Indexer gate vocabularies:
 legacy `assess` / `implement` and current `plan_changes` / `apply_changes`. The
@@ -508,10 +519,12 @@ Startup authority — approval policy, sandbox mode, config path, sandbox image,
 checks, capabilities — is never persisted and is re-imposed from the running
 process, so a stored request cannot outlive or widen the policy it ran under.
 
-The native implementer is the default and `claude` is its peer, selected once
-with `--implementation-backend` or the bounded `FLYTO_AI_CODING_BACKEND`
-default. There is no per-job selection and no fallback between them. The
-public `code-mcp` and `code-serve` commands are audit-required
+The native implementer is the default and `claude` / `codex` are its peers,
+selected once with `--implementation-backend` or the bounded
+`FLYTO_AI_CODING_BACKEND`
+default. The Codex adapter additionally requires a startup `--model` and may
+pin the executable with `--codex-command`. There is no per-job selection and
+no fallback among them. The public `code-mcp` and `code-serve` commands are audit-required
 unconditionally: an implementer round reaches `awaiting_codex_audit`, and only
 an `accept` verdict on that exact revision reaches `codex_accepted` with
 `landable` evidence. A `rework` verdict returns typed findings to the same job
@@ -742,6 +755,27 @@ context. CI and local audited verification likewise share one dependency
 authority, `stack-lock.json`, rather than separately embedded sibling
 revisions.
 
+`flyto_ai/coding/watchdog.py` sits outside every session as a read-only
+observer of those same two projections, reached through `code-watchdog`. It is
+not a lane, not an MCP tool, and not an AI: it evaluates fixed thresholds,
+emits stable reason codes, and holds no scheduling, implementation, audit,
+repair, commit or push authority. It writes only aggregate health under
+`~/.flyto/health/coding/`, and may publish a secret-free heartbeat to a GitHub
+Actions repository variable through the already-authenticated `gh` CLI. Its
+health directory is required to be disjoint from the state root after symlink
+resolution, which is what keeps the observer strictly outside the tree it
+observes rather than a writer inside it. A
+deterministic scheduled workflow reads that variable as the off-host dead-man
+switch, which is the only layer able to observe the local machine itself
+dying. Because that outer layer is the last witness, every failure in the
+publish path — a hung `gh` and an unwritable heartbeat cursor alike — is
+converted to a stable code carried inside the record rather than raised, so
+publishing can never cost the local health record. For the same reason the
+health directory is treated as a location the observer does not exclusively
+own: every record there is opened `O_NOFOLLOW`, so a symlink planted under an
+operator-chosen world-writable parent can neither redirect the watchdog's
+appends nor choose what it reads back as its own prior state.
+
 Where the host has no inter-process lock the service refuses to start at all
 (`CodingAuthorityUnavailable`, `execution_authority_unavailable`) rather than
 degrading: advertising multi-process isolation a host cannot keep is worse than
@@ -809,6 +843,20 @@ the amendment target list can narrow the intent ledger below files earlier
 rounds already attributed to the job. The host therefore unions the bounded,
 revision-proven prior paths with the explicit targets parsed from the new audit
 finding before `task(action="plan")`; first-round requests remain unchanged.
+Because audit prose also carries commands, check output, and evidence
+references, an existing path mentioned there becomes a new amendment target
+only when a mutation cue governs it in the same bounded clause. Execution and
+evidence references remain context, not edit authority; the proven prior set is
+still sent unchanged when no new mutation target exists.
+The projection recognizes regeneration of a tracked output as mutation, while
+a later execution connector (`using`, `via`, `use`, `call`, `calling`, `run`,
+`execute`, `invoke`, `with`, `through`, or bare `by`) cuts off that authority
+before the program. The execution forms `by running`, `by executing`, and
+`by invoking` remain boundaries; the explicit mutation forms `by modifying`,
+`by editing`, `by updating`, and `by changing` instead authorize the program.
+If the same instruction explicitly modifies both output and program, both
+remain targets. Generic inclusion or evidence language alone never grants edit
+scope.
 
 Plan-authority refusals are closed, terminal and report `verification` or
 `workspace` phase with `resubmit_against_current_contract`. A capability's own
@@ -819,3 +867,189 @@ No product topology changes: `flyto-cloud` remains parallel to and level with th
 combined `flyto-code` / `flyto-engine` column, and no repository ownership or
 integration arrow moves. See `docs/CODING_CONTROL_PLANE.md` and `DECISIONS.md`
 (2026-08-10).
+
+## Durable Scheduler adapter (2026-08-12)
+
+The Scheduler is an adapter onto `flyto_ai.orchestration.mission_control`, not
+a second execution scheduler. Its small durable catalog stores only canonical
+task definitions, enabled flags, persisted due cursors and unique task/slot
+claims, bounded secret-minimized result projections, and the identifiers that
+map each occurrence to one MissionStore generation and work item.
+
+Each task has one bounded MissionStore generation at a time. A fixed internal
+anchor is the generation root; occurrences are bounded side items. Generation
+rollover occurs before the MissionStore work-item limit and only after the old
+generation is explicitly closed. Execution begins only inside a real
+`DispatchHandle`; the handle heartbeats during the async await and its live
+lease/fence is required for truthful fixed or blocked closure. The catalog has
+no running, worker, lease, fence, reclaim, or success authority.
+
+Durable storage is owner-only, bounded, schema-exact, atomically transacted,
+cross-process locked, and rejects symbolic-link or path displacement. Operation
+receipts are acknowledged only after the corresponding catalog mapping or
+outcome is durable. Without `state_root`, Scheduler remains explicitly
+process-local and advertises no durable guarantees.
+
+## Governed Execution Session boundary (2026-08-13)
+
+`flyto_ai.execution_session` is a domain-neutral validation bridge between a
+host's already-observed activation claim and capability planning. It accepts an
+exact versioned Space, activation, and goal-frame request, but identity and the
+source, domain, permission, and capability ceilings come only from a verified
+host `ExecutionAuthority`. The bridge normalizes the goal through the existing
+goal-frame contract, gives those ceilings to `route_capabilities` as hard-filter
+context, and returns only detached canonical JSON planning input, a
+principal-minimized authority projection, the capability route, and
+request/authority/route digests. A canonical overall digest additionally binds
+the result contract version and every governed result payload field while
+excluding only its own field. Request and result have distinct contract versions
+so a response cannot be replayed as an activation claim.
+
+Canonicalization is bounded before recursion or digesting: maximum JSON depth
+is 32 (root at depth zero); a request is limited to 4,096 nodes and 262,144
+UTF-8 bytes; trusted manifests collectively allow 500,000 nodes and 8,388,608
+bytes; trusted Blueprints allow 500,000 nodes and 1,048,576 bytes. JSON integers
+are limited to -9,223,372,036,854,775,807 through
+9,223,372,036,854,775,807, activation timestamps additionally to
+0..253,402,300,799,999 milliseconds, and the route limit is a non-boolean
+integer from 1 through 32. Catalog item-count ceilings remain 10,000 manifests
+and 32 Blueprints. A node is each container or scalar value, including the
+root; object keys consume the byte budget but are not separate nodes. These
+limits are rejection boundaries, not truncation.
+
+Activation sources are closed to exactly `typed`, `voice_reviewed`,
+`external_agent`, and `mission_card`, preserving the existing v1 ingress and
+storage vocabulary. All four require `observed_wake_word` to be exact JSON null;
+`voice_reviewed` means upstream-reviewed voice input and does not prove or imply
+wake detection. Raw `voice`, `button`, and unknown sources fail closed. A Space
+may have an exact-empty display name and zero configured wake words. A non-empty
+display name must contain a non-whitespace character; it is not trimmed or
+collapsed, and existing NFC normalization remains the only normalization.
+Supplied values remain bounded and text-safe, and neither field supplies identity. Its exact
+`active_timeout_ms` field is an integer from 1 through 300,000 and directly
+bounds `expires_at_ms - activated_at_ms` without unit conversion. A Space
+display name is not an implicit wake word. This module does not listen to a
+microphone, detect speech, perform STT, choose an identity or LLM provider, call
+Cloud, control a device or robot, execute work, or schedule work. Those remain
+upstream or downstream host/runtime responsibilities. The bridge adds no
+fallback, opt-out, product-topology edge, or execution authority.
+
+Rollback is removal of this adapter and its callers while retaining the existing
+`normalize_goal_frame` and `route_capabilities` contracts. Hosts must then stop
+admitting this request contract; they must not bypass the bridge by translating
+untrusted request fields into router context.
+
+Supervisor hot-reload ownership is request-and-response bound. A connection
+pins a non-terminal job after its own successful submit, and also after a
+successful `flyto_coding_audit` request that explicitly carries
+`verdict=rework` returns the same well-formed job in `rework_queued` or
+`rework_running`: that audit has started the next implementation round even if
+another connection submitted the original job. Tenant-visible `get`, accept
+audits, failed or malformed replies, mismatched job ids, unknown tool names,
+and response state alone never create or clear ownership. Only the exact
+submit/get/audit tool responses may observe a job; truthful matching terminal
+get/audit state, or the bounded durable-state reader, releases only an existing
+pin. Build drift preserves a pinned worker until that release. This changes no
+public tool or product-topology edge.
+
+## Capability Card/catalog boundary, phase 1 (2026-08-13)
+
+`flyto_ai.capability_catalog` is a dependency-free, provider- and domain-neutral
+trust boundary. Exact `flyto.capability-claim.v1` untrusted claims contain only
+display text, normalized semantic identifiers, semantic origin, and nullable
+source kind/reference. Frozen `CapabilityAuthority` separately supplies tenant,
+Space, stable catalog capability id, the exact claim-digest binding, explicit
+host verification, capability approval/verification, active, and retired state.
+Host verification must be exactly true and is not implied by either capability
+flag. Unknown claim fields—including
+authority, parameters, payloads, prompts, credentials, endpoints, raw manifests,
+and aliases—fail closed.
+
+Canonical claims are NFC-normalized, key ordered, list-set normalized,
+versioned, structurally bounded, and SHA-256 digested. A card exists only when
+the host binding matches that exact digest.
+Snapshots detach each untrusted Mapping exactly once from bounded `items()`;
+duplicate/inconsistent keys and any hostile iterator or getter failure become a
+fixed content-free boundary error before validation reads the snapshot.
+Autonomous routing additionally
+requires a non-blank title and summary, at least one semantic identifier, a
+bounded non-blank source reference, and approved, capability-verified, active,
+non-retired state under verified host authority. A source identifier never
+synthesizes description or completeness. `static_derived` records untrusted
+semantic origin and cannot mint verification. All represented draft, inactive,
+retired, or incomplete states remain audit-visible and explicitly non-routable.
+
+Separate `flyto.capability-card.v1` and `flyto.capability-search.v1` outputs are
+detached ordinary JSON. The Card retains the bounded canonical claim solely so
+projection can recompute its digest and rebuild every claim-derived and
+host-owned field; any mismatch fails before projection. Search uses an exact
+allowlist of host ids, digest,
+trust/lifecycle flags, display text, source kind, and normalized semantic ids;
+it excludes the canonical claim, source reference, and runtime data. This phase implements only the
+Card/catalog trust and search-document contract: no persistence, vector index,
+retrieval/rerank, runtime installation, execution, approval service,
+verification service, UI, router, provider, MCP runtime, workflow executor,
+Cloud, Blueprint, or Core integration.
+
+Rollback removes this standalone module and stops admitting its three v1
+contracts. Goal Frame, `capability_router`, Execution Session, product topology,
+and runtime APIs remain unchanged.
+
+### Capability retrieval-to-routing boundary (Phase 2, 2026-08-13)
+
+The provider-neutral `flyto.ai.capability-retrieval-handoff.v2` edge is
+implemented in `flyto_ai.capability_router`. It embeds the exact accepted
+Blueprint query/page and Cloud result/feasibility shapes instead of renaming or
+redefining their fields. Frozen host authority separately binds tenant,
+workspace, Space, request, query context, requirements, result, model, index,
+and snapshot digests. AI binds its own input with distinctly versioned
+`goal_digest`, `routing_context_digest`, and `goal_frame_digest` fields. Routing
+context and normalized Goal Frame are exact-JSON snapshotted under depth, node,
+byte, finite-number, and integer bounds before hashing or returning. Blueprint
+model ID/version keep their 128-character producer limit; 192-character scope
+and capability fields are unchanged.
+
+The router accepts only a complete terminal full top-k page of at most 32
+active candidates: input and next Blueprint cursors and Cloud continuation are
+null, `page_size == top_k`, feasibility is true, and every layer is
+candidate-only without execution authority. Candidate fields, integer score
+order, content digests, and Cloud `candidate_resources` remain exact upstream
+truth. The exact Blueprint model dialect and active/ACL/risk/resource/
+capability hard filters are rebuilt. Empty capability IDs mean open discovery;
+nonempty lists constrain membership. Blueprint's `/`-capable identifier dialect
+and field-specific bounds are preserved separately from local router IDs. One capability candidate expands to every
+distinct installed full provider bound to its accepted document; duplicate
+identities and unbound documents fail closed. `CAPABILITY_GROUP_LIMIT` caps 32
+canonical groups, independently of `EMITTED_PROVIDER_ROW_LIMIT`, which caps 32
+projected provider rows. Equal current values do not share units or authority;
+every selected group expands in full-identity order, and an oversized group
+fails closed without partial emission.
+Cloud feasibility accepts at most 128 canonical capability keys. Those keys
+need not occur on the page, and requirements may span distinct resources
+without implying co-location.
+
+Retrieval narrows installed/registered manifests and contributes at most one
+ranking point. It cannot create a manifest, provider identity, semantic match,
+resource or ACL fact, risk decision, grant, approval, verification, workflow
+parameter, secret, or execution authority. Goal Frame semantics and the
+existing hard filters remain authoritative; installed safety and human-gate
+controls remain available. Final candidates still resolve through the exact
+four-field provider identity and still require planning, permission, and
+execution closure. The emitted v1 evidence is digest-only and repeats the
+candidate-only/non-execution boundary.
+
+This implements a local AI trust edge, not a new product-ownership or runtime
+topology arrow. `flyto-cloud` remains parallel to the combined
+`flyto-code`/`flyto-engine` column. No sibling Cloud or Blueprint source is
+imported, and a vector backend remains non-authoritative. Rollback removes the
+optional retrieval arguments and evidence while preserving the existing route
+API and all hard filters.
+
+The producer boundary is locked to Blueprint
+`f3eb62eff97fac3b3f19d2f1c8d7c1e71664894b`, Core
+`a048bc47de158c096b7010642452e4d41d21748c`, and Indexer
+`b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`. Blueprint remains authoritative
+for request/model/index/snapshot/page/candidate digest meanings; Cloud remains
+authoritative for query-context/requirements/feasibility/result meanings. Host
+validation binds those meanings, while the handoff and route evidence remain
+candidate-only and confer no execution authority.

@@ -1,5 +1,164 @@
 # Decisions
 
+## 2026-08-13 — Capability search revalidates canonical claims under host verification
+
+- A phase-one Card retains its bounded canonical claim solely as validation
+  material. Search projection recomputes the exact claim digest, rebuilds the
+  Card under frozen authority, and rejects any field mismatch; no independently
+  recomputable Card digest is treated as authority.
+- `host_verified` is an explicit frozen-authority fact distinct from capability
+  approval and verification and must be exactly true. Completeness additionally
+  requires a bounded non-blank source reference. Identifiers never synthesize
+  display or semantic content.
+- The projection excludes the canonical claim and source reference as well as
+  parameters, defaults, payloads, prompts, headers, credentials, tokens,
+  secrets, MCP arguments, endpoints, and raw bodies. This remains a contract
+  only, with no downstream catalog, retrieval, routing, runtime, or UI.
+- Public claim and Card boundaries snapshot an untrusted Mapping once through
+  bounded items and thereafter read only the detached exact dict. Duplicate or
+  inconsistent entries and arbitrary iterator/getter faults fail with a fixed
+  content-free `CapabilityCatalogError`, preventing caller exception leakage.
+
+
+## 2026-08-12: Codex CLI is an explicit implementation backend, not a route bypass
+
+Claude quota must not decide whether the Flyto route exists, but replacing the
+route with ad-hoc direct edits would also discard the very evidence the route
+was built to protect. We therefore add `codex` as a third startup-selected
+implementer behind the existing `CodingService`; it does not become a per-job
+fallback and it cannot skip Indexer, Blueprint, Core, checks, or audit.
+
+The implementation process is deliberately not the auditor process. Flyto
+starts a separate non-interactive Codex CLI thread, pins the executable and
+model at service startup, binds the structured thread id durably, and resumes
+that exact id for typed audit rework. The outer Codex session receives only the
+host-derived revision and evidence and remains the sole principal that can
+submit an accept/rework verdict. Sharing a model family or ChatGPT account does
+not merge those roles or their session state.
+
+The child gets less ambient authority than an ordinary personal Codex run. It
+uses `--ignore-user-config` and `--ignore-rules`, has no configured MCP server,
+plugin, web search, browser, computer-control, or audit tool, and inherits only
+the small runtime environment needed to launch and authenticate the CLI.
+Provider and CI credentials are excluded. Its command execution remains inside
+Codex's bounded `read-only` / `workspace-write` sandbox, never danger-full.
+Flyto independently snapshots the workspace before and after, runs the pinned
+repository checks, and refuses a changed/missing session, unexpected read-only
+write, invalid JSONL, missing verification tool, or required capability.
+
+Selection stays startup-only: `--implementation-backend codex` requires an
+explicit bounded `--model`; `--codex-command` may pin the installed executable.
+There is no automatic fallback from Claude/native, no remote backend field, and
+no audit-disable flag. Rollback is configuration: restart the service with
+`native` or `claude`. Existing jobs stay bound to their recorded implementation
+backend and session; they are never silently migrated.
+
+## 2026-08-12: The coding watchdog observes; it never acts, and it is not an AI
+
+`code-status` and `code-task-window` make failure inspectable, but a dead or
+wedged Codex cannot inspect itself. The observer for that gap is deliberately
+the dumbest component in the system.
+
+It is not an AI. A model in the liveness path is a model that can be wrong
+about whether the system is alive, can burn Claude/Codex/Copilot/Gemini quota
+on healthy polling, and can fail for the same reason the thing it watches
+failed. `code-watchdog` therefore evaluates fixed thresholds over the two
+bounded projections that already exist and emits stable reason codes. The
+GitHub side is an ordinary scheduled workflow, not a GitHub Agentic Workflow,
+for the same reason. AI diagnosis may be attached *after* an incident is
+opened; it is never what decides that one exists.
+
+It has no authority. The first release is alert-only: no automatic job
+abandonment, workspace repair, service restart, audit acceptance, commit, or
+push. An observer that can act is a second control plane, and a second control
+plane racing the first is how a stuck job becomes a lost one. Operators use the
+existing explicit, subtractive recovery commands after reading the reason
+codes.
+
+It records aggregates, not identities. Health files carry counts, reason codes,
+the reader build digest, and timestamps. Job ids, session ids, repository
+paths, prompts, evidence, and credentials never reach `~/.flyto/health/coding/`
+and never reach the remote heartbeat, because the heartbeat lands in a *public*
+GitHub Actions repository variable. The `gh` CLI supplies its own
+already-authenticated credential, so no token is written into the LaunchAgent
+plist or any health file.
+
+Liveness is layered, and the outer layer is off-host. The LaunchAgent watches
+the coding service; the scheduled GitHub workflow watches the LaunchAgent. Only
+the remote witness can observe the case where the local machine dies, which is
+exactly the case a local watchdog cannot report. Consequently the local path
+must never fail in a way that skips recording: a hung or missing `gh` is
+converted to a stable code rather than raised, so one bad heartbeat cannot also
+cost the local health record.
+
+An idle host is healthy. Requiring an always-on model process would waste quota
+and quietly turn the watchdog into the thing that keeps a Codex alive. Absence
+of work is only a fault when work is stranded.
+
+## 2026-08-12: The watchdog's own inputs are untrusted, and its bounds belong to their writers
+
+A monitor is only worth its uptime if it cannot be talked out of alerting. Three
+rules follow, and they apply to the watchdog itself rather than to what it
+watches.
+
+The public heartbeat is untrusted input. `FLYTO_CODING_HEARTBEAT` is an Actions
+repository variable, so anyone able to write repository variables can choose
+what the dead-man switch reads. The workflow therefore bounds the raw size
+before parsing, requires the exact schema, requires a plain in-range integer
+timestamp, allowlists `health` to the three levels the publisher can emit, and
+allowlists reason codes. The emitted `reason` is re-checked against a
+single-line character allowlist immediately before it reaches `GITHUB_OUTPUT`;
+that check is redundant by construction and kept anyway, because the failure it
+prevents is a newline forging `healthy=true` and silencing the exact alarm the
+workflow exists to raise. A malformed heartbeat is never optimistically read as
+healthy, and each rejection carries its own code so an operator can distinguish
+a bad publisher from a dead host.
+
+A bound belongs to whoever writes the file. `state_readable` now judges the
+route status index by the publisher's `MAX_STATUS_INDEX_BYTES`. A second,
+stricter copy of someone else's limit does not add safety; it manufactures
+incidents whenever the writer legitimately uses its own headroom, and a monitor
+that cries wolf is uninstalled.
+
+An installed configuration must be a runnable configuration. Every value baked
+into the LaunchAgent is validated at install time against exactly the bounds
+the observing run applies, through one shared validator rather than a second
+copy. The worst outcome for a dead-man switch is not a loud rejection at
+install; it is a successful-looking install that fails silently on every
+unattended wake. The same reasoning forbids the state root and health directory
+from overlapping: an observer writing into the tree it observes both mutates
+durable coding-service state it has no authority over and triggers on itself.
+
+A path is identified as a directory, never as a spelling. Both roots are
+resolved through their symlinks before the overlap comparison, and the resolved
+state root is what derives the LaunchAgent label. A lexical `abspath` is not a
+containment check — `--health-dir <link-into-state-root>` presents the guard
+with two unrelated strings — and it is not an identity either: install
+resolving while uninstall does not yields two labels for one state root, so
+`--uninstall` reports success, removes nothing, and leaves the agent waking
+forever. Resolution is non-strict so a health directory that does not exist yet
+is judged by exactly the rules every later run is judged by.
+
+The health directory is not assumed to be exclusively owned. It is created
+`0o700`, but `--health-dir` takes an operator-supplied path and a world-writable
+parent such as `/tmp` is a plausible choice, so every record the watchdog opens
+by name is opened `O_NOFOLLOW` and rotation tests the name with `lexists` rather
+than its target. `_atomic_write` needs no flag because `os.replace` overwrites a
+link instead of following it; the append, the reads and the lock did need one. A
+name-then-read pair is not sufficient either — checking `is_symlink()` and then
+reading by name leaves a window in which the record is swapped for a link — so
+`_read_json` measures and drains one descriptor.
+
+The turn's contract is the local record, and nothing secondary may cost it. A
+hung `gh` was the first way that promise broke; a failed heartbeat-cursor write
+was the second, and it is worse, because the heartbeat had already been
+published and the remote switch would read `healthy` while the record a human
+inspects was never written. Both are now warnings carried inside the record
+rather than exceptions that end the turn. The same rule chose the workflow's
+`cancel-in-progress: false`: the job's product is an incident, and a run
+cancelled between deciding and reporting is silence at the one moment the switch
+exists for.
+
 ## 2026-08-12: Repository-set leases, one task window, and one stack lock
 
 A configured workspace root is an admission boundary, not a concurrency unit.
@@ -714,14 +873,14 @@ model-asserted lane outcome.
 ## 2026-08-08: One audited coding route with a startup-selected implementer
 
 Supersedes the 2026-08-01 statement that the native `FlytoCodingAgent` is the
-only coding-loop implementation. It is now one of exactly two peer
+only coding-loop implementation. It is now one of three peer
 implementers behind the same audited service contract.
 
 - Codex, or whichever principal the host authenticates, is the orchestrator and
   the independent auditor. `flyto-ai` is the single coding route between them
   and the implementer; there is no second path that reaches a landable result.
 - The operator selects exactly one implementer at process startup with
-  `--implementation-backend native|claude`, or the bounded
+  `--implementation-backend native|claude|codex`, or the bounded
   `FLYTO_AI_CODING_BACKEND` default. `native` remains the default. There is no
   per-job backend field, no provider/model auto-routing, and no fallback in
   either direction; an invalid or unavailable selection fails startup.
@@ -729,6 +888,10 @@ implementers behind the same audited service contract.
   the legacy direct backend's model but can never redirect audited service
   work. The Claude route reads only bounded `FLYTO_AI_CC_*` settings and
   resolves no native provider credential or configuration.
+- Codex service rounds pin one installed CLI executable and an explicit model,
+  open a separate non-interactive session, ignore personal config/rules, and
+  inherit no ambient provider/CI credential. They expose no audit/MCP/plugin/
+  web authority; host snapshots and checks remain authoritative.
 - An implementer success is never public success. It reaches
   `awaiting_codex_audit` bound to an exact `implementation_revision_sha256`,
   the implementer backend, and an opaque implementation session id.
@@ -748,7 +911,7 @@ implementers behind the same audited service contract.
   loop, without claiming the transport can prove the auditing principal.
 
 Rollback is configuration, not code, and it never leaves the audited route.
-Select `--implementation-backend native` to detach the Claude adapter, or lower
+Select `--implementation-backend native` to detach either external adapter, or lower
 `--max-rework-rounds` to tighten the repair ceiling; both keep `code-mcp` and
 `code-serve` audit-required. Stopping the service **pauses** Codex-managed
 implementation until it is restarted; it does not hand that work to another
@@ -1225,6 +1388,25 @@ same shape produced it, and both are now closed.
   it, so `check.generated_reference` and `pkg/check.some_capability` are
   evidence about a round rather than a request to create a file, while
   `add tests/test_x.py` and `create app/[id]/page.tsx` still work.
+- **Rework context is not new mutation authority.** Amendment findings mix edit
+  requests with commands, check output, and evidence references. An existing
+  path mentioned only in those contextual forms is not added to the amended
+  target ledger; a bounded mutation cue in the same clause is required. The
+  revision-proven prior scope is always retained, including when the finding
+  contributes no new target. First-round targeting and its safety/polarity
+  rules are unchanged. Rollback is removal of this amendment-only projection,
+  which restores the known over-broad rework behaviour without changing the
+  Indexer contract.
+  Regeneration is a mutation of its tracked output, but a later bounded
+  execution connector (`using`, `via`, `use`, `call`, `calling`, `run`,
+  `execute`, `invoke`, `with`, `through`, or bare `by`) is a command boundary
+  and does not grant authority over the program. `By running`, `by executing`,
+  and `by invoking` remain execution-only. The deliberately bounded positive
+  forms `by modifying`, `by editing`, `by updating`, and `by changing` place a
+  later mutation cue after that boundary and therefore grant authority to the
+  program. An explicit request to modify both output and program still grants
+  both. `Include` and evidence language without a mutation cue are
+  intentionally contextual rather than authoritative.
 
 ## 2026-08-10: Domain diagnostics are validated before they are normalized
 
@@ -1262,3 +1444,157 @@ workspace argument are used by submit preflight, the native implementation
 agent, the Claude implementation adapter, and the real check runner. Using the
 service process cwd is forbidden because it makes the same contract pass or
 fail solely according to the supervisor launch directory.
+
+## 2026-08-12 — Durable Scheduler converges on MissionStore
+
+- `MissionStore` remains the sole execution scheduler and state machine. The
+  Scheduler catalog owns only validated immutable definitions, enabled state,
+  deterministic due cursors and slot claims, bounded public result summaries,
+  and mission/work-item mappings.
+- Durable Scheduler execution has no fallback lane: an occurrence is submitted
+  idempotently, dispatched through a real `DispatchHandle`, automatically
+  heartbeaten while awaiting the executor, and closed with its live lease and
+  fence. Failed or over-budget outcomes close blocked; only policy-valid success
+  closes fixed.
+- Scheduled tasks use bounded mission generations. Each generation has one
+  fixed internal container anchor and bounded occurrence side items, and is
+  completed before rollover. The catalog does not own worker, lease, fence,
+  running, or executor-success authority.
+- `state_root=None` remains the backward-compatible process-local mode and is
+  explicitly reported as ephemeral. Supplying `state_root` selects the durable,
+  owner-only, multi-process catalog and MissionStore-governed path.
+
+## 2026-08-13 — Execution Sessions validate activation without minting authority
+
+- A governed Execution Session is an exact, versioned and domain-neutral bridge
+  from an upstream activation claim to planning. It is not a microphone, wake
+  detector, STT layer, provider adapter, Cloud runtime, device runtime, or
+  scheduler.
+- Space wake words remain bounded and normalized, but this bridge accepts no
+  observed wake claim. A display name is not a wake word, and activation never
+  authenticates a principal or grants a permission.
+- Canonical Spaces may be unnamed and voice-disabled: `display_name` accepts a
+  bounded exact-empty string or bounded non-whitespace text, while whitespace-only
+  labels fail closed without trimming or collapsing ordinary display text.
+  `wake_words` accepts zero through 32 safe,
+  normalized-unique values. `active_timeout_ms` is the sole timeout field and a
+  strict integer from 1 through 300,000; the activation window is compared to
+  it directly in milliseconds, with no seconds alias or unit inference.
+- The complete v1 activation-source vocabulary is `typed`, `voice_reviewed`,
+  `external_agent`, and `mission_card`. Every source requires
+  `observed_wake_word` to be exactly null. `voice_reviewed` records upstream
+  review only and claims no wake detector; raw `voice`, `button`, and unknown
+  sources fail closed.
+- Tenant and principal identity plus allowed source/domain, granted permission,
+  and enabled-capability ceilings are accepted only through a verified frozen
+  host authority. The untrusted request cannot provide or widen them. Existing
+  goal-frame normalization and capability routing remain authoritative, with
+  all four ceilings supplied as hard-filter context and no fallback.
+- Outputs are detached, canonical, plain JSON containers and are
+  principal-minimized. Distinct request/result versions prevent wire-direction
+  confusion, while SHA-256 attestations bind canonical request, authority, and
+  route projections. A deterministic overall digest excludes only its own field
+  and covers the result contract version plus every governed payload field.
+  Caller mutation cannot retroactively alter the returned result, which remains
+  directly JSON serializable; the host authority itself stays frozen.
+- JSON is preflighted iteratively before recursive normalization or hashing.
+  The exact ceilings are depth 32; request 4,096 nodes/262,144 bytes; manifests
+  500,000 nodes/8,388,608 bytes; Blueprints 500,000 nodes/1,048,576 bytes;
+  JSON integers from -9,223,372,036,854,775,807 through
+  9,223,372,036,854,775,807; timestamps 0..253,402,300,799,999 ms; and route
+  limit 1..32 as a non-boolean integer. Breaches fail closed without truncation.
+  Nodes count container and scalar values including the root, but not object
+  keys, which remain covered by the byte limit.
+- Rollback removes the bridge and stops admission of
+  `flyto.execution-session-request.v1`; it does not weaken router filters or reinterpret
+  request data as authority. Product topology and integration ownership do not
+  change.
+## 2026-08-13: A successful cross-connection rework audit owns its worker round
+
+**Decision.** Supervisor ownership is bound to both the request and its
+truthful response. A successful local submit owns its non-terminal job. A
+successful `flyto_coding_audit` owns a job only when its request explicitly
+carried `verdict=rework`, the response is addressed to that request, returns the
+same valid job id, and reports `rework_queued` or `rework_running`.
+
+**Rationale.** Rework audit is not observation: it queues or runs the next
+implementation round, so the connection that performed it must keep that child
+alive through source drift. Reads and other audit outcomes remain observations
+and cannot adopt foreign work. Matching terminal evidence clears only an
+already tracked pin. This default-deny rule prevents response prose, future
+tool names, malformed/error replies, and wrong-job receipts from manufacturing
+ownership or terminal-clear authority. Only exact submit/get/audit responses
+may observe jobs; get/audit must also return the requested job id. Rollback is
+removal of audit-rework registration while retaining
+submit tracking and durable terminal reconciliation; that rollback reopens the
+confirmed restart gap and is not operationally safe during rework.
+
+## 2026-08-13 — Capability Cards bind semantics to exact host authority
+
+- Phase 1 defines distinct `flyto.capability-claim.v1`,
+  `flyto.capability-card.v1`, and `flyto.capability-search.v1` contracts. The
+  boundary is provider and domain neutral and calls no existing router.
+- Claims own only bounded display/semantic metadata, semantic origin, and a
+  nullable source kind/reference. Exact schema validation rejects authority
+  injection, unknown fields, unsafe text/types, and raw parameters, credentials,
+  tokens, endpoints, bodies, or arbitrary configuration.
+- Tenant, Space, catalog id, approval, verification, lifecycle, and binding to
+  the exact canonical claim SHA-256 digest come only from frozen host authority.
+  Digest mismatch is rejection, not a draft card.
+- Completeness requires a non-blank title and summary plus at least one semantic
+  id. Source identifiers never synthesize semantic truth. Only complete,
+  approved, verified, active, non-retired exact bindings are autonomous-routable.
+  Other represented states are audit-visible and non-routable; static derivation
+  cannot mint verification.
+- Search is a deterministic bounded allowlist projection. Phase 1 has no
+  persistence, vector indexing, retrieval/rerank, installation, execution,
+  approval/verification service, or UI. Rollback removes these contracts without
+  changing Goal Frame, `capability_router`, Execution Session, or topology.
+
+## 2026-08-13 — Retrieval preserves upstream contracts and is never route authority
+
+- Adopt one exact `flyto.ai.capability-retrieval-handoff.v2` handoff and frozen
+  `CapabilityRetrievalAuthority`. It preserves the accepted Blueprint
+  request/page and Cloud result/feasibility field sets and digest meanings.
+  Host verification binds tenant, workspace, Space, model/index/snapshot and
+  exact upstream request/context/requirements/result digests. AI-local goal,
+  routing context, and Goal Frame use three distinct versioned digest names.
+- Admit only a complete terminal page (`top_k` 1..32, equal page size, no input
+  or next cursor) whose exact candidates are active, uniquely and
+  deterministically ordered, canonically digested, and explicitly
+  candidate-only without execution authority.
+- Require true Cloud feasibility and exact candidate-resource evidence without
+  inventing a co-location rule for requirements satisfied on distinct
+  resources or requiring feasibility capabilities on the page. Bound the
+  feasibility result to 128 canonical capability keys. Preserve all
+  distinct installed providers bound to one accepted capability document,
+  ordered by full provider identity; reject duplicate identities and unknown
+  documents. Use `CAPABILITY_GROUP_LIMIT` for the 32-group public bound and
+  independently use `EMITTED_PROVIDER_ROW_LIMIT` for the 32 emitted provider
+  rows. Equal current values do not alias their units or authority. Expand
+  every selected group completely and deterministically; if it cannot fit,
+  fail closed without a partial group. Rebuild the producer's exact model dialect and active, ACL, risk,
+  resource, capability-filter, scope, and candidate bindings. Preserve its
+  `/`-capable identifier syntax and field bounds. An empty capability list is
+  open discovery; only a nonempty list is an allowlist.
+- Bound and detach AI-local routing context and normalized Goal Frame before
+  hashing or returning them. Hostile types, depth, nodes, bytes, non-finite
+  values, and oversized integers fail through the content-free boundary.
+  Blueprint model ID/version are exactly 128 characters maximum; tenant, Space,
+  and capability identifiers remain 192.
+  Retrieval may narrow the catalog and add at most one relevance point. It may
+  not supply semantics, manifests, grants, resource truth, approval,
+  verification, parameters, secrets, or execution authority.
+- Preserve safety/human-gate candidates and the existing planning, permission,
+  and execution closure. Empty retrieval is non-routable; malformed, stale,
+  partial, mixed-scope, or infeasible retrieval fails with one content-free
+  error. Rollback removes the optional handoff only. The product topology is
+  unchanged and vector retrieval remains non-authoritative.
+- Lock this producer-compatible decision to Blueprint
+  `f3eb62eff97fac3b3f19d2f1c8d7c1e71664894b`, Core
+  `a048bc47de158c096b7010642452e4d41d21748c`, and Indexer
+  `b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`. Blueprint owns
+  request/model/index/snapshot/page/candidate digest meanings; Cloud owns
+  query-context/requirements/feasibility/result meanings. Frozen host
+  validation preserves both, but every result remains candidate-only with
+  `execution_authority=false`.

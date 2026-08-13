@@ -105,7 +105,7 @@ _NEW_FILE_SUFFIX_RE = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
 #: next unfamiliar identifier walks straight past. Existing paths are unaffected
 #: - the filesystem already proved those.
 _MUTATION_VERB_RE = re.compile(
-    r"\b(add|create|new|write|generate|emit|produce|introduce|implement|"
+    r"\b(add|create|new|write|generate|regenerate|emit|produce|introduce|implement|"
     r"update|edit|modify|change|rewrite|replace|amend|patch|fix|repair|"
     r"rename|move|delete|remove|drop|touch|append|extend)\b[^A-Za-z0-9]*$",
     re.IGNORECASE,
@@ -114,6 +114,35 @@ _MUTATION_VERB_RE = re.compile(
 #: enough for "please add a new file called ...", short enough that a verb from
 #: an unrelated clause cannot reach across a sentence.
 _MUTATION_VERB_WINDOW = 48
+#: Amendment prose contains commands and evidence as well as edit requests.
+#: Only a mutation cue in the same local clause may turn an existing path into
+#: *new* authority during rework.  First-round parsing deliberately keeps its
+#: historical filesystem-backed behaviour.
+_AMENDMENT_TRAILING_MUTATION_RE = re.compile(
+    r"^\s*(?:must|should|needs?\s+to|has\s+to|is\s+to|please)?\s*"
+    r"(?:be\s+)?(?:updated|edited|modified|changed|rewritten|replaced|amended|"
+    r"patched|fixed|repaired|renamed|moved|deleted|removed|dropped|touched|"
+    r"extended)\b",
+    re.IGNORECASE,
+)
+#: Rework findings may put a short description between a mutation verb and its
+#: target ("regenerate and include that tracked output X").  Scan only a
+#: bounded suffix of the same clause, and let a later command verb cut off the
+#: mutation cue. Thus "regenerate output through tool.py" authorizes the output,
+#: not the program used to produce it. `include` is intentionally absent.
+_AMENDMENT_LEADING_MUTATION_RE = re.compile(
+    r"\b(?:add|create|write|generate|regenerate|emit|produce|introduce|implement|"
+    r"update|updating|edit|editing|modify|modifying|change|changing|rewrite|"
+    r"replace|amend|patch|fix|repair|rename|"
+    r"move|delete|remove|drop|touch|append|extend)\b",
+    re.IGNORECASE,
+)
+_AMENDMENT_COMMAND_RE = re.compile(
+    r"\b(?:run|running|execute|executing|invoke|invoking|use|using|via|call|calling|"
+    r"with|through|by)\b",
+    re.IGNORECASE,
+)
+_AMENDMENT_INTENT_WINDOW = 160
 #: Where one instruction stops and the next begins. A sentence terminator only
 #: closes a clause when whitespace or the end of the message follows it, so the
 #: dot inside `flyto_ai/coding/route.py` is punctuation *in* a path rather than
@@ -1083,10 +1112,15 @@ class CodingRouteOrchestrator:
             lane, "search", self._search_args(request.message, project), action="search",
         )
         calls.append(RouteCallRecord(lane.value, "search", True, "context"))
-        explicit_targets = self._explicit_request_targets(
-            request.message, request.working_dir,
-        )
-        if parent_contract and prior_scope:
+        if parent_contract:
+            explicit_targets = self._explicit_amendment_targets(
+                request.message, request.working_dir,
+            )
+        else:
+            explicit_targets = self._explicit_request_targets(
+                request.message, request.working_dir,
+            )
+        if parent_contract:
             # Audit prose normally names only the finding being repaired.  The
             # host, however, has already re-proved every path this same job
             # owns.  Carry that cumulative authority into the amendment so the
@@ -1742,6 +1776,50 @@ class CodingRouteOrchestrator:
             if len(targets) >= _MAX_EXPLICIT_REQUEST_TARGETS:
                 break
         return targets
+
+    @classmethod
+    def _explicit_amendment_targets(cls, message: str, working_dir: str) -> list:
+        """Project mutation targets, excluding command/evidence-only paths.
+
+        Audit findings routinely quote check commands, output paths, and
+        evidence references.  Those paths are useful context but cannot widen
+        the prior host-proven edit scope.  A path becomes a new amendment
+        target only when a generic mutation cue governs it in the same bounded
+        clause.  Regenerating an output authorizes that output, but an execution
+        connector cuts the inherited cue off before the named program.  A
+        direct request to modify both still authorizes both, while ``include``
+        alone authorizes neither.  All canonical-path, filesystem, polarity,
+        and count checks remain delegated to the first-round-compatible parser.
+        """
+
+        text = str(message or "")
+        candidates = set(cls._explicit_request_targets(text, working_dir))
+        if not candidates:
+            return []
+        approved = []
+        clause_start = 0
+        for boundary in list(_CLAUSE_BOUNDARY_RE.finditer(text)) + [None]:
+            clause_end = boundary.start() if boundary is not None else len(text)
+            clause = text[clause_start:clause_end]
+            for match in _EXPLICIT_PATH_RE.finditer(clause):
+                raw = match.group(1)
+                values = tuple(dict.fromkeys((raw, raw.rstrip("."))))
+                candidate = next((value for value in values if value in candidates), "")
+                if not candidate or candidate in approved:
+                    continue
+                before = clause[:match.start(1)][-_AMENDMENT_INTENT_WINDOW:]
+                after = clause[match.end(1):]
+                mutations = list(_AMENDMENT_LEADING_MUTATION_RE.finditer(before))
+                commands = list(_AMENDMENT_COMMAND_RE.finditer(before))
+                leading_mutation = bool(mutations) and (
+                    not commands or mutations[-1].start() > commands[-1].start()
+                )
+                if leading_mutation or _AMENDMENT_TRAILING_MUTATION_RE.search(after):
+                    approved.append(candidate)
+                    if len(approved) >= _MAX_EXPLICIT_REQUEST_TARGETS:
+                        return approved
+            clause_start = boundary.end() if boundary is not None else len(text)
+        return approved
 
     def _plan_groups(
         self, plan_result: Mapping[str, Any], lane: RouteLane,

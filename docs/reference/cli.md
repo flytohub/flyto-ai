@@ -70,82 +70,99 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code` | `--budget` | Max budget in USD (default: 5.0) | [`flyto_ai/cli.py:127`](../../flyto_ai/cli.py#L127) |
 | `code` | `--max-turns` | Max Claude SDK turns (default: 30) | [`flyto_ai/cli.py:128`](../../flyto_ai/cli.py#L128) |
 | `code` | `--json` | Output raw JSON | [`flyto_ai/cli.py:129`](../../flyto_ai/cli.py#L129) |
-| `code-serve` | `command` | Start the detachable authenticated coding HTTP service | [`flyto_ai/cli.py:196`](../../flyto_ai/cli.py#L196) |
+| `code-serve` | `command` | Start the detachable authenticated coding HTTP service | [`flyto_ai/cli.py:200`](../../flyto_ai/cli.py#L200) |
 | `code-serve` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
 | `code-serve` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
 | `code-serve` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
 | `code-serve` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
 | `code-serve` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
 | `code-serve` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
-| `code-serve` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
-| `code-serve` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:145`](../../flyto_ai/cli.py#L145) |
-| `code-serve` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
-| `code-serve` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
-| `code-serve` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
-| `code-serve` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
-| `code-serve` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
-| `code-serve` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
-| `code-serve` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
-| `code-serve` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
-| `code-serve` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:184`](../../flyto_ai/cli.py#L184) |
-| `code-serve` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:190`](../../flyto_ai/cli.py#L190) |
-| `code-serve` | `--host` | Loopback bind host | [`flyto_ai/cli.py:200`](../../flyto_ai/cli.py#L200) |
-| `code-serve` | `--port` | Loopback bind port | [`flyto_ai/cli.py:201`](../../flyto_ai/cli.py#L201) |
-| `code-serve` | `--auth-token-env` | Environment variable containing the HTTP bearer token | [`flyto_ai/cli.py:202`](../../flyto_ai/cli.py#L202) |
-| `code-mcp` | `command` | Start the detachable tenant-bound coding MCP stdio service | [`flyto_ai/cli.py:207`](../../flyto_ai/cli.py#L207) |
+| `code-serve` | `--codex-command` | Codex CLI executable used only by --implementation-backend codex | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
+| `code-serve` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:148`](../../flyto_ai/cli.py#L148) |
+| `code-serve` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
+| `code-serve` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
+| `code-serve` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
+| `code-serve` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:161`](../../flyto_ai/cli.py#L161) |
+| `code-serve` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
+| `code-serve` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:166`](../../flyto_ai/cli.py#L166) |
+| `code-serve` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
+| `code-serve` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:175`](../../flyto_ai/cli.py#L175) |
+| `code-serve` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:180`](../../flyto_ai/cli.py#L180) |
+| `code-serve` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:188`](../../flyto_ai/cli.py#L188) |
+| `code-serve` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:194`](../../flyto_ai/cli.py#L194) |
+| `code-serve` | `--host` | Loopback bind host | [`flyto_ai/cli.py:204`](../../flyto_ai/cli.py#L204) |
+| `code-serve` | `--port` | Loopback bind port | [`flyto_ai/cli.py:205`](../../flyto_ai/cli.py#L205) |
+| `code-serve` | `--auth-token-env` | Environment variable containing the HTTP bearer token | [`flyto_ai/cli.py:206`](../../flyto_ai/cli.py#L206) |
+| `code-mcp` | `command` | Start the detachable tenant-bound coding MCP stdio service | [`flyto_ai/cli.py:211`](../../flyto_ai/cli.py#L211) |
 | `code-mcp` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
 | `code-mcp` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
 | `code-mcp` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
 | `code-mcp` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
 | `code-mcp` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
 | `code-mcp` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
-| `code-mcp` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
-| `code-mcp` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:145`](../../flyto_ai/cli.py#L145) |
-| `code-mcp` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
-| `code-mcp` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
-| `code-mcp` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
-| `code-mcp` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
-| `code-mcp` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
-| `code-mcp` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
-| `code-mcp` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
-| `code-mcp` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
-| `code-mcp` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:184`](../../flyto_ai/cli.py#L184) |
-| `code-mcp` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:190`](../../flyto_ai/cli.py#L190) |
-| `code-mcp-supervisor` | `command` | Start a stable coding MCP facade that hot-reloads its worker | [`flyto_ai/cli.py:212`](../../flyto_ai/cli.py#L212) |
+| `code-mcp` | `--codex-command` | Codex CLI executable used only by --implementation-backend codex | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
+| `code-mcp` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:148`](../../flyto_ai/cli.py#L148) |
+| `code-mcp` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
+| `code-mcp` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
+| `code-mcp` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
+| `code-mcp` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:161`](../../flyto_ai/cli.py#L161) |
+| `code-mcp` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
+| `code-mcp` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:166`](../../flyto_ai/cli.py#L166) |
+| `code-mcp` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
+| `code-mcp` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:175`](../../flyto_ai/cli.py#L175) |
+| `code-mcp` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:180`](../../flyto_ai/cli.py#L180) |
+| `code-mcp` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:188`](../../flyto_ai/cli.py#L188) |
+| `code-mcp` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:194`](../../flyto_ai/cli.py#L194) |
+| `code-mcp-supervisor` | `command` | Start a stable coding MCP facade that hot-reloads its worker | [`flyto_ai/cli.py:216`](../../flyto_ai/cli.py#L216) |
 | `code-mcp-supervisor` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:132`](../../flyto_ai/cli.py#L132) |
 | `code-mcp-supervisor` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:133`](../../flyto_ai/cli.py#L133) |
 | `code-mcp-supervisor` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:137`](../../flyto_ai/cli.py#L137) |
 | `code-mcp-supervisor` | `--provider, -p` | Flyto2 provider (credentials come from env) | [`flyto_ai/cli.py:141`](../../flyto_ai/cli.py#L141) |
 | `code-mcp-supervisor` | `--model, -m` | Model name | [`flyto_ai/cli.py:142`](../../flyto_ai/cli.py#L142) |
 | `code-mcp-supervisor` | `--base-url` | OpenAI-compatible or Ollama base URL | [`flyto_ai/cli.py:143`](../../flyto_ai/cli.py#L143) |
-| `code-mcp-supervisor` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
-| `code-mcp-supervisor` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:145`](../../flyto_ai/cli.py#L145) |
-| `code-mcp-supervisor` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
-| `code-mcp-supervisor` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
-| `code-mcp-supervisor` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
-| `code-mcp-supervisor` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:158`](../../flyto_ai/cli.py#L158) |
-| `code-mcp-supervisor` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
-| `code-mcp-supervisor` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:167`](../../flyto_ai/cli.py#L167) |
-| `code-mcp-supervisor` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
-| `code-mcp-supervisor` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:176`](../../flyto_ai/cli.py#L176) |
-| `code-mcp-supervisor` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:184`](../../flyto_ai/cli.py#L184) |
-| `code-mcp-supervisor` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:190`](../../flyto_ai/cli.py#L190) |
-| `code-status` | `command` | Inspect the bounded runtime status of coding service instances | [`flyto_ai/cli.py:218`](../../flyto_ai/cli.py#L218) |
-| `code-status` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:222`](../../flyto_ai/cli.py#L222) |
-| `code-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:226`](../../flyto_ai/cli.py#L226) |
-| `code-task-window` | `command` | Show the shared mission, queue, repo-lease and audit window (read-only) | [`flyto_ai/cli.py:228`](../../flyto_ai/cli.py#L228) |
-| `code-task-window` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:232`](../../flyto_ai/cli.py#L232) |
-| `code-task-window` | `--limit` | Maximum missions, work items and jobs to project (1-200) | [`flyto_ai/cli.py:236`](../../flyto_ai/cli.py#L236) |
-| `code-task-window` | `--json` | Output raw JSON | [`flyto_ai/cli.py:240`](../../flyto_ai/cli.py#L240) |
-| `code-workspace-status` | `command` | Show which coding state root owns a workspace tree (read-only) | [`flyto_ai/cli.py:245`](../../flyto_ai/cli.py#L245) |
-| `code-workspace-status` | `--workspace` | Workspace root to report ownership for | [`flyto_ai/cli.py:249`](../../flyto_ai/cli.py#L249) |
-| `code-workspace-status` | `--registry-root` | Host-global workspace authority registry (defaults to the host's) | [`flyto_ai/cli.py:253`](../../flyto_ai/cli.py#L253) |
-| `code-workspace-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:257`](../../flyto_ai/cli.py#L257) |
-| `code-release` | `command` | Fail an orphaned audit-ready coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:265`](../../flyto_ai/cli.py#L265) |
-| `code-release` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:269`](../../flyto_ai/cli.py#L269) |
-| `code-release` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:270`](../../flyto_ai/cli.py#L270) |
-| `code-release` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:274`](../../flyto_ai/cli.py#L274) |
-| `release_target` | `--abandon-job` | Move one awaiting_codex_audit job to failed/job_abandoned | [`flyto_ai/cli.py:279`](../../flyto_ai/cli.py#L279) |
-| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:283`](../../flyto_ai/cli.py#L283) |
-| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:287`](../../flyto_ai/cli.py#L287) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:290`](../../flyto_ai/cli.py#L290) |
+| `code-mcp-supervisor` | `--codex-command` | Codex CLI executable used only by --implementation-backend codex | [`flyto_ai/cli.py:144`](../../flyto_ai/cli.py#L144) |
+| `code-mcp-supervisor` | `--config` | Repo-owned coding config | [`flyto_ai/cli.py:148`](../../flyto_ai/cli.py#L148) |
+| `code-mcp-supervisor` | `--approval` | Service-wide approval policy | [`flyto_ai/cli.py:149`](../../flyto_ai/cli.py#L149) |
+| `code-mcp-supervisor` | `--sandbox` | Service-wide workspace authority | [`flyto_ai/cli.py:153`](../../flyto_ai/cli.py#L153) |
+| `code-mcp-supervisor` | `--sandbox-image` | Pinned local Docker image for model-issued commands | [`flyto_ai/cli.py:157`](../../flyto_ai/cli.py#L157) |
+| `code-mcp-supervisor` | `--max-workers` | Concurrent job workers | [`flyto_ai/cli.py:161`](../../flyto_ai/cli.py#L161) |
+| `code-mcp-supervisor` | `--max-queued` | Maximum queued/running jobs | [`flyto_ai/cli.py:162`](../../flyto_ai/cli.py#L162) |
+| `code-mcp-supervisor` | `--implementation-backend` | Startup implementer selection (default: native, or FLYTO_AI_CODING_BACKEND; no per-job override) | [`flyto_ai/cli.py:166`](../../flyto_ai/cli.py#L166) |
+| `code-mcp-supervisor` | `--max-rework-rounds` | Maximum Codex-requested rework rounds per job (default: 3) | [`flyto_ai/cli.py:171`](../../flyto_ai/cli.py#L171) |
+| `code-mcp-supervisor` | `--indexer-command` | Indexer MCP argv for the mandatory route lane (default: this interpreter running flyto_indexer.mcp_server) | [`flyto_ai/cli.py:175`](../../flyto_ai/cli.py#L175) |
+| `code-mcp-supervisor` | `--blueprint-command` | Override the Blueprint MCP argv for read-only reuse discovery (the lane is always attached on the strict public route) | [`flyto_ai/cli.py:180`](../../flyto_ai/cli.py#L180) |
+| `code-mcp-supervisor` | `--emergency-overflow-backend` | Grant host-owned emergency overflow authority to this exact implementer for classified route-infrastructure failures (must equal --implementation-backend; omitted means disabled) | [`flyto_ai/cli.py:188`](../../flyto_ai/cli.py#L188) |
+| `code-mcp-supervisor` | `--emergency-overflow-threshold` | Classified pre-edit infrastructure failures in one process before its breaker opens (default: 1) | [`flyto_ai/cli.py:194`](../../flyto_ai/cli.py#L194) |
+| `code-status` | `command` | Inspect the bounded runtime status of coding service instances | [`flyto_ai/cli.py:222`](../../flyto_ai/cli.py#L222) |
+| `code-status` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:226`](../../flyto_ai/cli.py#L226) |
+| `code-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:230`](../../flyto_ai/cli.py#L230) |
+| `code-task-window` | `command` | Show the shared mission, queue, repo-lease and audit window (read-only) | [`flyto_ai/cli.py:232`](../../flyto_ai/cli.py#L232) |
+| `code-task-window` | `--state-dir` | Durable service state root to inspect (read-only) | [`flyto_ai/cli.py:236`](../../flyto_ai/cli.py#L236) |
+| `code-task-window` | `--limit` | Maximum missions, work items and jobs to project (1-200) | [`flyto_ai/cli.py:240`](../../flyto_ai/cli.py#L240) |
+| `code-task-window` | `--json` | Output raw JSON | [`flyto_ai/cli.py:244`](../../flyto_ai/cli.py#L244) |
+| `code-watchdog` | `command` | Monitor the coding route without invoking a model or mutating jobs | [`flyto_ai/cli.py:246`](../../flyto_ai/cli.py#L246) |
+| `code-watchdog` | `--state-dir` | Durable coding-service state root to inspect (read-only) | [`flyto_ai/cli.py:250`](../../flyto_ai/cli.py#L250) |
+| `code-watchdog` | `--health-dir` | Host-only latest health and bounded transition history directory | [`flyto_ai/cli.py:254`](../../flyto_ai/cli.py#L254) |
+| `code-watchdog` | `--stuck-seconds` | Age before live execution or Codex audit backlog is degraded | [`flyto_ai/cli.py:258`](../../flyto_ai/cli.py#L258) |
+| `code-watchdog` | `--orphan-grace-seconds` | Grace before execution with no live owner is critical | [`flyto_ai/cli.py:262`](../../flyto_ai/cli.py#L262) |
+| `code-watchdog` | `--github-repository` | Optional owner/repo for a secret-free Actions variable heartbeat | [`flyto_ai/cli.py:266`](../../flyto_ai/cli.py#L266) |
+| `code-watchdog` | `--github-variable` | GitHub Actions repository variable used for the heartbeat | [`flyto_ai/cli.py:270`](../../flyto_ai/cli.py#L270) |
+| `code-watchdog` | `--github-heartbeat-interval` | Minimum seconds between unchanged GitHub heartbeats | [`flyto_ai/cli.py:274`](../../flyto_ai/cli.py#L274) |
+| `code-watchdog` | `--interval-seconds` | LaunchAgent polling interval used with --install | [`flyto_ai/cli.py:278`](../../flyto_ai/cli.py#L278) |
+| `watchdog_mode` | `--install` | Install and load a per-state-root macOS LaunchAgent | [`flyto_ai/cli.py:283`](../../flyto_ai/cli.py#L283) |
+| `watchdog_mode` | `--uninstall` | Unload and remove the per-state-root macOS LaunchAgent | [`flyto_ai/cli.py:287`](../../flyto_ai/cli.py#L287) |
+| `code-watchdog` | `--notify` | Notify on macOS only when health changes | [`flyto_ai/cli.py:291`](../../flyto_ai/cli.py#L291) |
+| `code-watchdog` | `--fail-on-unhealthy` | Exit nonzero after recording degraded or critical health | [`flyto_ai/cli.py:295`](../../flyto_ai/cli.py#L295) |
+| `code-watchdog` | `--json` | Output raw JSON | [`flyto_ai/cli.py:299`](../../flyto_ai/cli.py#L299) |
+| `code-workspace-status` | `command` | Show which coding state root owns a workspace tree (read-only) | [`flyto_ai/cli.py:304`](../../flyto_ai/cli.py#L304) |
+| `code-workspace-status` | `--workspace` | Workspace root to report ownership for | [`flyto_ai/cli.py:308`](../../flyto_ai/cli.py#L308) |
+| `code-workspace-status` | `--registry-root` | Host-global workspace authority registry (defaults to the host's) | [`flyto_ai/cli.py:312`](../../flyto_ai/cli.py#L312) |
+| `code-workspace-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:316`](../../flyto_ai/cli.py#L316) |
+| `code-release` | `command` | Fail an orphaned audit-ready coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:324`](../../flyto_ai/cli.py#L324) |
+| `code-release` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:328`](../../flyto_ai/cli.py#L328) |
+| `code-release` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:329`](../../flyto_ai/cli.py#L329) |
+| `code-release` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:333`](../../flyto_ai/cli.py#L333) |
+| `release_target` | `--abandon-job` | Move one awaiting_codex_audit job to failed/job_abandoned | [`flyto_ai/cli.py:338`](../../flyto_ai/cli.py#L338) |
+| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:342`](../../flyto_ai/cli.py#L342) |
+| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:346`](../../flyto_ai/cli.py#L346) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:349`](../../flyto_ai/cli.py#L349) |

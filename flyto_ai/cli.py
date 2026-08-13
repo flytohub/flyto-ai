@@ -15,8 +15,8 @@ from urllib.error import URLError
 
 
 #: The operator picks exactly one implementer at process startup. There is no
-#: per-job field, no auto-routing, and no fallback between the two.
-CODING_BACKENDS = ("native", "claude")
+#: per-job field, no auto-routing, and no fallback among backends.
+CODING_BACKENDS = ("native", "claude", "codex")
 CODING_BACKEND_ENV = "FLYTO_AI_CODING_BACKEND"
 
 
@@ -141,6 +141,10 @@ def main():
         service_parser.add_argument("--provider", "-p", help="Flyto2 provider (credentials come from env)")
         service_parser.add_argument("--model", "-m", help="Model name")
         service_parser.add_argument("--base-url", help="OpenAI-compatible or Ollama base URL")
+        service_parser.add_argument(
+            "--codex-command", default="codex",
+            help="Codex CLI executable used only by --implementation-backend codex",
+        )
         service_parser.add_argument("--config", default=".flyto/coding.yaml", help="Repo-owned coding config")
         service_parser.add_argument(
             "--approval", choices=("never", "on-request", "on-failure", "always"),
@@ -239,6 +243,61 @@ def main():
     )
     task_window_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    watchdog_p = sub.add_parser(
+        "code-watchdog",
+        help="Monitor the coding route without invoking a model or mutating jobs",
+    )
+    watchdog_p.add_argument(
+        "--state-dir", default="~/.flyto/coding-service",
+        help="Durable coding-service state root to inspect (read-only)",
+    )
+    watchdog_p.add_argument(
+        "--health-dir", default="~/.flyto/health/coding",
+        help="Host-only latest health and bounded transition history directory",
+    )
+    watchdog_p.add_argument(
+        "--stuck-seconds", type=int, default=3600,
+        help="Age before live execution or Codex audit backlog is degraded",
+    )
+    watchdog_p.add_argument(
+        "--orphan-grace-seconds", type=int, default=180,
+        help="Grace before execution with no live owner is critical",
+    )
+    watchdog_p.add_argument(
+        "--github-repository", default="",
+        help="Optional owner/repo for a secret-free Actions variable heartbeat",
+    )
+    watchdog_p.add_argument(
+        "--github-variable", default="FLYTO_CODING_HEARTBEAT",
+        help="GitHub Actions repository variable used for the heartbeat",
+    )
+    watchdog_p.add_argument(
+        "--github-heartbeat-interval", type=int, default=300,
+        help="Minimum seconds between unchanged GitHub heartbeats",
+    )
+    watchdog_p.add_argument(
+        "--interval-seconds", type=int, default=60,
+        help="LaunchAgent polling interval used with --install",
+    )
+    watchdog_mode = watchdog_p.add_mutually_exclusive_group()
+    watchdog_mode.add_argument(
+        "--install", action="store_true",
+        help="Install and load a per-state-root macOS LaunchAgent",
+    )
+    watchdog_mode.add_argument(
+        "--uninstall", action="store_true",
+        help="Unload and remove the per-state-root macOS LaunchAgent",
+    )
+    watchdog_p.add_argument(
+        "--notify", action="store_true",
+        help="Notify on macOS only when health changes",
+    )
+    watchdog_p.add_argument(
+        "--fail-on-unhealthy", action="store_true",
+        help="Exit nonzero after recording degraded or critical health",
+    )
+    watchdog_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # Read-only, local, and deliberately not a fourth MCP tool. It answers the
     # one question a workspace refusal raises and an MCP client can never be
     # told: which state root owns this tree, and can it be taken over.
@@ -313,6 +372,8 @@ def main():
         _cmd_code_status(args)
     elif args.command == "code-task-window":
         _cmd_code_task_window(args)
+    elif args.command == "code-watchdog":
+        _cmd_code_watchdog(args)
     elif args.command == "code-workspace-status":
         _cmd_code_workspace_status(args)
     elif args.command == "code-release":
@@ -582,6 +643,29 @@ def _build_claude_agent_factory(args):
     return lambda store: ClaudeCodingAgent(store, config=startup_config)
 
 
+def _build_codex_agent_factory(args):
+    """Bind one startup Codex CLI executable and model for every job.
+
+    Authentication remains owned by the installed Codex CLI.  The coding
+    service reads no provider API key and never falls back to another backend.
+    """
+    from flyto_ai.agents.codex_cli import CodexCliCodingAgent
+
+    executable = getattr(args, "codex_command", "codex")
+    model = getattr(args, "model", None)
+    # Construct one throwaway adapter to make executable/model availability a
+    # startup fact instead of discovering a bad selection after a job exists.
+    class _StartupStore:
+        pass
+
+    validated = CodexCliCodingAgent(
+        _StartupStore(), executable=executable, model=model,
+    )
+    return lambda store: CodexCliCodingAgent(
+        store, executable=validated.executable, model=validated.model,
+    )
+
+
 def _create_native_coding_provider(args):
     """Build one normal Flyto2 provider; service secrets come from env only."""
     from flyto_ai.config import AgentConfig
@@ -655,6 +739,11 @@ def _build_coding_service(args):
 
         agent_factory = _build_claude_agent_factory(args)
         implementer = ClaudeCodingAgent
+    elif backend == "codex":
+        from flyto_ai.agents.codex_cli import CodexCliCodingAgent
+
+        agent_factory = _build_codex_agent_factory(args)
+        implementer = CodexCliCodingAgent
     else:
         # Fail startup early, then create an isolated provider client per job.
         _create_native_coding_provider(args)
@@ -910,6 +999,73 @@ def _cmd_code_task_window(args):
                 task.get("failure_code", "") or "-",
             )
         )
+
+
+def _cmd_code_watchdog(args):
+    """Run or manage the deterministic host watchdog."""
+
+    from flyto_ai.coding.watchdog import (
+        WatchdogError,
+        install_launch_agent,
+        run_watchdog_once,
+        uninstall_launch_agent,
+    )
+
+    state_root = _os.path.abspath(_os.path.expanduser(args.state_dir))
+    health_root = _os.path.abspath(_os.path.expanduser(args.health_dir))
+    try:
+        if args.install:
+            report = install_launch_agent(
+                state_root=state_root,
+                health_root=health_root,
+                interval_seconds=args.interval_seconds,
+                stuck_seconds=args.stuck_seconds,
+                orphan_grace_seconds=args.orphan_grace_seconds,
+                github_repository=args.github_repository,
+                github_variable=args.github_variable,
+                github_heartbeat_interval=args.github_heartbeat_interval,
+                notify=args.notify,
+            )
+        elif args.uninstall:
+            report = uninstall_launch_agent(state_root)
+        else:
+            report = run_watchdog_once(
+                state_root=state_root,
+                health_root=health_root,
+                stuck_seconds=args.stuck_seconds,
+                orphan_grace_seconds=args.orphan_grace_seconds,
+                github_repository=args.github_repository,
+                github_variable=args.github_variable,
+                github_heartbeat_interval=args.github_heartbeat_interval,
+                notify=args.notify,
+            )
+    except (OSError, ValueError, WatchdogError) as exc:
+        code = exc.code if isinstance(exc, WatchdogError) else "watchdog_failed"
+        print("\033[31mError:\033[0m {}".format(code), file=sys.stderr)
+        sys.exit(2)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    elif args.install:
+        print("coding watchdog: installed and loaded ({})".format(report["label"]))
+    elif args.uninstall:
+        print("coding watchdog: removed={} ({})".format(report["removed"], report["label"]))
+    else:
+        print(
+            "coding watchdog: health={} reasons={} live={} executing={} audit={} github={}".format(
+                report["health"], ",".join(report["reason_codes"]) or "-",
+                report["counts"]["live_instances"],
+                report["counts"]["executing_tasks"],
+                report["counts"]["awaiting_codex_audit"], report["github"],
+            )
+        )
+    # Only an observation can be unhealthy. A successful install or uninstall
+    # reports no health at all, and must not be turned into a false alarm.
+    if (
+        args.fail_on_unhealthy
+        and not (args.install or args.uninstall)
+        and report.get("health") != "healthy"
+    ):
+        sys.exit(1)
 
 
 def _cmd_code_workspace_status(args):

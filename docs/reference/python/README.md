@@ -4,20 +4,20 @@
 
 All module-level functions/classes, nested classes, and direct class methods are included, including internal implementation symbols.
 
-- [agents](agents-package.md): 7 modules, 39 top-level symbols, 36 methods
+- [agents](agents-package.md): 8 modules, 40 top-level symbols, 55 methods
 - [assistant](assistant.md): 7 modules, 27 top-level symbols, 29 methods
 - [channels](channels.md): 7 modules, 9 top-level symbols, 39 methods
-- [coding](coding.md): 33 modules, 337 top-level symbols, 589 methods
+- [coding](coding.md): 34 modules, 360 top-level symbols, 601 methods
 - [evolution](evolution.md): 6 modules, 57 top-level symbols, 15 methods
 - [extensions](extensions.md): 4 modules, 8 top-level symbols, 36 methods
 - [intelligence](intelligence.md): 2 modules, 17 top-level symbols, 22 methods
 - [memory](memory.md): 6 modules, 13 top-level symbols, 42 methods
-- [orchestration](orchestration.md): 5 modules, 103 top-level symbols, 158 methods
-- [package-root](package-root.md): 33 modules, 296 top-level symbols, 288 methods
+- [orchestration](orchestration.md): 5 modules, 103 top-level symbols, 160 methods
+- [package-root](package-root.md): 35 modules, 335 top-level symbols, 291 methods
 - [prompt](prompt.md): 3 modules, 13 top-level symbols, 0 methods
 - [providers](providers.md): 6 modules, 26 top-level symbols, 33 methods
 - [sandbox](sandbox.md): 2 modules, 2 top-level symbols, 3 methods
-- [scheduler](scheduler.md): 2 modules, 6 top-level symbols, 20 methods
+- [scheduler](scheduler.md): 3 modules, 16 top-level symbols, 59 methods
 - [security](security.md): 16 modules, 49 top-level symbols, 0 methods
 - [telegram](telegram.md): 6 modules, 14 top-level symbols, 54 methods
 - [tools](tools.md): 6 modules, 73 top-level symbols, 7 methods

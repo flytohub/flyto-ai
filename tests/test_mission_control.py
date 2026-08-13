@@ -506,6 +506,52 @@ def test_scheduler_order_is_the_same_read_only_preference_as_dispatch(tmp_path):
     assert store.metrics() == before
 
 
+def test_targeted_dispatch_never_falls_through_and_recovers_same_receipt(tmp_path):
+    store = MissionStore(tmp_path)
+    mission = _mission(store)
+    expected = _root(store, mission.mission_id, priority=1)
+    displaced = _side(store, mission.mission_id, expected, priority=9)
+    with store.dispatch_expected(
+        operation=_key("displaced-candidate"),
+        worker="worker-1",
+        work_item_id=expected.work_item_id,
+        expected_attempt=expected.attempts + 1,
+    ) as missing:
+        assert missing is None
+    assert store.get_work_item(expected.work_item_id).status == STATUS_READY
+    assert store.get_work_item(displaced.work_item_id).status == STATUS_READY
+
+    operation = _key("targeted-dispatch")
+    with store.dispatch_expected(
+        operation=operation,
+        worker="worker-1",
+        work_item_id=displaced.work_item_id,
+        expected_attempt=displaced.attempts + 1,
+    ) as handle:
+        assert handle is not None
+        assert handle.work_item_id == displaced.work_item_id
+        fence = handle.fence
+        # Stand in for a hard crash: release only the OS lease, without requeue.
+        handle._released = True
+        handle._lease.released = True
+        mission_control._drop_lease(handle._lease.fd)
+        store._leases.pop(handle.work_item_id)
+
+    restarted = MissionStore(tmp_path)
+    with restarted.dispatch_expected(
+        operation=operation,
+        worker="worker-1",
+        work_item_id=displaced.work_item_id,
+        expected_attempt=displaced.attempts + 1,
+    ) as recovered:
+        assert recovered is not None
+        assert recovered.work_item_id == displaced.work_item_id
+        assert recovered.fence == fence
+        recovered.close(_fixed(), operation=_key("targeted-close"))
+
+    assert restarted.get_work_item(expected.work_item_id).status == STATUS_READY
+
+
 def test_dispatch_order_is_priority_then_age(tmp_path):
     store = MissionStore(tmp_path)
     mission = _mission(store)

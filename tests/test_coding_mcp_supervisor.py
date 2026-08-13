@@ -832,8 +832,8 @@ def test_a_terminal_foreign_observation_cannot_release_a_local_job(tmp_path) -> 
         supervisor.close()
 
 
-def test_audit_and_rework_observations_cannot_adopt_foreign_work(tmp_path) -> None:
-    """Every non-submit tool is default-deny, including ones added later."""
+def test_non_rework_audits_and_unknown_tools_cannot_adopt_foreign_work(tmp_path) -> None:
+    """Observation and future tool names remain default-deny."""
 
     build = ["build-one"]
     supervisor, marker = _multi_job_supervisor(tmp_path, build)
@@ -841,7 +841,8 @@ def test_audit_and_rework_observations_cannot_adopt_foreign_work(tmp_path) -> No
         _initialize(supervisor)
         original_pid = supervisor.worker_pid
         _call(supervisor, 2, "flyto_coding_audit", {
-            "job_id": _FOREIGN_JOB, "state": "awaiting_codex_audit",
+            "job_id": _FOREIGN_JOB, "verdict": "accept",
+            "state": "awaiting_codex_audit",
         })
         _call(supervisor, 3, "flyto_coding_rework", {
             "job_id": _LOCAL_JOB, "state": "running",
@@ -856,6 +857,196 @@ def test_audit_and_rework_observations_cannot_adopt_foreign_work(tmp_path) -> No
         assert accepted["result"]["structuredContent"]["ok"] is True
         assert supervisor.worker_pid != original_pid
         assert supervisor.reload_count == 1
+    finally:
+        supervisor.close()
+
+
+def test_unknown_tool_terminal_receipt_cannot_clear_a_local_pin(tmp_path) -> None:
+    """Unknown tools have neither registration nor terminal-clear authority."""
+
+    build = ["build-one"]
+    supervisor, marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        _call(supervisor, 2, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "running",
+        })
+        original_pid = supervisor.worker_pid
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+
+        receipt = _call(supervisor, 3, "flyto_coding_future_tool", {
+            "job_id": _LOCAL_JOB, "state": "completed",
+        })
+        assert receipt["result"]["structuredContent"]["job"]["state"] == "completed"
+        assert supervisor._active_jobs == {_LOCAL_JOB: "running"}
+        blocked = _call(supervisor, 4, "flyto_coding_submit", {
+            "job_id": _LOCAL_JOB, "state": "queued",
+        })
+        assert blocked["result"]["structuredContent"]["error"] == (
+            "service_reload_pending"
+        )
+        assert supervisor.worker_pid == original_pid
+
+        _call(supervisor, 5, "flyto_coding_get", {
+            "job_id": _LOCAL_JOB, "state": "completed",
+        })
+        assert supervisor._active_jobs == {}
+        listed = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {},
+        })))
+        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert supervisor.worker_pid != original_pid
+        assert supervisor.reload_count == 1
+    finally:
+        supervisor.close()
+
+
+def test_cross_connection_rework_pins_until_terminal_then_reloads(tmp_path) -> None:
+    """The connection ordering rework owns that implementation round."""
+
+    owner_build = ["build-one"]
+    auditor_build = ["build-one"]
+    owner, _owner_marker = _multi_job_supervisor(
+        tmp_path, owner_build, name="owner",
+    )
+    auditor, marker = _multi_job_supervisor(
+        tmp_path, auditor_build, name="auditor",
+    )
+    state_dir = tmp_path / "state"
+    tenant = "local-codex"
+    try:
+        _initialize(owner)
+        _initialize(auditor)
+        _call(owner, 2, "flyto_coding_submit", {
+            "job_id": _FOREIGN_JOB, "state": "awaiting_codex_audit",
+        })
+        _call(auditor, 2, "flyto_coding_get", {
+            "job_id": _FOREIGN_JOB, "state": "awaiting_codex_audit",
+        })
+        assert auditor._active_jobs == {}
+
+        reworked = _call(auditor, 3, "flyto_coding_audit", {
+            "job_id": _FOREIGN_JOB, "verdict": "rework",
+            "state": "rework_running",
+        })
+        assert reworked["result"]["structuredContent"]["job"] == {
+            "job_id": _FOREIGN_JOB, "state": "rework_running",
+        }
+        assert auditor._active_jobs == {_FOREIGN_JOB: "rework_running"}
+        original_pid = auditor.worker_pid
+
+        _job_record(state_dir, tenant, _FOREIGN_JOB, "rework_running")
+        auditor._job_state_reader = durable_job_state_reader(str(state_dir), tenant)
+        marker.write_text("build-two", encoding="utf-8")
+        auditor_build[0] = "build-two"
+        polled = _call(auditor, 4, "flyto_coding_get", {
+            "job_id": _FOREIGN_JOB, "state": "rework_running",
+        })
+        assert polled["result"]["structuredContent"]["job"]["state"] == "rework_running"
+        assert auditor.worker_pid == original_pid
+        assert auditor.reload_count == 0
+
+        _job_record(state_dir, tenant, _FOREIGN_JOB, "completed")
+        listed = _value(auditor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {},
+        })))
+        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert auditor.worker_pid != original_pid
+        assert auditor.reload_count == 1
+        assert auditor._active_jobs == {}
+    finally:
+        auditor.close()
+        owner.close()
+
+
+@pytest.mark.parametrize("state", [
+    "queued", "running", "awaiting_codex_audit", "completed", "failed",
+    "codex_accepted", "invented_future_state",
+])
+def test_rework_request_only_pins_truthful_nonterminal_rework_states(
+    tmp_path, state,
+) -> None:
+    build = ["build-one"]
+    supervisor, _marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        _call(supervisor, 2, "flyto_coding_audit", {
+            "job_id": _FOREIGN_JOB, "verdict": "rework", "state": state,
+        })
+        assert supervisor._active_jobs == {}
+    finally:
+        supervisor.close()
+
+
+@pytest.mark.parametrize("arguments", [
+    {"job_id": _FOREIGN_JOB, "verdict": "rework", "state": "rework_running",
+     "as_error": True},
+    {"job_id": _FOREIGN_JOB, "verdict": "rework", "state": "rework_running",
+     "wrong_id": True},
+    {"job_id": "not-a-job-id", "verdict": "rework", "state": "rework_running"},
+])
+def test_error_malformed_and_wrong_response_rework_adopts_nothing(
+    tmp_path, arguments,
+) -> None:
+    build = ["build-one"]
+    supervisor, _marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        _call(supervisor, 2, "flyto_coding_audit", arguments)
+        assert supervisor._active_jobs == {}
+    finally:
+        supervisor.close()
+
+
+def test_wrong_job_rework_response_and_observer_exception_fail_closed(tmp_path) -> None:
+    build = ["build-one"]
+    supervisor, _marker = _multi_job_supervisor(tmp_path, build)
+    request = {
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "flyto_coding_audit", "arguments": {
+            "job_id": _FOREIGN_JOB, "verdict": "rework",
+        }},
+    }
+    try:
+        _initialize(supervisor)
+        response = {
+            "jsonrpc": "2.0", "id": 2, "result": {"isError": False,
+                "structuredContent": {"ok": True, "job": {
+                    "job_id": _LOCAL_JOB, "state": "rework_running",
+                }}},
+        }
+        supervisor._observe_job(_line(response), request)
+        assert supervisor._active_jobs == {}
+        supervisor._observe_job(b"{malformed\n", request)
+        assert supervisor._active_jobs == {}
+    finally:
+        supervisor.close()
+
+
+def test_accept_or_failed_audit_clears_only_an_existing_matching_pin(tmp_path) -> None:
+    build = ["build-one"]
+    supervisor, _marker = _multi_job_supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        _call(supervisor, 2, "flyto_coding_audit", {
+            "job_id": _FOREIGN_JOB, "verdict": "rework",
+            "state": "rework_queued",
+        })
+        assert supervisor._active_jobs == {_FOREIGN_JOB: "rework_queued"}
+        _call(supervisor, 3, "flyto_coding_audit", {
+            "job_id": _LOCAL_JOB, "verdict": "accept", "state": "codex_accepted",
+        })
+        assert supervisor._active_jobs == {_FOREIGN_JOB: "rework_queued"}
+        _call(supervisor, 4, "flyto_coding_audit", {
+            "job_id": _FOREIGN_JOB, "verdict": "accept", "state": "failed",
+            "as_error": True,
+        })
+        assert supervisor._active_jobs == {_FOREIGN_JOB: "rework_queued"}
+        _call(supervisor, 5, "flyto_coding_audit", {
+            "job_id": _FOREIGN_JOB, "verdict": "accept", "state": "failed",
+        })
+        assert supervisor._active_jobs == {}
     finally:
         supervisor.close()
 

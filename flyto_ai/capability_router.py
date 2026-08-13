@@ -17,6 +17,7 @@ import math
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
@@ -24,8 +25,17 @@ CAPABILITY_ROUTE_VERSION = "flyto.capability-route.v1"
 ROUTING_DECISION_VERSION = "flyto.capability-routing-decision.v1"
 GOAL_FRAME_VERSION = "flyto.goal-frame.v1"
 GOAL_FRAME_REQUEST_VERSION = "flyto.goal-frame-request.v1"
+CAPABILITY_RETRIEVAL_VERSION = "flyto.ai.capability-retrieval-handoff.v2"
+CAPABILITY_RETRIEVAL_EVIDENCE_VERSION = "flyto.capability-retrieval-evidence.v1"
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,191}$")
+_RETRIEVAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]*$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_RETRIEVAL_ERROR = "invalid capability retrieval handoff"
+_RETRIEVAL_MAX_BYTES = 131_072
+_RETRIEVAL_MAX_DEPTH = 8
+_RETRIEVAL_MAX_NODES = 2_048
+_RETRIEVAL_RISK_LEVELS = ("minimal", "low", "medium", "high", "critical")
 
 # Bounded, machine-readable discovery outcomes.  A lane outcome is derived from
 # a completed bridge call, never from model prose, and never carries raw
@@ -50,6 +60,11 @@ CORE_RUNTIME_CONTRACT = "flyto-core-mcp.v1"
 # relevance ordered and only one trusted procedure is ever consumed, so an
 # over-bound result is a broken bridge rather than richer evidence.
 BLUEPRINT_CANDIDATE_LIMIT = 32
+# Public routing bounds have different units even though their current values
+# are equal.  Keep them separately named so changing the number of capability
+# choices cannot silently widen the provider-row projection (or vice versa).
+CAPABILITY_GROUP_LIMIT = 32
+EMITTED_PROVIDER_ROW_LIMIT = 32
 _MISSING = object()
 
 CoreDispatch = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -58,6 +73,476 @@ BlueprintSearch = Callable[[str], Sequence[Mapping[str, Any]]]
 
 class CapabilityRoutingError(ValueError):
     """Raised when a capability catalog or routing policy is unsafe."""
+
+
+def capability_routing_bounds() -> dict[str, int]:
+    """Return detached public bounds with their distinct routing units."""
+    return {
+        "capability_groups": CAPABILITY_GROUP_LIMIT,
+        "emitted_provider_rows": EMITTED_PROVIDER_ROW_LIMIT,
+    }
+
+
+def _retrieval_fail() -> None:
+    """Raise the one content-free error exposed by the retrieval boundary."""
+    raise CapabilityRoutingError(_RETRIEVAL_ERROR)
+
+
+def _retrieval_id(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > 192
+        or value != unicodedata.normalize("NFC", value)
+        or value != value.strip()
+        or not _RETRIEVAL_ID.fullmatch(value)
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co", "Cn"}
+            for character in value
+        )
+    ):
+        _retrieval_fail()
+    return value
+
+
+def _retrieval_ids(value: object, *, maximum: int, item_maximum: int) -> list[str]:
+    if type(value) is not list or len(value) > maximum:
+        _retrieval_fail()
+    result = [_retrieval_id(item) for item in value]
+    if any(len(item) > item_maximum for item in result) or result != sorted(
+        set(result)
+    ):
+        _retrieval_fail()
+    return result
+
+
+def _retrieval_optional_id(value: object) -> str:
+    if value == "":
+        return ""
+    return _retrieval_id(value)
+
+
+def _retrieval_digest(value: object) -> str:
+    if type(value) is not str or not _DIGEST.fullmatch(value):
+        _retrieval_fail()
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityRetrievalAuthority:
+    """Frozen host authority for one exact, already-validated search result."""
+
+    tenant_id: str
+    workspace_id: str
+    space_id: str
+    request_digest: str
+    model_digest: str
+    index_digest: str
+    snapshot_digest: str
+    query_context_digest: str
+    requirements_digest: str
+    result_digest: str
+    goal_digest: str
+    routing_context_digest: str
+    goal_frame_digest: str
+    handoff_digest: str
+    host_verified: bool
+
+    def __post_init__(self) -> None:
+        try:
+            for field in (
+                "tenant_id",
+                "workspace_id",
+                "space_id",
+            ):
+                object.__setattr__(self, field, _retrieval_id(getattr(self, field)))
+            for field in (
+                "request_digest",
+                "model_digest",
+                "index_digest",
+                "snapshot_digest",
+                "query_context_digest",
+                "requirements_digest",
+                "result_digest",
+                "goal_digest",
+                "routing_context_digest",
+                "goal_frame_digest",
+                "handoff_digest",
+            ):
+                object.__setattr__(self, field, _retrieval_digest(getattr(self, field)))
+            if type(self.host_verified) is not bool or self.host_verified is not True:
+                _retrieval_fail()
+        except CapabilityRoutingError:
+            raise
+        except Exception:
+            _retrieval_fail()
+
+
+def _retrieval_json(value: object) -> Any:
+    """Detach exact JSON while bounding structure before encoding or recursion."""
+    nodes = 0
+
+    def copy(item: object, depth: int) -> Any:
+        nonlocal nodes
+        nodes += 1
+        if nodes > _RETRIEVAL_MAX_NODES or depth > _RETRIEVAL_MAX_DEPTH:
+            _retrieval_fail()
+        if item is None or type(item) in {bool, str}:
+            return item
+        if type(item) is int:
+            if not -(2**63 - 1) <= item <= 2**63 - 1:
+                _retrieval_fail()
+            return item
+        if type(item) is float:
+            if not math.isfinite(item):
+                _retrieval_fail()
+            return item
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                _retrieval_fail()
+            return {key: copy(child, depth + 1) for key, child in item.items()}
+        if type(item) is list:
+            return [copy(child, depth + 1) for child in item]
+        _retrieval_fail()
+
+    try:
+        detached = copy(value, 0)
+        encoded = json.dumps(
+            detached,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except CapabilityRoutingError:
+        raise
+    except Exception:
+        _retrieval_fail()
+    if len(encoded) > _RETRIEVAL_MAX_BYTES:
+        _retrieval_fail()
+    return detached
+
+
+def _exact_retrieval_object(value: object, fields: set[str]) -> dict[str, Any]:
+    if type(value) is not dict or set(value) != fields:
+        _retrieval_fail()
+    return value
+
+
+def _sha(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def validate_capability_retrieval(
+    handoff: Mapping[str, Any], authority: CapabilityRetrievalAuthority
+) -> dict[str, Any]:
+    """Validate and detach one terminal, candidate-only bounded search handoff."""
+    if type(authority) is not CapabilityRetrievalAuthority:
+        _retrieval_fail()
+    obj = _exact_retrieval_object(
+        _retrieval_json(handoff),
+        {
+            "contract_version",
+            "tenant_id",
+            "workspace_id",
+            "space_id",
+            "goal_digest",
+            "routing_context_digest",
+            "goal_frame_digest",
+            "request",
+            "result",
+            "candidate_only",
+            "execution_authority",
+            "handoff_digest",
+        },
+    )
+    if (
+        obj["contract_version"] != CAPABILITY_RETRIEVAL_VERSION
+        or any(
+            obj[field] != getattr(authority, field)
+            for field in (
+                "tenant_id",
+                "workspace_id",
+                "space_id",
+                "goal_digest",
+                "routing_context_digest",
+                "goal_frame_digest",
+            )
+        )
+        or obj["candidate_only"] is not True
+        or obj["execution_authority"] is not False
+    ):
+        _retrieval_fail()
+    request = _exact_retrieval_object(
+        obj["request"],
+        {
+            "request_version",
+            "query",
+            "top_k",
+            "page_size",
+            "hard_filters",
+            "prefilter_required",
+            "retrieval_order",
+            "model",
+            "index_digest",
+            "snapshot_digest",
+            "weights",
+            "cursor",
+            "request_digest",
+        },
+    )
+    top_k = request["top_k"]
+    if (
+        request["request_version"] != "flyto.capability-search-query.v1"
+        or type(top_k) is not int
+        or not 1 <= top_k <= 32
+        or type(request["page_size"]) is not int
+        or request["page_size"] != top_k
+        or request["cursor"] is not None
+        or request["prefilter_required"] is not True
+        or request["retrieval_order"] != ["hard_filter", "lexical", "ann", "fuse"]
+    ):
+        _retrieval_fail()
+    filters = _exact_retrieval_object(
+        request["hard_filters"],
+        {
+            "tenant_id",
+            "space_id",
+            "status",
+            "acl_principals",
+            "acl_scopes",
+            "risk_classification",
+            "resource_ids",
+            "capability_ids",
+        },
+    )
+    model = _exact_retrieval_object(
+        request["model"],
+        {"model_id", "model_version", "dimensions", "model_digest"},
+    )
+    weights = _exact_retrieval_object(request["weights"], {"lexical", "vector"})
+    if (
+        type(request["query"]) is not str
+        or not request["query"]
+        or len(request["query"]) > 2_048
+        or request["query"] != unicodedata.normalize("NFC", request["query"])
+        or request["query"] != request["query"].strip()
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co", "Cn"}
+            for character in request["query"]
+        )
+        or _retrieval_id(model["model_id"]) != model["model_id"]
+        or _retrieval_id(model["model_version"]) != model["model_version"]
+        or len(model["model_id"]) > 128
+        or len(model["model_version"]) > 128
+        or type(model["dimensions"]) is not int
+        or not 1 <= model["dimensions"] <= 65_536
+        or any(type(weights[field]) is not int for field in ("lexical", "vector"))
+        or not 0 <= weights["lexical"] <= 100
+        or not 0 <= weights["vector"] <= 100
+        or weights["lexical"] + weights["vector"] != 100
+    ):
+        _retrieval_fail()
+    principals = _retrieval_ids(
+        filters["acl_principals"], maximum=128, item_maximum=128
+    )
+    scopes = _retrieval_ids(filters["acl_scopes"], maximum=128, item_maximum=128)
+    resources_filter = _retrieval_ids(
+        filters["resource_ids"], maximum=128, item_maximum=128
+    )
+    capabilities_filter = _retrieval_ids(
+        filters["capability_ids"], maximum=128, item_maximum=192
+    )
+    if (
+        _retrieval_id(filters["tenant_id"]) != authority.tenant_id
+        or _retrieval_id(filters["space_id"]) != authority.space_id
+        or filters["status"] != "active"
+        or not principals
+        or not scopes
+        or filters["risk_classification"] not in _RETRIEVAL_RISK_LEVELS
+        or request["request_digest"] != authority.request_digest
+        or model["model_digest"] != authority.model_digest
+        or request["index_digest"] != authority.index_digest
+        or request["snapshot_digest"] != authority.snapshot_digest
+        or request["request_digest"]
+        != _sha(
+            {k: v for k, v in request.items() if k not in {"cursor", "request_digest"}}
+        )
+    ):
+        _retrieval_fail()
+    result = _exact_retrieval_object(
+        obj["result"],
+        {
+            "result_version",
+            "query_context_digest",
+            "cloud_next_continuation",
+            "page",
+            "feasibility",
+            "candidate_only",
+            "execution_authority",
+            "result_digest",
+        },
+    )
+    page = _exact_retrieval_object(
+        result["page"],
+        {
+            "page_version",
+            "request_digest",
+            "candidates",
+            "next_cursor",
+            "candidate_only",
+            "execution_authority",
+        },
+    )
+    if (
+        result["result_version"] != "flyto.cloud.capability-index-result.v1"
+        or page["page_version"] != "flyto.capability-search-page.v1"
+        or result["query_context_digest"] != authority.query_context_digest
+        or result["cloud_next_continuation"] is not None
+        or result["candidate_only"] is not True
+        or result["execution_authority"] is not False
+        or page["request_digest"] != authority.request_digest
+        or page["next_cursor"] is not None
+        or page["candidate_only"] is not True
+        or page["execution_authority"] is not False
+    ):
+        _retrieval_fail()
+    candidates = page["candidates"]
+    if type(candidates) is not list or len(candidates) > top_k:
+        _retrieval_fail()
+    candidate_fields = {
+        "tenant_id",
+        "space_id",
+        "capability_id",
+        "status",
+        "acl_principals",
+        "acl_scopes",
+        "risk_classification",
+        "resource_ids",
+        "score",
+        "source_projection_digest",
+        "upstream_content_digest",
+        "document_digest",
+        "model_digest",
+        "index_digest",
+        "snapshot_digest",
+        "candidate_digest",
+        "candidate_only",
+        "execution_authority",
+    }
+    seen: set[str] = set()
+    previous: tuple[int, str] | None = None
+    for raw in candidates:
+        candidate = _exact_retrieval_object(raw, candidate_fields)
+        capability_id = _retrieval_id(candidate["capability_id"])
+        if capability_id in seen or candidate["status"] != "active":
+            _retrieval_fail()
+        seen.add(capability_id)
+        candidate_principals = _retrieval_ids(
+            candidate["acl_principals"], maximum=128, item_maximum=128
+        )
+        candidate_scopes = _retrieval_ids(
+            candidate["acl_scopes"], maximum=128, item_maximum=128
+        )
+        candidate_resources = _retrieval_ids(
+            candidate["resource_ids"], maximum=128, item_maximum=128
+        )
+        if (
+            candidate["tenant_id"] != authority.tenant_id
+            or candidate["space_id"] != authority.space_id
+            or candidate["status"] != filters["status"]
+            or not set(principals).issubset(candidate_principals)
+            or not set(scopes).issubset(candidate_scopes)
+            or candidate["risk_classification"] not in _RETRIEVAL_RISK_LEVELS
+            or _RETRIEVAL_RISK_LEVELS.index(candidate["risk_classification"])
+            > _RETRIEVAL_RISK_LEVELS.index(filters["risk_classification"])
+            or (
+                resources_filter
+                and not set(resources_filter).issubset(candidate_resources)
+            )
+            or (capabilities_filter and capability_id not in capabilities_filter)
+            or candidate["model_digest"] != authority.model_digest
+            or candidate["index_digest"] != authority.index_digest
+            or candidate["snapshot_digest"] != authority.snapshot_digest
+            or candidate["candidate_only"] is not True
+            or candidate["execution_authority"] is not False
+        ):
+            _retrieval_fail()
+        for field in (
+            "source_projection_digest",
+            "upstream_content_digest",
+            "document_digest",
+            "model_digest",
+            "index_digest",
+            "snapshot_digest",
+        ):
+            _retrieval_digest(candidate[field])
+        score = candidate["score"]
+        if type(score) is not int or not -1_000_000_000 <= score <= 1_000_000_000:
+            _retrieval_fail()
+        canonical_candidate = {
+            key: candidate[key] for key in candidate if key != "candidate_digest"
+        }
+        if _retrieval_digest(candidate["candidate_digest"]) != _sha(
+            canonical_candidate
+        ):
+            _retrieval_fail()
+        order = (-score, capability_id)
+        if previous is not None and order <= previous:
+            _retrieval_fail()
+        previous = order
+    feasibility = _exact_retrieval_object(
+        result["feasibility"],
+        {
+            "result_version",
+            "requirements_digest",
+            "candidate_resources",
+            "feasible",
+            "candidate_only",
+            "execution_authority",
+            "result_digest",
+        },
+    )
+    resources = feasibility["candidate_resources"]
+    if (
+        feasibility["requirements_digest"] != authority.requirements_digest
+        or feasibility["result_version"]
+        != "flyto.cloud.capability-resource-feasibility.v1"
+        or feasibility["feasible"] is not True
+        or feasibility["candidate_only"] is not True
+        or feasibility["execution_authority"] is not False
+        or type(resources) is not dict
+    ):
+        _retrieval_fail()
+    if len(resources) > 128:
+        _retrieval_fail()
+    clean_resources: dict[str, list[str]] = {}
+    for capability_id, resource_ids in resources.items():
+        clean_id = _retrieval_id(capability_id)
+        clean_resources[clean_id] = _retrieval_ids(
+            resource_ids, maximum=128, item_maximum=128
+        )
+    if resources != dict(sorted(clean_resources.items())):
+        _retrieval_fail()
+    if (
+        feasibility["result_digest"]
+        != _sha({k: v for k, v in feasibility.items() if k != "result_digest"})
+        or result["result_digest"] != authority.result_digest
+        or result["result_digest"]
+        != _sha({k: v for k, v in result.items() if k != "result_digest"})
+        or obj["handoff_digest"] != authority.handoff_digest
+        or obj["handoff_digest"]
+        != _sha({k: v for k, v in obj.items() if k != "handoff_digest"})
+    ):
+        _retrieval_fail()
+    return obj
 
 
 def _empty_blueprint_search(_goal: str) -> tuple[Mapping[str, Any], ...]:
@@ -111,7 +596,9 @@ def normalize_goal_frame(value: Mapping[str, Any]) -> dict[str, Any]:
 
     constraints = value.get("constraints", [])
     if not isinstance(constraints, list) or len(constraints) > 64:
-        raise CapabilityRoutingError("goal_frame.constraints must contain at most 64 items")
+        raise CapabilityRoutingError(
+            "goal_frame.constraints must contain at most 64 items"
+        )
     for constraint in constraints:
         if not isinstance(constraint, Mapping):
             raise CapabilityRoutingError("goal_frame constraint must be an object")
@@ -283,6 +770,20 @@ def _provider_identity(manifest: Mapping[str, Any]) -> tuple[str, str, str, str]
     )
 
 
+def _retrieval_candidate_matches_manifest(
+    candidate: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> bool:
+    """Resolve retrieval evidence only to an exact installed provider record."""
+    return (
+        candidate["capability_id"] == _canonical_id(manifest)
+        and candidate["source_projection_digest"]
+        == manifest.get("source_projection_digest")
+        and candidate["upstream_content_digest"]
+        == manifest.get("upstream_content_digest")
+        and candidate["document_digest"] == manifest.get("document_digest")
+    )
+
+
 def _catalog_snapshot(manifests: Sequence[Mapping[str, Any]]) -> str:
     payload = json.dumps(
         [dict(item) for item in manifests],
@@ -399,6 +900,7 @@ def _score(
     manifest: Mapping[str, Any],
     blueprint_hints: frozenset[str],
     goal_frame: Mapping[str, Any] | None,
+    retrieval_score: float | None = None,
 ) -> tuple[float, tuple[str, ...]]:
     runtime_name = _runtime_name(manifest)
     canonical_id = _canonical_id(manifest)
@@ -475,8 +977,16 @@ def _score(
         score += 2.5
         reasons.append("trusted_blueprint_hint")
 
+    # Retrieval is candidate-only relevance evidence.  Its deliberately small
+    # cap cannot replace a semantic match or any hard-filter decision.
+    if retrieval_score is not None:
+        score += min(1.0, max(0.0, retrieval_score))
+        reasons.append("bounded_retrieval_hint")
+
     upstream_score = manifest.get("discovery_score", manifest.get("score", 0.0))
-    if isinstance(upstream_score, (int, float)) and math.isfinite(float(upstream_score)):
+    if isinstance(upstream_score, (int, float)) and math.isfinite(
+        float(upstream_score)
+    ):
         score += min(2.0, max(0.0, float(upstream_score)) / 10.0)
         if upstream_score:
             reasons.append("runtime_discovery_score")
@@ -491,20 +1001,81 @@ def route_capabilities(
     context: Mapping[str, object] | None = None,
     limit: int = 8,
     blueprint_candidates: Sequence[Mapping[str, Any]] = (),
+    retrieval_handoff: Mapping[str, Any] | None = None,
+    retrieval_authority: CapabilityRetrievalAuthority | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic, bounded shortlist from versioned JSON manifests."""
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 4000:
         raise CapabilityRoutingError("goal must be 1 to 4000 characters")
-    if not 1 <= limit <= 32:
-        raise CapabilityRoutingError("limit must be between 1 and 32")
+    if not 1 <= limit <= CAPABILITY_GROUP_LIMIT:
+        raise CapabilityRoutingError(
+            f"limit must be between 1 and {CAPABILITY_GROUP_LIMIT} capability groups"
+        )
     if len(manifests) > 10_000:
         raise CapabilityRoutingError("catalog exceeds the 10000 capability limit")
 
-    active_goal_frame = (
-        normalize_goal_frame(goal_frame) if goal_frame is not None else None
-    )
-    active_context: dict[str, object] = dict(context or {})
+    uses_retrieval = retrieval_handoff is not None or retrieval_authority is not None
+    if uses_retrieval:
+        # AI-local digest inputs are an exact bounded JSON boundary too.  Take
+        # the snapshot before Goal Frame normalization or context use so hostile
+        # containers and recursive/oversized values cannot escape as raw Python
+        # exceptions or be returned by the route.
+        bounded_context = _retrieval_json({} if context is None else context)
+        bounded_goal_frame = None if goal_frame is None else _retrieval_json(goal_frame)
+        if type(bounded_context) is not dict:
+            _retrieval_fail()
+        try:
+            active_goal_frame = (
+                normalize_goal_frame(bounded_goal_frame)
+                if bounded_goal_frame is not None
+                else None
+            )
+        except CapabilityRoutingError:
+            _retrieval_fail()
+        active_context: dict[str, object] = bounded_context
+    else:
+        active_goal_frame = (
+            normalize_goal_frame(goal_frame) if goal_frame is not None else None
+        )
+        active_context = dict(context or {})
     blueprint_hints = _trusted_blueprint_module_hints(blueprint_candidates)
+    retrieval: dict[str, Any] | None = None
+    retrieval_scores: dict[tuple[str, str, str, str], float] = {}
+    if uses_retrieval:
+        if retrieval_handoff is None or retrieval_authority is None:
+            _retrieval_fail()
+        retrieval = validate_capability_retrieval(
+            retrieval_handoff, retrieval_authority
+        )
+        if (
+            retrieval["goal_digest"]
+            != _sha({"digest_version": "flyto.ai.goal-digest.v1", "goal": goal})
+            or retrieval["routing_context_digest"]
+            != _sha(
+                {
+                    "digest_version": "flyto.ai.routing-context-digest.v1",
+                    "routing_context": active_context,
+                }
+            )
+            or retrieval["goal_frame_digest"]
+            != _sha(
+                {
+                    "digest_version": "flyto.ai.goal-frame-digest.v1",
+                    "goal_frame": active_goal_frame,
+                }
+            )
+        ):
+            _retrieval_fail()
+        try:
+            retrieval_scores = {
+                _provider_identity(manifest): item["score"] / 1_000_000_000
+                for item in retrieval["result"]["page"]["candidates"]
+                for manifest in manifests
+                if isinstance(manifest, Mapping)
+                and _retrieval_candidate_matches_manifest(item, manifest)
+            }
+        except Exception:
+            _retrieval_fail()
     valid: list[Mapping[str, Any]] = []
     excluded: list[dict[str, object]] = []
     seen_providers: set[tuple[str, str, str, str]] = set()
@@ -518,14 +1089,18 @@ def route_capabilities(
         identity = _provider_identity(manifest)
         if (
             not _SAFE_ID.fullmatch(runtime_name)
-            or not _SAFE_ID.fullmatch(canonical_id)
+            or not _RETRIEVAL_ID.fullmatch(canonical_id)
+            or len(canonical_id) > 192
             or (plugin and not _SAFE_ID.fullmatch(plugin))
             # Two modules may legitimately provide one capability, so only an
             # identical provider identity is a duplicate.
             or identity in seen_providers
         ):
             excluded.append(
-                {"runtime_name": runtime_name, "reasons": ["invalid_or_duplicate_identity"]}
+                {
+                    "runtime_name": runtime_name,
+                    "reasons": ["invalid_or_duplicate_identity"],
+                }
             )
             continue
         seen_providers.add(identity)
@@ -533,11 +1108,39 @@ def route_capabilities(
         if failures:
             excluded.append({"runtime_name": runtime_name, "reasons": list(failures)})
             continue
+        if retrieval is not None and identity not in retrieval_scores:
+            # Keep installed safety and human-gate controls available around a
+            # retrieved task shortlist; they still need semantic selection.
+            if not retrieval_scores or str(manifest.get("control_class", "")) not in {
+                "safety",
+                "human_gate",
+            }:
+                continue
         valid.append(manifest)
+
+    if retrieval is not None:
+        for candidate in retrieval["result"]["page"]["candidates"]:
+            matches = [
+                manifest
+                for manifest in manifests
+                if isinstance(manifest, Mapping)
+                and _retrieval_candidate_matches_manifest(candidate, manifest)
+            ]
+            identities = [_provider_identity(manifest) for manifest in matches]
+            if not matches or len(identities) != len(set(identities)):
+                _retrieval_fail()
+            if any(_hard_filter(manifest, active_context) for manifest in matches):
+                _retrieval_fail()
 
     ranked: list[tuple[float, str, Mapping[str, Any], tuple[str, ...]]] = []
     for manifest in valid:
-        score, reasons = _score(goal, manifest, blueprint_hints, active_goal_frame)
+        score, reasons = _score(
+            goal,
+            manifest,
+            blueprint_hints,
+            active_goal_frame,
+            retrieval_scores.get(_provider_identity(manifest)),
+        )
         ranked.append((score, _canonical_id(manifest), manifest, reasons))
     # Full provider identity is the tiebreak so co-providers of one capability
     # keep a stable, auditable order instead of an arbitrary catalog order.
@@ -547,15 +1150,52 @@ def route_capabilities(
         if active_goal_frame is not None
         else ranked
     )
-    selected = selection_pool[:limit]
+    # ``limit`` bounds canonical capability groups, not provider rows.  A
+    # selected capability always expands to every exact installed co-provider;
+    # the independent row ceiling prevents a large provider group from turning
+    # a bounded route into unbounded planner input.
+    groups: dict[str, list[tuple[float, str, Mapping[str, Any], tuple[str, ...]]]] = {}
+    for item in ranked:
+        canonical_id = item[1]
+        if canonical_id not in groups:
+            groups[canonical_id] = []
+        groups[canonical_id].append(item)
+    group_order: list[str] = []
+    for item in selection_pool:
+        if item[1] not in group_order:
+            group_order.append(item[1])
+    selected_group_ids = group_order[:limit]
 
-    relevant = [
-        item
-        for item in ranked
-        if str(item[2].get("control_class", "")) not in {"safety", "human_gate"}
-    ]
-    top_relevant = relevant[0][0] if relevant else (ranked[0][0] if ranked else 0.0)
-    second_relevant = relevant[1][0] if len(relevant) > 1 else 0.0
+    def expanded_selection() -> list[
+        tuple[float, str, Mapping[str, Any], tuple[str, ...]]
+    ]:
+        expanded = [item for group_id in selected_group_ids for item in groups[group_id]]
+        if len(expanded) > EMITTED_PROVIDER_ROW_LIMIT:
+            raise CapabilityRoutingError(
+                "selected capability provider groups exceed the "
+                f"{EMITTED_PROVIDER_ROW_LIMIT} emitted provider row limit"
+            )
+        return expanded
+
+    selected = expanded_selection()
+
+    # Confidence and ambiguity describe capability choices, not the number of
+    # installed providers for one choice.  Collapse non-control provider rows
+    # to their canonical group and use the group's highest provider score.
+    relevant_group_scores: dict[str, float] = {}
+    for score, canonical_id, manifest, _reasons in ranked:
+        if str(manifest.get("control_class", "")) in {"safety", "human_gate"}:
+            continue
+        relevant_group_scores[canonical_id] = max(
+            score, relevant_group_scores.get(canonical_id, score)
+        )
+    relevance_scores = sorted(relevant_group_scores.values(), reverse=True)
+    top_relevant = (
+        relevance_scores[0]
+        if relevance_scores
+        else (ranked[0][0] if ranked else 0.0)
+    )
+    second_relevant = relevance_scores[1] if len(relevance_scores) > 1 else 0.0
 
     required_names: list[str] = []
     if any(
@@ -572,9 +1212,12 @@ def route_capabilities(
         )
         if required is None:
             continue
-        if len(selected) >= limit:
-            selected = selected[:-1]
-        selected.append(required)
+        required_group = required[1]
+        if required_group not in selected_group_ids:
+            if len(selected_group_ids) >= limit:
+                selected_group_ids = selected_group_ids[:-1]
+            selected_group_ids.append(required_group)
+        selected = expanded_selection()
 
     semantic_coverage = _semantic_coverage(active_goal_frame, selected)
     if active_goal_frame is not None:
@@ -593,9 +1236,12 @@ def route_capabilities(
             )
             if required is None:
                 continue
-            if len(selected) >= limit:
-                selected = selected[:-1]
-            selected.append(required)
+            required_group = required[1]
+            if required_group not in selected_group_ids:
+                if len(selected_group_ids) >= limit:
+                    selected_group_ids = selected_group_ids[:-1]
+                selected_group_ids.append(required_group)
+            selected = expanded_selection()
     semantic_coverage = _semantic_coverage(active_goal_frame, selected)
     if active_goal_frame is not None and semantic_coverage["missing"]:
         needs_clarification = True
@@ -616,7 +1262,7 @@ def route_capabilities(
         }
         for score, canonical_id, manifest, reasons in selected
     ]
-    return {
+    result = {
         "contract_version": CAPABILITY_ROUTE_VERSION,
         "registry_snapshot": _catalog_snapshot(manifests),
         "selection_method": (
@@ -638,6 +1284,29 @@ def route_capabilities(
         "goal_frame": active_goal_frame,
         "semantic_coverage": semantic_coverage,
     }
+    if retrieval is not None:
+        result["retrieval_evidence"] = {
+            "contract_version": CAPABILITY_RETRIEVAL_EVIDENCE_VERSION,
+            "request_digest": retrieval["request"]["request_digest"],
+            "index_digest": retrieval["request"]["index_digest"],
+            "snapshot_digest": retrieval["request"]["snapshot_digest"],
+            "query_context_digest": retrieval["result"]["query_context_digest"],
+            "requirements_digest": retrieval["result"]["feasibility"][
+                "requirements_digest"
+            ],
+            "result_digest": retrieval["result"]["result_digest"],
+            "goal_digest": retrieval["goal_digest"],
+            "routing_context_digest": retrieval["routing_context_digest"],
+            "goal_frame_digest": retrieval["goal_frame_digest"],
+            "handoff_digest": retrieval["handoff_digest"],
+            "candidate_count": len(retrieval["result"]["page"]["candidates"]),
+            "candidate_only": True,
+            "execution_authority": False,
+            "planning_required": True,
+            "permission_required": True,
+            "execution_closure_required": True,
+        }
+    return result
 
 
 def _semantic_coverage(
@@ -663,11 +1332,16 @@ def _semantic_coverage(
     }
     provided: set[str] = set()
     for _score_value, _canonical_id_value, manifest, _reasons in selected:
-        provided.update(f"intent:{item}" for item in _string_list(manifest.get("intent_ids", ())))
         provided.update(
-            f"affordance:{item}" for item in _string_list(manifest.get("affordances", ()))
+            f"intent:{item}" for item in _string_list(manifest.get("intent_ids", ()))
         )
-        provided.update(f"effect:{item}" for item in _string_list(manifest.get("effects", ())))
+        provided.update(
+            f"affordance:{item}"
+            for item in _string_list(manifest.get("affordances", ()))
+        )
+        provided.update(
+            f"effect:{item}" for item in _string_list(manifest.get("effects", ()))
+        )
         provided.update(
             f"event:{item}" for item in _string_list(manifest.get("handled_events", ()))
         )
@@ -1145,16 +1819,23 @@ async def _gather_calls(
 
 __all__ = [
     "BLUEPRINT_CANDIDATE_LIMIT",
+    "CAPABILITY_GROUP_LIMIT",
     "CAPABILITY_ROUTE_VERSION",
+    "CAPABILITY_RETRIEVAL_VERSION",
+    "CAPABILITY_RETRIEVAL_EVIDENCE_VERSION",
     "CORE_RUNTIME_CONTRACT",
     "DISCOVERY_STATUSES",
+    "EMITTED_PROVIDER_ROW_LIMIT",
     "GOAL_FRAME_REQUEST_VERSION",
     "GOAL_FRAME_VERSION",
     "ROUTING_DECISION_VERSION",
     "CapabilityRoutingError",
+    "CapabilityRetrievalAuthority",
+    "capability_routing_bounds",
     "goal_frame_request",
     "normalize_goal_frame",
     "prepare_planner_request",
     "route_capabilities",
+    "validate_capability_retrieval",
     "route_with_flyto",
 ]

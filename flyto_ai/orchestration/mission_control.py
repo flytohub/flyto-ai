@@ -2589,6 +2589,77 @@ class MissionStore:
             if handle is not None:
                 handle._release()
 
+    @contextmanager
+    def dispatch_expected(
+        self, *, operation: str, worker: str, work_item_id: str, expected_attempt: int
+    ) -> Iterator[Optional[DispatchHandle]]:
+        """Claim exactly one expected ready item and attempt era.
+
+        Unlike :meth:`dispatch`, this contract never falls through to another
+        queue item if the advisory candidate moved. The exact identity and its
+        attempt era are part of the durable idempotency payload, so the
+        same operation can recover only the dispatch it named.
+        """
+
+        _check_token(worker, "worker")
+        _check_token(work_item_id, "work item id")
+        if isinstance(expected_attempt, bool) or not isinstance(expected_attempt, int) \
+                or expected_attempt < 1:
+            raise MissionRejected("expected attempt is invalid")
+        key = _check_token(operation, "operation")
+        handle = self._dispatch_expected_once(
+            key, worker, work_item_id, expected_attempt
+        )
+        try:
+            yield handle
+        finally:
+            if handle is not None:
+                handle._release()
+
+    def _dispatch_expected_once(
+        self, key: str, worker: str, work_item_id: str, expected_attempt: int
+    ) -> Optional[DispatchHandle]:
+        payload = self._payload_digest(
+            OPERATION_DISPATCH, worker, work_item_id, expected_attempt
+        )
+        pending: Optional[Tuple[WorkItem, int, int]] = None
+        recalled = None
+        try:
+            with self._mutate() as txn:
+                conn = txn.conn
+                recalled = self._recall(conn, key, OPERATION_DISPATCH, payload)
+                if recalled is None:
+                    rows = conn.execute(_SELECT_READY, (1,)).fetchall()
+                    row = rows[0] if rows and rows[0]["work_item_id"] == work_item_id else None
+                    if row is not None:
+                        item = self._item_from_row(conn, row)
+                        if item.status == STATUS_READY \
+                                and item.attempts + 1 == expected_attempt:
+                            pending = self._try_candidate(
+                                txn, row, worker, time.time(), key, payload
+                            )
+        except BaseException:
+            if pending is not None:
+                _drop_lease(pending[2])
+            raise
+
+        if recalled is not None:
+            if recalled["work_item_id"] != work_item_id:
+                raise MissionCorrupt("targeted dispatch receipt names another item")
+            return self._recover_dispatch(key, worker, recalled)
+        if pending is None:
+            return None
+        item, fence, descriptor = pending
+        try:
+            lease = _Lease(
+                item.work_item_id, self._lease_name(item.work_item_id), descriptor, fence
+            )
+        except BaseException:  # pragma: no cover - fstat on a descriptor we hold
+            _drop_lease(descriptor)
+            raise
+        self._leases[item.work_item_id] = lease
+        return DispatchHandle(self, item, lease)
+
     def _recover_dispatch(
         self, key: str, worker: str, result: Dict[str, Any]
     ) -> DispatchHandle:
@@ -2716,7 +2787,8 @@ class MissionStore:
         return DispatchHandle(self, item, lease)
 
     def _try_candidate(
-        self, txn: _Txn, row: sqlite3.Row, worker: str, now: float, key: str = ""
+        self, txn: _Txn, row: sqlite3.Row, worker: str, now: float, key: str = "",
+        payload: Optional[str] = None,
     ) -> Optional[Tuple[WorkItem, int, int]]:
         """Claim one candidate completely, or leave the store exactly as found.
 
@@ -2787,7 +2859,7 @@ class MissionStore:
                 conn,
                 key,
                 OPERATION_DISPATCH,
-                self._payload_digest(OPERATION_DISPATCH, worker),
+                payload or self._payload_digest(OPERATION_DISPATCH, worker),
                 {"work_item_id": item.work_item_id, "fence": fence},
             )
             conn.execute("RELEASE try_claim")

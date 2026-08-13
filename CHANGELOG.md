@@ -2,6 +2,140 @@
 
 ## Unreleased
 
+- Repaired the phase-one Capability Card boundary: empty or missing source
+  references remain incomplete, host verification is explicit and mandatory,
+  and search projection now recomputes the canonical claim digest and rejects
+  any tampered claim-derived, identity, lifecycle, trust, version, or schema
+  field before emitting its secret-free exact allowlist.
+- Hardened Capability claim/Card Mapping ingestion by validating a single
+  detached bounded snapshot. Hostile iterators, item views, getters, duplicate
+  keys, and malformed entries now fail with stable content-free catalog errors.
+
+- Fixed cross-connection coding MCP rework ownership. The supervisor that
+  successfully records an explicit audit `rework` now pins the returned
+  matching non-terminal rework job through source drift, even when another
+  connection submitted it. Foreign reads, accept/error/terminal observations,
+  malformed or mismatched receipts, and response state alone remain non-owning.
+  Unknown tools have no observation authority and cannot clear pins with a
+  terminal-shaped receipt; matching terminal get/audit observation or durable
+  state releases an existing pin for safe hot reload. The public inventory
+  remains exactly submit, get, and audit.
+
+- Fixed unified coding-route rework planning so command syntax, check output,
+  and evidence references no longer grant new edit authority merely by naming
+  an existing path. Explicit mutation instructions still widen an amendment,
+  prior host-proven targets are always retained, and first-round target parsing
+  remains compatible.
+  Tracked outputs explicitly requested for regeneration are recognized, while
+  programs named after execution connectors such as `using`, `via`, `use`,
+  `call`, `calling`, `run`, `execute`, `invoke`, `with`, `through`, or bare
+  `by` remain excluded unless they are themselves explicitly modified.
+  `by running` / `by executing` / `by invoking` remain execution-only, while
+  `by modifying` / `by editing` / `by updating` / `by changing` explicitly
+  authorize the program. Inclusion and evidence language alone do not widen
+  scope.
+
+- Added a domain-neutral governed Execution Session validation bridge. It
+  fail-closes exact Space/activation/goal-frame claims, accepts no observed
+  wake-word claim, takes identity and all routing
+  ceilings from a frozen verified host authority, and returns detached bounded
+  JSON planning input, a capability route, a hashed principal reference, and
+  request/authority/route attestations plus a self-excluding overall digest that
+  covers every governed result payload field. It does not implement microphone,
+  wake detection, STT, identity provider, Cloud, robotics, device, execution, or
+  scheduler runtime behavior, and activation grants no identity or permission.
+  Activation sources match the v1 ingress/storage contract exactly:
+  `typed`, `voice_reviewed`, `external_agent`, and `mission_card`. All four
+  require an exact-null observed wake word; reviewed voice claims only upstream
+  review, while raw `voice`, `button`, and unknown sources fail closed.
+  Unnamed, voice-disabled Spaces preserve an empty `display_name` and empty
+  `wake_words`; whitespace-only display names fail closed, while ordinary
+  non-empty display text is preserved without trimming or collapsing. Supplied
+  metadata remains bounded and text-safe and never
+  becomes identity. The exact `active_timeout_ms` field accepts 1..300000 and
+  bounds the activation window directly in integer milliseconds, with no
+  seconds alias or conversion.
+  Request and result contracts have distinct versions; active expiry is
+  exclusive, the configured timeout is capped at 300000 milliseconds, and control,
+  format/bidi, zero-width, and surrogate text is rejected.
+  Canonical JSON admission now has explicit depth, node, UTF-8 byte, integer,
+  and timestamp ceilings before recursion or attestation encoding; route limits
+  also reject booleans, coercible strings, and values outside 1..32.
+
+- Added an explicit `codex` implementer to the audited `code-mcp` / `code-serve`
+  route. It launches a separate non-interactive Codex CLI session from the
+  startup-pinned executable and required model, uses the existing ChatGPT login
+  without reading a provider API key, ignores personal configuration and
+  exec-policy rules, scrubs ambient provider/CI credentials, and loads no MCP,
+  plugin, web-search, browser, computer-control, or audit authority. Structured
+  JSONL binds the exact provider session; typed rework resumes only that id.
+  Workspace changes still come from host snapshots, all source-controlled
+  checks and route lanes still run, and success still stops at independent
+  exact-revision Codex audit. There is no per-job backend switch or fallback.
+
+- Added `flyto-ai code-watchdog`, a host-only, non-AI observer for the coding
+  control plane. It reads the same bounded projections as `code-status` and
+  `code-task-window`, never invokes a model, and has no path to submit, audit,
+  abandon, repair, commit, or push. It records aggregate health to
+  `~/.flyto/health/coding/`: `latest.json` every run, `history.jsonl` only on a
+  transition (size-rotated), and `github.json` as the heartbeat cursor. Records
+  carry counts, stable reason codes, the reader build digest, and timestamps —
+  never prompts, paths, job or session identifiers, evidence, or credentials.
+  An executing task with no provably live owner is `critical` after the orphan
+  grace; stalled execution, overdue Codex audit, a stale rolling build, a
+  failing status recorder, and emergency spillway are `degraded`. An idle host
+  with no Codex process stays `healthy`.
+  `--install` / `--uninstall` manage a per-state-root macOS LaunchAgent, and an
+  optional `--github-repository` publishes a secret-free heartbeat to a GitHub
+  Actions repository variable through the already-authenticated `gh` CLI.
+  `.github/workflows/coding-watchdog.yml` is the remote dead-man switch: a
+  deterministic scheduled job (no agentic workflow, no model quota) that opens
+  or refreshes one labelled issue when the heartbeat is stale or unhealthy and
+  closes it on recovery. This first release is alert-only.
+
+- Hardened the coding watchdog before its first release.
+  - The dead-man workflow now treats `FLYTO_CODING_HEARTBEAT` as untrusted
+    input: bounded raw size, exact schema, plain in-range integer
+    `observed_at`, an allowlisted `health` level, and an allowlisted `reason`
+    re-checked before it is written to `GITHUB_OUTPUT`. A newline in a
+    rendered field could previously have forged `healthy=true` and silenced
+    the switch. Each rejection now has its own reason code.
+  - `state_readable` judges the status index by the publisher's authoritative
+    `MAX_STATUS_INDEX_BYTES` instead of the watchdog's smaller record limit,
+    which had reported a large but valid index as a route failure.
+  - The state root and the health directory must now be disjoint
+    (`watchdog_paths_overlap`), so the observer can neither write into the
+    coding-service tree nor observe its own writes. Both roots, and the state
+    root that derives the LaunchAgent label, are resolved through their
+    symlinks first: a lexical comparison let `--health-dir` reach inside the
+    state root through a link, and let `--install` and `--uninstall` compute
+    two different labels for one state root.
+  - `--install` now validates every value it bakes into the LaunchAgent —
+    thresholds, heartbeat interval, repository, and variable name — against
+    the bounds the observing run applies, so an install can no longer produce
+    an agent that fails on every unattended wake.
+  - The remote heartbeat is one bounded `gh variable set` upsert instead of a
+    PATCH that parsed its own 404 message to decide whether to POST, and an
+    oversized projection fails locally rather than being truncated by GitHub.
+  - Every health record the watchdog opens by name is now opened `O_NOFOLLOW`,
+    and rotation tests the name rather than its target. `--health-dir` may
+    legitimately sit under a world-writable parent, where a planted symlink at
+    `history.jsonl` had turned the `O_APPEND` write into a write primitive
+    against any file the watchdog's user owns, a planted `latest.json` chose
+    what the watchdog read back as its own previous state, and a planted
+    `watchdog.lock` placed the exclusive lock somewhere no second watchdog
+    would look. A refused history append now reports
+    `watchdog_history_unwritable` after `latest.json` is already durable.
+  - A failure to record the heartbeat cursor no longer discards the whole turn.
+    `mark_github_sent` raising `OSError` after the heartbeat was published had
+    left the remote switch reading `healthy` while the local record was never
+    written; it is now a `github_heartbeat` warning
+    (`github_state_unrecordable`) and the turn still records health.
+  - The dead-man workflow no longer cancels a run in progress. Its product is
+    an incident, not an artefact, so a dispatch arriving between "the heartbeat
+    is stale" and "open the issue" must not cancel the only step that reports
+    it.
+
 - Added a host-only adapter for flyto-core extension management:
   `list_core_extensions`, `list_core_extension_kinds`,
   `install_core_extension`, and `uninstall_core_extension` in
@@ -618,3 +752,40 @@
 - Bounded domain diagnostics: a capability's own `reason_codes` and
   `required_actions` reach `verification_blockers` when they already are machine
   codes, and are dropped whole when they are not.
+- Added phase 1 of the provider-neutral Capability Catalog / Skill Registry
+  contract: exact semantic claims, frozen host authority, canonical SHA-256
+  content binding, detached Capability Cards, and bounded allowlisted search
+  projections. Only complete claims with exact approved, verified, active,
+  non-retired host bindings are autonomous-routable. This phase adds no storage,
+  vector search, retrieval, installation, execution, approval/verification
+  service, UI, router call, or runtime-provider integration.
+- Replaced the non-landable phase 2 retrieval draft with a frozen host-verified
+  `flyto.ai.capability-retrieval-handoff.v2` terminal handoff that preserves the
+  exact Blueprint page and Cloud result/feasibility contracts and their digest
+  meanings. Distinct versioned AI-local goal, routing-context, and Goal-Frame
+  digests avoid overloading upstream names; true cross-resource feasibility and
+  exact `candidate_resources` are required without imposing co-location or page
+  membership. The producer model and active/ACL/risk/resource/capability filter
+  invariants are rebuilt, while one capability candidate retains every
+  distinct installed provider bound to its accepted document. Empty capability
+  filters retain open-discovery semantics, and upstream `/` identifiers retain
+  their exact field bounds. Model ID/version stop at 128 characters, while
+  scope/capability IDs remain 192. AI-local routing context and Goal Frame are
+  now exact-JSON bounded before digesting or returning, preventing hostile
+  objects or recursive/oversized values from leaking raw exceptions. Cloud
+  feasibility now accepts at most 128 canonical capability keys.
+  `CAPABILITY_GROUP_LIMIT` names the 32-group public bound and independent
+  `EMITTED_PROVIDER_ROW_LIMIT` names the 32-provider-row projection bound;
+  co-providers expand in stable identity order and overflow has no partial
+  output. Blueprint retains request/model/index/snapshot/page/candidate digest
+  meanings, Cloud retains query-context/requirements/feasibility/result
+  meanings, and host validation grants no execution authority. Final pins are
+  Blueprint `f3eb62eff97fac3b3f19d2f1c8d7c1e71664894b`, Core
+  `a048bc47de158c096b7010642452e4d41d21748c`, and Indexer
+  `b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`.
+  The handoff can narrow and
+  boundedly hint already installed providers. It rejects partial pages, stale
+  identities, scope/context/model/index/snapshot or hard-filter drift, hostile
+  JSON, and authority-shaped results. Vector relevance cannot override Goal
+  Frame semantics, safety/human gates, permissions, planning, or execution
+  closure.

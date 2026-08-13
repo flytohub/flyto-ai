@@ -113,6 +113,92 @@ def test_code_task_window_is_host_only_read_only_json(tmp_path, capsys):
     assert not state.exists()
 
 
+def test_code_watchdog_is_host_only_and_uses_no_model(tmp_path, monkeypatch, capsys):
+    import flyto_ai.cli as cli
+    import flyto_ai.coding.watchdog as watchdog
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("watchdog must not build or invoke a coding service")
+
+    monkeypatch.setattr(cli, "_build_coding_service", forbidden)
+    monkeypatch.setattr(
+        watchdog,
+        "run_watchdog_once",
+        lambda **kwargs: {
+            "health": "healthy",
+            "reason_codes": [],
+            "counts": {
+                "live_instances": 0,
+                "executing_tasks": 0,
+                "awaiting_codex_audit": 0,
+            },
+            "github": "disabled",
+            "state_root": kwargs["state_root"],
+        },
+    )
+    sys.argv = [
+        "flyto-ai", "code-watchdog",
+        "--state-dir", str(tmp_path / "state"),
+        "--health-dir", str(tmp_path / "health"),
+        "--json",
+    ]
+    main()
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["health"] == "healthy"
+    assert report["github"] == "disabled"
+
+
+def test_code_watchdog_flag_defaults_match_the_module_contract(monkeypatch, capsys):
+    """The parser's defaults are the watchdog module's, not a second opinion.
+
+    `cli.py` spells these thresholds as argparse literals while
+    `flyto_ai.coding.watchdog` declares them as constants, and the module is
+    the contract every other caller and the installed LaunchAgent obey. Two
+    copies of a bound drift silently, and the drift only becomes visible once
+    an unattended agent has been observing on the wrong thresholds for a while,
+    so pin them behaviourally: run the real parser and read what it handed the
+    observer.
+    """
+
+    import flyto_ai.coding.watchdog as watchdog
+
+    captured = {}
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return {
+            "health": "healthy",
+            "reason_codes": [],
+            "counts": {
+                "live_instances": 0,
+                "executing_tasks": 0,
+                "awaiting_codex_audit": 0,
+            },
+            "github": "disabled",
+        }
+
+    monkeypatch.setattr(watchdog, "run_watchdog_once", capture)
+    sys.argv = ["flyto-ai", "code-watchdog", "--json"]
+    main()
+    capsys.readouterr()
+
+    assert captured["stuck_seconds"] == watchdog.DEFAULT_STUCK_SECONDS
+    assert captured["orphan_grace_seconds"] == watchdog.DEFAULT_ORPHAN_GRACE_SECONDS
+    assert (
+        captured["github_heartbeat_interval"]
+        == watchdog.DEFAULT_GITHUB_HEARTBEAT_INTERVAL
+    )
+    assert captured["github_variable"] == watchdog.DEFAULT_GITHUB_VARIABLE
+    # No repository by default: the heartbeat is opt-in, so a plain local run
+    # never reaches the network.
+    assert captured["github_repository"] == ""
+    assert captured["notify"] is False
+    assert captured["health_root"] == os.path.abspath(
+        os.path.expanduser(watchdog.DEFAULT_HEALTH_DIR),
+    )
+
+
 def test_webhook_post():
     """_post_webhook sends JSON POST to target URL."""
     received = {}
@@ -286,7 +372,7 @@ def test_unavailable_or_invalid_startup_selection_fails_closed(tmp_path, monkeyp
         )
     with pytest.raises(ValueError, match="invalid --implementation-backend"):
         cli._build_coding_service(
-            _service_args(tmp_path, implementation_backend="codex"),
+            _service_args(tmp_path, implementation_backend="unknown"),
         )
     for invalid in (0, 100, "3", True):
         with pytest.raises(ValueError, match="max_rework_rounds"):
@@ -302,12 +388,12 @@ def test_environment_backend_default_is_bounded(monkeypatch):
 
     monkeypatch.delenv(cli.CODING_BACKEND_ENV, raising=False)
     assert cli._default_coding_backend() == "native"
-    for value in ("native", "claude"):
+    for value in ("native", "claude", "codex"):
         monkeypatch.setenv(cli.CODING_BACKEND_ENV, value)
         assert cli._default_coding_backend() == value
     monkeypatch.setenv(cli.CODING_BACKEND_ENV, "  claude  ")
     assert cli._default_coding_backend() == "claude"
-    for invalid in ("codex", "gpt", "Native", "native,claude"):
+    for invalid in ("gpt", "Native", "native,claude"):
         monkeypatch.setenv(cli.CODING_BACKEND_ENV, invalid)
         with pytest.raises(SystemExit, match=cli.CODING_BACKEND_ENV):
             cli._default_coding_backend()
@@ -326,7 +412,7 @@ def test_both_public_commands_expose_the_startup_options():
         assert completed.returncode == 0, completed.stderr
         assert "--implementation-backend" in completed.stdout
         assert "--max-rework-rounds" in completed.stdout
-        assert "native" in completed.stdout and "claude" in completed.stdout
+        assert all(name in completed.stdout for name in ("native", "claude", "codex"))
         # There is no switch that disables the Codex audit requirement.
         assert "--require-codex-audit" not in completed.stdout
         assert "--no-audit" not in completed.stdout
@@ -336,7 +422,7 @@ def test_invalid_backend_env_only_affects_the_coding_service_commands(tmp_path, 
     import pytest
     import flyto_ai.cli as cli
 
-    monkeypatch.setenv(cli.CODING_BACKEND_ENV, "codex")
+    monkeypatch.setenv(cli.CODING_BACKEND_ENV, "gpt")
     # Building the global parser must not evaluate the service-only default.
     monkeypatch.setattr(sys, "argv", ["flyto-ai", "version"])
     cli.main()
@@ -360,7 +446,7 @@ def test_unrelated_commands_survive_an_invalid_backend_env(tmp_path):
     import subprocess
     from pathlib import Path
 
-    env = dict(os.environ, FLYTO_AI_CODING_BACKEND="codex")
+    env = dict(os.environ, FLYTO_AI_CODING_BACKEND="gpt")
     root = str(Path(__file__).parents[1])
     for argv in (["version"], ["--help"], ["code-mcp", "--help"]):
         completed = subprocess.run(

@@ -69,6 +69,7 @@ from flyto_ai.coding.service import (
     CodingAuthorityUnavailable,
     CodingService,
     MissionRouteRefused,
+    _DISPATCH_FOREIGN,
     receipt_to_mapping,
 )
 from flyto_ai.orchestration.mission_control import (
@@ -2133,6 +2134,58 @@ def test_a_changed_build_id_does_not_strand_semantically_identical_work(
         assert item.attempts == 1
     finally:
         worker.close()
+
+
+@needs_host
+def test_a_peer_cannot_account_work_while_admission_is_still_committing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ready mission item is not proof that its private record is orphaned.
+
+    Mission placement intentionally precedes the private job and round
+    envelopes. A peer may dispatch in that bounded window, but the admitting
+    service still holds the job lease. The peer must therefore requeue the item
+    without a closure, then run it normally after admission commits. Its
+    attempt and fence still record the real scheduling collision.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    submitter = _service(state, workspace, provider=_Provider(tag="submitter"))
+    peer = _service(state, workspace, provider=_Provider(tag="peer"))
+    original_admit = submitter._admit_mission
+    observed: dict[str, str] = {}
+
+    def dispatch_between_mission_and_record(*args, **kwargs):
+        admission = original_admit(*args, **kwargs)
+        observed["work_item_id"] = admission.work_item_id
+        assert peer._dispatch_once() == _DISPATCH_FOREIGN
+        item = _store(state).get_work_item(admission.work_item_id)
+        assert item.status == STATUS_READY
+        assert item.attempts == 1 and item.fence == 1
+        return admission
+
+    monkeypatch.setattr(
+        submitter, "_admit_mission", dispatch_between_mission_and_record,
+    )
+    try:
+        receipt = submitter.submit(_TENANT, "key-1", _request(workspace))
+        assert observed["work_item_id"] == (
+            CodingMissionProjection.from_mapping(
+                receipt.mission or {},
+            ).work_item_id
+        )
+        settled = _wait(peer, receipt.job_id)
+        assert settled.state is CodingJobState.COMPLETED
+        item = _store(state).get_work_item(observed["work_item_id"])
+        assert item.status == STATUS_CLOSED
+        assert item.attempts == 2
+    finally:
+        submitter.close()
+        peer.close()
 
 
 @needs_host

@@ -3294,66 +3294,91 @@ class CodingService:
         Three refusals happen before anything is executed, and each of them is a
         case where running would be worse than not running:
 
-        * the owning record cannot be read, or is already terminal. The item is
-          closed with full accounting rather than left in the queue, which is
-          what makes a restart's failed-closed jobs explicitly accounted for.
+        * the job lease is held elsewhere. Another process either owns this
+          round or is still committing its admission; the item is requeued
+          without closure, never stolen, duplicated, or mistaken for corrupt
+          work. The scheduler records the attempted dispatch and its fence.
+        * after the lease is ours, the owning record cannot be read or is
+          already terminal. The item is closed with full accounting rather than
+          left in the queue, which is what makes a restart's failed-closed jobs
+          explicitly accounted for.
         * the round envelope does not name this work item. Something else placed
           it, so this process has no proof of what it was for.
-        * the job lease is held elsewhere. Another process owns this round; the
-          item is requeued untouched, never stolen and never duplicated.
         """
 
         tenant_ref, job_id = work.tenant_ref, work.job_id
         if not _JOB_ID.fullmatch(job_id) or not _TENANT_REF.fullmatch(tenant_ref):
             self._account_unrunnable(work, "mission_coordinates_unresolvable")
             return _DISPATCH_RAN
-        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
-        try:
-            record = self._read_json(path)
-        except (OSError, ValueError):
-            self._account_unrunnable(work, "job_record_unreadable")
-            return _DISPATCH_RAN
-        state = str(record.get("state") or "")
-        if state in _TERMINAL_STATE_VALUES or state not in (
-            CodingJobState.QUEUED.value, CodingJobState.REWORK_QUEUED.value,
-        ):
-            self._account_unrunnable(work, "job_not_runnable")
-            return _DISPATCH_RAN
-        if not isinstance(record.get("execution_authority"), Mapping):
-            # A record with no provable executing authority. `_bind_startup_
-            # authority` settles these at start-up, so reaching one here means it
-            # appeared afterwards - an edited or partially written record. It is
-            # accounted once, terminally, rather than requeued forever.
-            self._account_unrunnable(work, EXECUTION_AUTHORITY_UNBOUND)
-            self._fail_unrunnable_record(
-                tenant_ref, job_id, EXECUTION_AUTHORITY_UNBOUND,
-            )
-            return _DISPATCH_RAN
-        if not self._may_execute(record):
-            # Shared durable state, unshared authority. Startup binding makes
-            # this unreachable for a service that came up cleanly - an
-            # incompatible one is refused before it can pump at all - so this is
-            # defence in depth for a record rewritten underneath a running
-            # service. Requeue untouched; executing it here would silently
-            # redirect a caller's work to an agent they never authorized.
-            return _DISPATCH_FOREIGN
-        round_envelope = self._read_round_envelope(tenant_ref, work.work_item_id)
-        if round_envelope is None or str(round_envelope.get("job_id") or "") != job_id:
-            self._account_unrunnable(work, "round_envelope_unbound")
-            self._fail_unrunnable_record(tenant_ref, job_id, "round_envelope_unbound")
-            return _DISPATCH_RAN
-        rework = bool(round_envelope.get("rework"))
-        request = self._reconstruct_request(tenant_ref, job_id, record, round_envelope)
-        if request is None:
-            self._account_unrunnable(work, "request_unreconstructable")
-            self._fail_unrunnable_record(tenant_ref, job_id, "request_unreconstructable")
-            return _DISPATCH_RAN
+        # Admission deliberately places the mission item before it writes the
+        # private job and round envelopes, but it holds this same lease across
+        # that whole commit. Claiming first is therefore the proof that a
+        # missing record is genuinely orphaned, rather than merely between two
+        # atomic writes in another live service.
         if not self._claim_round(job_id):
-            # Held by another process. Leaving the `with` block without closing
-            # requeues the item, so the owner keeps its work and nothing is
-            # duplicated behind its back.
+            # Leaving the mission dispatch context without closing requeues the
+            # item. Its attempt/fence records this real scheduling collision,
+            # but the owner keeps the work and nothing is duplicated or
+            # prematurely closed behind its back.
             return _DISPATCH_FOREIGN
         try:
+            path = (
+                self._tenant_dir(tenant_ref, create=False)
+                / "jobs" / (job_id + ".json")
+            )
+            try:
+                record = self._read_json(path)
+            except (OSError, ValueError):
+                self._account_unrunnable(work, "job_record_unreadable")
+                return _DISPATCH_RAN
+            state = str(record.get("state") or "")
+            if state in _TERMINAL_STATE_VALUES or state not in (
+                CodingJobState.QUEUED.value, CodingJobState.REWORK_QUEUED.value,
+            ):
+                self._account_unrunnable(work, "job_not_runnable")
+                return _DISPATCH_RAN
+            if not isinstance(record.get("execution_authority"), Mapping):
+                # A record with no provable executing authority. `_bind_startup_
+                # authority` settles these at start-up, so reaching one here
+                # means it appeared afterwards - an edited or partially written
+                # record. It is accounted once, terminally, rather than requeued
+                # forever.
+                self._account_unrunnable(work, EXECUTION_AUTHORITY_UNBOUND)
+                self._fail_unrunnable_record(
+                    tenant_ref, job_id, EXECUTION_AUTHORITY_UNBOUND,
+                )
+                return _DISPATCH_RAN
+            if not self._may_execute(record):
+                # Shared durable state, unshared authority. Startup binding
+                # makes this unreachable for a service that came up cleanly -
+                # an incompatible one is refused before it can pump at all - so
+                # this is defence in depth for a record rewritten underneath a
+                # running service. Requeue untouched; executing it here would
+                # silently redirect a caller's work to an agent they never
+                # authorized.
+                return _DISPATCH_FOREIGN
+            round_envelope = self._read_round_envelope(
+                tenant_ref, work.work_item_id,
+            )
+            if (
+                round_envelope is None
+                or str(round_envelope.get("job_id") or "") != job_id
+            ):
+                self._account_unrunnable(work, "round_envelope_unbound")
+                self._fail_unrunnable_record(
+                    tenant_ref, job_id, "round_envelope_unbound",
+                )
+                return _DISPATCH_RAN
+            rework = bool(round_envelope.get("rework"))
+            request = self._reconstruct_request(
+                tenant_ref, job_id, record, round_envelope,
+            )
+            if request is None:
+                self._account_unrunnable(work, "request_unreconstructable")
+                self._fail_unrunnable_record(
+                    tenant_ref, job_id, "request_unreconstructable",
+                )
+                return _DISPATCH_RAN
             self._run_job(tenant_ref, job_id, request, rework=rework, work=work)
         finally:
             self._release_round(job_id)

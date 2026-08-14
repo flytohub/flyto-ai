@@ -365,7 +365,7 @@ can pin the installed executable. Startup verifies both without making a model
 call. Each round runs a separate `codex exec` process with user configuration
 and personal exec-policy rules ignored, no configured MCP/plugins/web search,
 a scrubbed runtime environment, and only Codex's `read-only` or
-`workspace-write` sandbox. Flyto binds the first structured `thread.started`
+`workspace-write` sandbox. Flyto2 binds the first structured `thread.started`
 identifier durably, derives changes from host snapshots, runs the same pinned
 checks, and stops at the same independent audit. Rework uses `codex exec
 resume` on that exact id. A missing/changed id, malformed or oversized JSONL,
@@ -925,7 +925,7 @@ a live leased job is left untouched.
   unrestricted filesystem mode.
 - Codex CLI mode likewise exposes only `read-only` and `workspace-write`,
   never danger-full. The implementation child ignores personal config/rules,
-  receives no Flyto MCP or audit tool, and inherits no provider or CI token.
+  receives no Flyto2 MCP or audit tool, and inherits no provider or CI token.
 - Model-issued development commands use `execve`-style argv dispatch inside a
   detected OS sandbox (a pinned local Docker image or `bwrap` on Linux). They can
   read installed tooling and the workspace, but network access and workspace or

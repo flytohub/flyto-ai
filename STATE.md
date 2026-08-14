@@ -34,7 +34,7 @@ tokens, prose, paths, URLs or secrets. New-file extraction rejects a
 numeric-only dotted milestone such as `M1.1`, while a typed extension such as
 `.7z` remains valid under an explicit mutation instruction. The Engine
 parent-plus-successor projection is admitted only through the deterministic
-Indexer contract gate; Flyto AI neither hard-codes a live step count nor weakens
+Indexer contract gate; Flyto2 AI neither hard-codes a live step count nor weakens
 its proof boundary.
 
 ## Pre-provider rework-route recovery (2026-08-14)

@@ -1812,7 +1812,7 @@ def test_the_real_indexer_codes_still_cross():
 
 def test_secret_shaped_machine_codes_are_unknown_to_the_closed_registry():
     payload = {
-        "reason_codes": ["sk_live_51jsecret0123456789"],
+        "reason_codes": ["API_KEY_SK_LIVE_SECRET"],
         "required_actions": ["token_abcdef0123456789"],
     }
 
@@ -1843,7 +1843,7 @@ def test_hostile_domain_evidence_never_reaches_any_public_projection(
                     "ok": True, "pass": False,
                     "reason_codes": ["please open {}".format(secret),
                                      "https://evil.example/path",
-                                     "sk_live_51jsecret0123456789"],
+                                     "API_KEY_SK_LIVE_SECRET"],
                     "required_actions": ["rm -rf workspace",
                                          "token_abcdef0123456789"],
                 }
@@ -1868,11 +1868,13 @@ def test_hostile_domain_evidence_never_reaches_any_public_projection(
             "params": {"name": "flyto_coding_get",
                        "arguments": {"job_id": job.job_id}},
         })
-        rendered = json.dumps(response) + json.dumps(receipt_to_mapping(failed))
+        rendered = (
+            json.dumps(response) + json.dumps(receipt_to_mapping(failed))
+        ).lower()
         for forbidden in (
             "alice", "private", "evil.example", "rm_rf", "rm -rf", "https",
-            "please_open", "workspace_token", "sk_live", "51jsecret",
-            "token_abcdef", str(workspace),
+            "please_open", "workspace_token", "api_key_sk_live_secret",
+            "token_abcdef", str(workspace).lower(),
         ):
             assert forbidden not in rendered, forbidden
     finally:

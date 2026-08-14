@@ -1,3 +1,4 @@
+# Historical false positives already reviewed before this release closure.
 198cf49a8fb43ad8080e5f9710361ebffcb676e4:.env.example:generic-api-key:46
 ab362a22a3fa235d6122dc5dc9a7ea7ea402dfa0:tests/test_vault.py:generic-api-key:81
 ab362a22a3fa235d6122dc5dc9a7ea7ea402dfa0:tests/test_vault.py:generic-api-key:152
@@ -7,3 +8,10 @@ ab362a22a3fa235d6122dc5dc9a7ea7ea402dfa0:tests/test_real_integration.py:generic-
 # contract. Keep the exemption bound to the exact historical finding instead
 # of weakening the generic API-key rule.
 a2dfe949eaed83b33e1557880fb981296f4202b5:tests/test_coding_service.py:generic-api-key:172
+
+# Exact historical false positives from the hostile-token regression fixture.
+# The live fixture no longer resembles a provider credential; keeping these
+# commit/file/rule/line fingerprints narrow preserves scanning for every other
+# secret in the same commit and all future history.
+a3b464100fcf0690803161485668ddd09bd325aa:tests/test_coding_plan_amendment.py:stripe-access-token:1815
+a3b464100fcf0690803161485668ddd09bd325aa:tests/test_coding_plan_amendment.py:stripe-access-token:1846

@@ -268,7 +268,7 @@ This producer-compatible edge is locked to Blueprint
 `a048bc47de158c096b7010642452e4d41d21748c`, and Indexer
 `b492ef9b663f4a37c4883e2b9e1d8b45b3719b6d`. Blueprint owns the request,
 model, index, snapshot, page, and candidate digest meanings; Cloud owns the
-query-context, requirements, feasibility, and complete result meanings. Flyto
+query-context, requirements, feasibility, and complete result meanings. Flyto2
 AI validates both against frozen host authority but receives only candidate
 evidence, never execution authority.
 

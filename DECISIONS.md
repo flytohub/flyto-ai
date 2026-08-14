@@ -8,7 +8,7 @@ valid 18-step parent plus 16-step amendment to fail before the provider, althoug
 the parent had already completed. Raising the ordinary execution limit would
 have accepted unrelated oversized plans and weakened the pre-provider gate.
 
-Flyto AI now independently recomputes Indexer's small versioned parent digest
+Flyto2 AI now independently recomputes Indexer's small versioned parent digest
 and validates the root, project, generation, parent profile/ledger/instruction
 fingerprints, content-addressed contract and parent ids, complete entry-digest
 ancestry, exact original/added/cumulative path partition, successor ledger, and
@@ -31,7 +31,7 @@ suffixes are excluded from new-file inference so a
 milestone such as `M1.1` does not widen authority, without rejecting typed
 numeric-leading formats such as `.7z`. We rejected fuzzy semantic step matching,
 hard-coded live plan lengths, a larger global step budget and importing sibling
-Indexer source into Flyto AI. The pure compatibility contract lives in the
+Indexer source into Flyto2 AI. The pure compatibility contract lives in the
 stdlib-only `flyto_ai.coding.amendment_contract`; route orchestration maps its
 content-free failures to lane errors and owns no duplicate schema implementation.
 
@@ -123,13 +123,13 @@ would hide a contract violation at the repository boundary.
 
 ## 2026-08-12: Codex CLI is an explicit implementation backend, not a route bypass
 
-Claude quota must not decide whether the Flyto route exists, but replacing the
+Claude quota must not decide whether the Flyto2 route exists, but replacing the
 route with ad-hoc direct edits would also discard the very evidence the route
 was built to protect. We therefore add `codex` as a third startup-selected
 implementer behind the existing `CodingService`; it does not become a per-job
 fallback and it cannot skip Indexer, Blueprint, Core, checks, or audit.
 
-The implementation process is deliberately not the auditor process. Flyto
+The implementation process is deliberately not the auditor process. Flyto2
 starts a separate non-interactive Codex CLI thread, pins the executable and
 model at service startup, binds the structured thread id durably, and resumes
 that exact id for typed audit rework. The outer Codex session receives only the
@@ -143,7 +143,7 @@ plugin, web search, browser, computer-control, or audit tool, and inherits only
 the small runtime environment needed to launch and authenticate the CLI.
 Provider and CI credentials are excluded. Its command execution remains inside
 Codex's bounded `read-only` / `workspace-write` sandbox, never danger-full.
-Flyto independently snapshots the workspace before and after, runs the pinned
+Flyto2 independently snapshots the workspace before and after, runs the pinned
 repository checks, and refuses a changed/missing session, unexpected read-only
 write, invalid JSONL, missing verification tool, or required capability.
 

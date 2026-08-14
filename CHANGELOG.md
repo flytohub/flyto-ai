@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Made Indexer rework amendments execute a proof-bound delta instead of the
-  cumulative parent-plus-successor plan. Flyto AI now recomputes the versioned
+  cumulative parent-plus-successor plan. Flyto2 AI now recomputes the versioned
   parent/content/entry digests and ids, validates complete chain linkage, the
   normalized host project, profile/context fingerprint mirrors, intent and
   objective continuity, canonical path spelling, the authenticated

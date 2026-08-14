@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed the mandatory Indexer pre-work lane for isolated worktrees. Canonical
+  and translated plan `impact`, `structure`, and `call_hierarchy` calls now
+  inherit the host-owned workspace project just like search. A conflicting
+  project in returned plan evidence is rejected before analysis or editing.
+
 - Repaired the phase-one Capability Card boundary: empty or missing source
   references remain incomplete, host verification is explicit and mandatory,
   and search projection now recomputes the canonical claim digest and rejects

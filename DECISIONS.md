@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-08-14 — Every project-aware Indexer plan step inherits host scope
+
+An Indexer task contract may omit `project` from individual read-only plan
+steps because the task itself already names the project. The capability process
+can see ambient indexes, so the host must carry its scope into canonical and
+translated `search`, `impact`, `structure`, and `call_hierarchy` calls. If plan
+evidence names a different project, the step is rejected; evidence cannot
+change the workspace authority selected by the host.
+
+This is a narrowing, not new authority. It changes no allowlist, tool schema,
+lane, gate, timeout, receipt field, or mutation permission. The rejected
+alternative was to accept or silently rewrite foreign project evidence, which
+would hide a contract violation at the repository boundary.
+
 ## 2026-08-13 — Capability search revalidates canonical claims under host verification
 
 - A phase-one Card retains its bounded canonical claim solely as validation

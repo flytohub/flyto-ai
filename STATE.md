@@ -1,6 +1,21 @@
 # State
 
-Last updated: 2026-08-12
+Last updated: 2026-08-14
+
+## Project-scoped Indexer plan analysis (2026-08-14)
+
+The coding route now binds every project-aware read-only plan step to the
+host-derived workspace project, not only search. Canonical and translated
+`impact`, `structure`, and `call_hierarchy` calls receive the current workspace
+project. Conflicting project evidence fails closed before analysis or editing.
+This closes pre-work `domain_failure` results where an exact symbol from an
+isolated worktree was resolved against ambient indexes before the implementer
+started.
+
+The tool allowlist, lane ordering, transport bounds, receipt contract, and
+fail-closed behavior are unchanged. The complete repository suite, focused
+route regressions, generated reference check, and locked cross-stack dependency
+check passed before release.
 
 ## Host-only coding watchdog and remote dead-man switch (2026-08-12)
 

@@ -281,9 +281,12 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
   -> durable CodingJobReceipt + secret-free CodingRouteReceipt
 ```
 
-Every host-owned Indexer search in this chain is scoped to the workspace
-project. An unscoped smart search fans out across every indexed project and
-can fail the mandatory pre-work lane before any implementer starts. The
+Every host-owned Indexer plan analysis in this chain is scoped to the workspace
+project: search, impact, structure, and call-hierarchy calls all carry the same
+host-derived project. A plan that tries to name another project is rejected
+rather than trusted or silently rewritten. An unscoped analysis can fan out
+across ambient indexes or fail to resolve an exact symbol from an isolated
+worktree, failing the mandatory pre-work lane before any implementer starts. The
 Indexer capability has one shared ten-minute transport bound across the stack
 preset and the public `code-mcp` / `code-serve` route. This accommodates a
 legitimate full strict verification or reindex on a large workspace without

@@ -929,9 +929,14 @@ def test_a_domain_failure_never_opens_the_lane(tmp_path):
     workspace.mkdir()
     _declare_verification(workspace)
     fixture = tmp_path / "refusing_indexer.py"
+    search_response = '''if name == "search":
+        return {"results": [{
+            "path": "app.py", "symbol_id": "p:app.py:function:main",
+        }]}, False'''
+    assert search_response in INDEXER_FIXTURE
     fixture.write_text(INDEXER_FIXTURE.replace(
-        'return {"results": [{"symbol_id": "p:app.py:function:main"}]}, False',
-        'return {"error": "refused"}, True',
+        search_response,
+        'if name == "search":\n        return {"error": "refused"}, True',
     ))
     box: dict = {}
     service = _emergency_service(

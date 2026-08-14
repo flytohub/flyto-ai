@@ -1,5 +1,47 @@
 # Decisions
 
+## 2026-08-14 — Amendment contracts prove a bounded delta, not a larger execution budget
+
+Indexer amendments restate the parent execution plan before appending successor
+work. Counting that cumulative contract as one fresh executable plan caused a
+valid 18-step parent plus 16-step amendment to fail before the provider, although
+the parent had already completed. Raising the ordinary execution limit would
+have accepted unrelated oversized plans and weakened the pre-provider gate.
+
+Flyto AI now independently recomputes Indexer's small versioned parent digest
+and validates the root, project, generation, parent profile/ledger/instruction
+fingerprints, content-addressed contract and parent ids, complete entry-digest
+ancestry, exact original/added/cumulative path partition, successor ledger, and
+resolved-target coverage against the normalized host project. Parent and
+successor profile mirrors, intent continuity, ledger descriptions and both
+instruction contexts are mandatory; missing context never degrades to
+`not_required`. Exact target
+coordinates assign analysis steps to the original or added side, but original
+ownership does not prove prior execution: reuse consumes an exact scoped
+tool/args/required/purpose multiset occurrence from the completed parent. Novel
+original-path analysis and every successor gate run. Each derived delta remains
+under the unchanged ordinary limit. The pinned verifier rejects chain length
+eight, making generation seven the effective compatibility ceiling; generation
+eight closes until the producer/verifier off-by-one is resolved.
+
+The same boundary preserves actionable Indexer failures only when reason and
+action values occur in an exact host-owned registry; unknown uppercase tokens,
+prose, paths, secrets and mixed-format values remain generic. Numeric-only
+suffixes are excluded from new-file inference so a
+milestone such as `M1.1` does not widen authority, without rejecting typed
+numeric-leading formats such as `.7z`. We rejected fuzzy semantic step matching,
+hard-coded live plan lengths, a larger global step budget and importing sibling
+Indexer source into Flyto AI. The pure compatibility contract lives in the
+stdlib-only `flyto_ai.coding.amendment_contract`; route orchestration maps its
+content-free failures to lane errors and owns no duplicate schema implementation.
+
+Path authority is exact rather than producer-declared: the cumulative contract
+must equal authenticated parent ledger paths plus exact audited prior
+implementation paths plus filesystem-validated explicit targets, in stable
+order. Every token must already be canonical repository-relative POSIX form.
+This rejects omissions, inventions, globs and traversal without treating a
+valid existing numeric-suffix filename as an untyped new-file request.
+
 ## 2026-08-14 — A pre-provider rework route has one explicit proved retry
 
 A host-owned Indexer/Blueprint outage after Codex ordered rework did not call

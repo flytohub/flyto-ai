@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Made Indexer rework amendments execute a proof-bound delta instead of the
+  cumulative parent-plus-successor plan. Flyto AI now recomputes the versioned
+  parent/content/entry digests and ids, validates complete chain linkage, the
+  normalized host project, profile/context fingerprint mirrors, intent and
+  objective continuity, canonical path spelling, the authenticated
+  parent/audited-prior/explicit-target union, exact path partition and
+  resolved-target coverage,
+  reuses only an exact completed parent-step multiset occurrence, reruns every
+  successor gate, and keeps each delta within the unchanged plan limit. The
+  pinned verifier's effective compatibility ceiling is generation seven;
+  generation eight fails closed. Both Indexer envelope failures and ordinary
+  `pass=false` validations retain only exact host-registered machine codes
+  without leaking unknown tokens, prose, paths or secrets. Numeric-only
+  milestone suffixes no longer become new-file authority,
+  while typed `.7z` targets remain valid. The pure amendment contract is isolated
+  in a stdlib-only coding-domain module rather than expanding route orchestration.
+
 - Added proof-bound recovery for audit rework routes that fail in Indexer or
   Blueprint before provider start. The existing submit tool accepts explicit
   `retry_rework_route` without adding a tool; ordinary replay remains read-only,

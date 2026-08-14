@@ -2,6 +2,41 @@
 
 Last updated: 2026-08-14
 
+## Digest-bound amendment delta execution (2026-08-14)
+
+The strict Indexer pre-lane now treats an amended task plan as cumulative
+evidence rather than cumulative executable work. It recomputes Indexer's
+versioned parent digest, validates the exact generation/root/project and
+original/added/cumulative path partition, requires all paths to be covered by
+resolved targets, and verifies the content-addressed contract id plus every
+ancestry id/digest/link/count. It reuses only an exact parent step occurrence;
+novel analysis against an original path and every successor gate still run. The
+executable delta remains under the normal 32-step ceiling. Pinned Indexer
+verification rejects ancestry length eight, so generation seven is the current
+compatibility ceiling and generation eight remains fail-closed as a separate
+producer/verifier P1.
+
+Both generations' task-profile amendment fields and intent/instruction
+fingerprints must exactly mirror their corresponding contract sections. Intent
+and ledger description remain continuous, and a successor with a missing or
+malformed instruction context fails closed.
+
+All amendment and ledger paths must use exact canonical repository-relative
+POSIX spelling. The accepted cumulative scope is the ordered union of the
+authenticated parent ledger, exact audited prior implementation paths and the
+current filesystem-validated explicit targets; an omission or invention is a
+closed refusal. Existing numeric-suffix literals remain legal, while the host
+new-file parser still refuses an unresolved `M1.1` version label.
+
+Indexer envelope failures and ordinary `pass=false` validations now retain only
+exact host-registered machine reason/action codes without persisting unknown
+tokens, prose, paths, URLs or secrets. New-file extraction rejects a
+numeric-only dotted milestone such as `M1.1`, while a typed extension such as
+`.7z` remains valid under an explicit mutation instruction. The Engine
+parent-plus-successor projection is admitted only through the deterministic
+Indexer contract gate; Flyto AI neither hard-codes a live step count nor weakens
+its proof boundary.
+
 ## Pre-provider rework-route recovery (2026-08-14)
 
 Audit rework that fails in Indexer/Blueprint before provider start now remains

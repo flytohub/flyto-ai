@@ -813,14 +813,11 @@ def test_post_validation_receipt_preserves_one_bounded_reason_code(tmp_path):
 
     assert result.ok is False and receipt.failure_code == "validation_failed"
     post = next(lane for lane in receipt.lanes if lane.lane == "indexer_post")
-    # `INTENT_LEDGER_NONCONFORMANT` used to be normalized into
-    # `validation_intent_ledger_nonconformant`. It no longer is, and the change
-    # is deliberate: normalizing before validating is what also turned
-    # `please open /Users/alice/private token` into a token that reads like one
-    # this host owns. A value only becomes a code if the capability already
-    # wrote it as one, so a screaming-case value falls back to the generic
-    # host-owned detail rather than being rescued into validity.
-    assert post.calls[-1].detail_code == "validation_failed"
+    # This production Indexer code crosses because it is in the host-owned
+    # exact registry; unknown upper-case values still fall back to generic.
+    assert post.calls[-1].detail_code == (
+        "validation_intent_ledger_nonconformant"
+    )
     encoded = json.dumps(receipt.to_mapping())
     assert "path-bearing prose" not in encoded
     assert "UNSAFE / raw detail" not in encoded
@@ -838,6 +835,36 @@ def test_post_validation_receipt_preserves_one_bounded_reason_code(tmp_path):
     assert post.calls[-1].detail_code == (
         "validation_fix_intent_ledger_task_unplanned_diff"
     )
+
+
+@pytest.mark.parametrize(
+    "secret_code",
+    ["API_KEY_SK_LIVE_SECRET", "TOKEN_ABC123_DEF456"],
+)
+def test_unknown_uppercase_machine_shape_never_enters_the_full_receipt(
+    tmp_path, secret_code,
+):
+    """A machine-looking secret is not a host-owned Indexer reason code."""
+
+    refusal = _envelope({
+        "ok": False,
+        "pass": False,
+        "error": "opaque failure",
+        "reason_codes": [secret_code],
+        "required_actions": [secret_code],
+    }, is_error=True)
+    indexer = IndexerDouble(overrides={"task.plan": refusal})
+
+    result, receipt = _run(_policy(), RouteDouble(indexer), _request(tmp_path))
+
+    assert result.ok is False
+    assert receipt.failure_code == "domain_failure"
+    encoded = json.dumps(receipt.to_mapping())
+    lowered = encoded.lower()
+    assert secret_code not in encoded
+    assert secret_code.lower() not in lowered
+    assert "domain_{}".format(secret_code.lower()) not in lowered
+    assert "action_{}".format(secret_code.lower()) not in lowered
 
 
 def test_post_validation_is_scoped_to_the_host_attributable_change_set(tmp_path):
@@ -1453,7 +1480,7 @@ def test_route_evidence_is_secret_free_and_path_free(tmp_path):
 # ── service-level route: fixture MCP process ──────────────────────────
 
 INDEXER_FIXTURE = """
-import json, os, sys
+import hashlib, json, os, sys
 
 TOOLS = ["search", "impact", "call_hierarchy", "structure", "task", "verify"]
 REQUIRED = {"search": {"query"}, "task": {"action"}}
@@ -1470,6 +1497,73 @@ OPTIONAL = {
 }
 
 
+def digest(*parts):
+    encoded = json.dumps(
+        list(parts), sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def parent_digest(parent):
+    def mapping(name):
+        value = parent.get(name)
+        return value if isinstance(value, dict) else {}
+    def text(value, limit):
+        return value[:limit] if isinstance(value, str) else ""
+    profile = mapping("task_profile")
+    ledger = mapping("intent_ledger")
+    instruction = mapping("instruction_context")
+    amendment = mapping("task_amendment")
+    index = amendment.get("amendment_index")
+    if isinstance(index, bool) or not isinstance(index, int):
+        index = -1
+    parts = [
+        "task-amendment.parent.v1",
+        text(profile.get("version"), 64),
+        text(profile.get("task_id"), 160),
+        text(profile.get("intent"), 32)
+        or text(profile.get("original_intent"), 32),
+        text(profile.get("project"), 512),
+        text(ledger.get("version"), 64),
+        text(ledger.get("fingerprint"), 64),
+        text(instruction.get("version"), 64),
+        text(instruction.get("fingerprint"), 64),
+        text(amendment.get("version"), 64),
+        text(amendment.get("contract_id"), 64),
+        index,
+    ]
+    return digest(*parts)
+
+
+def root_contract_id(root, objective, paths):
+    return "amd_root_" + digest(
+        "task-amendment.root.v1", root, objective, paths,
+    )[:20]
+
+
+def amendment_contract_id(root, index, objective, paths, parent_id, parent_sha):
+    return "amd_" + digest(
+        "task-amendment.contract.v1", root, index, objective, paths,
+        parent_id, parent_sha,
+    )[:24]
+
+
+def chain_entry(contract_id, parent_id, root, project, index, count, parent_sha):
+    entry = {
+        "contract_id": contract_id, "parent_contract_id": parent_id,
+        "root_task_id": root, "project": project,
+        "amendment_index": index, "target_count": count,
+        "contract_digest": parent_sha,
+    }
+    entry["entry_digest"] = digest(
+        "task-amendment.entry.v1", entry["contract_id"],
+        entry["parent_contract_id"] or "", entry["root_task_id"],
+        entry["project"] or "", entry["amendment_index"],
+        entry["target_count"], entry["contract_digest"],
+    )
+    return entry
+
+
 def domain(name, args):
     unknown = set(args) - REQUIRED.get(name, set()) - OPTIONAL.get(name, set())
     if unknown:
@@ -1480,7 +1574,9 @@ def domain(name, args):
     if name == "structure":
         return {"projects": [{"name": args.get("project", "p")}]}, False
     if name == "search":
-        return {"results": [{"symbol_id": "p:app.py:function:main"}]}, False
+        return {"results": [{
+            "path": "app.py", "symbol_id": "p:app.py:function:main",
+        }]}, False
     if name in ("impact", "call_hierarchy"):
         return {"references": []}, False
     if name == "verify":
@@ -1489,10 +1585,95 @@ def domain(name, args):
     if action == "plan":
         if os.path.exists(__file__ + ".fail-plan"):
             return {"error": "fixture plan unavailable"}, True
-        return {"task_profile": {"task_id": "t-1"}, "constraints": {},
-                "execution_plan": [{"id": "s1", "tool": "impact",
-                                    "args": {"target": "p:app.py:function:main"},
-                                    "depends_on": []}]}, False
+        parent = args.get("task_contract")
+        parent = parent if isinstance(parent, dict) else None
+        original = list(
+            (parent.get("intent_ledger") or {}).get("allowed_paths") or []
+        ) if parent else []
+        targets = [str(item) for item in (args.get("targets") or [])]
+        cumulative = list(dict.fromkeys(original + targets))
+        objective = (
+            (parent.get("intent_ledger") or {}).get("description")
+            if parent else str(args.get("description") or "")
+        )
+        fingerprint = hashlib.sha256(
+            json.dumps(cumulative, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        body = {
+            "task_profile": {
+                "version": "task-contract.v2", "task_id": "t-1",
+                "intent": "feature", "project": args.get("project"),
+                "description": objective,
+                "intent_fingerprint": fingerprint,
+                "instruction_fingerprint": "0" * 64,
+                "targets": cumulative,
+                "resolved_targets": [
+                    {
+                        "input": item, "path": item,
+                        "symbol_id": (
+                            "p:app.py:function:main" if item == "app.py" else None
+                        ),
+                    }
+                    for item in cumulative
+                ],
+            },
+            "intent_ledger": {
+                "version": "intent-ledger.v1", "fingerprint": fingerprint,
+                "description": objective,
+                "allowed_paths": cumulative,
+            },
+            "instruction_context": {
+                "version": "task-context.v1", "fingerprint": "0" * 64,
+            },
+            "constraints": {}, "targets": cumulative,
+            "resolved_targets": [
+                {
+                    "input": item, "path": item,
+                    "symbol_id": (
+                        "p:app.py:function:main" if item == "app.py" else None
+                    ),
+                }
+                for item in cumulative
+            ],
+            "execution_plan": [{"id": "s1", "tool": "impact",
+                                "args": {"target": "p:app.py:function:main"},
+                                "depends_on": []}],
+        }
+        if parent:
+            parent_state = parent.get("task_amendment") or {}
+            generation = int(parent_state.get("amendment_index") or 0) + 1
+            parent_sha = parent_digest(parent)
+            parent_id = parent_state.get("contract_id") or root_contract_id(
+                "t-1", objective, original,
+            )
+            contract_id = amendment_contract_id(
+                "t-1", generation, objective, cumulative, parent_id, parent_sha,
+            )
+            prior_chain = list(parent_state.get("chain") or [])
+            body["task_amendment"] = {
+                "version": "task-amendment.v1", "status": "amended",
+                "root_task_id": "t-1", "objective": objective,
+                "amendment_index": generation, "contract_id": contract_id,
+                "parent_contract_id": parent_id,
+                "parent_contract_digest": parent_sha,
+                "chain": prior_chain + [
+                    chain_entry(
+                        parent_id,
+                        prior_chain[-1]["contract_id"] if prior_chain else None,
+                        "t-1", str(args.get("project") or ""), generation - 1,
+                        len(original), parent_sha,
+                    )
+                ],
+                "original_paths": original,
+                "added_paths": [item for item in cumulative if item not in original],
+                "cumulative_paths": cumulative,
+            }
+            body["task_profile"].update({
+                "root_task_id": "t-1", "description": objective,
+                "amendment_index": generation,
+                "amendment_contract_id": contract_id,
+            })
+        return body, False
     if action == "gate":
         return {"pass": True, "decision": "pass", "required_actions": [],
                 "required_state": {}}, False

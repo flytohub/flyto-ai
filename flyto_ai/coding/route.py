@@ -45,6 +45,13 @@ from typing import (
     Tuple,
 )
 
+from flyto_ai.coding.amendment_contract import (
+    AmendmentContractError,
+    amendment_delta_steps,
+    covered_amendment_paths,
+    reusable_parent_step_counts,
+    validate_amendment_contract,
+)
 from flyto_ai.coding.contracts import (
     CapabilitySpec,
     CodingTaskRequest,
@@ -56,15 +63,84 @@ from flyto_ai.coding.contracts import (
 ROUTE_CONTRACT_VERSION = "flyto.coding-route.v1"
 _ROUTE_DOMAIN = b"flyto.coding-route.v1\n"
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
-#: What a capability must *already* have written for this host to treat it as a
-#: machine code rather than as prose. Deliberately validated before any
-#: normalization: normalizing first turns
-#: `please open /Users/alice/private token` into
-#: `validation_please_open_users_alice_private_token`, which reads exactly like a
-#: host-owned control token and is not one. Whitespace, slashes, URLs, controls,
-#: upper case and anything overlong are dropped whole, never truncated into
-#: validity.
-_DOMAIN_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{1,63}$")
+#: The Indexer's historical upper-case reasons are untrusted input too. Only
+#: exact entries in this host-owned registry may cross into a receipt; accepting
+#: the shape alone would turn a secret-shaped value into a host control token.
+_INDEXER_REASON_CODES = frozenset({
+    "AMENDMENT_CHAIN_COUNT_INVALID",
+    "AMENDMENT_CHAIN_CYCLIC",
+    "AMENDMENT_CHAIN_INDEX_INVALID",
+    "AMENDMENT_CHAIN_LINKAGE_INVALID",
+    "AMENDMENT_CHAIN_MALFORMED",
+    "AMENDMENT_CHAIN_OVERSIZED",
+    "AMENDMENT_CHAIN_PROJECT_MISMATCH",
+    "AMENDMENT_CHAIN_ROOT_MISMATCH",
+    "AMENDMENT_CHAIN_TAMPERED",
+    "AMENDMENT_PARENT_INSTRUCTION_MISSING",
+    "AMENDMENT_PARENT_INSTRUCTION_STALE",
+    "AMENDMENT_PARENT_INSTRUCTION_TAMPERED",
+    "AMENDMENT_PARENT_LEDGER_MISSING",
+    "AMENDMENT_PARENT_LEDGER_STALE",
+    "AMENDMENT_PARENT_LEDGER_TAMPERED",
+    "AMENDMENT_PARENT_MISSING_ROOT_IDENTITY",
+    "AMENDMENT_PARENT_NOT_A_CONTRACT",
+    "AMENDMENT_PARENT_OBJECTIVE_MISMATCH",
+    "AMENDMENT_PARENT_OBJECTIVE_MISSING",
+    "AMENDMENT_PARENT_OBJECTIVE_OVERSIZED",
+    "AMENDMENT_PARENT_PROJECT_MISMATCH",
+    "AMENDMENT_PARENT_SCOPE_TAMPERED",
+    "AMENDMENT_PARENT_VERSION_UNSUPPORTED",
+    "AMENDMENT_PROJECT_UNRESOLVED",
+    "AMENDMENT_TARGET_NOT_RELATIVE",
+    "AMENDMENT_TARGET_SYMLINK",
+    "AMENDMENT_TARGET_UNBOUNDED",
+    "AMENDMENT_TARGET_UNRESOLVED",
+    "AMENDMENT_TARGETS_MISSING",
+    "AMENDMENT_TARGETS_OVERSIZED",
+    "CODE_VALIDATION_FAILED",
+    "DECISIONS_INCOMPLETE",
+    "DECISION_CONTRACT_NOT_FROZEN",
+    "DECISION_CONTRACT_NOT_READY",
+    "DECISION_CONTRACT_TAMPERED",
+    "DECISION_CONTRADICTIONS",
+    "DECISION_DIFF_NONCONFORMANT",
+    "DECISION_EVIDENCE_SCOPE_INVALID",
+    "DECISION_EVIDENCE_STALE",
+    "EVIDENCE_SNAPSHOT_DIVERGED",
+    "EXTERNAL_PROOF_NONCONFORMANT",
+    "INSTRUCTION_CONTEXT_NONCONFORMANT",
+    "INTENT_LEDGER_NONCONFORMANT",
+    "INVALID_GRILL_REQUEST",
+    "fix_intent_ledger:task:incomplete_scope",
+    "fix_intent_ledger:task:unplanned_diff",
+})
+_INDEXER_REQUIRED_ACTIONS = frozenset({
+    "amend_intent_ledger",
+    "amend_within_the_same_project",
+    "complete_and_freeze_grill_session",
+    "close_this_task_before_amending_again",
+    "declare_bounded_relative_amendment_targets",
+    "declare_resolvable_amendment_targets",
+    "fix_intent_ledger:task:change_set_unavailable",
+    "fix_intent_ledger:task:incomplete_scope",
+    "fix_intent_ledger:task:intent_ledger_stale",
+    "fix_intent_ledger:task:orphan_requirement",
+    "fix_intent_ledger:task:requirement_path_uncovered",
+    "fix_intent_ledger:task:requirement_proof_unsatisfied",
+    "fix_intent_ledger:task:unplanned_diff",
+    "fix_lint_or_tests",
+    "freeze_decision_contract",
+    "refresh_task_context:instruction_conflict",
+    "refresh_task_context:instruction_context_stale",
+    "refresh_task_context:unplanned_instruction_scope",
+    "reduce_amendment_target_count",
+    "refresh_parent_task_contract",
+    "replace_explicitly_failing_proof_receipts",
+    "restore_or_refreeze_decision_contract",
+    "rerun_task_plan_without_parent",
+    "supply_an_indexed_project",
+    "supply_immediately_preceding_task_contract",
+})
 _ACTION_RE = re.compile(r"^[a-z][a-z0-9_.:-]{1,63}$")
 #: Host-created provenance for the root execution plan. A sub-task's scope
 #: is "subtask_<n>" for its declared position. These names are assigned by
@@ -95,6 +171,14 @@ _MAX_EXPLICIT_REQUEST_TARGETS = 64
 #: looks like one: short, alphanumeric, no underscores. Existing paths are
 #: unaffected; they are proven by the filesystem, not by their spelling.
 _NEW_FILE_SUFFIX_RE = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
+_VERSION_LABEL_SUFFIX_RE = re.compile(r"^\.[0-9]+$")
+#: A cumulative amendment may contain the already-executed parent plan plus a
+#: bounded delta.  The execution bound still applies to the delta; this second
+#: ceiling only lets the host validate the complete successor before deriving
+#: that delta from the Indexer's digest-bound original/added path boundary.
+#: Public Indexer ``task-amendment.v1`` chain bound.  A generation-N
+#: successor may restate each earlier bounded plan plus one new bounded delta,
+#: while the executable delta below remains capped by ``max_plan_steps``.
 #: A file that does not exist yet is only a target when the task actually asks
 #: for it. `human.approval` and `pkg/check.some_capability` are perfectly
 #: well-formed filenames; what distinguishes them from `add tests/test_x.py` is
@@ -333,23 +417,13 @@ class RouteLaneStatus(str, Enum):
 _MAX_DOMAIN_EVIDENCE = 8
 
 
-def _domain_code_token(value: Any, prefix: str) -> str:
-    """Map one already-valid domain code into the public blocker grammar.
+def _indexer_domain_code_token(value: Any, prefix: str) -> str:
+    """Project only an exact host-owned Indexer reason/action registry entry."""
 
-    Two steps, and the order is the whole point. First the raw value has to
-    *already* be a machine identifier - that is a statement about what the
-    capability chose to emit, and it is the only thing separating
-    `fix_intent_ledger:task:unplanned_diff` from `rm -rf workspace`. Only then
-    are the stable separators `.`, `:` and `-` mapped to `_`, which is a
-    lossless spelling change rather than a rescue of invalid input.
-
-    Returns `""` for anything that does not qualify. Nothing is truncated into
-    validity: an overlong or malformed value is dropped entire.
-    """
-
-    if not isinstance(value, str) or not _DOMAIN_CODE_RE.fullmatch(value):
+    allowed = _INDEXER_REQUIRED_ACTIONS if prefix == "action" else _INDEXER_REASON_CODES
+    if not isinstance(value, str) or value not in allowed:
         return ""
-    token = "{}_{}".format(prefix, re.sub(r"[.:-]", "_", value))
+    token = "{}_{}".format(prefix, re.sub(r"[.:-]", "_", value.lower()))
     return token if _CODE_RE.fullmatch(token) else ""
 
 
@@ -965,7 +1039,13 @@ class CodingRouteOrchestrator:
         if demand > self._remaining_calls(lane):
             raise CodingRouteError("plan_call_budget_exceeded", lane)
 
-    def _failed_call(self, code: str, lane: RouteLane, action: str) -> CodingRouteError:
+    def _failed_call(
+        self,
+        code: str,
+        lane: RouteLane,
+        action: str,
+        blockers: Sequence[str] = (),
+    ) -> CodingRouteError:
         """Record the exact call that failed, then return the closing error.
 
         The action is derived host-side and the detail code is a stable
@@ -983,7 +1063,7 @@ class CodingRouteOrchestrator:
             and _ACTION_RE.fullmatch(action)
         ):
             trace.calls.append(RouteCallRecord(lane.value, action, False, code))
-        return CodingRouteError(code, lane)
+        return CodingRouteError(code, lane, blockers=blockers)
 
     @staticmethod
     def _capability_reason(raw: Mapping[str, Any]) -> str:
@@ -1038,41 +1118,85 @@ class CodingRouteOrchestrator:
         payload = raw.get("result", raw)
         if not isinstance(payload, Mapping):
             return payload
-        if payload.get("isError") is True:
-            raise self._failed_call("domain_failure", lane, recorded)
         inner = payload.get("structuredContent")
-        if inner is None and isinstance(payload.get("content"), (list, tuple)):
-            for block in payload["content"]:
-                if isinstance(block, Mapping) and block.get("type") == "text":
-                    # Some tools append a human-readable section after the JSON
-                    # document, so decode the leading value rather than the
-                    # whole string.
-                    text = str(block.get("text", "")).lstrip()
-                    try:
-                        inner, _end = json.JSONDecoder().raw_decode(text)
-                    except (TypeError, ValueError) as exc:
-                        # A text block that should carry JSON but does not is
-                        # malformed evidence, never an empty success.
-                        raise self._failed_call(
-                            "malformed_evidence", lane, recorded,
-                        ) from exc
-                    break
         if inner is None:
+            inner = self._text_structured_content(payload, lane, recorded)
+        if inner is None:
+            if payload.get("isError") is True:
+                raise self._failed_call("domain_failure", lane, recorded)
             return payload
         if not isinstance(inner, Mapping):
             raise self._failed_call("malformed_evidence", lane, recorded)
-        if inner.get("ok") is False or inner.get("error"):
-            raise self._failed_call("domain_failure", lane, recorded)
-        runtime = inner.get("_runtime")
-        if isinstance(runtime, Mapping):
-            freshness = str(runtime.get("index_freshness", "")).lower()
-            if "stale" in freshness or "missing" in freshness:
-                raise self._failed_call("index_stale", lane, recorded)
+        self._raise_structured_domain_failure(payload, inner, lane, recorded)
+        self._validate_domain_runtime(inner, lane, recorded)
         domain = {key: value for key, value in inner.items() if key != "_runtime"}
         # A legacy scalar result is wrapped by the server under `result`.
         if set(domain) == {"result"}:
             return domain["result"]
         return domain
+
+    def _text_structured_content(
+        self,
+        payload: Mapping[str, Any],
+        lane: RouteLane,
+        recorded: str,
+    ) -> Any:
+        """Decode only the leading JSON value from the first MCP text block."""
+
+        content = payload.get("content")
+        if not isinstance(content, (list, tuple)):
+            return None
+        for block in content:
+            if not isinstance(block, Mapping) or block.get("type") != "text":
+                continue
+            text = str(block.get("text", "")).lstrip()
+            try:
+                value, _end = json.JSONDecoder().raw_decode(text)
+            except (TypeError, ValueError) as exc:
+                raise self._failed_call(
+                    "malformed_evidence", lane, recorded,
+                ) from exc
+            return value
+        return None
+
+    def _raise_structured_domain_failure(
+        self,
+        payload: Mapping[str, Any],
+        inner: Mapping[str, Any],
+        lane: RouteLane,
+        recorded: str,
+    ) -> None:
+        """Fail a structured domain result with only bounded machine evidence."""
+
+        if (
+            payload.get("isError") is True
+            or inner.get("ok") is False
+            or inner.get("error")
+        ):
+            blockers = self._structured_domain_evidence(inner)
+            code = "domain_failure"
+            reasons = inner.get("reason_codes")
+            if isinstance(reasons, (list, tuple)) and reasons:
+                projected = _indexer_domain_code_token(reasons[0], "domain")
+                if projected:
+                    code = projected
+            raise self._failed_call(
+                code, lane, recorded, blockers=blockers,
+            )
+
+    def _validate_domain_runtime(
+        self,
+        inner: Mapping[str, Any],
+        lane: RouteLane,
+        recorded: str,
+    ) -> None:
+        """Reject a stale Indexer runtime without exposing runtime prose."""
+
+        runtime = inner.get("_runtime")
+        if isinstance(runtime, Mapping):
+            freshness = str(runtime.get("index_freshness", "")).lower()
+            if "stale" in freshness or "missing" in freshness:
+                raise self._failed_call("index_stale", lane, recorded)
 
     @staticmethod
     def _lane_projection(result: Any, keys: Sequence[str]) -> Any:
@@ -1162,7 +1286,13 @@ class CodingRouteOrchestrator:
 
         state: Dict[str, Any] = {}
         gates_passed: list = []
-        groups = self._plan_groups(plan_result, lane)
+        groups = self._plan_groups(
+            plan_result,
+            lane,
+            parent_contract=parent_contract,
+            host_project=project,
+            host_requested_paths=targets,
+        )
         steps = [step for _, scoped in groups for step in scoped]
         # The gate phases this plan schedules for itself, decided before any of
         # it runs. Gate expansion is bounded here rather than discovered: the
@@ -1538,7 +1668,28 @@ class CodingRouteOrchestrator:
             if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
                 continue
             for value in list(values)[:_MAX_DOMAIN_EVIDENCE]:
-                token = _domain_code_token(value, prefix)
+                token = _indexer_domain_code_token(value, prefix)
+                if token and token not in tokens:
+                    tokens.append(token)
+        return tuple(tokens[:_MAX_DOMAIN_EVIDENCE])
+
+    @staticmethod
+    def _structured_domain_evidence(value: Any) -> Tuple[str, ...]:
+        """Project bounded Indexer codes from a failed structured result."""
+
+        tokens: list = []
+        if not isinstance(value, Mapping):
+            return ()
+        for source, prefix in (
+            ("reason_codes", "validation"), ("required_actions", "action"),
+        ):
+            values = value.get(source)
+            if isinstance(values, (str, bytes)) or not isinstance(
+                values, (list, tuple),
+            ):
+                continue
+            for item in list(values)[:_MAX_DOMAIN_EVIDENCE]:
+                token = _indexer_domain_code_token(item, prefix)
                 if token and token not in tokens:
                     tokens.append(token)
         return tuple(tokens[:_MAX_DOMAIN_EVIDENCE])
@@ -1560,7 +1711,9 @@ class CodingRouteOrchestrator:
                 # a path, a URL - keeps the generic host-owned detail, because a
                 # normalized sentence is indistinguishable from a real code once
                 # it reaches a caller.
-                token = _domain_code_token(reason_codes[0], "validation")
+                token = _indexer_domain_code_token(
+                    reason_codes[0], "validation",
+                )
                 if token:
                     return token
         return "validation_failed"
@@ -1763,7 +1916,10 @@ class CodingRouteOrchestrator:
                         # component, because `pkg/check.some_capability` is a
                         # qualified identifier rather than a path.
                         suffix = PurePosixPath(value).suffix
-                        if not _NEW_FILE_SUFFIX_RE.fullmatch(suffix):
+                        if (
+                            not _NEW_FILE_SUFFIX_RE.fullmatch(suffix)
+                            or _VERSION_LABEL_SUFFIX_RE.fullmatch(suffix)
+                        ):
                             continue
                         if not _MUTATION_VERB_RE.search(
                             text[max(0, match.start(1) - _MUTATION_VERB_WINDOW):match.start(1)],
@@ -1834,7 +1990,13 @@ class CodingRouteOrchestrator:
         return approved
 
     def _plan_groups(
-        self, plan_result: Mapping[str, Any], lane: RouteLane,
+        self,
+        plan_result: Mapping[str, Any],
+        lane: RouteLane,
+        *,
+        parent_contract: Optional[Mapping[str, Any]] = None,
+        host_project: str = "",
+        host_requested_paths: Sequence[str] = (),
     ) -> list:
         """Split a contract into its independently compiled plans, in declared order.
 
@@ -1861,37 +2023,113 @@ class CodingRouteOrchestrator:
         Nothing is namespaced or rewritten, so the exact contract and every tool
         argument stay untouched.
         """
-
-        def collect(value: Any) -> list:
-            if value is None:
-                return []
-            if not isinstance(value, (list, tuple)):
-                raise CodingRouteError("malformed_evidence", lane)
-            for item in value:
-                # A non-object step is malformed, never something to skip.
-                if not isinstance(item, Mapping):
-                    raise CodingRouteError("malformed_evidence", lane)
-            return list(value)
-
-        groups: list = [(_ROOT_SCOPE, collect(plan_result.get("execution_plan")))]
-        sub_tasks = plan_result.get("sub_tasks")
-        if sub_tasks is not None:
-            if not isinstance(sub_tasks, (list, tuple)):
-                raise CodingRouteError("malformed_evidence", lane)
-            for index, sub_task in enumerate(sub_tasks, 1):
-                if not isinstance(sub_task, Mapping):
-                    raise CodingRouteError("malformed_evidence", lane)
-                groups.append((
-                    "subtask_{}".format(index),
-                    collect(sub_task.get("execution_plan")),
-                ))
-        if sum(len(steps) for _, steps in groups) > self.limits.max_plan_steps:
+        groups = self._raw_plan_groups(plan_result, lane)
+        boundary = None
+        amendment_index = 0
+        reusable_parent_steps: Dict[str, int] = {}
+        if parent_contract is not None:
+            try:
+                boundary = validate_amendment_contract(
+                    plan_result, parent_contract, host_project,
+                    host_requested_paths,
+                )
+                amendment_index = boundary.amendment_index
+                parent_groups = [
+                    (scope, self._ordered_steps(steps, lane))
+                    for scope, steps, _source in self._raw_plan_groups(
+                        parent_contract, lane,
+                    )
+                ]
+                reusable_parent_steps = reusable_parent_step_counts(
+                    parent_groups, frozenset(INDEXER_PLAN_GATE_STEPS),
+                )
+            except AmendmentContractError as exc:
+                raise CodingRouteError(exc.code, lane) from exc
+        total = sum(len(steps) for _, steps, _source in groups)
+        hard_bound = self.limits.max_plan_steps
+        if parent_contract is not None:
+            hard_bound *= amendment_index + 1
+        if total > hard_bound:
             raise CodingRouteError("plan_bound_exceeded", lane)
-        return [
-            (scope, self._ordered_steps(steps, lane))
-            for scope, steps in groups
+        ordered = tuple(
+            (scope, self._ordered_steps(steps, lane), source)
+            for scope, steps, source in groups
+            if steps or len(groups) == 1
+        )
+        if boundary is not None:
+            try:
+                covered = covered_amendment_paths(
+                    [source for _scope, _steps, source in ordered],
+                )
+            except AmendmentContractError as exc:
+                raise CodingRouteError(exc.code, lane) from exc
+            if covered != boundary.original | boundary.added:
+                raise CodingRouteError("amendment_plan_boundary_incomplete", lane)
+            try:
+                ordered = tuple(
+                    (
+                        scope,
+                        amendment_delta_steps(
+                            scope=scope,
+                            steps=steps,
+                            source=source,
+                            boundary=boundary,
+                            reusable_counts=reusable_parent_steps,
+                            gate_tools=frozenset(INDEXER_PLAN_GATE_STEPS),
+                        ),
+                        source,
+                    )
+                    for scope, steps, source in ordered
+                )
+            except AmendmentContractError as exc:
+                raise CodingRouteError(exc.code, lane) from exc
+        executable = [
+            (scope, steps)
+            for scope, steps, _source in ordered
             if steps
         ]
+        if sum(len(steps) for _, steps in executable) > self.limits.max_plan_steps:
+            raise CodingRouteError("plan_bound_exceeded", lane)
+        return executable
+
+    @staticmethod
+    def _collect_plan_steps(value: Any, lane: RouteLane) -> list:
+        """Copy one execution plan after validating every step object."""
+
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            raise CodingRouteError("malformed_evidence", lane)
+        if any(not isinstance(item, Mapping) for item in value):
+            raise CodingRouteError("malformed_evidence", lane)
+        return list(value)
+
+    @classmethod
+    def _raw_plan_groups(
+        cls, plan_result: Mapping[str, Any], lane: RouteLane,
+    ) -> list:
+        """Collect root and sub-task plans with host-assigned provenance."""
+
+        groups = [(
+            _ROOT_SCOPE,
+            cls._collect_plan_steps(plan_result.get("execution_plan"), lane),
+            plan_result,
+        )]
+        sub_tasks = plan_result.get("sub_tasks")
+        if sub_tasks is None:
+            return groups
+        if not isinstance(sub_tasks, (list, tuple)):
+            raise CodingRouteError("malformed_evidence", lane)
+        for index, sub_task in enumerate(sub_tasks, 1):
+            if not isinstance(sub_task, Mapping):
+                raise CodingRouteError("malformed_evidence", lane)
+            groups.append((
+                "subtask_{}".format(index),
+                cls._collect_plan_steps(sub_task.get("execution_plan"), lane),
+                sub_task,
+            ))
+        return groups
+
 
     def _plan_steps(self, plan_result: Mapping[str, Any], lane: RouteLane) -> list:
         """Every step, in the exact order the lane will run it."""

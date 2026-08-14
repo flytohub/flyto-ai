@@ -877,7 +877,56 @@ scope.
 Plan-authority refusals are closed, terminal and report `verification` or
 `workspace` phase with `resubmit_against_current_contract`. A capability's own
 `reason_codes`/`required_actions` reach host-owned blockers only when they
-already are machine codes.
+already are machine codes. A failed Indexer MCP envelope is inspected for that
+bounded structured result before its transport error flag is projected. Both
+that path and an ordinary `pass=false` validation use the same closed
+projection. Only exact entries in the host-owned Indexer reason/action registry
+remain
+actionable; an unknown upper-case token is generic even when it looks like a
+machine code. Free-form messages, paths, URLs, secrets and unknown tokens still
+collapse to `domain_failure` and are never persisted.
+
+An amended Indexer plan is cumulative evidence, but it is not cumulative work.
+The host recomputes the published, versioned parent-contract digest from the
+bounded task profile, intent ledger, instruction context and any prior amendment.
+The stdlib-only `flyto_ai.coding.amendment_contract` domain then verifies the
+content-addressed contract id, parent id/digest, complete ancestry entry digests,
+root, normalized host project, indices, linkage, counts and exact path partition.
+Parent and successor task profiles must mirror amendment identity and their own
+ledger/instruction fingerprints; intent and the immutable objective remain
+continuous, and a missing successor instruction context is a refusal rather
+than `not_applicable`.
+It has no route, service, provider or sibling-package dependency. The pinned
+Indexer verifier accepts ancestry lengths below eight, so generation seven is
+the effective compatibility ceiling and generation/length eight fails closed
+until the producer/verifier off-by-one is resolved.
+
+Original paths must equal the parent ledger, added paths must be disjoint, their
+ordered union must equal the successor ledger, and every path must occur in the
+plan groups' exact resolved-target union. Path ownership alone never proves work
+was executed: a successor analysis step is reused only by consuming one exact
+parent multiset occurrence with the same host-assigned scope, tool, canonical
+arguments, required flag and purpose. Every novel or changed step executes even
+when it targets an original path, and every successor gate executes again. The
+derived executable delta always remains within the ordinary 32-step limit.
+Missing, ambiguous or tampered evidence fails closed; these are Indexer-issued
+digest boundaries, not cryptographic signatures.
+
+Every amendment path is also revalidated as one bounded, canonical,
+repository-relative POSIX lexical token: absolute, drive, traversal, glob,
+control, backslash, dot-segment and non-normal spellings are refused. The
+successor cumulative scope must equal the ordered union of the authenticated
+parent ledger, the exact revision/audit-proven prior implementation scope and
+the current filesystem-validated explicit targets. The producer may neither
+omit one of those paths nor invent another. Numeric suffixes remain legal for
+existing literal paths; the host new-file parser plus Indexer resolution prevent
+a nonexistent milestone such as `M1.1` from creating authority, while `.7z`
+stays typed.
+
+Audit-target parsing also distinguishes dotted milestone labels from typed new
+files. A numeric-only suffix such as `M1.1` cannot grant new-file authority, while
+a typed suffix that contains a letter, including `.7z`, remains eligible when an
+explicit mutation verb governs it.
 
 No product topology changes: `flyto-cloud` remains parallel to and level with the
 combined `flyto-code` / `flyto-engine` column, and no repository ownership or

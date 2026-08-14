@@ -26,6 +26,7 @@ extraction read it as a request to create a file called
 edit-path authority.
 """
 import asyncio
+import copy
 import hashlib
 import json
 import sys
@@ -36,6 +37,12 @@ from flyto_ai.coding.contracts import (
     CapabilitySpec,
     CodingJobState,
     CodingTaskRequest,
+)
+from flyto_ai.coding.amendment_contract import (
+    amendment_contract_id,
+    chain_entry,
+    parent_contract_digest,
+    root_contract_id,
 )
 from flyto_ai.coding.route import (
     CodingRouteOrchestrator,
@@ -110,12 +117,37 @@ def test_real_paths_and_typed_new_filenames_still_resolve(repo):
     assert _targets("add tests/test_new_thing.py", repo) == []  # parent absent
     (repo / "tests").mkdir()
     assert _targets("add tests/test_new_thing.py", repo) == ["tests/test_new_thing.py"]
+    assert _targets("create artifacts/archive.7z", repo) == [
+        "artifacts/archive.7z",
+    ]
     # Existing root file, bare.
     assert _targets("fix README.md please.", repo) == ["README.md"]
     # Expo route segments survive.
     (repo / "app" / "(tabs)" / "index.tsx").write_text("x", encoding="utf-8")
     assert _targets("edit app/(tabs)/index.tsx", repo) == ["app/(tabs)/index.tsx"]
     assert _targets("create app/[id]/page.tsx", repo) == ["app/[id]/page.tsx"]
+
+
+def test_the_exact_code_rework_does_not_treat_milestone_m1_1_as_a_new_file(repo):
+    """A milestone label is prose, even when a mutation verb precedes it.
+
+    The live Code repair starts its original task with ``Implement M1.1``.
+    ``.1`` used to satisfy the new-file suffix grammar, so the amendment sent
+    a nonexistent root file named ``M1.1`` to the Indexer and was refused
+    before the provider could run.
+    """
+
+    message = (
+        "Audit verdict: rework. Resolve every finding below in this same thread.\n"
+        "1. [blocker] focused_sidebar_suite_does_not_execute: repair the "
+        "allowed Sidebar import and rerun both new tests.\n\n"
+        "Original task:\n"
+        "Implement M1.1 module-state coherence on exact base e233a0b3. "
+        "Allowed product files: src-next/hooks/useEffectivePageAccess.ts."
+    )
+    assert "M1.1" in message
+    assert _targets(message, repo) == []
+    assert _amendment_targets(message, repo) == []
 
 
 def test_the_target_bound_still_holds(repo):
@@ -267,25 +299,110 @@ class FakeIndexer:
             parent = arguments.get("task_contract")
             targets = [str(item) for item in (arguments.get("targets") or [])]
             if isinstance(parent, dict) and parent:
-                ledger = sorted(set(parent["intent_ledger"]) | set(targets))
+                original = list(parent["intent_ledger"]["allowed_paths"])
+                ledger = list(dict.fromkeys(original + targets))
                 root = parent["root_task_id"]
                 objective = parent["objective"]
                 generation = int(parent["generation"]) + 1
             else:
-                ledger = sorted(set(targets))
+                original = []
+                ledger = list(dict.fromkeys(targets))
                 root = self.ROOT
                 objective = str(arguments.get("description", ""))[:200]
                 generation = 1
-            return {
+            fingerprint = self._chain(ledger)
+            contract = {
                 "ok": True,
                 "root_task_id": root,
                 "objective": objective,
                 "generation": generation,
-                "intent_ledger": ledger,
-                "chain_sha256": self._chain(ledger),
-                "task_profile": {"kind": "generic"},
+                "intent_ledger": {
+                    "version": "intent-ledger.v1",
+                    "fingerprint": fingerprint,
+                    "description": objective,
+                    "allowed_paths": ledger,
+                },
+                "instruction_context": {
+                    "version": "task-context.v1",
+                    "fingerprint": self._chain(["instructions"] + ledger),
+                },
+                "chain_sha256": fingerprint,
+                "task_profile": {
+                    "kind": "generic",
+                    "version": "task-contract.v2",
+                    "task_id": root,
+                    "intent": "feature",
+                    "project": arguments.get("project"),
+                    "description": objective,
+                    "intent_fingerprint": fingerprint,
+                    "instruction_fingerprint": self._chain(["instructions"] + ledger),
+                    "targets": ledger,
+                    "resolved_targets": [
+                        {"input": item, "path": item, "symbol_id": None}
+                        for item in ledger
+                    ],
+                },
+                "targets": ledger,
+                "resolved_targets": [
+                    {"input": item, "path": item, "symbol_id": None}
+                    for item in ledger
+                ],
                 "execution_plan": [],
             }
+            if isinstance(parent, dict) and parent:
+                parent_state = parent.get("task_amendment") or {}
+                amendment_index = int(parent_state.get("amendment_index") or 0) + 1
+                parent_digest = (
+                    parent_contract_digest(parent)
+                )
+                parent_contract_id = parent_state.get("contract_id") or (
+                    root_contract_id(
+                        root, objective, original,
+                    )
+                )
+                contract_id = amendment_contract_id(
+                    root,
+                    amendment_index,
+                    objective,
+                    ledger,
+                    parent_contract_id,
+                    parent_digest,
+                )
+                parent_chain = list(parent_state.get("chain") or [])
+                chain = parent_chain + [
+                    chain_entry(
+                        contract_id=parent_contract_id,
+                        parent_contract_id=(
+                            parent_chain[-1]["contract_id"] if parent_chain else None
+                        ),
+                        root_task_id=root,
+                        project=str(arguments.get("project") or ""),
+                        amendment_index=amendment_index - 1,
+                        target_count=len(original),
+                        contract_digest=parent_digest,
+                    )
+                ]
+                contract["task_amendment"] = {
+                    "version": "task-amendment.v1",
+                    "status": "amended",
+                    "root_task_id": root,
+                    "objective": objective,
+                    "amendment_index": amendment_index,
+                    "contract_id": contract_id,
+                    "parent_contract_id": parent_contract_id,
+                    "parent_contract_digest": parent_digest,
+                    "chain": chain,
+                    "original_paths": original,
+                    "added_paths": [item for item in ledger if item not in original],
+                    "cumulative_paths": ledger,
+                }
+                contract["task_profile"].update({
+                    "root_task_id": root,
+                    "description": objective,
+                    "amendment_index": amendment_index,
+                    "amendment_contract_id": contract_id,
+                })
+            return contract
         if tool == "task" and action == "gate":
             return {"ok": True, "pass": True, "required_state": {}}
         if tool == "task" and action == "validate":
@@ -294,7 +411,9 @@ class FakeIndexer:
             changed = list(
                 (arguments.get("current_state") or {}).get("changed_paths") or []
             )
-            ledger = set(contract.get("intent_ledger") or ())
+            ledger = set(
+                (contract.get("intent_ledger") or {}).get("allowed_paths") or ()
+            )
             # Faithful to the cumulative amendment contract in both directions.
             # An undeclared change is drift; an omitted cumulative path means the
             # caller validated a narrower scope than the contract now covers,
@@ -372,7 +491,7 @@ def test_a_rework_amends_the_exact_parent_and_keeps_the_root(repo):
     assert amended["root_task_id"] == parent["root_task_id"] == FakeIndexer.ROOT
     assert amended["objective"] == parent["objective"], "the root task moved"
     assert amended["generation"] == parent["generation"] + 1
-    assert set(amended["intent_ledger"]) == {
+    assert set(amended["intent_ledger"]["allowed_paths"]) == {
         "docs/reference/python/coding.md", "docs/reference/python/README.md",
     }
     assert amended["chain_sha256"] != parent["chain_sha256"]
@@ -403,11 +522,580 @@ def test_a_rework_plan_carries_host_proven_prior_scope(repo):
         "docs/reference/python/coding.md",
         "docs/reference/python/README.md",
     ]
-    assert set(second["task_contract"]["intent_ledger"]) == {
+    assert set(second["task_contract"]["intent_ledger"]["allowed_paths"]) == {
         "README.md",
         "docs/reference/python/coding.md",
         "docs/reference/python/README.md",
     }
+
+
+def test_parent_ledger_authority_survives_a_touched_scope_subset(repo):
+    """Touched files cannot narrow the authenticated parent plan ledger."""
+
+    indexer = FakeIndexer()
+    route = _orchestrator(indexer)
+    request = CodingTaskRequest(
+        message=(
+            "edit docs/reference/python/coding.md and "
+            "docs/reference/python/README.md"
+        ),
+        working_dir=str(repo),
+    )
+    _, first = asyncio.run(route._indexer_pre(request))
+    parent = first["task_contract"]
+    assert parent["intent_ledger"]["allowed_paths"] == [
+        "docs/reference/python/coding.md",
+        "docs/reference/python/README.md",
+    ]
+
+    rework = CodingTaskRequest(
+        message="rework: also edit artifacts/result.txt",
+        working_dir=str(repo),
+    )
+    _, second = asyncio.run(route._indexer_pre(
+        rework, parent,
+        ("docs/reference/python/coding.md", "README.md"),
+    ))
+
+    assert indexer.plans[-1]["targets"] == [
+        "docs/reference/python/coding.md", "README.md", "artifacts/result.txt",
+    ]
+    assert second["task_contract"]["intent_ledger"]["allowed_paths"] == [
+        "docs/reference/python/coding.md",
+        "docs/reference/python/README.md",
+        "README.md",
+        "artifacts/result.txt",
+    ]
+
+
+def test_audited_prior_scope_outside_parent_ledger_is_amendment_authority(repo):
+    indexer = FakeIndexer()
+    route = _orchestrator(indexer)
+    request = CodingTaskRequest(
+        message="edit docs/reference/python/coding.md", working_dir=str(repo),
+    )
+    _, first = asyncio.run(route._indexer_pre(request))
+    rework = CodingTaskRequest(
+        message="rework: also edit artifacts/result.txt", working_dir=str(repo),
+    )
+
+    _, second = asyncio.run(route._indexer_pre(
+        rework, first["task_contract"], ("README.md",),
+    ))
+    assert second["task_contract"]["intent_ledger"]["allowed_paths"] == [
+        "docs/reference/python/coding.md", "README.md", "artifacts/result.txt",
+    ]
+
+
+def _synthetic_plan_step(identifier, *, purpose, target="", gate=False, search=False):
+    if gate:
+        return {
+            "id": identifier,
+            "tool": "task",
+            "args": {"action": "gate", "next_phase": purpose},
+            "purpose": "gate_{}".format(purpose),
+            "required": True,
+            "depends_on": [],
+        }
+    return {
+        "id": identifier,
+        "tool": "search" if search else "impact",
+        "args": (
+            {"query": "tests covering {}".format(target)}
+            if search else {"target": target, "change_type": "modify"}
+        ),
+        "purpose": purpose,
+        "required": True,
+        "depends_on": [],
+    }
+
+
+def _synthetic_plan_group(prefix, original_count, added_count):
+    steps = [
+        _synthetic_plan_step(
+            "{}_o{:02d}".format(prefix, index),
+            purpose="{}_original_{:02d}".format(prefix, index),
+            target="repo:orig/a.py:file:a",
+            search=index == 0,
+        )
+        for index in range(original_count)
+    ] + [
+        _synthetic_plan_step(
+            "{}_a{:02d}".format(prefix, index),
+            purpose="{}_added_{:02d}".format(prefix, index),
+            target="add/a.py" if index == 0 else "repo:add/a.py:file:a",
+            search=index == 0,
+        )
+        for index in range(added_count)
+    ]
+    steps.extend([
+        _synthetic_plan_step("{}_g1".format(prefix), purpose="assess", gate=True),
+        _synthetic_plan_step("{}_g2".format(prefix), purpose="implement", gate=True),
+    ])
+    return steps
+
+
+def _bind_successor_amendment(parent, successor):
+    """Attach the exact public Indexer content-addressed successor chain."""
+
+    amendment = successor["task_amendment"]
+    parent_state = parent.get("task_amendment") or {}
+    parent_index = int(parent_state.get("amendment_index") or 0)
+    objective = parent["intent_ledger"]["description"]
+    original = list(amendment["original_paths"])
+    cumulative = list(amendment["cumulative_paths"])
+    root = amendment["root_task_id"]
+    digest = parent_contract_digest(parent)
+    parent_id = parent_state.get("contract_id") or root_contract_id(
+        root, objective, original,
+    )
+    contract_id = amendment_contract_id(
+        root, parent_index + 1, objective, cumulative, parent_id, digest,
+    )
+    parent_chain = list(parent_state.get("chain") or [])
+    amendment.update({
+        "objective": objective,
+        "amendment_index": parent_index + 1,
+        "contract_id": contract_id,
+        "parent_contract_id": parent_id,
+        "parent_contract_digest": digest,
+        "chain": parent_chain + [
+            chain_entry(
+                contract_id=parent_id,
+                parent_contract_id=(
+                    parent_chain[-1]["contract_id"] if parent_chain else None
+                ),
+                root_task_id=root,
+                project=parent["task_profile"]["project"],
+                amendment_index=parent_index,
+                target_count=len(original),
+                contract_digest=digest,
+            )
+        ],
+    })
+    successor["task_profile"].update({
+        "root_task_id": root,
+        "description": objective,
+        "amendment_index": parent_index + 1,
+        "amendment_contract_id": contract_id,
+    })
+
+
+def _promote_parent_to_generation_one(parent):
+    """Give a root fixture one valid first-generation public ancestry."""
+
+    ancestor = copy.deepcopy(parent)
+    ancestor.pop("task_amendment", None)
+    root = parent["task_profile"]["task_id"]
+    project = parent["task_profile"]["project"]
+    objective = parent["intent_ledger"]["description"]
+    paths = list(parent["intent_ledger"]["allowed_paths"])
+    digest = parent_contract_digest(ancestor)
+    predecessor = root_contract_id(root, objective, paths)
+    contract_id = amendment_contract_id(
+        root, 1, objective, paths, predecessor, digest,
+    )
+    parent["task_amendment"] = {
+        "version": "task-amendment.v1", "status": "amended",
+        "root_task_id": root, "objective": objective, "amendment_index": 1,
+        "contract_id": contract_id, "parent_contract_id": predecessor,
+        "parent_contract_digest": digest,
+        "chain": [
+            chain_entry(
+                contract_id=predecessor, parent_contract_id=None,
+                root_task_id=root, project=project, amendment_index=0,
+                target_count=len(paths), contract_digest=digest,
+            )
+        ],
+        "original_paths": paths, "added_paths": [], "cumulative_paths": paths,
+    }
+    parent["task_profile"].update({
+        "root_task_id": root,
+        "description": objective,
+        "amendment_index": 1,
+        "amendment_contract_id": contract_id,
+    })
+
+
+def _contract_section(*, task_id, project, paths, fingerprint, steps):
+    """Build one pinned-v2 root contract section for amendment tests."""
+
+    objective = "Implement the exact amendment test contract"
+    return {
+        "task_profile": {
+            "version": "task-contract.v2", "task_id": task_id,
+            "intent": "feature", "project": project,
+            "description": objective,
+            "intent_fingerprint": fingerprint,
+            "instruction_fingerprint": "9" * 64,
+        },
+        "intent_ledger": {
+            "version": "intent-ledger.v1", "fingerprint": fingerprint,
+            "description": objective, "allowed_paths": list(paths),
+        },
+        "instruction_context": {
+            "version": "task-context.v1", "fingerprint": "9" * 64,
+        },
+        "execution_plan": list(steps),
+    }
+
+
+def test_amendment_executes_only_parent_proven_delta_without_relaxing_bound(repo):
+    """The live Engine 18 + 16 successor has a bounded 22-step delta.
+
+    The Indexer-issued digest-bound amendment boundary, rather than fuzzy step similarity,
+    says which paths are original and which were added. Analysis tied exactly
+    to the six original paths was completed by the successful parent pre-lane.
+    Gates are never reused: the successor contract must pass all four of its
+    own scoped gates.
+    """
+
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    parent = _contract_section(
+        task_id="task_feature_engine",
+        project=repo.name,
+        paths=["orig/a.py"],
+        fingerprint="1" * 64,
+        steps=[],
+    )
+    parent.update({
+        "sub_tasks": [
+            {"execution_plan": _synthetic_plan_group("parent_cleanup", 4, 0)},
+            {"execution_plan": _synthetic_plan_group("parent_feature", 10, 0)},
+        ],
+    })
+    successor = {
+        "task_profile": {
+            "version": "task-contract.v2", "task_id": "task_feature_engine",
+            "intent": "feature", "project": repo.name,
+            "intent_fingerprint": "2" * 64,
+            "instruction_fingerprint": "8" * 64,
+        },
+        "intent_ledger": {
+            "version": "intent-ledger.v1", "fingerprint": "2" * 64,
+            "description": parent["intent_ledger"]["description"],
+            "allowed_paths": ["orig/a.py", "add/a.py"],
+        },
+        "instruction_context": {
+            "version": "task-context.v1", "fingerprint": "8" * 64,
+        },
+        "task_amendment": {
+            "version": "task-amendment.v1",
+            "status": "amended",
+            "root_task_id": "task_feature_engine",
+            "amendment_index": 1,
+            "parent_contract_digest": "",
+            "original_paths": ["orig/a.py"],
+            "added_paths": ["add/a.py"],
+            "cumulative_paths": ["orig/a.py", "add/a.py"],
+        },
+        "sub_tasks": [
+            {
+                "targets": ["orig/a.py", "add/a.py"],
+                "resolved_targets": [
+                    {"input": "orig/a.py", "path": "orig/a.py",
+                     "symbol_id": "repo:orig/a.py:file:a"},
+                    {"input": "add/a.py", "path": "add/a.py",
+                     "symbol_id": "repo:add/a.py:file:a"},
+                ],
+                "execution_plan": _synthetic_plan_group("parent_cleanup", 3, 13),
+            },
+            {
+                "targets": ["orig/a.py", "add/a.py"],
+                "resolved_targets": [
+                    {"input": "orig/a.py", "path": "orig/a.py",
+                     "symbol_id": "repo:orig/a.py:file:a"},
+                    {"input": "add/a.py", "path": "add/a.py",
+                     "symbol_id": "repo:add/a.py:file:a"},
+                ],
+                "execution_plan": _synthetic_plan_group("parent_feature", 9, 5),
+            },
+        ],
+    }
+    route = _orchestrator(FakeIndexer())
+    _bind_successor_amendment(parent, successor)
+    with pytest.raises(CodingRouteError, match="plan_bound_exceeded"):
+        route._plan_groups(successor, RouteLane.INDEXER_PRE)
+
+    groups = route._plan_groups(
+        successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+        host_project=repo.name,
+        host_requested_paths=successor["task_amendment"]["added_paths"],
+    )
+    delta = [step for _scope, steps in groups for step in steps]
+    assert sum(
+        len(item["execution_plan"]) for item in successor["sub_tasks"]
+    ) == 34
+    assert len(delta) == 22 <= RouteLimits().max_plan_steps
+    assert sum(step["tool"] == "task" for step in delta) == 4
+    assert not any("_original_" in step["purpose"] for step in delta)
+    assert sum("_added_" in step["purpose"] for step in delta) == 18
+
+
+def test_amendment_executes_a_novel_original_path_step_not_proven_by_parent(repo):
+    """Path ownership alone cannot erase new successor analysis."""
+
+    from flyto_ai.coding.route import RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    proven = copy.deepcopy(parent["execution_plan"][0])
+    novel = {
+        "id": "successor_novel_original_callers",
+        "tool": "call_hierarchy",
+        "args": {"symbol_id": "repo:orig/a.py:file:a", "direction": "callers"},
+        "purpose": "inspect_new_original_callers",
+        "required": True,
+        "depends_on": [],
+    }
+    added = _synthetic_plan_step(
+        "successor_added", purpose="inspect_added", target="add/a.py", search=True,
+    )
+    gates = [
+        _synthetic_plan_step("successor_g1", purpose="assess", gate=True),
+        _synthetic_plan_step("successor_g2", purpose="implement", gate=True),
+    ]
+    successor["execution_plan"] = [proven, novel, added] + gates
+
+    groups = route._plan_groups(
+        successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+        host_project=repo.name,
+        host_requested_paths=successor["task_amendment"]["added_paths"],
+    )
+    delta = [step for _scope, steps in groups for step in steps]
+    assert proven not in delta
+    assert novel in delta
+    assert added in delta
+    assert sum(step["tool"] == "task" for step in delta) == 2
+
+
+def test_redigested_foreign_parent_and_successor_cannot_replace_host_project(repo):
+    """Matching producer claims never outrank the normalized host project."""
+
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    parent["task_profile"]["project"] = "foreign_project"
+    successor["task_profile"]["project"] = "foreign_project"
+    _bind_successor_amendment(parent, successor)
+
+    with pytest.raises(CodingRouteError, match="amendment_parent_proof_mismatch"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=successor["task_amendment"]["added_paths"],
+        )
+
+
+def test_self_consistent_unrequested_path_cannot_replace_host_target_authority(repo):
+    """Producer digests cannot add a path absent from the host request."""
+
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+
+    with pytest.raises(CodingRouteError, match="amendment_path_boundary_invalid"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=[],
+        )
+
+
+def _digest_bound_amendment_fixture(repo):
+    parent = _contract_section(
+        task_id="task_feature_boundary", project=repo.name,
+        paths=["orig/a.py"], fingerprint="1" * 64,
+        steps=_synthetic_plan_group("parent", 1, 0),
+    )
+    successor = {
+        "task_profile": {
+            "version": "task-contract.v2",
+            "task_id": "task_feature_boundary",
+            "intent": "feature",
+            "project": repo.name,
+            "intent_fingerprint": "3" * 64,
+            "instruction_fingerprint": "8" * 64,
+        },
+        "intent_ledger": {
+            "version": "intent-ledger.v1",
+            "fingerprint": "3" * 64,
+            "description": parent["intent_ledger"]["description"],
+            "allowed_paths": ["orig/a.py", "add/a.py"],
+        },
+        "instruction_context": {
+            "version": "task-context.v1", "fingerprint": "8" * 64,
+        },
+        "task_amendment": {
+            "version": "task-amendment.v1",
+            "status": "amended",
+            "root_task_id": "task_feature_boundary",
+            "amendment_index": 1,
+            "parent_contract_digest": "",
+            "original_paths": ["orig/a.py"],
+            "added_paths": ["add/a.py"],
+            "cumulative_paths": ["orig/a.py", "add/a.py"],
+        },
+        "execution_plan": _synthetic_plan_group("successor", 1, 1),
+        "resolved_targets": [
+            {"input": "orig/a.py", "path": "orig/a.py",
+             "symbol_id": "repo:orig/a.py:file:a"},
+            {"input": "add/a.py", "path": "add/a.py",
+             "symbol_id": "repo:add/a.py:file:a"},
+        ],
+        "targets": ["orig/a.py", "add/a.py"],
+    }
+    route = _orchestrator(FakeIndexer())
+    _bind_successor_amendment(parent, successor)
+    return route, parent, successor
+
+
+@pytest.mark.parametrize("drift", ["profile", "ledger", "instruction", "digest"])
+def test_amendment_delta_refuses_any_parent_digest_drift(repo, drift):
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    parent = copy.deepcopy(parent)
+    successor = copy.deepcopy(successor)
+    if drift == "profile":
+        parent["task_profile"]["version"] = "task-contract.v999"
+    elif drift == "ledger":
+        parent["intent_ledger"]["fingerprint"] = "4" * 64
+        parent["task_profile"]["intent_fingerprint"] = "4" * 64
+    elif drift == "instruction":
+        parent["instruction_context"]["fingerprint"] = "5" * 64
+        parent["task_profile"]["instruction_fingerprint"] = "5" * 64
+    else:
+        successor["task_amendment"]["parent_contract_digest"] = "f" * 64
+    with pytest.raises(CodingRouteError, match="amendment_parent_proof_mismatch"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=successor["task_amendment"]["added_paths"],
+        )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "not_mapping", "version", "status", "negative_index", "zero_index",
+        "oversized_index", "boolean_index", "root", "missing_contract_id",
+    ],
+)
+def test_amendment_delta_requires_a_valid_parent_generation_shape(repo, drift):
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    parent["task_amendment"] = {
+        "version": "task-amendment.v1",
+        "status": "amended",
+        "root_task_id": "task_feature_boundary",
+        "amendment_index": 1,
+        "contract_id": "amd_generation_one",
+    }
+    successor["task_amendment"]["amendment_index"] = 2
+    if drift == "not_mapping":
+        parent["task_amendment"] = "not-a-contract"
+    elif drift == "version":
+        parent["task_amendment"]["version"] = "task-amendment.v999"
+    elif drift == "status":
+        parent["task_amendment"]["status"] = "blocked"
+    elif drift == "negative_index":
+        parent["task_amendment"]["amendment_index"] = -1
+    elif drift == "zero_index":
+        parent["task_amendment"]["amendment_index"] = 0
+    elif drift == "oversized_index":
+        parent["task_amendment"]["amendment_index"] = 9
+    elif drift == "boolean_index":
+        parent["task_amendment"]["amendment_index"] = True
+    elif drift == "root":
+        parent["task_amendment"]["root_task_id"] = "task_other"
+    else:
+        parent["task_amendment"].pop("contract_id")
+    # Rebind the digest after tampering: structural validation must reject the
+    # malformed generation even when its bounded bytes match the claimed hash.
+    successor["task_amendment"]["parent_contract_digest"] = (
+        parent_contract_digest(parent)
+    )
+    with pytest.raises(CodingRouteError, match="amendment_parent_proof_mismatch"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=successor["task_amendment"]["added_paths"],
+        )
+
+
+def test_amendment_delta_requires_every_added_path_in_resolved_union(repo):
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    successor["task_amendment"]["added_paths"].append("add/omitted.py")
+    successor["task_amendment"]["cumulative_paths"].append("add/omitted.py")
+    successor["intent_ledger"]["allowed_paths"].append("add/omitted.py")
+    _bind_successor_amendment(parent, successor)
+    with pytest.raises(CodingRouteError, match="amendment_plan_boundary_incomplete"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=successor["task_amendment"]["added_paths"],
+        )
+
+
+def test_generation_two_cumulative_plan_grows_but_delta_stays_at_32(repo):
+    from flyto_ai.coding.route import RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    parent["execution_plan"] = _synthetic_plan_group("generation_two", 44, 0)
+    _promote_parent_to_generation_one(parent)
+    # 65 cumulative steps would be refused by a fixed x2 ceiling. Only the 19
+    # added-path analyses and two successor gates execute in this generation.
+    successor["execution_plan"] = _synthetic_plan_group("generation_two", 44, 19)
+    _bind_successor_amendment(parent, successor)
+    groups = route._plan_groups(
+        successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+        host_project=repo.name,
+        host_requested_paths=successor["task_amendment"]["added_paths"],
+    )
+    assert sum(len(steps) for _scope, steps in groups) == 21
+
+
+def test_generation_two_cumulative_plan_still_has_a_finite_growth_bound(repo):
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    parent["execution_plan"] = _synthetic_plan_group("oversized", 44, 0)
+    _promote_parent_to_generation_one(parent)
+    successor["execution_plan"] = _synthetic_plan_group("oversized", 75, 20)
+    _bind_successor_amendment(parent, successor)
+    with pytest.raises(CodingRouteError, match="plan_bound_exceeded"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=successor["task_amendment"]["added_paths"],
+        )
+
+
+def test_amendment_chain_depth_beyond_public_indexer_bound_is_refused(repo):
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    parent["task_amendment"] = {
+        "version": "task-amendment.v1",
+        "status": "amended",
+        "root_task_id": "task_feature_boundary",
+        "amendment_index": 8,
+        "contract_id": "amd_generation_eight",
+    }
+    successor["task_amendment"]["amendment_index"] = 9
+    successor["task_amendment"]["parent_contract_digest"] = (
+        parent_contract_digest(parent)
+    )
+    with pytest.raises(CodingRouteError, match="amendment_parent_proof_mismatch"):
+        route._plan_groups(
+            successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+            host_project=repo.name,
+            host_requested_paths=successor["task_amendment"]["added_paths"],
+        )
 
 
 def test_rework_without_a_mutation_target_retains_prior_scope_exactly(repo):
@@ -441,7 +1129,7 @@ def test_post_validation_receives_exactly_the_supplied_cumulative_set(repo):
     _, context = asyncio.run(route._indexer_pre(request))
     # Widen the ledger the way a real amendment would, so the union is planned.
     context["task_contract"] = dict(context["task_contract"])
-    context["task_contract"]["intent_ledger"] = [
+    context["task_contract"]["intent_ledger"]["allowed_paths"] = [
         "docs/reference/python/README.md", "docs/reference/python/coding.md",
     ]
     result = CodingTaskResult(
@@ -512,6 +1200,62 @@ def test_unbounded_or_malformed_domain_evidence_is_bounded(repo):
         detail = route._validation_failure_detail(payload)
         assert isinstance(detail, str)
         assert len(detail) <= 200
+
+
+def test_task_plan_inner_failure_keeps_only_bounded_indexer_reason(repo):
+    """The Code refusal stays actionable without persisting its error prose."""
+
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route = _orchestrator(FakeIndexer())
+    route._begin_lane(RouteLane.INDEXER_PRE)
+    raw = {
+        "ok": True,
+        "result": {
+            "isError": True,
+            "structuredContent": {
+                "ok": False,
+                "pass": False,
+                "error": "Amendment refused at /Users/alice/private/project",
+                "reason_codes": ["AMENDMENT_TARGET_UNRESOLVED"],
+                "required_actions": ["declare_resolvable_amendment_targets"],
+            },
+        },
+    }
+    with pytest.raises(CodingRouteError) as excinfo:
+        route._domain_payload(raw, RouteLane.INDEXER_PRE, "task.plan")
+    assert excinfo.value.code == "domain_amendment_target_unresolved"
+    assert excinfo.value.blockers == (
+        "action_declare_resolvable_amendment_targets",
+        "validation_amendment_target_unresolved",
+    )
+    rendered = json.dumps([item.to_mapping() for item in route._trace.calls])
+    assert "domain_amendment_target_unresolved" in rendered
+    assert "alice" not in rendered and "/Users/" not in rendered
+
+
+def test_task_plan_hostile_reason_prose_and_paths_stay_generic(repo):
+    from flyto_ai.coding.route import CodingRouteError, RouteLane
+
+    route = _orchestrator(FakeIndexer())
+    route._begin_lane(RouteLane.INDEXER_PRE)
+    raw = {
+        "ok": True,
+        "result": {
+            "structuredContent": {
+                "ok": False,
+                "error": "open /etc/passwd",
+                "reason_codes": ["PLEASE OPEN /Users/alice/private token"],
+                "required_actions": ["https://evil.example/action"],
+            },
+        },
+    }
+    with pytest.raises(CodingRouteError) as excinfo:
+        route._domain_payload(raw, RouteLane.INDEXER_PRE, "task.plan")
+    assert excinfo.value.code == "domain_failure"
+    assert excinfo.value.blockers == ()
+    rendered = json.dumps([item.to_mapping() for item in route._trace.calls])
+    assert "alice" not in rendered and "passwd" not in rendered
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1066,6 +1810,18 @@ def test_the_real_indexer_codes_still_cross():
     )
 
 
+def test_secret_shaped_machine_codes_are_unknown_to_the_closed_registry():
+    payload = {
+        "reason_codes": ["sk_live_51jsecret0123456789"],
+        "required_actions": ["token_abcdef0123456789"],
+    }
+
+    assert CodingRouteOrchestrator._domain_evidence(payload) == ()
+    assert CodingRouteOrchestrator._validation_failure_detail(payload) == (
+        "validation_failed"
+    )
+
+
 def test_hostile_domain_evidence_never_reaches_any_public_projection(
     tmp_path, monkeypatch,
 ):
@@ -1086,8 +1842,10 @@ def test_hostile_domain_evidence_never_reaches_any_public_projection(
                 return {
                     "ok": True, "pass": False,
                     "reason_codes": ["please open {}".format(secret),
-                                     "https://evil.example/path"],
-                    "required_actions": ["rm -rf workspace"],
+                                     "https://evil.example/path",
+                                     "sk_live_51jsecret0123456789"],
+                    "required_actions": ["rm -rf workspace",
+                                         "token_abcdef0123456789"],
                 }
             return await super().__call__(tool, arguments)
 
@@ -1113,7 +1871,8 @@ def test_hostile_domain_evidence_never_reaches_any_public_projection(
         rendered = json.dumps(response) + json.dumps(receipt_to_mapping(failed))
         for forbidden in (
             "alice", "private", "evil.example", "rm_rf", "rm -rf", "https",
-            "please_open", "workspace_token", str(workspace),
+            "please_open", "workspace_token", "sk_live", "51jsecret",
+            "token_abcdef", str(workspace),
         ):
             assert forbidden not in rendered, forbidden
     finally:

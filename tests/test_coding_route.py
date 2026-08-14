@@ -551,7 +551,9 @@ def test_compound_subtask_plans_run_in_declared_order(tmp_path):
     order = [tool for tool, _ in steps]
     # `search` step b precedes dependent `impact` step c.
     assert order.index("search", 2) < order.index("impact")
-    assert {"focus": "apis"} in [args for tool, args in steps if tool == "structure"]
+    assert {
+        "focus": "apis", "project": tmp_path.name,
+    } in [args for tool, args in steps if tool == "structure"]
 
 
 def test_compound_subtasks_may_reuse_their_local_step_ids(tmp_path):
@@ -581,16 +583,64 @@ def test_compound_subtasks_may_reuse_their_local_step_ids(tmp_path):
         "search", {"query": "tests for first.py", "project": tmp_path.name},
     ))
     first_impact = emitted.index((
-        "impact", {"target": "p:first.py:file:first"},
+        "impact", {"target": "p:first.py:file:first", "project": tmp_path.name},
     ))
     second_search = emitted.index((
         "search", {"query": "tests for second.py", "project": tmp_path.name},
     ))
     second_impact = emitted.index((
-        "impact", {"target": "p:second.py:file:second"},
+        "impact", {"target": "p:second.py:file:second", "project": tmp_path.name},
     ))
     assert first_search < first_impact
     assert second_search < second_impact
+
+
+@pytest.mark.parametrize(("tool", "arguments"), [
+    ("search", {"query": "workspace shell"}),
+    ("impact", {"target": "proj:app.py:function:main"}),
+    ("call_hierarchy", {"path": "app.py", "line": 1}),
+    ("structure", {"focus": "dependencies", "path": "app.py"}),
+])
+def test_plan_analysis_steps_are_bound_to_the_host_project(tool, arguments):
+    translated = CodingRouteOrchestrator._translate_step(
+        tool, arguments, set(INDEXER_PLAN_STEP_TOOLS), "host-workspace",
+    )
+
+    assert translated == (
+        tool, dict(arguments, project="host-workspace"),
+    )
+
+
+@pytest.mark.parametrize("tool", INDEXER_PLAN_STEP_TOOLS)
+def test_plan_analysis_steps_cannot_override_the_host_project(tool):
+    translated = CodingRouteOrchestrator._translate_step(
+        tool,
+        {"project": "foreign-workspace"},
+        set(INDEXER_PLAN_STEP_TOOLS),
+        "host-workspace",
+    )
+
+    assert translated is None
+
+
+def test_plan_project_override_fails_before_analysis_or_editing(tmp_path):
+    implement = Implementer()
+    indexer = IndexerDouble(plan=[{
+        "id": "scope", "tool": "impact",
+        "args": {
+            "target": "proj:app.py:function:main",
+            "project": "foreign-workspace",
+        },
+    }])
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer), _request(tmp_path), implement,
+    )
+
+    assert result.ok is False
+    assert receipt.failure_code == "plan_step_not_allowlisted"
+    assert not [tool for tool, _arguments in indexer.calls if tool == "impact"]
+    assert implement.rounds == 0
 
 
 def test_a_duplicate_id_inside_one_compound_subtask_is_still_refused(tmp_path):
@@ -2020,14 +2070,20 @@ def test_plan_operation_names_are_translated_to_exact_public_calls(tmp_path):
     assert result.ok is True
     assert indexer.violations == []
     emitted = [(tool, args) for tool, args in indexer.calls]
-    assert ("impact", {"target": "p:app.py:function:main"}) in emitted
+    project = Path(_request(tmp_path).working_dir).name
+    assert (
+        "impact", {"target": "p:app.py:function:main", "project": project},
+    ) in emitted
     # A translated plan step is host-owned discovery too, so it carries the
     # workspace project exactly like the initial search does.
-    project = Path(_request(tmp_path).working_dir).name
     assert (
         "search", {"query": "tests covering app.py", "project": project},
     ) in emitted
-    assert ("structure", {"focus": "dependencies", "path": "app.py"}) in emitted
+    assert (
+        "structure", {
+            "focus": "dependencies", "path": "app.py", "project": project,
+        },
+    ) in emitted
     # The plan's own gate step became a real gate carrying the exact contract.
     gates = [a for t, a in emitted if t == "task" and a.get("action") == "gate"]
     assert any(a["next_phase"] == "assess" for a in gates)
@@ -3204,7 +3260,7 @@ def test_impact_step_binds_repo_path_to_current_project_file_symbol():
 
     assert translated == (
         "impact",
-        {"target": "turibi:app/(tabs)/map.tsx:file:map"},
+        {"target": "turibi:app/(tabs)/map.tsx:file:map", "project": "turibi"},
     )
 
 

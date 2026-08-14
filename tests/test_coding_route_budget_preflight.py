@@ -637,6 +637,7 @@ class _CompoundDispatcher(_CountingDispatcher):
         self._plan = plan
         self._expected = list(expected_order)
         self.gate_calls = []
+        self.impact_calls = []
 
     async def __call__(self, tool, arguments):
         args = dict(arguments or {})
@@ -658,6 +659,8 @@ class _CompoundDispatcher(_CountingDispatcher):
                         "required_state": {"completed_subtasks": list(required)},
                     }
             return {"ok": True, "pass": True, "required_state": {}}
+        if tool == "impact":
+            self.impact_calls.append(args)
         return await super().__call__(tool, arguments)
 
 
@@ -713,6 +716,11 @@ def test_the_live_two_subtask_compound_plan_reaches_implementation(tmp_path):
     assert dispatcher.gate_calls == expected
     # No extra global fallback gate: every canonical phase was scheduled.
     assert dispatcher.count == 3 + 2 * 3
+    assert len(dispatcher.impact_calls) == 2
+    assert all(
+        arguments["project"] == tmp_path.name
+        for arguments in dispatcher.impact_calls
+    )
     assert list(receipt.gates_passed) == [
         "task.gate.assess:subtask_1",
         "task.gate.implement:subtask_1",

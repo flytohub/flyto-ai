@@ -1442,11 +1442,17 @@ class CodingRouteOrchestrator:
         public_tool, rename = entry
         if public_tool not in INDEXER_PLAN_STEP_TOOLS or public_tool not in allowed:
             return None
+        if project and "project" in args and args.get("project") != project:
+            # A returned plan is evidence, not authority to select another
+            # workspace's index. The host owns this scope and conflicting
+            # project evidence is refused rather than silently rewritten.
+            return None
         if rename is None:
             arguments = dict(args)
-            if public_tool == "search" and project and "project" not in arguments:
-                # A plan that names its own project keeps it; one that does not
-                # is scoped to the workspace rather than to every index.
+            if project:
+                # Every public analysis operation accepts the project scope.
+                # Leaving impact, hierarchy or structure unscoped makes the
+                # Indexer merge every discovered index before doing the work.
                 arguments["project"] = project
             return public_tool, arguments
         source, target = rename
@@ -1458,7 +1464,10 @@ class CodingRouteOrchestrator:
                 "tests covering {}".format(value)[:200], project,
             )
         if public_tool == "structure":
-            return public_tool, {"focus": "dependencies", "path": value}
+            arguments = {"focus": "dependencies", "path": value}
+            if project:
+                arguments["project"] = project
+            return public_tool, arguments
         if (
             public_tool == "impact"
             and project
@@ -1474,7 +1483,10 @@ class CodingRouteOrchestrator:
             value = "{}:{}:file:{}".format(
                 project, value, PurePosixPath(value).stem,
             )
-        return public_tool, {target: value}
+        arguments = {target: value}
+        if project:
+            arguments["project"] = project
+        return public_tool, arguments
 
     @staticmethod
     def _validation_passed(validated: Any) -> bool:

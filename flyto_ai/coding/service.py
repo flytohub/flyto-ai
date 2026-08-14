@@ -12,6 +12,7 @@ import math
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -101,6 +102,7 @@ from flyto_ai.coding.mission_runtime import (
     MissionAuthorityRefused,
     MissionConflictRefused,
     MissionHeartbeat,
+    MissionRepairRetryExhausted,
     MissionRouteError,
     worker_identity,
 )
@@ -168,7 +170,7 @@ _IDENTIFIER_DETAIL_KEYS = frozenset({"verification_blockers"})
 _BACKEND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ALLOWED_REQUEST_FIELDS = frozenset({
     "message", "working_dir", "repository_roots", "owner_ref", "thread_id",
-    "resume", "max_attempts", "max_rounds", "require_changes",
+    "resume", "retry_rework_route", "max_attempts", "max_rounds", "require_changes",
 })
 #: What a public payload may *decode*. Deliberately wider than
 #: `_ALLOWED_REQUEST_FIELDS`, which is also the resume-envelope field list: the
@@ -875,6 +877,7 @@ _ROUTE_EVIDENCE_STATES = frozenset({
     CodingJobState.AWAITING_CODEX_AUDIT.value,
     CodingJobState.REWORK_QUEUED.value,
     CodingJobState.REWORK_RUNNING.value,
+    CodingJobState.REWORK_ROUTE_BLOCKED.value,
     CodingJobState.CODEX_ACCEPTED.value,
 })
 
@@ -947,6 +950,7 @@ _NOFOLLOW_ERRNOS = frozenset({errno.ELOOP, getattr(errno, "EMLINK", errno.ELOOP)
 #: let a competing job invalidate an audit before it happened.
 _CLAIM_OWNED_STATES = _INTERRUPTED_JOB_STATES | {
     CodingJobState.AWAITING_CODEX_AUDIT.value,
+    CodingJobState.REWORK_ROUTE_BLOCKED.value,
 }
 
 #: The one terminal vocabulary, projected to the raw strings a durable record
@@ -1130,13 +1134,20 @@ def request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest:
     owner_ref = value.get("owner_ref")
     if owner_ref is not None and not isinstance(owner_ref, str):
         raise ValueError("owner_ref must be a string")
+    retry_rework_route = value.get("retry_rework_route", False)
+    if not isinstance(retry_rework_route, bool):
+        raise ValueError("retry_rework_route must be a boolean")
+    resume = value.get("resume", False)
+    if retry_rework_route and not isinstance(resume, bool):
+        raise ValueError("resume must be a boolean for retry_rework_route")
     return CodingTaskRequest(
         message=str(value.get("message", "")),
         working_dir=str(value.get("working_dir", "")),
         repository_roots=tuple(repositories_value),
         owner_ref=owner_ref,
         thread_id=str(value["thread_id"]) if value.get("thread_id") is not None else None,
-        resume=bool(value.get("resume", False)),
+        resume=bool(resume),
+        retry_rework_route=retry_rework_route,
         max_attempts=int(value.get("max_attempts", 3)),
         max_rounds=int(value.get("max_rounds", 100)),
         require_changes=bool(value.get("require_changes", True)),
@@ -1747,6 +1758,26 @@ class CodingService:
         tenant_dir = self._tenant_dir(tenant_ref)
         idempotency_path = tenant_dir / "idempotency" / (hashlib.sha256(idempotency_key.encode()).hexdigest() + ".json")
 
+        # An audit repair that stopped in a host-owned lane before the provider
+        # began is neither a provider continuation nor a fresh job.  Preserve
+        # every ordinary same-key payload as a read-only idempotent replay;
+        # only the explicit action bit enters the private, one-shot route
+        # recovery seam.  This distinction matters for a job whose *original*
+        # request was itself a provider continuation (resume=True).
+        if request.retry_rework_route:
+            recovered = self._retry_rework_route_submit(
+                tenant_ref=tenant_ref,
+                tenant_dir=tenant_dir,
+                idempotency_path=idempotency_path,
+                request=request,
+            )
+            if recovered is not None:
+                return recovered
+            raise ContinuationRefused(
+                "no exact repair route retry is available",
+                CONTINUATION_UNAVAILABLE,
+            )
+
         # Phase 0, unlocked: an idempotent replay must not pay for a repository
         # scan it does not need. This read is advisory - the authoritative one
         # happens under the guard below - but it is exact when it hits, because
@@ -1948,6 +1979,419 @@ class CodingService:
             return None
         return self._public_receipt(tenant_ref, record)
 
+    def _retry_rework_route_submit(
+        self,
+        *,
+        tenant_ref: str,
+        tenant_dir: Path,
+        idempotency_path: Path,
+        request: CodingTaskRequest,
+    ) -> Optional[CodingJobReceipt]:
+        """Consume one exact pre-provider repair-route retry, if one exists.
+
+        This method deliberately sits before continuation observation.  It
+        never opens or rewinds provider continuation authority: it only repeats
+        a repair round whose provider was provably never called.
+        """
+
+        try:
+            reference = self._read_json(idempotency_path)
+        except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+            return None
+        referenced_digest = str(reference.get("request_sha256") or "")
+        action_cleared = dataclasses.replace(request, retry_rework_route=False)
+        candidates = (
+            action_cleared,
+            dataclasses.replace(action_cleared, thread_id=None, resume=False),
+        )
+        normalized_request = next(
+            (
+                candidate for candidate in candidates
+                if self._request_digest(candidate) == referenced_digest
+            ),
+            None,
+        )
+        if normalized_request is None:
+            return None
+        normalized_digest = referenced_digest
+        job_id = str(reference.get("job_id") or "")
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingServiceError("idempotency record is invalid")
+        path = tenant_dir / "jobs" / (job_id + ".json")
+        try:
+            observed = self._read_json(path)
+        except (OSError, ValueError):
+            return None
+        state = str(observed.get("state") or "")
+        future = state == CodingJobState.REWORK_ROUTE_BLOCKED.value
+        legacy = state == CodingJobState.FAILED.value
+        if not (future or legacy):
+            return None
+
+        with self._admission_lock(request.working_dir):
+            with self._state_guard():
+                if self._closed:
+                    raise CodingServiceError("coding service is closed")
+                # Re-read every authority under the short global guard.  The
+                # earlier reads only selected this seam; none of them decide it.
+                reference = self._read_json(idempotency_path)
+                record = self._read_json(path)
+                if (
+                    str(reference.get("job_id") or "") != job_id
+                    or str(reference.get("request_sha256") or "") != normalized_digest
+                    or str(record.get("job_id") or "") != job_id
+                    or str(record.get("request_sha256") or "") != normalized_digest
+                ):
+                    raise IdempotencyConflict(
+                        "idempotency authority changed during route recovery",
+                    )
+                state = str(record.get("state") or "")
+                future = state == CodingJobState.REWORK_ROUTE_BLOCKED.value
+                legacy = state == CodingJobState.FAILED.value
+                if not (future or legacy):
+                    return self._public_receipt(tenant_ref, record)
+                roots = self._record_repository_roots(record)
+                if current_service_build_id() != self.build_id:
+                    raise CodingServiceReloadRequired(
+                        "coding service source changed; reload the MCP worker",
+                    )
+                self._ensure_workspace_authority_locked(roots)
+                if int(record.get("route_retry_count", 0) or 0) != 0:
+                    raise ContinuationRefused(
+                        "the repair route retry has already been consumed",
+                        CONTINUATION_UNAVAILABLE,
+                    )
+                self._prove_rework_route_recovery(
+                    tenant_ref, job_id, record, request,
+                    require_legacy_terminal=legacy,
+                )
+                projection = self._record_projection(record)
+                assert projection is not None  # proved above
+                envelope = self._read_round_envelope(
+                    tenant_ref, projection.work_item_id,
+                )
+                message = str((envelope or {}).get("message") or "")
+                if not message:
+                    raise ContinuationRefused(
+                        "the blocked repair feedback is unavailable",
+                        CONTINUATION_UNAVAILABLE,
+                    )
+                if len(self._pending) >= self.max_queued:
+                    raise CodingServiceBusy("coding job queue is full")
+                # The Git/mission proof above can be materially slower than a
+                # normal replay.  Fence again at the last point before taking
+                # a lease or writing a claim, envelope, mission child, or job
+                # record, exactly as fresh admission does under this guard.
+                if current_service_build_id() != self.build_id:
+                    raise CodingServiceReloadRequired(
+                        "coding service source changed; reload the MCP worker",
+                    )
+                if not self._acquire_job_lease(job_id):
+                    raise CodingServiceBusy("coding job is already being executed")
+                created_claim = False
+                retry_work_item_id = ""
+                try:
+                    if legacy:
+                        # The exact Git proof above closes the historical gap;
+                        # now and only now may a terminal legacy record recreate
+                        # ownership, provided every repository is still free.
+                        self._create_repository_claims(
+                            tenant_ref, job_id, roots,
+                            CodingJobState.REWORK_QUEUED.value,
+                        )
+                        created_claim = True
+                        self._write_resume_envelope(
+                            tenant_ref, job_id, normalized_request,
+                            normalized_digest,
+                            session_bound=str(
+                                record.get("implementation_session_id") or "",
+                            ),
+                        )
+                    else:
+                        self._reassert_repository_claims(
+                            tenant_ref, job_id, record,
+                            CodingJobState.REWORK_ROUTE_BLOCKED.value,
+                        )
+                        if self._read_resume_envelope(tenant_ref, job_id, record) is None:
+                            raise ContinuationRefused(
+                                "the sealed repair request is unavailable",
+                                CONTINUATION_UNAVAILABLE,
+                            )
+                    try:
+                        retry = self._mission.submit_repair_retry(
+                            tenant_ref=tenant_ref,
+                            job_id=job_id,
+                            workspace_sha256=self._workspace_digest(request.working_dir),
+                            projection=projection,
+                            round_index=int(record.get("rework_count", 0)),
+                            retry_index=1,
+                            repository_sha256s=self._record_repository_digests(record),
+                        )
+                    except MissionRepairRetryExhausted:
+                        raise
+                    except MissionRouteError as exc:
+                        raise MissionRouteRefused(exc) from exc
+                    retry_work_item_id = retry.work_item_id
+                    self._write_round_envelope(
+                        tenant_ref, job_id, retry.work_item_id,
+                        rework=True, message=message,
+                    )
+                    changes = {
+                        "state": CodingJobState.REWORK_QUEUED.value,
+                        "route_retry_count": 1,
+                        "failure_code": None,
+                        "landable": False,
+                        "implementer_started": True,
+                        "mission": retry.projection.to_mapping(),
+                    }
+                    if legacy:
+                        # The recreated claim is keyed back to the owner
+                        # record.  Publish both under this guard without asking
+                        # the normal reassertion path to validate the still-
+                        # terminal old record in between those two writes.
+                        recovered = dict(record)
+                        recovered.update(changes)
+                        recovered["updated_at"] = time.time()
+                        self._write_json(path, recovered)
+                        self._publish_status(recovered)
+                    else:
+                        self._update_record_locked(path, **changes)
+                    self._mission.acknowledge_repair_retry(
+                        job_id=job_id,
+                        round_index=int(record.get("rework_count", 0)),
+                        retry_index=1,
+                    )
+                except MissionRepairRetryExhausted:
+                    try:
+                        # Both deterministic publication children were
+                        # accounted without ever running.  No provider retry
+                        # was consumed, but there is no bounded mission slot
+                        # left.  Publish a terminal, action-free truth before
+                        # releasing any authority so a crash cannot reopen the
+                        # workspace behind a still-live receipt.
+                        exhausted = dict(record)
+                        exhausted.update({
+                            "state": CodingJobState.FAILED.value,
+                            "route_retry_count": 1,
+                            "failure_code": "rework_route_recovery_exhausted",
+                            "landable": False,
+                            "updated_at": time.time(),
+                        })
+                        self._write_json(path, exhausted)
+                        self._publish_status(exhausted)
+                        self._settle_continuation(tenant_ref, job_id, path)
+                        self._release_repository_claims(job_id, exhausted)
+                        self._discard_resume(tenant_ref, job_id)
+                        self._release_workspace_authority_if_idle_locked()
+                        return self._public_receipt(
+                            tenant_ref, self._read_json(path),
+                        )
+                    finally:
+                        self._release_job_lease(job_id)
+                except BaseException:
+                    if retry_work_item_id:
+                        self._discard_path(
+                            self._round_path(tenant_ref, retry_work_item_id),
+                        )
+                    if created_claim:
+                        self._release_repository_claims(job_id, record)
+                        self._discard_resume(tenant_ref, job_id)
+                    self._release_job_lease(job_id)
+                    raise
+                self._release_job_lease(job_id)
+            self._schedule_pump()
+            return self._public_receipt(tenant_ref, self._read_json(path))
+
+    def _prove_rework_route_recovery(
+        self,
+        tenant_ref: str,
+        job_id: str,
+        record: Mapping[str, Any],
+        request: CodingTaskRequest,
+        *,
+        require_legacy_terminal: bool,
+    ) -> None:
+        """Require every fact that makes repeating a route safe.
+
+        The proof is conjunctive and discovers no jobs.  In particular, an
+        old terminal record is recoverable only when its sealed Indexer base,
+        current Git HEAD/status, stored revision, audit/session, failed route,
+        and accounted mission child all still agree exactly.
+        """
+
+        def refusal(text: str) -> ContinuationRefused:
+            return ContinuationRefused(text, CONTINUATION_UNAVAILABLE)
+        session = str(record.get("implementation_session_id") or "")
+        revision = str(record.get("implementation_revision_sha256") or "")
+        files = record.get("implementation_files")
+        projection = self._record_projection(record)
+        result = record.get("result")
+        if (
+            request.resume is not True
+            or str(request.thread_id or "") != session
+            or str(request.working_dir) != str(record.get("working_dir") or "")
+            or tuple(request.repository_roots) != self._record_repository_roots(record)
+            or not is_continuable_session(session)
+            or not _SHA256_RE.fullmatch(revision)
+            or not isinstance(files, list)
+            or not files
+            or len(files) > MAX_ATTRIBUTABLE_FILES
+            or not _SHA256_RE.fullmatch(str(record.get("audit_findings_sha256") or ""))
+            or int(record.get("audit_count", 0) or 0) < 1
+            or int(record.get("audit_count", 0) or 0)
+            != int(record.get("rework_count", 0) or 0)
+            or not isinstance(result, Mapping)
+            or result.get("attempts") != 0
+            or list(result.get("files_changed") or ())
+            or projection is None
+            or projection.lane != "repair"
+            or projection.status != MISSION_STATUS_CLOSED
+            or projection.disposition != DISPOSITION_BLOCKED
+        ):
+            raise refusal("the blocked repair identity is not exact")
+        try:
+            route = CodingRouteReceipt.from_mapping(record.get("route_receipt"))
+        except (TypeError, ValueError):
+            raise refusal("the blocked repair route receipt is invalid") from None
+        lane, _action, _code = route_failure_point(route)
+        if route.ok or not route.strict or lane not in {"indexer_pre", "blueprint"}:
+            raise refusal("the repair did not stop in a pre-provider route lane")
+        if self._stored_revision(record) != revision:
+            raise refusal("the audited implementation revision changed")
+        if self._load_plan_authority(record) is None:
+            raise refusal("the sealed Indexer plan authority is unavailable")
+        if not self._may_execute(record):
+            raise refusal("the blocked repair execution authority changed")
+
+        # A route retry never opens or rewinds provider continuation authority.
+        # A continuation-origin job legitimately retains the authority it
+        # already consumed while its independent Codex audit loop remains open;
+        # only that exact current-job claim may coexist with this host retry.
+        try:
+            continuation = self._continuation.load(tenant_ref, session)
+        except (OSError, ValueError, ContinuationCorrupt):
+            raise refusal("the provider continuation journal is unreadable") from None
+        if continuation is not None and continuation.state != STATE_SETTLED:
+            same_job_claim = (
+                continuation.state == STATE_CLAIMED
+                and continuation.claimed_by_job_id == job_id
+                and str(record.get("continuation_session_id") or "") == session
+                and int(record.get("continuation_generation", 0) or 0)
+                == continuation.generation
+                and str(record.get("continuation_origin_job_id") or "")
+                == continuation.origin_job_id
+                and continuation.backend
+                == str(record.get("implementation_backend") or "")
+                and continuation.working_dir
+                == str(record.get("working_dir") or "")
+                and continuation.workspace_sha256
+                == str(record.get("workspace_sha256") or "")
+                and continuation.authorized_config_sha256
+                == str(record.get("authorized_config_sha256") or "")
+                and continuation.contract_snapshot_sha256
+                == str(record.get("contract_snapshot_sha256") or "")
+                and continuation.snapshot_policy_sha256
+                == self.snapshot_policy.identity()
+            )
+            if not same_job_claim:
+                raise refusal("provider continuation authority already exists")
+
+        item = CodingMissionRuntime._persisted_work_item(
+            self.state_root, projection.work_item_id,
+        )
+        if (
+            item is None
+            or item.mission_id != projection.mission_id
+            or item.status != MISSION_STATUS_CLOSED
+            or item.disposition != DISPOSITION_BLOCKED
+            or item.coordinates.project != tenant_ref
+            or item.coordinates.location != job_id
+        ):
+            raise refusal("the blocked repair mission proof is unavailable")
+
+        if require_legacy_terminal:
+            if record.get("implementer_started") is not False:
+                raise refusal("the legacy failed round reached a provider")
+            self._prove_legacy_rework_git_tree(record)
+        else:
+            # New blocked records retain both authorities across the short
+            # outage, so recovery is continuity-preserving rather than a
+            # historical reconstruction.
+            for repository in self._record_repository_roots(record):
+                self._require_owned_claim(tenant_ref, job_id, repository)
+            if self._read_resume_envelope(tenant_ref, job_id, record) is None:
+                raise refusal("the sealed repair request is unavailable")
+
+    def _prove_legacy_rework_git_tree(self, record: Mapping[str, Any]) -> None:
+        """Bind a legacy terminal rescue to one unchanged, single Git tree."""
+
+        roots = self._record_repository_roots(record)
+        working = str(record.get("working_dir") or "")
+        plan = self._load_plan_authority(record) or {}
+        continuity = plan.get("continuity")
+        base = str(
+            continuity.get("base_commit")
+            if isinstance(continuity, Mapping) else ""
+        )
+        if len(roots) != 1 or roots[0] != working or not re.fullmatch(r"[0-9a-f]{40}", base):
+            raise ContinuationRefused(
+                "the legacy repair has no exact single-tree base authority",
+                CONTINUATION_UNAVAILABLE,
+            )
+
+        def git(*args: str) -> bytes:
+            try:
+                completed = subprocess.run(
+                    ("git", "-C", working, *args),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                raise ContinuationRefused(
+                    "the legacy repair Git proof is unavailable",
+                    CONTINUATION_UNAVAILABLE,
+                ) from None
+            if completed.returncode != 0 or len(completed.stdout) > 1024 * 1024:
+                raise ContinuationRefused(
+                    "the legacy repair Git proof is unavailable",
+                    CONTINUATION_UNAVAILABLE,
+                )
+            return completed.stdout
+
+        top = git("rev-parse", "--show-toplevel").decode("utf-8", "strict").strip()
+        head = git("rev-parse", "HEAD").decode("ascii", "strict").strip()
+        if str(Path(top).resolve()) != working or head != base:
+            raise ContinuationRefused(
+                "the legacy repair Git base changed",
+                CONTINUATION_UNAVAILABLE,
+            )
+        raw = git(
+            "status", "--porcelain=v1", "-z", "--untracked-files=all",
+            "--ignore-submodules=none",
+        )
+        changed = []
+        for entry in (part for part in raw.split(b"\0") if part):
+            if len(entry) < 4 or entry[:1] in {b"R", b"C"} or entry[1:2] in {b"R", b"C"}:
+                raise ContinuationRefused(
+                    "the legacy repair Git status is not a bounded file set",
+                    CONTINUATION_UNAVAILABLE,
+                )
+            try:
+                changed.append(entry[3:].decode("utf-8", "strict"))
+            except UnicodeDecodeError:
+                raise ContinuationRefused(
+                    "the legacy repair Git status is unreadable",
+                    CONTINUATION_UNAVAILABLE,
+                ) from None
+        if tuple(sorted(changed)) != tuple(sorted(str(item) for item in record["implementation_files"])):
+            raise ContinuationRefused(
+                "the legacy repair Git status no longer matches its revision",
+                CONTINUATION_UNAVAILABLE,
+            )
+
     def _commit_admission(
         self,
         tenant_ref: str,
@@ -2107,6 +2551,9 @@ class CodingService:
                 "emergency_authority": None,
                 "audit_count": 0,
                 "rework_count": 0,
+                # Host-route retries are separate from provider/audit rounds.
+                # One pre-provider repair outage may be repeated exactly once.
+                "route_retry_count": 0,
                 "audit_findings_sha256": "",
                 # Host-owned contract authority for this job's whole life. A
                 # later round re-applies exactly this, never the current file.
@@ -2756,6 +3203,7 @@ class CodingService:
                 CodingJobState.AWAITING_CODEX_AUDIT.value,
                 CodingJobState.QUEUED.value,
                 CodingJobState.REWORK_QUEUED.value,
+                CodingJobState.REWORK_ROUTE_BLOCKED.value,
             ):
                 raise AbandonStateConflict(
                     "only an audit-ready or already-accounted coding job can be abandoned",
@@ -5520,6 +5968,7 @@ class CodingService:
             settle = _RoundSettlement(self, None, tenant_ref, job_id)
 
         started = progress.implementer_started if progress is not None else False
+        prior = self._read_json(path)
         result_record = dataclasses.asdict(result)
         result_record["evidence_path"] = ""
         outcome: Dict[str, Any] = {
@@ -5534,7 +5983,9 @@ class CodingService:
             "evidence_sha256": store.digest(result.thread_id),
             "result": result_record,
             "failure_code": result.failure_code,
-            "implementer_started": started,
+            # Job-lifetime truth: a pre-provider rework failure must not erase
+            # the fact that the original audited implementation did run.
+            "implementer_started": bool(prior.get("implementer_started")) or started,
             # Re-validated on the way in: whatever an adapter put here, only
             # safe contract identifiers become durable.
             "verification_blockers": list(
@@ -5545,6 +5996,27 @@ class CodingService:
             outcome["implementation_backend"] = self.implementation_backend
         blockers: Tuple[str, ...] = ()
         cumulative: Tuple[str, ...] = ()
+        if (
+            self._is_pre_provider_rework_route_failure(
+                prior, result, route, rework=rework, started=started,
+            )
+            and int(prior.get("route_retry_count", 0) or 0) == 0
+        ):
+            # Account the failed repair child, but retain the sealed request,
+            # exact revision/session and workspace claim.  No provider began,
+            # so this consumes neither an audit round nor provider continuation.
+            outcome["failure_code"] = CodingJobState.REWORK_ROUTE_BLOCKED.value
+            self._update_record(
+                path,
+                state=CodingJobState.REWORK_ROUTE_BLOCKED.value,
+                landable=False,
+                **settle(
+                    state=CodingJobState.REWORK_ROUTE_BLOCKED.value,
+                    failure_code=str(result.failure_code or "route_failed"),
+                ),
+                **outcome,
+            )
+            return
         if rework and not result.ok and not (result.files_changed or ()):
             # Only asked on the exact path the production failure took: a
             # rework round that changed nothing new. Everywhere else the
@@ -5699,6 +6171,54 @@ class CodingService:
             implementation_blockers=list(blockers),
             **outcome,
         )
+
+    def _is_pre_provider_rework_route_failure(
+        self,
+        record: Mapping[str, Any],
+        result: CodingTaskResult,
+        route: Optional["CodingRouteReceipt"],
+        *,
+        rework: bool,
+        started: bool,
+    ) -> bool:
+        """Whether one failed repair is safe to hold for a host-route retry."""
+
+        if (
+            not rework
+            or started
+            or result.ok
+            or result.attempts != 0
+            or bool(result.files_changed)
+            or not isinstance(route, CodingRouteReceipt)
+            or route.ok
+            or not route.strict
+        ):
+            return False
+        lane, _action, _code = route_failure_point(route)
+        if lane not in {"indexer_pre", "blueprint"}:
+            return False
+        session = str(record.get("implementation_session_id") or "")
+        revision = str(record.get("implementation_revision_sha256") or "")
+        files = record.get("implementation_files")
+        eligible = bool(
+            is_continuable_session(session)
+            and _SHA256_RE.fullmatch(revision)
+            and isinstance(files, list)
+            and files
+            and int(record.get("audit_count", 0) or 0) >= 1
+            and int(record.get("audit_count", 0) or 0)
+            == int(record.get("rework_count", 0) or 0)
+            and _SHA256_RE.fullmatch(
+                str(record.get("audit_findings_sha256") or ""),
+            )
+            and self._load_plan_authority(record) is not None
+        )
+        if not eligible:
+            return False
+        try:
+            return self._stored_revision(record) == revision
+        except CodingServiceError:
+            return False
 
     def _close_continuation(
         self,
@@ -6328,6 +6848,30 @@ class CodingService:
             raise RouteEvidenceMissing("coding route evidence is invalid") from exc
         if not route.strict:
             raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
+        state = str(record.get("state") or "")
+        route_retry_pending = (
+            state in {
+                CodingJobState.REWORK_QUEUED.value,
+                CodingJobState.REWORK_RUNNING.value,
+            }
+            and int(record.get("route_retry_count", 0) or 0) == 1
+        )
+        if state == CodingJobState.REWORK_ROUTE_BLOCKED.value or route_retry_pending:
+            lane, _action, _code = route_failure_point(route)
+            result = record.get("result")
+            if (
+                route.ok
+                or lane not in {"indexer_pre", "blueprint"}
+                or not isinstance(result, Mapping)
+                or result.get("attempts") != 0
+                or bool(result.get("files_changed"))
+                or record.get("landable") is True
+                or record.get("implementer_started") is not True
+            ):
+                raise RouteEvidenceMissing(
+                    "blocked repair route evidence is not pre-provider exact",
+                )
+            return
         if not route.ok and not (
             # The single exception, and it grants strictly less than a pass: a
             # strict route whose every lane ran and was trusted, which stopped
@@ -7229,6 +7773,12 @@ class CodingService:
 
         fields = dataclasses.asdict(request)
         fields.pop("authorized_config_sha256", None)
+        # The action bit operates on an already admitted job and was absent
+        # from every historical request digest.  False is therefore omitted to
+        # preserve those identities; the recovery seam clears True before it
+        # compares against the original idempotency record.
+        if not fields.get("retry_rework_route"):
+            fields.pop("retry_rework_route", None)
         # An absent mission is dropped rather than hashed as `null`. A caller
         # that never named one must keep digesting to exactly the value it did
         # before this field existed, or every stored idempotency record from

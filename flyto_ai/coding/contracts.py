@@ -198,6 +198,7 @@ class CodingJobState(str, Enum):
     AWAITING_CODEX_AUDIT = "awaiting_codex_audit"
     REWORK_QUEUED = "rework_queued"
     REWORK_RUNNING = "rework_running"
+    REWORK_ROUTE_BLOCKED = "rework_route_blocked"
     CODEX_ACCEPTED = "codex_accepted"
 
 
@@ -206,12 +207,14 @@ AUDIT_BOUND_CODING_JOB_STATES = frozenset({
     CodingJobState.AWAITING_CODEX_AUDIT,
     CodingJobState.REWORK_QUEUED,
     CodingJobState.REWORK_RUNNING,
+    CodingJobState.REWORK_ROUTE_BLOCKED,
     CodingJobState.CODEX_ACCEPTED,
 })
 #: States only reachable after Codex has recorded at least one audit round.
 AUDITED_CODING_JOB_STATES = frozenset({
     CodingJobState.REWORK_QUEUED,
     CodingJobState.REWORK_RUNNING,
+    CodingJobState.REWORK_ROUTE_BLOCKED,
     CodingJobState.CODEX_ACCEPTED,
 })
 #: How far a job got before it failed. A closed set, because a caller decides
@@ -234,6 +237,9 @@ ACTION_REVISE_REQUEST_FOR_PROVIDER_POLICY = "revise_request_for_provider_policy"
 #: retryable: the job was authorized against a document that no longer exists,
 #: and only a fresh submission can be authorized against the current one.
 ACTION_RESUBMIT_AGAINST_CURRENT_CONTRACT = "resubmit_against_current_contract"
+#: Retry the same repair round after a host-owned route lane is restored.  This
+#: is not a provider continuation and consumes a separate, one-shot host retry.
+ACTION_RETRY_REWORK_ROUTE = "retry_rework_route"
 
 #: A round refused because the repository contract changed after the job was
 #: authorized. Deliberately *not* a provider code: no model was called, and
@@ -264,6 +270,7 @@ JOB_FAILURE_ACTIONS: Tuple[str, ...] = (
     ACTION_REFRESH_PROVIDER_CREDENTIALS,
     ACTION_RESTORE_PROVIDER_QUOTA,
     ACTION_PROVISION_ACTION_SANDBOX,
+    ACTION_RETRY_REWORK_ROUTE,
     ACTION_RESUBMIT_AGAINST_CURRENT_CONTRACT,
     ACTION_REVISE_REQUEST_FOR_PROVIDER_POLICY,
 )
@@ -276,6 +283,12 @@ JOB_FAILURE_ACTIONS: Tuple[str, ...] = (
 #: action token instead; an unrecognized failure is never guessed to be
 #: transient and stays conservative.
 JOB_FAILURE_SEMANTICS: Dict[str, Tuple[str, bool, Tuple[str, ...]]] = {
+    "rework_route_blocked": (
+        FAILURE_PHASE_VERIFICATION, False, (ACTION_RETRY_REWORK_ROUTE,),
+    ),
+    "rework_route_recovery_exhausted": (
+        FAILURE_PHASE_VERIFICATION, False, (),
+    ),
     "provider_capacity_unavailable": (FAILURE_PHASE_PROVIDER, True, ()),
     "provider_auth_failed": (
         FAILURE_PHASE_PROVIDER, False, (ACTION_REFRESH_PROVIDER_CREDENTIALS,),
@@ -1548,6 +1561,10 @@ class CodingTaskRequest:
     owner_ref: Optional[str] = None
     thread_id: Optional[str] = None
     resume: bool = False
+    #: Explicitly repeat one audited repair round whose host-owned route failed
+    #: before the provider began.  This is an action on the existing same-key
+    #: job, never provider input and never permission to create a fresh job.
+    retry_rework_route: bool = False
     approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER
     sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE
     checks: Tuple[CheckSpec, ...] = ()
@@ -1605,6 +1622,10 @@ class CodingTaskRequest:
             raise ValueError("thread_id must be a safe identifier")
         if self.resume and not self.thread_id:
             raise ValueError("resume requires thread_id")
+        if not isinstance(self.retry_rework_route, bool):
+            raise ValueError("retry_rework_route must be a boolean")
+        if self.retry_rework_route and self.resume is not True:
+            raise ValueError("retry_rework_route requires resume")
         if not isinstance(self.authorized_config_sha256, str) or (
             self.authorized_config_sha256
             and not _CONFIG_DIGEST_RE.fullmatch(self.authorized_config_sha256)

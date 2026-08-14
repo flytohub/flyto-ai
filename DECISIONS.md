@@ -1,5 +1,28 @@
 # Decisions
 
+## 2026-08-14 — A pre-provider rework route has one explicit proved retry
+
+A host-owned Indexer/Blueprint outage after Codex ordered rework did not call
+the provider, so terminalizing the job destroyed a valid audited session for an
+infrastructure failure. We retain the job as `rework_route_blocked` and expose
+one action bit, `retry_rework_route`, through the existing submit tool. It is
+not a route bypass: admission requires the original key and normalized request,
+exact recorded session, unchanged Git/revision/audit/mission/plan and current
+execution authority. A continuation journal may coexist only when it is
+claimed by this exact job and its session/generation/origin/contract bindings
+match the owner record. Ordinary replay remains observational.
+
+MissionStore and the owner record cannot commit atomically. We retain the
+deterministic mission operation receipt until the owner record commits,
+validate recalled WorkItem identity and status, and permit one compensation
+only for the host's exact peer-deferred `job_not_runnable` closure. A second
+publication loss is bounded exhaustion: terminalize action-free, settle any
+continuation claim, release workspace/resume authority, and leave both mission
+children accounted. We rejected hard-coded live job ids, reopening terminal
+provider work, unbounded compensation, and a fourth MCP tool. Rollback removes
+the request action and blocked-state transition; exhausted records remain
+conservative terminal failures.
+
 ## 2026-08-14 — Orphan abandonment uses target proof, not global downtime
 
 An unrelated live coding service holding the state-root authority lease does

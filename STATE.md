@@ -2,6 +2,24 @@
 
 Last updated: 2026-08-14
 
+## Pre-provider rework-route recovery (2026-08-14)
+
+Audit rework that fails in Indexer/Blueprint before provider start now remains
+nonterminal as `rework_route_blocked`. `flyto_coding_submit` has an explicit
+`retry_rework_route` Boolean action; ordinary replay is still read-only. The
+action requires the original idempotency key and normalized request, exact
+session/revision/audit/mission/plan/worktree/execution proof, and at most one
+provider-free route retry. Continuation-origin jobs retain only an exact
+claimed-by-current-job authority.
+
+Mission publication checks the persisted child status and acknowledges its
+operation only after the owner job record commits. One exact peer-deferred
+orphan may receive a deterministic compensation child. A second publication
+loss terminalizes as `rework_route_recovery_exhausted`, clears the retry action,
+workspace claim and resume envelope, and settles any claimed continuation.
+Focused tests cover future and legacy records, ordinary replay, proof drift,
+continuation/emergency flow, peer dispatch, build drift, and bounded exhaustion.
+
 ## Live-safe orphan retirement (2026-08-14)
 
 `flyto-ai code-release --abandon-job` now opens

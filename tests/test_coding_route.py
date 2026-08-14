@@ -7,8 +7,10 @@ can never define a contract the production server does not have.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,6 +80,25 @@ def _declare_verification(workspace) -> None:
     config = workspace / ".flyto" / "coding.yaml"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(_TEST_VERIFICATION_CONTRACT, encoding="utf-8")
+
+
+def _commit_workspace(workspace: Path) -> str:
+    subprocess.run(("git", "init", "-q", str(workspace)), check=True)
+    subprocess.run(
+        ("git", "-C", str(workspace), "config", "user.email", "test@example.com"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(workspace), "config", "user.name", "Flyto Test"),
+        check=True,
+    )
+    subprocess.run(("git", "-C", str(workspace), "add", "."), check=True)
+    subprocess.run(
+        ("git", "-C", str(workspace), "commit", "-qm", "base"), check=True,
+    )
+    return subprocess.check_output(
+        ("git", "-C", str(workspace), "rev-parse", "HEAD"), text=True,
+    ).strip()
 
 
 def _envelope(domain: dict, *, is_error: bool = False) -> dict:
@@ -1432,7 +1453,7 @@ def test_route_evidence_is_secret_free_and_path_free(tmp_path):
 # ── service-level route: fixture MCP process ──────────────────────────
 
 INDEXER_FIXTURE = """
-import json, sys
+import json, os, sys
 
 TOOLS = ["search", "impact", "call_hierarchy", "structure", "task", "verify"]
 REQUIRED = {"search": {"query"}, "task": {"action"}}
@@ -1466,6 +1487,8 @@ def domain(name, args):
         return {"pass": True, "checks": []}, False
     action = args.get("action")
     if action == "plan":
+        if os.path.exists(__file__ + ".fail-plan"):
+            return {"error": "fixture plan unavailable"}, True
         return {"task_profile": {"task_id": "t-1"}, "constraints": {},
                 "execution_plan": [{"id": "s1", "tool": "impact",
                                     "args": {"target": "p:app.py:function:main"},
@@ -1555,8 +1578,27 @@ class ServiceImplementer:
         )
 
 
+class BudgetThenSuccessImplementer(ServiceImplementer):
+    """First emergency segment stops boundedly; later strict rounds succeed."""
+
+    async def run(self, request):
+        import dataclasses
+
+        result = await super().run(request)
+        if self.rounds == 1:
+            return dataclasses.replace(
+                result,
+                ok=False,
+                status="failed",
+                failure_code="turn_limit_exceeded",
+                rounds_used=100,
+            )
+        return result
+
+
 def _route_service(tmp_path, workspace, box, *, indexer_argv=None, blueprint_argv=None,
-                   state_dir="route-state"):
+                   state_dir="route-state", emergency_policy=None,
+                   implementation_backend="native"):
     from flyto_ai.coding.service import CodingService
 
     fixture = tmp_path / "indexer_fixture.py"
@@ -1587,6 +1629,8 @@ def _route_service(tmp_path, workspace, box, *, indexer_argv=None, blueprint_arg
         max_workers=1, max_queued=4,
         require_codex_audit=True,
         route_policy=policy,
+        emergency_policy=emergency_policy,
+        implementation_backend=implementation_backend,
     )
 
 
@@ -1595,7 +1639,10 @@ def _wait_route(service, tenant, job_id, timeout=120):
 
     from flyto_ai.coding.contracts import TERMINAL_CODING_JOB_STATES
 
-    settled = TERMINAL_CODING_JOB_STATES | {CodingJobState.AWAITING_CODEX_AUDIT}
+    settled = TERMINAL_CODING_JOB_STATES | {
+        CodingJobState.AWAITING_CODEX_AUDIT,
+        CodingJobState.REWORK_ROUTE_BLOCKED,
+    }
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         receipt = service.get(tenant, job_id)
@@ -1655,6 +1702,785 @@ def test_service_route_completes_rework_and_audit_with_real_processes(tmp_path):
         assert accepted.landable is True
     finally:
         service.close()
+
+
+def test_pre_provider_rework_route_failure_is_one_time_explicitly_retryable(tmp_path):
+    """A host lane outage does not destroy a proved same-session audit loop.
+
+    Ordinary idempotent replay remains observational.  Only the original key,
+    full original request, explicit ``retry_rework_route=True`` and the exact
+    bound session consume the one route retry; a second pre-provider failure
+    settles closed.
+    """
+    import dataclasses
+
+    from flyto_ai.coding.contracts import CodingAuditFinding, CodingAuditVerdict
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    box = {"agent": None}
+    service = _route_service(tmp_path, workspace, box, state_dir="route-retry")
+    original = _request(workspace)
+    marker = tmp_path / "indexer_fixture.py.fail-plan"
+    try:
+        queued = service.submit("tenant-route", "route-retry", original)
+        first = _wait_route(service, "tenant-route", queued.job_id)
+        assert first.state is CodingJobState.AWAITING_CODEX_AUDIT
+        marker.write_text("fail", encoding="utf-8")
+        service.audit(
+            "tenant-route", queued.job_id, first.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK,
+            (CodingAuditFinding("retry_plan", "blocker", "retry the host plan lane"),),
+        )
+        blocked = _wait_route(service, "tenant-route", queued.job_id)
+        assert blocked.state is CodingJobState.REWORK_ROUTE_BLOCKED
+        assert blocked.job_terminal is False
+        assert blocked.implementer_started is True
+        assert blocked.implementation_session_id == first.implementation_session_id
+        assert blocked.implementation_revision_sha256 == first.implementation_revision_sha256
+        assert blocked.audit_count == blocked.rework_count == 1
+        assert blocked.continuation_available is False
+        assert box["agent"].rounds == 1
+        assert blocked.mission["status"] == "closed"
+        assert blocked.mission["disposition"] == "blocked"
+
+        # The old payload is still an idempotent read, never a hidden retry.
+        replay = service.submit("tenant-route", "route-retry", original)
+        assert replay.state is CodingJobState.REWORK_ROUTE_BLOCKED
+        assert box["agent"].rounds == 1
+
+        marker.unlink()
+        retry = service.submit(
+            "tenant-route", "route-retry",
+            dataclasses.replace(
+                original, resume=True,
+                thread_id=first.implementation_session_id,
+                retry_rework_route=True,
+            ),
+        )
+        assert retry.job_id == queued.job_id
+        assert retry.state is CodingJobState.REWORK_QUEUED
+        second = _wait_route(service, "tenant-route", queued.job_id)
+        assert second.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert second.implementation_session_id == first.implementation_session_id
+        assert second.audit_count == second.rework_count == 1
+        assert box["agent"].rounds == 2
+    finally:
+        marker.unlink(missing_ok=True)
+        service.close()
+
+
+def test_pre_provider_rework_route_retry_is_bounded_to_one(tmp_path):
+    import dataclasses
+
+    from flyto_ai.coding.contracts import CodingAuditFinding, CodingAuditVerdict
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    box = {"agent": None}
+    service = _route_service(tmp_path, workspace, box, state_dir="route-retry-bound")
+    original = _request(workspace)
+    marker = tmp_path / "indexer_fixture.py.fail-plan"
+    try:
+        queued = service.submit("tenant-route", "route-retry-bound", original)
+        first = _wait_route(service, "tenant-route", queued.job_id)
+        marker.write_text("fail", encoding="utf-8")
+        service.audit(
+            "tenant-route", queued.job_id, first.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK,
+            (CodingAuditFinding("retry_plan", "blocker", "retry the host plan lane"),),
+        )
+        assert _wait_route(service, "tenant-route", queued.job_id).state is (
+            CodingJobState.REWORK_ROUTE_BLOCKED
+        )
+        retried = service.submit(
+            "tenant-route", "route-retry-bound",
+            dataclasses.replace(
+                original, resume=True,
+                thread_id=first.implementation_session_id,
+                retry_rework_route=True,
+            ),
+        )
+        assert retried.state is CodingJobState.REWORK_QUEUED
+        terminal = _wait_route(service, "tenant-route", queued.job_id)
+        assert terminal.state is CodingJobState.FAILED
+        assert terminal.job_terminal is True
+        assert terminal.audit_count == terminal.rework_count == 1
+        assert terminal.continuation_available is False
+        assert terminal.implementation_session_id == first.implementation_session_id
+        assert box["agent"].rounds == 1
+
+        # Consumed means consumed; explicit replay cannot reopen it again.
+        from flyto_ai.coding.service import ContinuationRefused
+
+        with pytest.raises(ContinuationRefused):
+            service.submit(
+                "tenant-route", "route-retry-bound",
+                dataclasses.replace(
+                    original, resume=True,
+                    thread_id=first.implementation_session_id,
+                    retry_rework_route=True,
+                ),
+            )
+    finally:
+        marker.unlink(missing_ok=True)
+        service.close()
+
+
+def _legacy_pre_provider_failure(tmp_path, *, state_dir="legacy-route-retry"):
+    """Build the exact old-build terminal shape the production rescue reads."""
+    from flyto_ai.coding.contracts import CodingAuditFinding, CodingAuditVerdict
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    base = _commit_workspace(workspace)
+    box = {"agent": None}
+    original = _request(workspace)
+    marker = tmp_path / "indexer_fixture.py.fail-plan"
+    service = _route_service(tmp_path, workspace, box, state_dir=state_dir)
+    queued = service.submit("tenant-route", "legacy-route-retry", original)
+    first = _wait_route(service, "tenant-route", queued.job_id)
+    marker.write_text("fail", encoding="utf-8")
+    service.audit(
+        "tenant-route", queued.job_id, first.implementation_revision_sha256,
+        CodingAuditVerdict.REWORK,
+        (CodingAuditFinding("retry_plan", "blocker", "retry the host plan lane"),),
+    )
+    blocked = _wait_route(service, "tenant-route", queued.job_id)
+    assert blocked.state is CodingJobState.REWORK_ROUTE_BLOCKED
+    tenant_ref = service._tenant_ref("tenant-route")
+    tenant_dir = service._tenant_dir(tenant_ref)
+    path = tenant_dir / "jobs" / (queued.job_id + ".json")
+    record = service._read_json(path)
+    authority = record["indexer_plan_authority"]
+    authority["contract"]["continuity"] = {"base_commit": base}
+    authority["contract_sha256"] = service._plan_authority_digest(
+        queued.job_id,
+        record["request_sha256"],
+        record["workspace_sha256"],
+        authority["contract"],
+    )
+    service._write_json(path, record)
+    service._update_record(
+        path, state=CodingJobState.FAILED.value,
+        failure_code="route_domain_failure", landable=False,
+    )
+    service._discard_resume(tenant_ref, queued.job_id)
+    record = service._read_json(path)
+    record.pop("route_retry_count", None)
+    # The old build overwrote job-lifetime truth with this failed round's
+    # provider-start marker; that exact false shape is part of the rescue proof.
+    record["implementer_started"] = False
+    service._write_json(path, record)
+    mission_id = record["mission"]["mission_id"]
+    work_item_id = record["mission"]["work_item_id"]
+    service.close(wait=True)
+    marker.unlink()
+    recovery = _route_service(tmp_path, workspace, box, state_dir=state_dir)
+    return {
+        "service": recovery,
+        "workspace": workspace,
+        "original": original,
+        "job_id": queued.job_id,
+        "session": first.implementation_session_id,
+        "revision": first.implementation_revision_sha256,
+        "tenant_ref": tenant_ref,
+        "path": path,
+        "mission_id": mission_id,
+        "work_item_id": work_item_id,
+        "box": box,
+    }
+
+
+def test_legacy_terminal_route_failure_recovers_only_by_explicit_same_key_resume(tmp_path):
+    import dataclasses
+
+    fixture = _legacy_pre_provider_failure(tmp_path)
+    service = fixture["service"]
+    try:
+        # The original payload remains observational and cannot reopen the job.
+        replay = service.submit(
+            "tenant-route", "legacy-route-retry", fixture["original"],
+        )
+        assert replay.state is CodingJobState.FAILED
+        assert fixture["box"]["agent"].rounds == 1
+
+        retry = service.submit(
+            "tenant-route", "legacy-route-retry",
+            dataclasses.replace(
+                fixture["original"], resume=True, thread_id=fixture["session"],
+                retry_rework_route=True,
+            ),
+        )
+        assert retry.job_id == fixture["job_id"]
+        assert retry.state is CodingJobState.REWORK_QUEUED
+        recovered = _wait_route(service, "tenant-route", fixture["job_id"])
+        assert recovered.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert recovered.implementation_session_id == fixture["session"]
+        assert recovered.audit_count == recovered.rework_count == 1
+        assert fixture["box"]["agent"].rounds == 2
+    finally:
+        service.close(wait=True)
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["head", "status", "revision", "audit", "session", "idempotency", "mission", "route", "retry"],
+)
+def test_legacy_terminal_route_failure_refuses_any_proof_drift(tmp_path, drift):
+    import dataclasses
+
+    from flyto_ai.coding.service import ContinuationRefused, IdempotencyConflict
+
+    fixture = _legacy_pre_provider_failure(tmp_path, state_dir="legacy-{}".format(drift))
+    service = fixture["service"]
+    path = fixture["path"]
+    request = dataclasses.replace(
+        fixture["original"], resume=True, thread_id=fixture["session"],
+        retry_rework_route=True,
+    )
+    try:
+        if drift == "head":
+            subprocess.run(
+                ("git", "-C", str(fixture["workspace"]), "add", "notes.txt"), check=True,
+            )
+            subprocess.run(
+                ("git", "-C", str(fixture["workspace"]), "commit", "-qm", "drift"),
+                check=True,
+            )
+        elif drift == "status":
+            (fixture["workspace"] / "foreign.txt").write_text("drift\n", encoding="utf-8")
+        elif drift == "session":
+            request = dataclasses.replace(request, thread_id="sdk-wrong-session")
+        else:
+            record = service._read_json(path)
+            if drift == "revision":
+                record["implementation_revision_sha256"] = "f" * 64
+            elif drift == "audit":
+                record["audit_findings_sha256"] = ""
+                record["audit_count"] = 0
+            elif drift == "mission":
+                record["mission"]["disposition"] = "fixed"
+            elif drift == "route":
+                record["route_receipt"]["strict"] = False
+            elif drift == "retry":
+                record["route_retry_count"] = 1
+            if drift == "idempotency":
+                idempotency = (
+                    service._tenant_dir(fixture["tenant_ref"])
+                    / "idempotency"
+                    / (hashlib.sha256(b"legacy-route-retry").hexdigest() + ".json")
+                )
+                reference = service._read_json(idempotency)
+                reference["request_sha256"] = "e" * 64
+                service._write_json(idempotency, reference)
+            else:
+                service._write_json(path, record)
+        with pytest.raises((ContinuationRefused, IdempotencyConflict)):
+            service.submit("tenant-route", "legacy-route-retry", request)
+        assert fixture["box"]["agent"].rounds == 1
+    finally:
+        service.close(wait=True)
+
+
+def test_missing_legacy_feedback_fails_before_child_claim_or_envelope(tmp_path):
+    import dataclasses
+
+    from flyto_ai.coding.service import ContinuationRefused
+
+    fixture = _legacy_pre_provider_failure(tmp_path, state_dir="legacy-no-feedback")
+    service = fixture["service"]
+    snapshot = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+    before_items = tuple(item.work_item_id for item in snapshot.work_items)
+    round_path = service._round_path(fixture["tenant_ref"], fixture["work_item_id"])
+    round_path.unlink()
+    try:
+        with pytest.raises(ContinuationRefused):
+            service.submit(
+                "tenant-route", "legacy-route-retry",
+                dataclasses.replace(
+                    fixture["original"], resume=True, thread_id=fixture["session"],
+                    retry_rework_route=True,
+                ),
+            )
+        after = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+        assert tuple(item.work_item_id for item in after.work_items) == before_items
+        assert not service._resume_path(fixture["tenant_ref"], fixture["job_id"]).exists()
+        for repository in service._record_repository_roots(service._read_json(fixture["path"])):
+            assert service._workspace_authority(repository)[0] == "free"
+    finally:
+        service.close(wait=True)
+
+
+def test_legacy_retry_write_failure_leaves_no_claim_or_envelope_and_reconciles_child(
+    tmp_path, monkeypatch,
+):
+    import dataclasses
+
+    fixture = _legacy_pre_provider_failure(tmp_path, state_dir="legacy-write-failure")
+    service = fixture["service"]
+    request = dataclasses.replace(
+        fixture["original"], resume=True, thread_id=fixture["session"],
+        retry_rework_route=True,
+    )
+    original_writer = service._write_round_envelope
+    failed = {"once": False}
+
+    def fail_once(*args, **kwargs):
+        if kwargs.get("rework") and not failed["once"]:
+            failed["once"] = True
+            raise OSError("injected round-envelope write failure")
+        return original_writer(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_write_round_envelope", fail_once)
+    before = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+    try:
+        with pytest.raises(OSError, match="injected"):
+            service.submit("tenant-route", "legacy-route-retry", request)
+        after_failure = service._mission.store.snapshot(
+            mission_id=fixture["mission_id"],
+        )
+        assert len(after_failure.work_items) == len(before.work_items) + 1
+        retry_ids = {
+            item.work_item_id for item in after_failure.work_items
+        } - {
+            item.work_item_id for item in before.work_items
+        }
+        assert len(retry_ids) == 1
+        retry_id = retry_ids.pop()
+        assert not service._round_path(fixture["tenant_ref"], retry_id).exists()
+        assert not service._resume_path(fixture["tenant_ref"], fixture["job_id"]).exists()
+        for repository in service._record_repository_roots(service._read_json(fixture["path"])):
+            assert service._workspace_authority(repository)[0] == "free"
+
+        # A peer can dispatch the orphan after the failed publisher releases
+        # the job lease.  It must account that child as deferred because the
+        # owner record is still terminal; a later explicit retry may never
+        # publish queued while pointing back at that closed item.
+        service._dispatch_once()
+        closed = service._mission.store.get_work_item(retry_id)
+        assert closed.status == "closed"
+        assert closed.disposition == "deferred"
+
+        # Reconciliation is bounded: one compensating child may replace the
+        # exact host-accounted orphan, and that replacement must really be
+        # ready before the owner record says queued.
+        queued = service.submit("tenant-route", "legacy-route-retry", request)
+        assert queued.state is CodingJobState.REWORK_QUEUED
+        after_retry = service._mission.store.snapshot(
+            mission_id=fixture["mission_id"],
+        )
+        assert len(after_retry.work_items) == len(after_failure.work_items) + 1
+        replacement = next(
+            item for item in after_retry.work_items
+            if item.work_item_id not in {
+                prior.work_item_id for prior in after_failure.work_items
+            }
+        )
+        # The submit schedules the pump before returning, so the real child may
+        # already have advanced. It must never be the deferred orphan.
+        assert replacement.status in {"ready", "dispatched", "closed"}
+        assert replacement.disposition in {None, "fixed"}
+        assert replacement.parent_id == retry_id
+        assert queued.mission["work_item_id"] == replacement.work_item_id
+        recovered = _wait_route(service, "tenant-route", fixture["job_id"])
+        assert recovered.state is CodingJobState.AWAITING_CODEX_AUDIT
+    finally:
+        service.close(wait=True)
+
+
+def test_continuation_origin_route_retry_preserves_the_claimed_session(tmp_path):
+    """An explicit host-route retry is distinct from replaying segment two."""
+    import dataclasses
+
+    from flyto_ai.coding.continuation import STATE_CLAIMED, ContinuationAuthority
+    from flyto_ai.coding.continuation import workspace_manifest_digest
+
+    fixture = _legacy_pre_provider_failure(
+        tmp_path, state_dir="legacy-continuation-route",
+    )
+    service = fixture["service"]
+    tenant_ref = fixture["tenant_ref"]
+    record = service._read_json(fixture["path"])
+    original = dataclasses.replace(
+        fixture["original"], resume=True, thread_id=fixture["session"],
+    )
+    # Rebind the original idempotency digest to the production shape of a job
+    # that itself consumed a continuation segment.
+    normalized_digest = service._request_digest(
+        service._with_startup_authority(
+            service._with_repository_authority(original),
+        ),
+    )
+    record["request_sha256"] = normalized_digest
+    record["continuation_session_id"] = fixture["session"]
+    record["continuation_generation"] = 1
+    record["continuation_origin_job_id"] = "job_" + "1" * 24
+    plan = record["indexer_plan_authority"]
+    plan["request_sha256"] = normalized_digest
+    plan["contract_sha256"] = service._plan_authority_digest(
+        fixture["job_id"], normalized_digest, record["workspace_sha256"],
+        plan["contract"],
+    )
+    service._write_json(fixture["path"], record)
+    idempotency = (
+        service._tenant_dir(tenant_ref) / "idempotency"
+        / (hashlib.sha256(b"legacy-route-retry").hexdigest() + ".json")
+    )
+    reference = service._read_json(idempotency)
+    reference["request_sha256"] = normalized_digest
+    service._write_json(idempotency, reference)
+    authority = service._continuation.create(ContinuationAuthority(
+        tenant_ref=tenant_ref,
+        backend=service.implementation_backend,
+        session_id=fixture["session"],
+        job_id=record["continuation_origin_job_id"],
+        origin_job_id=record["continuation_origin_job_id"],
+        working_dir=str(fixture["workspace"]),
+        workspace_sha256=record["workspace_sha256"],
+        revision_sha256=fixture["revision"],
+        workspace_manifest_sha256=workspace_manifest_digest(
+            str(fixture["workspace"]), service.snapshot_policy,
+        ),
+        snapshot_policy_sha256=service.snapshot_policy.identity(),
+        files=tuple(record["implementation_files"]),
+        authorized_config_sha256=record["authorized_config_sha256"],
+        contract_snapshot_sha256=record["contract_snapshot_sha256"],
+        request_sha256="a" * 64,
+        failure_code="turn_limit_exceeded",
+        generation=1,
+        sequence=1,
+    ))
+    service._continuation.commit(
+        authority, authority.claimed(fixture["job_id"], authority.updated_at + 1.0),
+    )
+    try:
+        # The exact original segment-two replay remains observational.
+        replay = service.submit(
+            "tenant-route", "legacy-route-retry", original,
+        )
+        assert replay.state is CodingJobState.FAILED
+
+        retried = service.submit(
+            "tenant-route", "legacy-route-retry",
+            dataclasses.replace(original, retry_rework_route=True),
+        )
+        assert retried.state is CodingJobState.REWORK_QUEUED
+        assert _wait_route(
+            service, "tenant-route", fixture["job_id"],
+        ).state is CodingJobState.AWAITING_CODEX_AUDIT
+        claimed = service._continuation.load(tenant_ref, fixture["session"])
+        assert claimed is not None and claimed.state == STATE_CLAIMED
+        assert claimed.claimed_by_job_id == fixture["job_id"]
+    finally:
+        service.close(wait=True)
+
+
+@pytest.mark.parametrize(
+    "publication_failures", [0, 2], ids=["recovers", "settles-exhausted"],
+)
+def test_emergency_stop_continuation_can_explicitly_retry_a_strict_route_outage(
+    tmp_path, monkeypatch, publication_failures,
+):
+    """Production journey: emergency stop, continuation, audit, route retry."""
+    import dataclasses
+
+    from flyto_ai.coding.contracts import CodingAuditFinding, CodingAuditVerdict
+    from flyto_ai.coding.continuation import STATE_CLAIMED
+    from flyto_ai.coding.emergency import EmergencyOverflowPolicy
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    box = {"agent": BudgetThenSuccessImplementer(None)}
+    policy = EmergencyOverflowPolicy(enabled=True, backend="claude")
+    state_dir = "emergency-continuation-route-retry-{}".format(
+        publication_failures,
+    )
+    absent = tmp_path / "absent-indexer.py"
+    first_service = _route_service(
+        tmp_path,
+        workspace,
+        box,
+        state_dir=state_dir,
+        indexer_argv=(sys.executable, str(absent)),
+        emergency_policy=policy,
+        implementation_backend="claude",
+    )
+    original = _request(workspace)
+    try:
+        first = first_service.submit("tenant-route", "segment-1", original)
+        stopped = _wait_route(first_service, "tenant-route", first.job_id)
+        assert stopped.state is CodingJobState.FAILED
+        assert stopped.failure_code == "turn_limit_exceeded"
+        assert stopped.continuation_available is True
+        assert stopped.emergency_authority is not None
+        session = stopped.implementation_session_id
+    finally:
+        first_service.close(wait=True)
+
+    service = _route_service(
+        tmp_path,
+        workspace,
+        box,
+        state_dir=state_dir,
+        emergency_policy=policy,
+        implementation_backend="claude",
+    )
+    marker = tmp_path / "indexer_fixture.py.fail-plan"
+    continuation = dataclasses.replace(
+        original, resume=True, thread_id=session,
+    )
+    try:
+        queued = service.submit("tenant-route", "segment-2", continuation)
+        ready = _wait_route(service, "tenant-route", queued.job_id)
+        assert ready.state is CodingJobState.AWAITING_CODEX_AUDIT
+        authority = service._continuation.load(
+            service._tenant_ref("tenant-route"), session,
+        )
+        assert authority is not None and authority.state == STATE_CLAIMED
+        assert authority.claimed_by_job_id == queued.job_id
+
+        marker.write_text("fail", encoding="utf-8")
+        service.audit(
+            "tenant-route", queued.job_id, ready.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK,
+            (CodingAuditFinding(
+                "retry_plan", "blocker", "retry the host plan lane",
+            ),),
+        )
+        blocked = _wait_route(service, "tenant-route", queued.job_id)
+        assert blocked.state is CodingJobState.REWORK_ROUTE_BLOCKED
+        assert box["agent"].rounds == 2
+
+        replay = service.submit("tenant-route", "segment-2", continuation)
+        assert replay.state is CodingJobState.REWORK_ROUTE_BLOCKED
+        marker.unlink()
+        explicit = dataclasses.replace(
+            continuation, retry_rework_route=True,
+        )
+        if publication_failures:
+            original_writer = service._write_round_envelope
+            failures = {"remaining": publication_failures}
+
+            def fail_twice(*args, **kwargs):
+                if kwargs.get("rework") and failures["remaining"]:
+                    failures["remaining"] -= 1
+                    raise OSError("injected continuation publication failure")
+                return original_writer(*args, **kwargs)
+
+            monkeypatch.setattr(service, "_write_round_envelope", fail_twice)
+            for _ in range(publication_failures):
+                with pytest.raises(OSError, match="continuation publication"):
+                    service.submit("tenant-route", "segment-2", explicit)
+                service._dispatch_once()
+            exhausted = service.submit("tenant-route", "segment-2", explicit)
+            assert exhausted.state is CodingJobState.FAILED
+            assert exhausted.failure_code == "rework_route_recovery_exhausted"
+            settled = service._continuation.load(
+                service._tenant_ref("tenant-route"), session,
+            )
+            assert settled is not None and settled.state == "settled"
+            assert exhausted.continuation_available is False
+            assert service._workspace_authority(str(workspace))[0] == "free"
+            return
+        retried = service.submit(
+            "tenant-route",
+            "segment-2",
+            explicit,
+        )
+        assert retried.state is CodingJobState.REWORK_QUEUED
+        recovered = _wait_route(service, "tenant-route", queued.job_id)
+        assert recovered.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert recovered.implementation_session_id == session
+        assert box["agent"].rounds == 3
+        claimed = service._continuation.load(
+            service._tenant_ref("tenant-route"), session,
+        )
+        assert claimed is not None and claimed.state == STATE_CLAIMED
+        assert claimed.claimed_by_job_id == queued.job_id
+    finally:
+        marker.unlink(missing_ok=True)
+        service.close(wait=True)
+
+
+def test_route_retry_compensation_is_bounded_after_two_publication_failures(
+    tmp_path, monkeypatch,
+):
+    """A second host-write outage fails closed instead of inventing ready work."""
+    import dataclasses
+
+    from flyto_ai.coding.service import receipt_to_mapping
+
+    fixture = _legacy_pre_provider_failure(
+        tmp_path, state_dir="legacy-double-write-failure",
+    )
+    service = fixture["service"]
+    request = dataclasses.replace(
+        fixture["original"], resume=True, thread_id=fixture["session"],
+        retry_rework_route=True,
+    )
+    original_writer = service._write_round_envelope
+    failures = {"remaining": 2}
+
+    def fail_twice(*args, **kwargs):
+        if kwargs.get("rework") and failures["remaining"]:
+            failures["remaining"] -= 1
+            raise OSError("injected bounded publication failure")
+        return original_writer(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_write_round_envelope", fail_twice)
+    try:
+        for _ in range(2):
+            with pytest.raises(OSError, match="bounded publication"):
+                service.submit("tenant-route", "legacy-route-retry", request)
+            service._dispatch_once()
+
+        before = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+        assert before.metrics.queue_depth == 0
+        assert sum(
+            item.status == "closed" and item.disposition == "deferred"
+            for item in before.work_items
+        ) == 2
+
+        exhausted = service.submit(
+            "tenant-route", "legacy-route-retry", request,
+        )
+        assert exhausted.state is CodingJobState.FAILED
+        assert exhausted.failure_code == "rework_route_recovery_exhausted"
+        assert receipt_to_mapping(exhausted)["required_actions"] == []
+        after = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+        assert tuple(item.work_item_id for item in after.work_items) == tuple(
+            item.work_item_id for item in before.work_items
+        )
+        assert after.metrics.queue_depth == 0
+        current = service.get("tenant-route", fixture["job_id"])
+        assert current.state is CodingJobState.FAILED
+        assert current.job_terminal is True
+        assert current.failure_code == "rework_route_recovery_exhausted"
+        assert not service._resume_path(
+            fixture["tenant_ref"], fixture["job_id"],
+        ).exists()
+        for repository in service._record_repository_roots(
+            service._read_json(fixture["path"]),
+        ):
+            assert service._workspace_authority(repository)[0] == "free"
+    finally:
+        service.close(wait=True)
+
+
+def test_future_route_retry_exhaustion_closes_action_claim_and_resume(
+    tmp_path, monkeypatch,
+):
+    """A genuine blocked job cannot remain nonterminal with an empty queue."""
+    import dataclasses
+
+    from flyto_ai.coding.contracts import CodingAuditFinding, CodingAuditVerdict
+    from flyto_ai.coding.service import receipt_to_mapping
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    box = {"agent": None}
+    service = _route_service(
+        tmp_path, workspace, box, state_dir="future-double-write-failure",
+    )
+    original = _request(workspace)
+    marker = tmp_path / "indexer_fixture.py.fail-plan"
+    try:
+        queued = service.submit("tenant-route", "future-route-retry", original)
+        ready = _wait_route(service, "tenant-route", queued.job_id)
+        marker.write_text("fail", encoding="utf-8")
+        service.audit(
+            "tenant-route", queued.job_id, ready.implementation_revision_sha256,
+            CodingAuditVerdict.REWORK,
+            (CodingAuditFinding(
+                "retry_plan", "blocker", "retry the host plan lane",
+            ),),
+        )
+        blocked = _wait_route(service, "tenant-route", queued.job_id)
+        assert blocked.state is CodingJobState.REWORK_ROUTE_BLOCKED
+        request = dataclasses.replace(
+            original,
+            resume=True,
+            thread_id=ready.implementation_session_id,
+            retry_rework_route=True,
+        )
+        original_writer = service._write_round_envelope
+        failures = {"remaining": 2}
+
+        def fail_twice(*args, **kwargs):
+            if kwargs.get("rework") and failures["remaining"]:
+                failures["remaining"] -= 1
+                raise OSError("injected bounded future publication failure")
+            return original_writer(*args, **kwargs)
+
+        monkeypatch.setattr(service, "_write_round_envelope", fail_twice)
+        for _ in range(2):
+            with pytest.raises(OSError, match="future publication"):
+                service.submit("tenant-route", "future-route-retry", request)
+            service._dispatch_once()
+
+        exhausted = service.submit(
+            "tenant-route", "future-route-retry", request,
+        )
+        assert exhausted.state is CodingJobState.FAILED
+        assert exhausted.job_terminal is True
+        assert exhausted.failure_code == "rework_route_recovery_exhausted"
+        assert receipt_to_mapping(exhausted)["required_actions"] == []
+        snapshot = service._mission.store.snapshot(
+            mission_id=blocked.mission["mission_id"],
+        )
+        assert snapshot.metrics.queue_depth == 0
+        assert not service._resume_path(
+            service._tenant_ref("tenant-route"), queued.job_id,
+        ).exists()
+        assert service._workspace_authority(str(workspace))[0] == "free"
+    finally:
+        marker.unlink(missing_ok=True)
+        service.close(wait=True)
+
+
+def test_legacy_retry_rechecks_service_build_after_proof_before_mutation(
+    tmp_path, monkeypatch,
+):
+    import dataclasses
+
+    import flyto_ai.coding.service as service_module
+    from flyto_ai.coding.service import CodingServiceReloadRequired
+
+    fixture = _legacy_pre_provider_failure(tmp_path, state_dir="legacy-build-fence")
+    service = fixture["service"]
+    request = dataclasses.replace(
+        fixture["original"], resume=True, thread_id=fixture["session"],
+        retry_rework_route=True,
+    )
+    before = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+    observed = []
+
+    def changed_after_proof():
+        observed.append(True)
+        return service.build_id if len(observed) == 1 else "f" * 64
+
+    monkeypatch.setattr(
+        service_module, "current_service_build_id", changed_after_proof,
+    )
+    try:
+        with pytest.raises(CodingServiceReloadRequired):
+            service.submit("tenant-route", "legacy-route-retry", request)
+        assert len(observed) == 2
+        after = service._mission.store.snapshot(mission_id=fixture["mission_id"])
+        assert tuple(item.work_item_id for item in after.work_items) == tuple(
+            item.work_item_id for item in before.work_items
+        )
+        assert not service._resume_path(fixture["tenant_ref"], fixture["job_id"]).exists()
+        for repository in service._record_repository_roots(service._read_json(fixture["path"])):
+            assert service._workspace_authority(repository)[0] == "free"
+    finally:
+        service.close(wait=True)
 
 
 class BlockedServiceImplementer(ServiceImplementer):
@@ -2454,8 +3280,12 @@ def test_routed_service_process_exits_cleanly_under_a_hard_timeout(tmp_path):
     script = tmp_path / "run_route.py"
     script.write_text(textwrap.dedent('''
         import sys, time
-        sys.path.insert(0, {tests!r})
+        sys.path[:0] = [{tests!r}, {source!r}]
         from pathlib import Path
+        import flyto_ai
+        assert Path(flyto_ai.__file__).resolve().is_relative_to(
+            Path({source!r}).resolve()
+        ), flyto_ai.__file__
         from test_coding_route import (
             ServiceImplementer, _blueprint_spec, _indexer_spec, _wait_route,
         )
@@ -2495,6 +3325,7 @@ def test_routed_service_process_exits_cleanly_under_a_hard_timeout(tmp_path):
             service.close()
     ''').format(
         tests=str(Path(__file__).resolve().parent),
+        source=str(Path(__file__).resolve().parents[1]),
         state=str(tmp_path / "lifecycle-state"),
         workspace=str(workspace),
         fixture=str(fixture),

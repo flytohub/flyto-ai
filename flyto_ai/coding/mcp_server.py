@@ -279,6 +279,7 @@ class CodingMCPServer:
                                 },
                                 "thread_id": {"type": "string", "minLength": 1, "maxLength": 64},
                                 "resume": {"type": "boolean"},
+                                "retry_rework_route": {"type": "boolean"},
                                 "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5},
                                 "max_rounds": {"type": "integer", "minimum": 1, "maximum": 100},
                                 "require_changes": {"type": "boolean"},

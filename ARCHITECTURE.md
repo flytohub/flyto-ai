@@ -803,6 +803,25 @@ for the rationale and operator semantics.
 
 ## Coding continuation boundary
 
+An audited repair that fails in Indexer/Blueprint before provider start enters
+`rework_route_blocked` instead of destroying the bound implementation session.
+Ordinary same-key submit remains an observational replay. The existing
+`flyto_coding_submit` tool accepts the explicit Boolean action
+`retry_rework_route` only with `resume=true`, the exact recorded session, the
+original normalized request digest, and unchanged revision, audit, mission,
+plan, workspace, execution, and continuation authority. This host retry is
+separate from both provider continuation and the audit rework ceiling.
+
+Mission placement and the owner JSON record are separate durable stores, so a
+failed publication can leave a repair child that a peer correctly accounts as
+deferred. The retry operation validates the recalled WorkItem rather than
+projecting it ready, retains its operation receipt until the owner record
+commits, and permits one deterministic compensating child for that exact
+`job_not_runnable` closure. If both publication attempts are accounted before
+commit, the job closes as `rework_route_recovery_exhausted`, releases workspace
+and resume authority, settles any continuation claim, and advertises no retry
+action. No new MCP tool or provider call is introduced.
+
 A bounded provider stop keeps its session; carrying it into a second job is an
 explicit, single-use **continuation authority** owned by the host, not a property
 of the session id. The authority is tenant-partitioned, binds the exact backend

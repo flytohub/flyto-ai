@@ -107,6 +107,7 @@ __all__ = [
     "MissionCorruptRefused",
     "MissionDependencyRefused",
     "MissionHeartbeat",
+    "MissionRepairRetryExhausted",
     "MissionRouteError",
     "MissionStaleFenceRefused",
     "MissionUnsupportedRefused",
@@ -219,6 +220,12 @@ class MissionDependencyRefused(MissionRouteError):
     """The mission graph refused this lineage, dependency or closure."""
 
     code = "mission_dependency"
+
+
+class MissionRepairRetryExhausted(MissionDependencyRefused):
+    """Both bounded publication children were accounted without running."""
+
+    code = "mission_repair_retry_exhausted"
 
 
 class MissionCorruptRefused(MissionRouteError):
@@ -646,6 +653,215 @@ class CodingMissionRuntime:
                 return_to_id=root_id,
             ),
         )
+
+    def submit_repair_retry(
+        self,
+        *,
+        tenant_ref: str,
+        job_id: str,
+        workspace_sha256: str,
+        projection: CodingMissionProjection,
+        round_index: int,
+        retry_index: int,
+        repository_sha256s: Sequence[str] = (),
+    ) -> MissionAdmission:
+        """Place one bounded retry after a repair route failed before provider.
+
+        The failed repair child remains immutable and accounted as blocked.
+        The retry records it as lineage, but depends on the fixed main-axis
+        item: depending on a blocked item would correctly make the retry
+        unrunnable in the mission kernel.
+        """
+
+        self.require_supported()
+        mission_id = projection.mission_id
+        blocked_id = projection.work_item_id
+        key = self._key(
+            "repair-route-retry-{}-{}".format(int(round_index), int(retry_index)),
+            job_id,
+        )
+        with _translated():
+            blocked = self._store.get_work_item(blocked_id)
+            if blocked.mission_id != mission_id or blocked.lane != LANE_REPAIR:
+                raise MissionAuthorityRefused(
+                    "the blocked repair belongs to a different mission lane",
+                )
+            self._require_owner(blocked, tenant_ref, job_id)
+            if (
+                blocked.status != MISSION_STATUS_CLOSED
+                or blocked.disposition != DISPOSITION_BLOCKED
+            ):
+                raise MissionDependencyRefused(
+                    "the repair route retry requires one accounted blocked child",
+                )
+            root_id = self._root_id(blocked)
+            root = self._store.get_work_item(root_id)
+            self._require_owner(root, tenant_ref, job_id)
+            if (
+                not root.is_root
+                or root.status != MISSION_STATUS_CLOSED
+                or root.disposition != DISPOSITION_FIXED
+            ):
+                raise MissionDependencyRefused(
+                    "the repair route retry requires the fixed audited main axis",
+                )
+            coordinates = self._coordinates(tenant_ref, job_id, workspace_sha256)
+            resources = tuple(
+                self.resource(value)
+                for value in (tuple(repository_sha256s) or (workspace_sha256,))
+            )
+            item = self._store.submit_work_item(
+                mission_id,
+                operation=key,
+                coordinates=coordinates,
+                resources=resources,
+                lane=LANE_REPAIR,
+                priority=projection.priority,
+                root=False,
+                parent_id=blocked_id,
+                return_to_id=root_id,
+                depends_on_ids=(root_id,),
+            )
+            if not self._repair_retry_shape(
+                item,
+                mission_id=mission_id,
+                parent_id=blocked_id,
+                return_to_id=root_id,
+                coordinates=coordinates,
+                resources=resources,
+                priority=projection.priority,
+            ):
+                raise MissionDependencyRefused(
+                    "the persisted repair route retry changed identity",
+                )
+            if item.status == MISSION_STATUS_CLOSED:
+                if not self._retry_was_host_deferred(item, job_id):
+                    raise MissionDependencyRefused(
+                        "the persisted repair route retry is no longer runnable",
+                    )
+                orphaned_retry_id = item.work_item_id
+                reconcile_key = self._key(
+                    "repair-route-retry-reconcile-{}-{}".format(
+                        int(round_index), int(retry_index),
+                    ),
+                    job_id,
+                )
+                item = self._store.submit_work_item(
+                    mission_id,
+                    operation=reconcile_key,
+                    coordinates=coordinates,
+                    resources=resources,
+                    lane=LANE_REPAIR,
+                    priority=projection.priority,
+                    root=False,
+                    parent_id=orphaned_retry_id,
+                    return_to_id=root_id,
+                    depends_on_ids=(root_id,),
+                )
+                if not self._repair_retry_shape(
+                    item,
+                    mission_id=mission_id,
+                    parent_id=orphaned_retry_id,
+                    return_to_id=root_id,
+                    coordinates=coordinates,
+                    resources=resources,
+                    priority=projection.priority,
+                ):
+                    raise MissionDependencyRefused(
+                        "the reconciled repair route retry changed identity",
+                    )
+            if (
+                item.status == MISSION_STATUS_CLOSED
+                and self._retry_was_host_deferred(item, job_id)
+            ):
+                raise MissionRepairRetryExhausted(
+                    "the bounded repair route publication recovery was exhausted",
+                )
+            if item.status != MISSION_STATUS_READY or item.attempts != 0:
+                raise MissionDependencyRefused(
+                    "the repair route retry is not durably ready",
+                )
+        return MissionAdmission(
+            mission_id=mission_id,
+            work_item_id=item.work_item_id,
+            envelope=None,
+            projection=CodingMissionProjection(
+                mission_id=mission_id,
+                scope=projection.scope,
+                work_item_id=item.work_item_id,
+                main_axis_sha256=projection.main_axis_sha256,
+                criteria_ids=projection.criteria_ids,
+                lane=LANE_REPAIR,
+                priority=projection.priority,
+                status=MISSION_STATUS_READY,
+                mission_status=MISSION_OPEN,
+                parent_id=item.parent_id,
+                return_to_id=root_id,
+            ),
+        )
+
+    @staticmethod
+    def _repair_retry_shape(
+        item: WorkItem,
+        *,
+        mission_id: str,
+        parent_id: str,
+        return_to_id: str,
+        coordinates: WorkCoordinates,
+        resources: Tuple[MissionResource, ...],
+        priority: int,
+    ) -> bool:
+        """Bind a recalled mission operation to the retry we requested."""
+
+        return (
+            item.mission_id == mission_id
+            and item.lane == LANE_REPAIR
+            and item.priority == priority
+            and not item.is_root
+            and item.parent_id == parent_id
+            and item.return_to_id == return_to_id
+            and item.coordinates == coordinates
+            and item.resources == resources
+            and item.depends_on_ids == (return_to_id,)
+        )
+
+    @staticmethod
+    def _retry_was_host_deferred(item: WorkItem, job_id: str) -> bool:
+        """Recognize only the orphan accounting produced by this host."""
+
+        closure = item.closure
+        return bool(
+            item.attempts == 1
+            and closure is not None
+            and closure.disposition == DISPOSITION_DEFERRED
+            and closure.rationale
+            == "the host could not run this work item: job_not_runnable"
+            and closure.risk
+            == (
+                "the mission's objective is not reached and this workspace's "
+                "next round has to be submitted again"
+            )
+            and closure.evidence_refs
+            == ("reason-job_not_runnable", "job-{}".format(job_id))
+            and closure.owner == MISSION_CLOSURE_OWNER
+        )
+
+    def acknowledge_repair_retry(
+        self,
+        *,
+        job_id: str,
+        round_index: int,
+        retry_index: int,
+    ) -> None:
+        """Forget retry receipts only after the owner record names the child."""
+
+        for kind in (
+            "repair-route-retry-{}-{}".format(round_index, retry_index),
+            "repair-route-retry-reconcile-{}-{}".format(
+                round_index, retry_index,
+            ),
+        ):
+            self._forget(self._key(kind, job_id))
 
     def _root_id(self, item: WorkItem) -> str:
         """Walk lineage to the main axis, bounded by the kernel's own depth."""

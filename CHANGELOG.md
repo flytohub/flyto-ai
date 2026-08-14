@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added proof-bound recovery for audit rework routes that fail in Indexer or
+  Blueprint before provider start. The existing submit tool accepts explicit
+  `retry_rework_route` without adding a tool; ordinary replay remains read-only,
+  same-session/continuation authority is preserved exactly, recalled mission
+  children are status-validated, and repeated publication loss closes
+  action-free while releasing claims and resume state.
+
 - Split host release into two proof-bounded valves. `code-release
   --abandon-job` may now retire one audit-ready or kernel-closed queued orphan
   while unrelated coding services remain alive; it still requires the target

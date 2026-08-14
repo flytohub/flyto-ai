@@ -730,6 +730,45 @@ def test_audit_tool_schema_is_strict_and_hides_backend_selection() -> None:
     assert "evidence_path" not in catalog
 
 
+def test_route_retry_flag_is_publicly_decodable_without_adding_a_tool(tmp_path) -> None:
+    from flyto_ai.coding.mcp_server import CodingMCPServer
+
+    workspace = tmp_path / "retry-schema"
+    workspace.mkdir()
+    decoded = request_from_mapping({
+        "message": "resume the audited repair",
+        "working_dir": str(workspace),
+        "thread_id": "sdk-session-1",
+        "resume": True,
+        "retry_rework_route": True,
+    })
+    assert decoded.retry_rework_route is True
+
+    tools = {tool["name"]: tool for tool in CodingMCPServer._tools()}
+    assert set(tools) == {
+        "flyto_coding_submit", "flyto_coding_get", "flyto_coding_audit",
+    }
+    request_schema = tools["flyto_coding_submit"]["inputSchema"]["properties"]["request"]
+    assert request_schema["additionalProperties"] is False
+    assert request_schema["properties"]["retry_rework_route"] == {"type": "boolean"}
+    with pytest.raises(ValueError, match="must be a boolean"):
+        request_from_mapping({
+            "message": "resume the audited repair",
+            "working_dir": str(workspace),
+            "thread_id": "sdk-session-1",
+            "resume": True,
+            "retry_rework_route": "false",
+        })
+    with pytest.raises(ValueError, match="resume must be a boolean"):
+        request_from_mapping({
+            "message": "resume the audited repair",
+            "working_dir": str(workspace),
+            "thread_id": "sdk-session-1",
+            "resume": "false",
+            "retry_rework_route": True,
+        })
+
+
 def test_audit_finding_is_bounded_typed_and_carries_no_raw_payload() -> None:
     finding = CodingAuditFinding.from_mapping(_valid_finding_payload())
     assert finding.severity is CodingAuditSeverity.BLOCKER

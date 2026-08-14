@@ -1,5 +1,27 @@
 # Decisions
 
+## 2026-08-14 — Orphan abandonment uses target proof, not global downtime
+
+An unrelated live coding service holding the state-root authority lease does
+not prove the target orphan is running. Requiring an exclusive authority lease
+for every abandonment therefore deadlocked recovery: a kernel-closed queued
+record pinned the supervisor, while stopping all supervisors was the only way
+to retire it.
+
+`open_host_abandon_valve` now takes the authority lease shared and may perform
+only `abandon`. The write is authorized by four explicit facts: the global
+state guard serializes the transition, the exact target job lease is free, the
+record is audit-ready or queued/rework-queued, and a queued item is already
+closed blocked/deferred in MissionStore. The marker is neither read nor
+written. Claim repair has no equivalent exact-target proof, so
+`open_host_release_valve` remains exclusive and the online valve refuses it.
+
+We rejected removing the authority lease, weakening queued-state checks, and
+making claim repair concurrent. The shared lease prevents authority rotation,
+the job lease prevents a live writer race, and the MissionStore disposition
+prevents ready work from being discarded. Rollback is the single CLI factory
+selection; the exclusive release valve and its tests remain unchanged.
+
 ## 2026-08-14 — Every project-aware Indexer plan step inherits host scope
 
 An Indexer task contract may omit `project` from individual read-only plan

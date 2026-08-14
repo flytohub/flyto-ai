@@ -2,6 +2,23 @@
 
 Last updated: 2026-08-14
 
+## Live-safe orphan retirement (2026-08-14)
+
+`flyto-ai code-release --abandon-job` now opens
+`CodingService.open_host_abandon_valve`. It holds the existing authority lease
+shared, writes only under the cross-process state guard, and must acquire the
+exact target job lease. Audit-ready work may then fail closed; queued or
+rework-queued work additionally requires its exact MissionStore item to be
+closed blocked/deferred. A live round, ready queued item, unsupported state, or
+authority transition refuses without mutation.
+
+`--repair-workspace` still uses the exclusive host release valve and therefore
+still refuses while any coding service is alive. Neither valve binds startup
+authority, reads or writes `authority.json`, constructs runtime machinery, or
+adds an MCP tool. Focused CLI and authority regressions cover live peers,
+kernel-closed queued work, target lease contention, survivor preservation,
+marker preservation, operation refusal, and descriptor release.
+
 ## Project-scoped Indexer plan analysis (2026-08-14)
 
 The coding route now binds every project-aware read-only plan step to the
@@ -690,20 +707,15 @@ eligibility evidence for the caller, not an action the service performs.
   latest-writer status index, so a client that stops polling cannot pin
   `service_reload_pending`. A genuinely non-terminal job still preserves its
   worker and refuses only new submissions.
-- Host-owned release valve `flyto-ai code-release`. `--abandon-job` moves only
-  `awaiting_codex_audit` to `failed`/`job_abandoned` with `landable: false`;
-  `--repair-workspace` refuses while a live job owns the tree. Neither is an
-  MCP tool: the public inventory remains exactly the three tools above.
-- The valve opens the state root through `CodingService.open_host_release_valve`
-  rather than as an ordinary service. It takes the state-root authority lease
-  **exclusively** — refusing with `service_busy` while any live coding service
-  holds it — and never reads, writes, rotates, or reproduces `authority.json`,
-  so a job recorded under a foreign strict startup authority (for example a
-  Claude strict-route host with an emergency overflow grant) can be retired
-  without the marker changing by a byte and without disturbing another open job
-  under that same authority. The mode constructs no implementer, publishes no
-  runtime status, reconciles nothing, and refuses `submit`, `audit`, and the
-  pump with `release_valve_refused`.
+- Host-owned release command `flyto-ai code-release`. `--abandon-job` moves an
+  audit-ready job, or only a queued/rework-queued job whose exact MissionStore
+  item is closed blocked/deferred, to `failed`/`job_abandoned` with
+  `landable: false`. Its online abandon valve shares the authority lease with
+  live peers, then serializes with the state guard and acquires the exact job
+  lease. `--repair-workspace` keeps the exclusive release valve and refuses
+  while any service is alive. Both leave `authority.json` byte-identical,
+  construct no implementer/runtime machinery, refuse additive operations, and
+  add no MCP tool.
 - Fail-closed behavior for stale or mutated revisions, wrong state, wrong
   tenant, missing or changed session identity, unsafe attributable paths,
   read-only or approval-gated authority, and restart of in-flight work.

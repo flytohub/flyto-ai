@@ -277,6 +277,13 @@ incompatible service fails construction before status reconciliation, the
 workspace-claim sweep, or any pump. Lock order is authority-lease -> admission ->
 state guard. Crash recovery is `flock` release, never a TTL.
 
+The host release command keeps these scopes explicit. Abandonment joins the
+authority lease shared, then requires the cross-process state guard, the exact
+target job lease, an allowed record state, and—when queued—the exact
+MissionStore item already closed blocked/deferred. Workspace-claim repair lacks
+an exact target-job proof and therefore still takes the authority lease
+exclusively. Neither path binds or rewrites the authority marker.
+
 Every validation precedes every write: the marker, the active-job scan and any
 pre-fingerprint settlement are checked under the state guard while the caller
 holds the exclusive lock, and the marker is written last, so a refused start-up

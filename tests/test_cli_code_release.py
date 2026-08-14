@@ -113,24 +113,30 @@ def test_abandon_retires_only_kernel_accounted_queued_work(
         assert work.work_item_id == projection["work_item_id"]
         service._account_unrunnable(work, "job_record_unreadable")
     assert service.get("tenant-audit", owner.job_id).state is CodingJobState.QUEUED
-    service.close()
-
-    code, out, _err = _run(
-        monkeypatch, capsys,
-        "--tenant", "tenant-audit",
-        "--workspace-root", str(workspace),
-        "--state-dir", str(tmp_path / "service-state"),
-        "--abandon-job", owner.job_id,
-        "--json",
-    )
-    assert code == 0
-    assert json.loads(out) == {
-        "operation": "abandon_job",
-        "job_id": owner.job_id,
-        "state": CodingJobState.FAILED.value,
-        "failure_code": "job_abandoned",
-        "landable": False,
-    }
+    try:
+        # The service that admitted the work is deliberately still alive. The
+        # release must rely on the exact closed mission item and free job lease,
+        # not on stopping every unrelated supervisor sharing the state root.
+        code, out, _err = _run(
+            monkeypatch, capsys,
+            "--tenant", "tenant-audit",
+            "--workspace-root", str(workspace),
+            "--state-dir", str(tmp_path / "service-state"),
+            "--abandon-job", owner.job_id,
+            "--json",
+        )
+        assert code == 0
+        assert json.loads(out) == {
+            "operation": "abandon_job",
+            "job_id": owner.job_id,
+            "state": CodingJobState.FAILED.value,
+            "failure_code": "job_abandoned",
+            "landable": False,
+        }
+        assert service.get("tenant-audit", owner.job_id).state is CodingJobState.FAILED
+        assert not _claim_path(service, workspace).exists()
+    finally:
+        service.close()
 
     service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
     try:

@@ -18,6 +18,9 @@ Current priority — one audited coding route:
 - Codex independently inspects and tests the exact workspace revision, then binds its verdict to that revision digest.
 - A rejected revision resumes the same implementation session with typed findings, bounded by a startup rework ceiling.
 - Only an accepted exact revision becomes caller-landable. The service itself never stages, commits, pushes, publishes, or deploys — landability is evidence for the caller.
+- Host orphan recovery is proof-bounded: abandonment may coexist with unrelated
+  live services only after the exact job lease and state/MissionStore facts
+  permit it; workspace-claim repair remains globally exclusive.
 
 Standing priority:
 - Keep `flyto-core` MCP integration provider-agnostic, validated, observable, and safe for Cloud UI consumption, with Core as the execution authority and Blueprint learning bounded to redacted evidence.

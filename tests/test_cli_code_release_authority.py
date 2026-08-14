@@ -17,6 +17,7 @@ hand-invented) and then drive the real CLI as an operator would.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from flyto_ai.coding.service import (
     SERVICE_LOCK_NAME,
     CodingService,
     CodingServiceBusy,
+    CodingServiceError,
     HostReleaseValveRefused,
     HostReleaseValveRootUnusable,
 )
@@ -328,18 +330,14 @@ def test_release_retires_one_foreign_authority_job_and_leaves_the_rest(
     assert fixture["right_claim"].exists()
 
 
-def test_release_refuses_while_any_live_service_holds_the_lease(
+def test_abandon_retires_only_the_target_while_a_live_peer_holds_the_lease(
     tmp_path: Path, monkeypatch, capsys,
 ) -> None:
-    """A live holder is proof a round may be mid-flight; the valve stands down.
-
-    The refusal is the kernel's answer, not a comparison of authorities: any
-    live coding service holds the shared lease, so the valve's exclusive take
-    fails and the command exits on a bounded code without touching state.
-    """
+    """Unrelated live peers no longer pin a kernel-accounted orphan forever."""
 
     fixture = _orphaned_pair(tmp_path)
     marker = fixture["state_dir"] / AUTHORITY_MARKER_NAME
+    survivor = _record_for(fixture["state_dir"], fixture["second"].job_id)
     live = _audited_service(
         tmp_path,
         fixture["left"],
@@ -348,27 +346,21 @@ def test_release_refuses_while_any_live_service_holds_the_lease(
     )
     try:
         before = marker.read_bytes()
+        survivor_before = survivor.read_bytes()
         code, out, err = _run(
             monkeypatch, capsys, *_cli_args(fixture),
             "--abandon-job", fixture["first"].job_id, "--json",
         )
-        assert code == 2
-        assert "service_busy" in err
+        assert code == 0, err
         assert "Traceback" not in err and "Traceback" not in out
         assert marker.read_bytes() == before
-        # Nothing was retired while the holder was up.
-        assert live.get(TENANT, fixture["first"].job_id).state is (
+        assert live.get(TENANT, fixture["first"].job_id).state is CodingJobState.FAILED
+        assert survivor.read_bytes() == survivor_before
+        assert live.get(TENANT, fixture["second"].job_id).state is (
             CodingJobState.AWAITING_CODEX_AUDIT
         )
     finally:
         live.close()
-
-    # And it succeeds the moment that service exits.
-    code, _out, err = _run(
-        monkeypatch, capsys, *_cli_args(fixture),
-        "--abandon-job", fixture["first"].job_id, "--json",
-    )
-    assert code == 0, err
 
 
 def test_repair_workspace_stays_fail_closed_under_a_foreign_authority(
@@ -393,6 +385,150 @@ def _valve(fixture) -> CodingService:
         state_root=str(fixture["state_dir"]),
         workspace_roots=(str(fixture["left"]), str(fixture["right"])),
     )
+
+
+def _online_abandon_valve(fixture) -> CodingService:
+    return CodingService.open_host_abandon_valve(
+        state_root=str(fixture["state_dir"]),
+        workspace_roots=(str(fixture["left"]), str(fixture["right"])),
+    )
+
+
+def test_online_abandon_valve_refuses_claim_repair_and_additive_work(
+    tmp_path: Path,
+) -> None:
+    """Sharing the authority lease never turns the valve into a worker."""
+
+    fixture = _orphaned_pair(tmp_path)
+    live = _audited_service(
+        tmp_path,
+        fixture["left"],
+        provider=ReworkingProvider(),
+        extra_roots=(fixture["right"],),
+    )
+    valve = _online_abandon_valve(fixture)
+    try:
+        assert valve._authority_fd != -1
+        assert valve._release_valve_can_repair_workspace is False
+        with pytest.raises(HostReleaseValveRefused):
+            valve.repair_workspace_claim(str(fixture["left"]))
+        with pytest.raises(HostReleaseValveRefused):
+            valve.submit(TENANT, "online-valve-001", _request(fixture["left"]))
+        with pytest.raises(HostReleaseValveRefused):
+            valve.audit(
+                TENANT,
+                fixture["first"].job_id,
+                "c3" * 32,
+                CodingAuditVerdict.ACCEPT,
+                (),
+            )
+        with pytest.raises(HostReleaseValveRefused):
+            valve._pump_dispatch()
+    finally:
+        valve.close()
+        live.close()
+
+
+def test_online_abandon_refuses_a_target_whose_job_lease_is_live(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """The shared root lease cannot override the exact execution lease."""
+
+    fixture = _orphaned_pair(tmp_path)
+    target = _record_for(fixture["state_dir"], fixture["first"].job_id)
+    marker = fixture["state_dir"] / AUTHORITY_MARKER_NAME
+    lease_path = (
+        fixture["state_dir"] / "locks" / "jobs"
+        / (fixture["first"].job_id + ".lock")
+    )
+    import fcntl
+
+    lease_fd = os.open(lease_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    before_record = target.read_bytes()
+    before_marker = marker.read_bytes()
+    try:
+        code, out, err = _run(
+            monkeypatch, capsys, *_cli_args(fixture),
+            "--abandon-job", fixture["first"].job_id, "--json",
+        )
+        assert code == 2
+        assert "service_busy" in err
+        assert "Traceback" not in err and "Traceback" not in out
+        assert target.read_bytes() == before_record
+        assert marker.read_bytes() == before_marker
+    finally:
+        fcntl.flock(lease_fd, fcntl.LOCK_UN)
+        os.close(lease_fd)
+
+
+def test_online_abandon_valve_close_releases_both_descriptors(tmp_path: Path) -> None:
+    """The live-safe constructor has the same bounded descriptor lifetime."""
+
+    fixture = _orphaned_pair(tmp_path)
+    valve = _online_abandon_valve(fixture)
+    valve.close()
+
+    assert valve._authority_fd == -1
+    assert valve._lock_fd == -1
+    exclusive = _valve(fixture)
+    exclusive.close()
+
+
+def test_online_abandon_and_audit_have_one_serialized_winner(tmp_path: Path) -> None:
+    """Concurrent audit and abandon cannot both authorize the same job."""
+
+    fixture = _orphaned_pair(tmp_path)
+    live = _audited_service(
+        tmp_path,
+        fixture["left"],
+        provider=ReworkingProvider(),
+        extra_roots=(fixture["right"],),
+    )
+    valve = _online_abandon_valve(fixture)
+    barrier = threading.Barrier(2)
+    outcomes = {}
+
+    def audit() -> None:
+        barrier.wait()
+        try:
+            live.audit(
+                TENANT,
+                fixture["first"].job_id,
+                fixture["first"].implementation_revision_sha256,
+                CodingAuditVerdict.ACCEPT,
+                (),
+            )
+        except CodingServiceError as exc:
+            outcomes["audit"] = exc.code
+        else:
+            outcomes["audit"] = "accepted"
+
+    def abandon() -> None:
+        barrier.wait()
+        try:
+            valve.abandon(TENANT, fixture["first"].job_id)
+        except CodingServiceError as exc:
+            outcomes["abandon"] = exc.code
+        else:
+            outcomes["abandon"] = "abandoned"
+
+    threads = [threading.Thread(target=audit), threading.Thread(target=abandon)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        assert not any(thread.is_alive() for thread in threads)
+        assert sorted(outcomes.values()).count("accepted") + sorted(
+            outcomes.values(),
+        ).count("abandoned") == 1
+        final = live.get(TENANT, fixture["first"].job_id)
+        assert final.state in {CodingJobState.CODEX_ACCEPTED, CodingJobState.FAILED}
+        assert not fixture["left_claim"].exists()
+    finally:
+        valve.close()
+        live.close()
 
 
 def test_the_valve_refuses_every_additive_operation(tmp_path: Path) -> None:

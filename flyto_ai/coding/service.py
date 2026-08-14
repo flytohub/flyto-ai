@@ -1245,15 +1245,10 @@ class CodingService:
     ) -> "CodingService":
         """Open this state root for one strictly subtractive host release.
 
-        The problem this solves is narrow and was unsolvable before it existed.
-        The release valve is the operator's way to retire an orphaned
-        `awaiting_codex_audit` job, but an ordinary construction has to *bind*
-        the root to its own startup authority first - and a host running the
-        valve is, by definition, not running the strict route that created the
-        stranded job. `_bind_startup_authority` then saw live work under another
-        authority, `_require_all_jobs_terminal` saw the very job the valve
-        exists to retire, and the command refused itself. The release the
-        operator needed was the one thing the command could never do.
+        This is the exclusive form used for workspace-claim repair and for an
+        offline abandon caller that explicitly needs global quiescence. An
+        ordinary construction cannot be used because it binds the root to its
+        own startup authority before reaching either subtractive operation.
 
         So this mode does not bind, adopt, rotate or even read the marker. It
         takes the state root's authority lease *exclusively* instead, which
@@ -1279,18 +1274,53 @@ class CodingService:
         already written to a root it had not yet proved was free. Instead the
         object is allocated without `__init__` and
         :meth:`_init_release_valve` runs a fixed order: validate an existing
-        root, prove exclusivity, and only then build the little state the two
-        subtractive operations need.
+        root, take the exclusive lease, and only then build the little state the
+        two subtractive operations need. The CLI's live-safe abandon path uses
+        :meth:`open_host_abandon_valve` instead.
         """
 
         valve = cls.__new__(cls)
         valve._init_release_valve(
-            state_root=state_root, workspace_roots=workspace_roots,
+            state_root=state_root,
+            workspace_roots=workspace_roots,
+            permit_live_services=False,
+        )
+        return valve
+
+    @classmethod
+    def open_host_abandon_valve(
+        cls, *, state_root: str, workspace_roots: Sequence[str],
+    ) -> "CodingService":
+        """Open the narrow abandon-only valve beside live peer services.
+
+        The authority lease is shared, so constructing this valve neither
+        excludes nor impersonates an ordinary service. Safety comes from the
+        mutation path itself: the cross-process state guard serializes the
+        durable transition, the target job lease proves no implementation
+        round is writing that job, and :meth:`abandon` accepts only an
+        audit-ready job or a queued job whose exact mission item is already
+        closed blocked/deferred.
+
+        This mode cannot repair a workspace claim. Claim repair has no exact
+        job lease or mission-item proof to bind it, so it remains available
+        only through :meth:`open_host_release_valve`, after that valve proves
+        no service is alive by taking the authority lease exclusively.
+        """
+
+        valve = cls.__new__(cls)
+        valve._init_release_valve(
+            state_root=state_root,
+            workspace_roots=workspace_roots,
+            permit_live_services=True,
         )
         return valve
 
     def _init_release_valve(
-        self, *, state_root: str, workspace_roots: Sequence[str],
+        self,
+        *,
+        state_root: str,
+        workspace_roots: Sequence[str],
+        permit_live_services: bool,
     ) -> None:
         """Construct only what a subtractive host release can possibly need.
 
@@ -1301,10 +1331,10 @@ class CodingService:
            already - `.service.lock`, `locks/jobs`, `locks/workspaces` and the
            authority lease - so a typo'd or half-built path refuses instead of
            being completed into a new root;
-        3. take the authority lease exclusively and non-blocking, which proves
-           no coding service of any authority is alive here;
-        4. only then bind the narrow state `abandon`, `repair_workspace_claim`
-           and `close` actually use.
+        3. take the authority lease without binding the root: exclusively for
+           claim repair, or shared for the abandon-only valve;
+        4. only then bind the narrow state `abandon`, optional
+           `repair_workspace_claim`, and `close` actually use.
 
         Nothing here reads, writes, rotates or reproduces `authority.json`, and
         no executor, mission runtime, status publisher, dispatcher or
@@ -1329,6 +1359,7 @@ class CodingService:
             ) from exc
 
         self._release_valve = True
+        self._release_valve_can_repair_workspace = not permit_live_services
         self._closed = False
         # Never joined, never rotated, never adopted. Host-global workspace
         # ownership is an *additive* claim over a tree, and this mode exists to
@@ -1386,7 +1417,10 @@ class CodingService:
                         "this coding state root has no lock directories, so no"
                         " service has ever established it",
                     )
-            self._acquire_state_root_authority_exclusively()
+            if permit_live_services:
+                self._acquire_state_root_authority_for_online_abandon()
+            else:
+                self._acquire_state_root_authority_exclusively()
         except BaseException:
             # Constructor failure must leave nothing open. `close` is not used
             # here: it assumes a fully built object, and this one may not be.
@@ -1469,6 +1503,7 @@ class CodingService:
         self._lock_fd = -1
         self._authority_fd = -1
         self._release_valve = False
+        self._release_valve_can_repair_workspace = True
         # Host-global tree ownership is *demand scoped*: it is acquired only
         # while this state root has durable non-terminal work, never for the
         # lifetime of an idle service. An idle Codex worker that held its
@@ -2775,6 +2810,10 @@ class CodingService:
         the release valve from becoming a way to edit a tree mid-audit.
         """
 
+        if not self._release_valve_can_repair_workspace:
+            raise HostReleaseValveRefused(
+                "the online abandon valve cannot repair workspace claims",
+            )
         self._assert_workspace(workspace)
         with self._state_guard():
             status, owner_job_id = self._workspace_authority(workspace)
@@ -3834,6 +3873,36 @@ class CodingService:
                 raise CodingServiceBusy(
                     "a live coding service holds this state root; stop it"
                     " before releasing a job or a workspace claim",
+                ) from exc
+        except BaseException:
+            os.close(descriptor)
+            raise
+        self._authority_fd = descriptor
+
+    def _acquire_state_root_authority_for_online_abandon(self) -> None:
+        """Join only the kernel lease needed for a live-safe abandonment.
+
+        Ordinary services hold this same shared lease for their whole life, so
+        this valve may coexist with them. It never reads or writes the authority
+        marker and does not bind as a worker. The lease still matters: it keeps
+        authority rotation from replacing the marker while the valve is
+        operating, while the state guard and exact job lease protect the one
+        durable job transition.
+        """
+
+        if fcntl is None:
+            raise CodingAuthorityUnavailable(
+                "this host has no inter-process lock, so a coding job cannot"
+                " be abandoned beside live services",
+            )
+        descriptor = self._open_authority_lock()
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise CodingServiceBusy(
+                    "the coding state root authority is changing; retry the"
+                    " abandon operation after the transition",
                 ) from exc
         except BaseException:
             os.close(descriptor)

@@ -1143,20 +1143,23 @@ def _cmd_code_release(args):
     only clears a claim the service could not evaluate, and refuses outright
     while a live job still owns the tree. Neither is reachable over MCP.
 
-    It opens the state root through the dedicated host release valve rather than
-    as an ordinary service. Constructing a service here meant constructing a
-    *startup authority* here, and a host retiring a stranded job is by
-    definition not running the strict route that stranded it: binding refused on
-    the very job the command exists to retire, so the release was impossible
-    exactly when it was needed. The valve instead proves no coding service is
-    alive - by taking the state root lease exclusively - and never reads,
-    writes, or reproduces `authority.json`, so the strict route still owns this
-    root when the command exits.
+    It never constructs an ordinary service or binds a startup authority.
+    Abandon uses an online valve that shares the state-root authority lease with
+    live peers, then relies on the cross-process state guard, target job lease,
+    allowed job state and exact closed mission item. Workspace-claim repair has
+    no equivalent target proof, so it keeps the exclusive release valve and
+    refuses while any coding service is alive. Neither path reads, writes, or
+    reproduces `authority.json`.
     """
     from flyto_ai.coding.service import CodingService, CodingServiceError
 
     try:
-        service = CodingService.open_host_release_valve(
+        open_valve = (
+            CodingService.open_host_abandon_valve
+            if args.abandon_job
+            else CodingService.open_host_release_valve
+        )
+        service = open_valve(
             state_root=_os.path.abspath(_os.path.expanduser(args.state_dir)),
             workspace_roots=tuple(
                 _os.path.abspath(_os.path.expanduser(path))

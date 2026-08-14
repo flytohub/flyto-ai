@@ -487,25 +487,19 @@ automatically, including by startup reconciliation: discarding it would convert
 concurrent-edit hazard the claim exists to prevent. Only the host-owned
 `flyto-ai code-release` command clears one.
 
-`code-release` opens the state root through a dedicated **host release valve**
-(`CodingService.open_host_release_valve`) instead of constructing an ordinary
-service. An ordinary construction binds the root to the constructing process's
-startup authority, and an operator retiring an orphaned job is not running the
-strict route that stranded it — so binding refused on the very job the command
-existed to retire. The valve instead takes the state-root authority lease
-*exclusively*: success proves no coding service of any authority is alive here,
-and failure is a bounded `service_busy` refusal. Because no authority has to be
-compared, `authority.json` is never read, written, rotated, or reproduced, and
-the strict route still owns the root when the command exits. Neither
-`_bind_startup_authority` nor `_require_all_jobs_terminal` runs, so exactly one
-requested `awaiting_codex_audit` job may be abandoned while other open jobs
-under the recorded authority are left untouched. The mode is strictly
-subtractive: its agent factory raises rather than constructing an implementer,
-it publishes no runtime status row, it reconciles no interrupted job, and
-`submit`, `audit`, and the dispatch pump refuse with `release_valve_refused`.
-The two surviving operations are the proven ones — `abandon` still takes the
-job lease and still releases the workspace claim, resume envelope, and
-continuation authority; `repair_workspace_claim` still refuses a live owner.
+`code-release` never constructs an ordinary service or binds startup authority.
+Its two operations use different proof boundaries. `--abandon-job` opens
+`CodingService.open_host_abandon_valve`, takes the authority lease shared with
+live services, then serializes the transition with the state guard and acquires
+the exact target job lease. The target must be audit-ready; a queued or
+rework-queued record additionally requires its exact MissionStore item to be
+closed blocked/deferred. `--repair-workspace` has no exact job proof, so it
+keeps `CodingService.open_host_release_valve` and the exclusive authority
+lease, refusing while any service is alive. Both modes leave `authority.json`
+byte-identical, construct no implementer/runtime status/reconciliation, and
+refuse `submit`, `audit`, and dispatch. The online valve also refuses claim
+repair. Abandon releases only the target claim, resume envelope, and
+continuation authority; survivor jobs remain unchanged.
 
 Because the claim protects the audit gap, only an audit-required job takes one.
 A legacy direct-library service takes no claim and keeps its per-round

@@ -15,6 +15,8 @@
 - [x] Eliminate hard-coded runtime module totals from package, CLI, MCP, and demo behavior.
 - [x] Align Claude implementation rounds with the existing bounded 100-turn ceiling.
 - [x] Make Guardian honor its closed repository-dotfile edit allowlist.
+- [x] Let host operators retire a kernel-closed orphan beside unrelated live
+  coding services without weakening job leases, MissionStore proof, or claim repair.
 # Mission Stations
 
 - [x] Add strict judge-drawn card interpretation and deterministic fallback.

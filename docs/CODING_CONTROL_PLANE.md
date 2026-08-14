@@ -851,11 +851,16 @@ flyto-ai code-release --tenant acme --workspace-root /srv/workspaces/acme \
   --repair-workspace /srv/workspaces/acme/repo
 ```
 
-Both operations are strictly subtractive. `--abandon-job` moves only
-`awaiting_codex_audit` to `failed` with `job_abandoned` and `landable: false`;
-it cannot accept, land, or let a round skip its audit, so it is always worse
-for the caller than auditing and can never be a bypass. `--repair-workspace`
-refuses while a live job owns the tree.
+Both operations are strictly subtractive. `--abandon-job` may run while other
+coding services are alive, but only after taking the cross-process state guard
+and exact target job lease. It moves an audit-ready job to `failed` with
+`job_abandoned` and `landable: false`; queued/rework-queued work is eligible
+only when its exact MissionStore item is already closed blocked/deferred. A
+running round, ready queued item, wrong state, or held job lease refuses without
+mutation. `--repair-workspace` has no equivalent target proof, so it still
+requires the exclusive state-root lease and refuses while any service is alive.
+Neither path binds startup authority, changes `authority.json`, constructs an
+implementer, or adds an MCP tool.
 
 ### Bounded supervisor reads
 
@@ -1227,8 +1232,10 @@ adoptable exact entry never masks a live parent.
 | `adoptable` | owner gone, nothing unresolved | the next start adopts it |
 
 Recovery never involves editing a registry file. For a stranded audit under the
-previous owner, use the subtractive host release valve, which does not join,
-rotate, or adopt workspace authority:
+previous owner, use the subtractive host release command. Abandon joins only the
+state-root authority lease shared and proves the exact target safe; claim repair
+takes that lease exclusively. Neither joins, rotates, or adopts workspace
+authority:
 
 ```bash
 flyto-ai code-release --state-dir <owner state root> --abandon-job <job id>

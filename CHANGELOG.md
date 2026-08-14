@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Split host release into two proof-bounded valves. `code-release
+  --abandon-job` may now retire one audit-ready or kernel-closed queued orphan
+  while unrelated coding services remain alive; it still requires the target
+  state, the exact job lease, and the MissionStore closed disposition before
+  writing. `--repair-workspace` remains globally exclusive. Both modes bind no
+  startup authority, construct no implementer, preserve `authority.json`, and
+  expose no additional MCP tool.
+
 - Fixed the mandatory Indexer pre-work lane for isolated worktrees. Canonical
   and translated plan `impact`, `structure`, and `call_hierarchy` calls now
   inherit the host-owned workspace project just like search. A conflicting

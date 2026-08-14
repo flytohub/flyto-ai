@@ -463,6 +463,14 @@ class CodingMissionRuntime:
         return self._store
 
     @staticmethod
+    def _persisted_work_item(
+        state_root: Path, work_item_id: str,
+    ) -> Optional[WorkItem]:
+        """Read one durable item without constructing an execution worker."""
+
+        return MissionStore(Path(state_root)).get_work_item(work_item_id)
+
+    @staticmethod
     def supported() -> bool:
         """Whether this host has the primitives the kernel refuses to emulate."""
 

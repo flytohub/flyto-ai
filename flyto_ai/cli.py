@@ -323,7 +323,7 @@ def main():
     # may retire a job or clear a claim.
     code_release_p = sub.add_parser(
         "code-release",
-        help="Fail an orphaned audit-ready coding job closed, or repair a stuck claim",
+        help="Fail a provably stranded coding job closed, or repair a stuck claim",
     )
     code_release_p.add_argument("--tenant", required=True, help="Startup-bound tenant identifier")
     code_release_p.add_argument(
@@ -337,7 +337,10 @@ def main():
     release_target = code_release_p.add_mutually_exclusive_group(required=True)
     release_target.add_argument(
         "--abandon-job",
-        help="Move one awaiting_codex_audit job to failed/job_abandoned",
+        help=(
+            "Move one audit-ready or kernel-accounted non-runnable job to "
+            "failed/job_abandoned"
+        ),
     )
     release_target.add_argument(
         "--repair-workspace",

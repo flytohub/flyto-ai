@@ -158,11 +158,11 @@ Entrypoints: `flyto-ai` and `python -m flyto_ai`. `flyto-ai-mcp` starts the STDI
 | `code-workspace-status` | `--workspace` | Workspace root to report ownership for | [`flyto_ai/cli.py:308`](../../flyto_ai/cli.py#L308) |
 | `code-workspace-status` | `--registry-root` | Host-global workspace authority registry (defaults to the host's) | [`flyto_ai/cli.py:312`](../../flyto_ai/cli.py#L312) |
 | `code-workspace-status` | `--json` | Output raw JSON | [`flyto_ai/cli.py:316`](../../flyto_ai/cli.py#L316) |
-| `code-release` | `command` | Fail an orphaned audit-ready coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:324`](../../flyto_ai/cli.py#L324) |
+| `code-release` | `command` | Fail a provably stranded coding job closed, or repair a stuck claim | [`flyto_ai/cli.py:324`](../../flyto_ai/cli.py#L324) |
 | `code-release` | `--tenant` | Startup-bound tenant identifier | [`flyto_ai/cli.py:328`](../../flyto_ai/cli.py#L328) |
 | `code-release` | `--workspace-root` | Allowed workspace root (repeatable) | [`flyto_ai/cli.py:329`](../../flyto_ai/cli.py#L329) |
 | `code-release` | `--state-dir` | Durable service state root | [`flyto_ai/cli.py:333`](../../flyto_ai/cli.py#L333) |
-| `release_target` | `--abandon-job` | Move one awaiting_codex_audit job to failed/job_abandoned | [`flyto_ai/cli.py:338`](../../flyto_ai/cli.py#L338) |
-| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:342`](../../flyto_ai/cli.py#L342) |
-| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:346`](../../flyto_ai/cli.py#L346) |
-| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:349`](../../flyto_ai/cli.py#L349) |
+| `release_target` | `--abandon-job` | Move one audit-ready or kernel-accounted non-runnable job to failed/job_abandoned | [`flyto_ai/cli.py:338`](../../flyto_ai/cli.py#L338) |
+| `release_target` | `--repair-workspace` | Clear a workspace claim whose authority cannot be evaluated | [`flyto_ai/cli.py:345`](../../flyto_ai/cli.py#L345) |
+| `code-release` | `--json` | Output raw JSON | [`flyto_ai/cli.py:349`](../../flyto_ai/cli.py#L349) |
+| `interactive` | `command` | Start interactive chat (default when no args) | [`flyto_ai/cli.py:352`](../../flyto_ai/cli.py#L352) |

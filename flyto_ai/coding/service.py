@@ -2694,14 +2694,17 @@ class CodingService:
             )
 
     def abandon(self, tenant_id: str, job_id: str) -> CodingJobReceipt:
-        """Fail one audit-ready job closed so its worktree can be reused.
+        """Fail one provably stranded job closed so its worktree can be reused.
 
         This is the operator's only release valve for a job whose auditor went
-        away, and it is deliberately the weakest operation in the service: it
-        can move `awaiting_codex_audit` to `failed` and nothing else. It never
-        accepts, never lands, never stages or commits, and never lets a round
-        skip an audit — abandoning is strictly worse for the caller than
-        auditing, so it can never be used to route around the audit gate.
+        away or whose mission item was already accounted as non-runnable, and
+        it is deliberately the weakest operation in the service. It can move an
+        `awaiting_codex_audit` job to `failed`; it can also retire a queued or
+        rework-queued record only after the mission kernel proves that exact
+        work item is closed as blocked/deferred. It never accepts, lands,
+        stages, commits, or lets live/ready work skip an audit — abandoning is
+        strictly worse for the caller than auditing, so it cannot route around
+        the audit gate.
         """
 
         tenant_ref = self._tenant_ref(tenant_id)
@@ -2713,14 +2716,39 @@ class CodingService:
                 record = self._read_json(path)
             except FileNotFoundError as exc:
                 raise CodingJobNotFound("coding job does not exist") from exc
-            if str(record.get("state")) != CodingJobState.AWAITING_CODEX_AUDIT.value:
-                raise AbandonStateConflict("only an audit-ready coding job can be abandoned")
+            state = str(record.get("state") or "")
+            if state not in (
+                CodingJobState.AWAITING_CODEX_AUDIT.value,
+                CodingJobState.QUEUED.value,
+                CodingJobState.REWORK_QUEUED.value,
+            ):
+                raise AbandonStateConflict(
+                    "only an audit-ready or already-accounted coding job can be abandoned",
+                )
             # The lease proves no live round is mid-flight. Abandoning under a
             # running implementer would release a worktree that is still being
             # written, which is exactly the race this change exists to close.
             if not self._acquire_job_lease(job_id):
                 raise CodingServiceBusy("coding job is already being executed")
             try:
+                if state != CodingJobState.AWAITING_CODEX_AUDIT.value:
+                    projection = self._record_projection(record)
+                    item = (
+                        CodingMissionRuntime._persisted_work_item(
+                            self.state_root, projection.work_item_id,
+                        )
+                        if projection is not None else None
+                    )
+                    if (
+                        item is None
+                        or item.status != MISSION_STATUS_CLOSED
+                        or item.disposition not in (
+                            DISPOSITION_BLOCKED, DISPOSITION_DEFERRED,
+                        )
+                    ):
+                        raise AbandonStateConflict(
+                            "queued work must be closed blocked or deferred before abandonment",
+                        )
                 self._update_record_locked(
                     path,
                     state=CodingJobState.FAILED.value,

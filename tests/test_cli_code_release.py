@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from flyto_ai.coding.contracts import CodingJobState
 from flyto_ai.coding.mcp_server import CodingMCPServer
+from flyto_ai.coding.service import AbandonStateConflict
 
 from tests.test_coding_service import (
     ReworkingProvider,
@@ -84,6 +85,58 @@ def test_abandon_reports_failed_and_non_landable_json(
         assert service.submit(
             "tenant-audit", "cli-002", _request(workspace),
         ).state is CodingJobState.QUEUED
+    finally:
+        service.close()
+
+
+def test_abandon_retires_only_kernel_accounted_queued_work(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """A pre-fix admission race is recoverable without weakening live work.
+
+    The mission kernel has already closed the exact item blocked, so no worker
+    can run it. The durable job record is intentionally left queued to model an
+    older service that published it after the item was accounted. The host
+    valve may fail that proof-bound record closed and release its worktree.
+    """
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    monkeypatch.setattr(service, "_schedule_pump", lambda: None)
+    owner = service.submit("tenant-audit", "cli-stranded", _request(workspace))
+    projection = owner.mission or {}
+    with pytest.raises(AbandonStateConflict):
+        service.abandon("tenant-audit", owner.job_id)
+    with service._mission.dispatch() as work:
+        assert work is not None
+        assert work.work_item_id == projection["work_item_id"]
+        service._account_unrunnable(work, "job_record_unreadable")
+    assert service.get("tenant-audit", owner.job_id).state is CodingJobState.QUEUED
+    service.close()
+
+    code, out, _err = _run(
+        monkeypatch, capsys,
+        "--tenant", "tenant-audit",
+        "--workspace-root", str(workspace),
+        "--state-dir", str(tmp_path / "service-state"),
+        "--abandon-job", owner.job_id,
+        "--json",
+    )
+    assert code == 0
+    assert json.loads(out) == {
+        "operation": "abandon_job",
+        "job_id": owner.job_id,
+        "state": CodingJobState.FAILED.value,
+        "failure_code": "job_abandoned",
+        "landable": False,
+    }
+
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    try:
+        assert not _claim_path(service, workspace).exists()
+        fresh = service.submit("tenant-audit", "cli-after-stranded", _request(workspace))
+        assert fresh.state is CodingJobState.QUEUED
     finally:
         service.close()
 

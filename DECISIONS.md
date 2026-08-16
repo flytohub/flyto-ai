@@ -1610,6 +1610,51 @@ fail solely according to the supervisor launch directory.
   `flyto.execution-session-request.v1`; it does not weaken router filters or reinterpret
   request data as authority. Product topology and integration ownership do not
   change.
+## 2026-08-14 — Trusted connectors execute under the durable admission fence
+
+- A production host may transfer one keyword-only, pre-established one-shot
+  `ExecutionSessionConnector` handle to `admit_execution_session`; request data
+  can neither provide nor name it. Handle construction starts the non-daemon
+  worker before admission, so the deadline-bound path never calls
+  `Process.start`.
+- The connector receives only a detached bounded prepared-session snapshot in
+  memory. Durable instruction remains session/task IDs plus the four governed
+  digests. Scheduler alone owns the one-shot fence, closure, and evidence ref.
+- Accept only the exact four-field Scheduler result. Success is exact `ok=true`,
+  empty message, null error, and zero cost. Failure is the one stable empty
+  `execution_connector_failed` result. Invalid output and exception details are
+  never persisted. A possibly entered but unprovable outcome becomes
+  `execution_outcome_unknown` and is never automatically replayed. A concurrent
+  duplicate that is already waiting continues Scheduler reconciliation after
+  owner cancellation, using the existing fence rather than a connector replay.
+- Derive one absolute monotonic deadline from
+  `activation.expires_at_ms - now_ms`. Recompute its nonnegative remainder at
+  actual executor entry and never invoke at zero. Bound worker readiness,
+  nonblocking request transfer, the child-side entry check, and result receive
+  to that same deadline. On expiry, owner cancellation, validation failure,
+  connector failure, or normal return, forcibly terminate it and confirm process exit
+  before returning or publishing the stable empty timeout result. Bound both
+  forced cleanup and duplicate reconciliation to the fixed 0.5-second closure
+  grace, with a 10 ms sleeping pass interval.
+- Transfer ownership of the one-shot handle to admission: it is closed even
+  when validation fails or another host already resolved the durable occurrence.
+  Do not treat in-loop cancellation as lifecycle proof. There is no detached
+  callback task, daemon thread, or global connector slot. If the child cannot be
+  proven dead, fail closed without closing a durable receipt. This contract uses
+  the host's enforceably terminable process boundary because arbitrary Python
+  coroutine code cannot be forcibly stopped in-process.
+- Persisted result wins over any later callback, including after restart;
+  digest drift is a conflict. No callback preserves the prior exact blocked
+  receipt. This decision adds no Cloud or device/runtime claim.
+
+**Rationale.** A host needs a production connection point without creating a
+second execution ledger or letting provider identity/content enter durable
+authority. Reusing Scheduler's occurrence gives cross-process at-most-once
+entry and content-free recovery. Activation expiry is existing validated host
+policy and avoids inventing a provider-controlled timeout. Rollback stops
+supplying the connector, which restores the original blocked behavior without
+rewriting durable records.
+
 ## 2026-08-13: A successful cross-connection rework audit owns its worker round
 
 **Decision.** Supervisor ownership is bound to both the request and its

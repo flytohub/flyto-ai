@@ -1004,6 +1004,46 @@ Rollback is removal of this adapter and its callers while retaining the existing
 admitting this request contract; they must not bypass the bridge by translating
 untrusted request fields into router context.
 
+`flyto_ai.execution_session_host` is the provider-side durable admission seam.
+A host may transfer one pre-established, one-shot trusted connector handle.
+Construction starts its non-daemon isolation process before admission; the
+callback remains only in that process. Admission never calls `Process.start`.
+The connector receives only a fresh detached copy of the bounded prepared
+result after its readiness signal; it cannot come from the request and its
+identity is never serialized. The Scheduler's durable one-shot occurrence is
+the sole invocation
+fence and supplies the receipt evidence reference. Its persisted definition is
+limited to session/task identifiers and request, authority, route, and overall
+digests. It contains no goal, principal, manifest, credential, or connector.
+
+No connector preserves the existing `execution_not_connected` blocked receipt.
+Exact content-free, zero-cost connector success closes `connected`; exact
+content-free failure closes with `execution_connector_failed`. Malformed output
+or exceptions fail closed without connector prose. Connector await is bounded
+by one absolute monotonic deadline derived from the validated activation time
+remaining at admission. Executor entry recomputes its nonnegative remainder;
+entry at or after expiry never invokes the connector. Readiness, nonblocking
+request transfer, the child-side final deadline check, and result receive all
+use that same deadline. A worker stalled before readiness therefore cannot
+block the event loop or escape the activation bound. On expiry, owner
+cancellation, validation failure, connector failure, and normal return, the
+host forcibly terminates that process within the fixed closure grace and
+confirms it has exited before control returns or a receipt closes. Expiry then
+durably closes `execution_connector_timeout`; cancellation, process loss, or heartbeat loss
+after durable entry instead recovers as `execution_outcome_unknown`. Neither is
+replayed. An already-waiting duplicate continues Scheduler reconciliation only
+through the same deadline plus a fixed 0.5-second closure grace, so it can
+close a cancelled owner's fenced occurrence without invoking its connector.
+Concurrent and restarted duplicate admission returns the one persisted receipt.
+No in-process coroutine, callback task, daemon thread, or global connector slot
+survives closure. Every transferred handle is closed even when its Scheduler
+occurrence was already resolved or admission fails before dispatch; an isolation
+process that cannot be proven terminated fails closed instead of publishing a
+receipt.
+This seam is provider-neutral and establishes no Cloud consumer, device runtime,
+or new product-topology edge. Rollback removes connector supply and returns all
+admissions to the unchanged not-connected receipt.
+
 Supervisor hot-reload ownership is request-and-response bound. A connection
 pins a non-terminal job after its own successful submit, and also after a
 successful `flyto_coding_audit` request that explicitly carries

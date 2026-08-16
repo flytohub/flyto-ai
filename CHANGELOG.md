@@ -38,6 +38,27 @@
   and translated plan `impact`, `structure`, and `call_hierarchy` calls now
   inherit the host-owned workspace project just like search. A conflicting
   project in returned plan evidence is rejected before analysis or editing.
+- Added a provider-neutral trusted connector seam to governed execution-session
+  admission. A host transfers a pre-established one-shot process handle whose
+  trusted async callback receives only a detached bounded prepared result in
+  memory and executes under the existing durable Scheduler
+  one-shot fence. Exact content-free success yields a connected receipt with
+  Scheduler evidence; absent, failed, malformed, exceptional, interrupted, and
+  unknown outcomes fail closed without persisting connector identity or prose.
+  Connector await uses one absolute monotonic activation deadline and recomputes
+  remaining time at actual executor entry; zero remaining makes no callback.
+  Admission performs no synchronous process start. Worker readiness,
+  nonblocking request transfer, child-side entry, and result receive share the
+  same deadline. Timeout, owner cancellation, validation failure, exception,
+  and normal return forcibly terminate the non-daemon worker within the fixed
+  closure grace and confirm zero live connector work before returning or closing
+  a stable receipt. Duplicate reconciliation uses the same deadline
+  plus that fixed 0.5-second grace and sleeps between passes.
+  An already-waiting duplicate reconciles a cancelled owner's fenced occurrence
+  to unknown without hanging or invoking another connector. Duplicate and
+  restart admission returns the persisted content-free result and never
+  automatically replays an unknown external outcome. No Cloud consumer or device
+  execution is claimed.
 
 - Repaired the phase-one Capability Card boundary: empty or missing source
   references remain incomplete, host verification is explicit and mandatory,

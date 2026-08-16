@@ -86,6 +86,39 @@ The tool allowlist, lane ordering, transport bounds, receipt contract, and
 fail-closed behavior are unchanged. The complete repository suite, focused
 route regressions, generated reference check, and locked cross-stack dependency
 check passed before release.
+## Governed execution-session connector seam (2026-08-14)
+
+`admit_execution_session` now accepts one keyword-only pre-established,
+one-shot `ExecutionSessionConnector` handle. Its trusted async callback receives
+a fresh detached prepared-session result in its non-daemon worker process and
+runs only through the existing durable Scheduler one-shot occurrence. The
+catalog remains content-free: session/task IDs, request/authority/route/overall
+digests, and the Scheduler result with its own evidence reference. It stores no
+goal, principal, manifests, credentials, callback, or callback identity.
+
+Without a connector the exact prior `execution_not_connected` receipt remains.
+Exact zero-cost, empty success closes `connected`; stable empty failure closes
+blocked. Invalid output and exceptions are content-free failures. Cancellation
+or lost execution authority recovers as `execution_outcome_unknown` and is not
+automatically replayed. Connector process start happens during handle
+construction, before admission. Admission bounds readiness, nonblocking request
+transfer, child-side entry, and result receive to the one absolute deadline; a
+worker stalled before readiness cannot block cancellation or timeout. At that
+deadline, on owner cancellation, validation failure, exception, or normal
+return, the host forcibly terminates that process within the fixed closure grace
+and confirms zero live connector work before returning or closing
+`execution_connector_timeout`. Delayed executor entry recomputes the remaining
+duration and does not call at zero. A duplicate already waiting when its owner
+is cancelled runs Scheduler reconciliation only until the same deadline plus
+0.5 seconds; it never enters its own connector. No in-process callback task,
+daemon thread, or global connector slot survives a return or durable closure.
+Duplicate, concurrent, and restarted admission observes the persisted receipt;
+changed digests conflict. Connector
+input/output mutation cannot change prepared or durable state. Deterministic
+start-stall tests cover timeout and owner cancellation with zero remaining
+connector task, thread, process, or later side effect. This is a provider
+contract only: no Cloud consumer, live account, hardware, or device execution is
+claimed.
 
 ## Host-only coding watchdog and remote dead-man switch (2026-08-12)
 

@@ -203,6 +203,27 @@ Flyto2 Cloud / CLI / MCP client
 - Local or airgapped deployments must be able to replace hosted providers with
   local endpoints or rules-only operation without changing `flyto-core`.
 
+Governed execution-session admission has one provider-neutral host seam. A
+pre-established one-shot trusted connector handle may receive a detached bounded
+prepared session only in its non-daemon worker process, under the durable
+Scheduler one-shot fence. Admission never starts a process. Neither the callback
+nor its identity is request data or durable data. The catalog retains only content-free
+session/task IDs, four digests, and the Scheduler-owned result/evidence
+projection. Exact success is connected; absent, failed, malformed, interrupted,
+or unknown outcomes fail closed, and a possibly entered occurrence is never
+replayed after restart. One monotonic deadline is derived at admission and
+bounds worker readiness, nonblocking transfer, child-side connector entry, and
+result receive; entry recomputes its remainder and zero remainder makes no callback.
+Duplicate reconciliation uses that same deadline with only an additional fixed
+0.5-second closure grace. Every invocation is isolated in a dedicated
+non-daemon child process; timeout and owner cancellation forcibly terminate it
+and confirm zero live connector work before a return or durable receipt closure.
+No global connector slot or detached task remains.
+A waiting duplicate keeps reconciling the durable fence after an owner exits;
+it does not merely poll or invoke another connector. No Cloud consumer or device
+execution is implemented by this edge, so the canonical product topology is
+unchanged.
+
 ## Product-Line Role
 
 - Flyto2 Cloud / Apps / Automation: agent app building, crawler automation,

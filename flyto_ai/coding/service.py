@@ -224,6 +224,11 @@ GENERIC_IMPLEMENTATION_BLOCKER = "implementation_incomplete"
 #: Distinct from any implementer or provider failure: nothing went wrong in the
 #: round, the job simply ran out of the budget the host gave it.
 REWORK_LIMIT_FAILURE_CODE = "rework_limit_reached"
+#: Stable fail-closed settlement for a queued record whose durable Mission item
+#: can no longer be scheduled.  This is distinct from a missing round envelope:
+#: restart reconciliation has proved that the queue authority itself is closed
+#: or absent, so replaying the private request would invent new work.
+MISSION_ITEM_UNAVAILABLE = "mission_item_unavailable"
 #: Blocker codes share the audit finding vocabulary: short, stable, opaque.
 _BLOCKER_CODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{1,63}$")
 #: How one round was executed. Persisted before the implementer is invoked, so
@@ -7983,23 +7988,7 @@ class CodingService:
                         # exited" indistinguishable from "the round died", and
                         # it threw away work nobody had begun.
                         if self._may_execute(record):
-                            projection = self._record_projection(record)
-                            item = (
-                                self._mission.work_item(projection.work_item_id)
-                                if projection is not None else None
-                            )
-                            if item is not None and item.status == MISSION_STATUS_DISPATCHED:
-                                # A process can die after MissionStore commits
-                                # the dispatch but before the coding record is
-                                # advanced from queued.  That is still queued
-                                # work, but the scheduler will not offer it
-                                # again until its now-free execution lease is
-                                # reclaimed.  Use the same proof-based path as
-                                # interrupted running jobs; a live holder is
-                                # never stolen and therefore schedules no pump.
-                                self._reclaim_mission_item(path, record)
-                            else:
-                                self._reclaimed += 1
+                            self._reconcile_queued_job(path, record)
                         continue
                     if record.get("state") in _EXECUTING_JOB_STATES:
                         job_id = str(record.get("job_id") or "")
@@ -8042,6 +8031,94 @@ class CodingService:
         for _ in range(self._reclaimed):
             self._prime_pump()
         self._reclaimed = 0
+
+    def _reconcile_queued_job(
+        self, path: Path, observed: Mapping[str, Any],
+    ) -> None:
+        """Classify one queued record under its round's execution barrier.
+
+        Admission publishes the Mission item before the private record and
+        envelopes, while holding this lease across the whole commit.  Restart
+        must therefore take the lease before trusting either side of that
+        relationship.  A live holder wins without mutation.  Once the lease is
+        ours, the record and item are re-read: ready work is pumped, a stranded
+        dispatch is reclaimed by the kernel, and a closed or absent item makes
+        the queued record terminal.  The latter can never be replayed because
+        its resume authority and exact repository claims are released as part
+        of the same fail-closed settlement.
+        """
+
+        job_id = str(observed.get("job_id") or "")
+        if not _JOB_ID.fullmatch(job_id) or not self._claim_round(job_id):
+            return
+        try:
+            try:
+                record = self._read_json(path)
+            except (OSError, ValueError):
+                return
+            if str(record.get("state") or "") not in _PUMPABLE_JOB_STATES:
+                return
+            projection = self._record_projection(record)
+            item = (
+                self._mission.work_item(projection.work_item_id)
+                if projection is not None else None
+            )
+            if item is not None and item.status == MISSION_STATUS_READY:
+                self._reclaimed += 1
+                return
+            if item is not None and item.status == MISSION_STATUS_DISPATCHED:
+                # The item execution lease is a second, kernel-owned proof.
+                # Reclaim refuses while a live dispatch holder exists.
+                self._reclaim_mission_item(path, record)
+                return
+            self._settle_unavailable_queued_item(path, record, item)
+        finally:
+            # `_update_record_locked` may already have released this lease.
+            # The round token makes this release ABA-safe if a replacement
+            # admission or another operation acquired the job lease meanwhile.
+            self._release_round(job_id)
+
+    def _settle_unavailable_queued_item(
+        self,
+        path: Path,
+        record: Mapping[str, Any],
+        item: Optional[Any],
+    ) -> None:
+        """Fail one queued record whose exact Mission authority cannot run.
+
+        The caller owns the job lease and has re-read both authorities.  Keep
+        the terminal record publication, mission projection, repository-claim
+        release, host-idle release, and private resume cleanup in one bounded
+        operation so no future reconciliation path can release only half of
+        the job.  `_update_record_locked` performs the exact-identity claim
+        release and retains the host lease only when other durable work needs
+        it; the cleanup below removes only this job's resume envelope.
+        """
+
+        job_id = str(record.get("job_id") or "")
+        if not _JOB_ID.fullmatch(job_id):
+            return
+        disposition = (
+            str(item.disposition or DISPOSITION_BLOCKED)
+            if item is not None else DISPOSITION_BLOCKED
+        )
+        mission = record.get("mission")
+        changes: Dict[str, Any] = {
+            "state": CodingJobState.FAILED.value,
+            "failure_code": MISSION_ITEM_UNAVAILABLE,
+            "landable": False,
+        }
+        if isinstance(mission, Mapping):
+            try:
+                changes["mission"] = CodingMissionRuntime.advance(
+                    mission,
+                    status=MISSION_STATUS_CLOSED,
+                    disposition=disposition,
+                )
+            except (TypeError, ValueError):
+                pass
+        self._update_record_locked(path, **changes)
+        self._discard_resume(path.parent.parent.name, job_id)
 
     def _reclaim_mission_item(self, path: Path, record: Mapping[str, Any]) -> None:
         """Return one interrupted job's work item to the queue, on proof.

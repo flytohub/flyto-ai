@@ -65,6 +65,7 @@ from flyto_ai.coding.service import (
     AUTHORITY_MARKER_VERSION,
     MAX_AUTHORITY_MARKER_BYTES,
     EXECUTION_AUTHORITY_UNBOUND,
+    MISSION_ITEM_UNAVAILABLE,
     CodingAuthorityConflict,
     CodingAuthorityUnavailable,
     CodingService,
@@ -2229,6 +2230,79 @@ def test_admission_releases_its_lease_before_any_pump_can_dispatch(
 
 
 @needs_host
+def test_dispatch_waits_behind_a_live_admission_before_accounting_absence(
+    tmp_path: Path,
+) -> None:
+    """A placed item is not orphaned until its admission lease is provably free."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    tenant_ref = CodingService._tenant_ref(_TENANT)
+    job_id = "job_" + "b" * 24
+    placed = CodingMissionRuntime(state, worker="admitter").admit(
+        tenant_ref=tenant_ref, job_id=job_id, workspace_sha256="b" * 64,
+        envelope=None, message="admission still committing",
+    )
+
+    import fcntl
+
+    lease_dir = state / "locks" / "jobs"
+    lease_dir.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(lease_dir / (job_id + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    service = _service(state, workspace, provider=_Provider(tag="barrier"))
+    try:
+        assert service._dispatch_once() == "foreign"
+        collided = _store(state).get_work_item(placed.work_item_id)
+        assert collided.status == STATUS_READY
+        assert collided.attempts == 1 and collided.closure is None
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+        descriptor = -1
+        assert service._dispatch_once() == "ran"
+        accounted = _store(state).get_work_item(placed.work_item_id)
+        assert accounted.status == STATUS_CLOSED
+        assert accounted.disposition == DISPOSITION_BLOCKED
+        assert accounted.attempts == 2
+    finally:
+        if descriptor >= 0:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+        service.close()
+
+
+@needs_host
+def test_missing_round_envelope_is_accounted_only_after_the_round_lease(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    provider = _Provider(tag="missing-envelope")
+    service = _service(state, workspace, provider=provider)
+    service._schedule_pump = lambda: None  # type: ignore[method-assign]
+    try:
+        receipt = service.submit(_TENANT, "key-1", _request(workspace))
+        projection = CodingMissionProjection.from_mapping(receipt.mission or {})
+        service._discard_path(
+            service._round_path(CodingService._tenant_ref(_TENANT), projection.work_item_id),
+        )
+        assert service._dispatch_once() == "ran"
+        settled = service.get(_TENANT, receipt.job_id)
+        assert settled.state is CodingJobState.FAILED
+        assert settled.failure_code == "round_envelope_unbound"
+        item = _store(state).get_work_item(projection.work_item_id)
+        assert item.status == STATUS_CLOSED and item.disposition == DISPOSITION_BLOCKED
+        assert provider.rounds == 0
+    finally:
+        service.close()
+
+
+@needs_host
 def test_a_stale_round_finally_cannot_release_a_reacquired_job_lease(
     tmp_path: Path,
 ) -> None:
@@ -2345,6 +2419,116 @@ def test_a_different_startup_authority_never_executes_another_worker_job(
 # --------------------------------------------------------------------------
 # restart
 # --------------------------------------------------------------------------
+
+
+@needs_host
+@pytest.mark.parametrize("item_state", ["closed", "missing"])
+def test_restart_terminalizes_a_queued_job_whose_mission_item_cannot_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, item_state: str,
+) -> None:
+    """Closed/absent queue authority releases the old job without replay."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    provider = _Provider(tag="must-not-replay")
+    owner = _service(
+        state, workspace, provider=provider, require_codex_audit=True,
+    )
+    owner._schedule_pump = lambda: None  # type: ignore[method-assign]
+    receipt = owner.submit(_TENANT, "old", _request(workspace))
+    projection = CodingMissionProjection.from_mapping(receipt.mission or {})
+    job_path = (
+        state / "tenants" / CodingService._tenant_ref(_TENANT)
+        / "jobs" / (receipt.job_id + ".json")
+    )
+    if item_state == "closed":
+        with owner._mission.dispatch() as work:
+            assert work is not None and work.work_item_id == projection.work_item_id
+            owner._mission.close_accounted(
+                work,
+                tenant_ref=work.tenant_ref,
+                job_id=work.job_id,
+                mission_id=work.mission_id,
+                work_item_id=work.work_item_id,
+                disposition=DISPOSITION_BLOCKED,
+                rationale="the hostile fixture closed the queued authority",
+                risk="the queued implementation must not be replayed",
+                evidence_refs=("fixture-closed",),
+            )
+    owner.close()
+
+    original_work_item = CodingMissionRuntime.work_item
+    if item_state == "missing":
+        monkeypatch.setattr(CodingMissionRuntime, "work_item", lambda self, item_id: None)
+    restarted = _service(
+        state, workspace, provider=provider, require_codex_audit=True,
+    )
+    if item_state == "missing":
+        monkeypatch.setattr(CodingMissionRuntime, "work_item", original_work_item)
+    try:
+        settled = restarted.get(_TENANT, receipt.job_id)
+        assert settled.state is CodingJobState.FAILED
+        assert settled.failure_code == MISSION_ITEM_UNAVAILABLE
+        failed_projection = CodingMissionProjection.from_mapping(settled.mission or {})
+        assert failed_projection.status == MISSION_STATUS_CLOSED
+        assert provider.rounds == 0
+        assert not restarted._resume_path(
+            CodingService._tenant_ref(_TENANT), receipt.job_id,
+        ).exists()
+        assert not restarted._workspace_claim_path(str(workspace)).exists()
+        assert restarted._workspace_root_authority is None
+
+        # The exact old claim is gone: a replacement admission in the same
+        # workspace can acquire a fresh claim without replaying the old round.
+        # Exercise the wired queue, not merely the claim writer: an identical
+        # admission is an idempotent replay of the replacement, and its one
+        # Mission item reaches the provider exactly once.
+        restarted._schedule_pump = lambda: None  # type: ignore[method-assign]
+        replacement = restarted.submit(_TENANT, "replacement", _request(workspace))
+        replay = restarted.submit(_TENANT, "replacement", _request(workspace))
+        assert replacement.job_id != receipt.job_id
+        assert replay.job_id == replacement.job_id
+        claim = json.loads(
+            restarted._workspace_claim_path(str(workspace)).read_text(encoding="utf-8"),
+        )
+        assert claim["job_id"] == replacement.job_id
+        assert restarted._workspace_root_authority is not None
+        assert restarted._workspace_root_authority.held_digests == [
+            restarted._workspace_digest(str(workspace)),
+        ]
+        assert json.loads(job_path.read_text(encoding="utf-8"))["state"] == "failed"
+
+        assert restarted._dispatch_once() == "ran"
+        if item_state == "missing":
+            # The hostile lookup made the item absent only to reconciliation;
+            # its real ready row remains in MissionStore. The ordinary wired
+            # dispatcher accounts that now-terminal old row without invoking
+            # the provider, then the replacement is next in queue.
+            accounted_old_item = _store(state).get_work_item(
+                projection.work_item_id,
+            )
+            assert accounted_old_item.status == STATUS_CLOSED
+            assert accounted_old_item.disposition == DISPOSITION_DEFERRED
+            assert provider.rounds == 0
+            assert restarted._dispatch_once() == "ran"
+        replacement_settled = _wait(restarted, replacement.job_id)
+        assert replacement_settled.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert provider.rounds == 1
+        replacement_projection = CodingMissionProjection.from_mapping(
+            replacement_settled.mission or {},
+        )
+        replacement_item = _store(state).get_work_item(
+            replacement_projection.work_item_id,
+        )
+        assert replacement_item.status == STATUS_CLOSED
+        assert replacement_item.attempts == 1
+        assert restarted._dispatch_once() != "ran"
+        assert provider.rounds == 1
+        assert restarted.get(_TENANT, receipt.job_id).state is CodingJobState.FAILED
+    finally:
+        restarted.close()
 
 
 @needs_host

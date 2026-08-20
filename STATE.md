@@ -2,6 +2,22 @@
 
 Last updated: 2026-08-20
 
+## Codex JSONL frame diagnostics and bound (2026-08-20)
+
+The Codex implementation adapter now accepts one valid JSONL event up to 2 MiB
+while retaining the separate 8 MiB total stdout ceiling. This closes a proved
+false failure where one valid 1,048,577-byte tool-result event appeared inside
+a valid 1,448,355-byte completed stream. `coding.round` records content-free
+byte counts plus malformed-JSON, malformed-shape, oversized-event,
+stream-overflow, invalid-output, and timeout indicators. It never records the
+offending frame or provider content.
+
+Focused regression coverage accepts a valid event between 1 MiB and 2 MiB and
+continues to reject malformed JSON, a single event over its configured bound,
+and a total stream over its independent bound. The source digest inventory is
+self-covering, allowing a long-lived supervisor with the older inventory to
+observe the inventory expansion at its next safe worker boundary.
+
 ## Codex adapter hot-reload coverage (2026-08-20)
 
 `current_service_build_id()` now includes both implementation adapters. A

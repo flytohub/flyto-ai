@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Raised the Codex CLI adapter's bounded per-event JSONL ceiling from 1 MiB to
+  2 MiB after a valid tool-result frame exceeded the former limit. The
+  independent 8 MiB total-stream ceiling is unchanged. Secret-free round
+  evidence now distinguishes malformed JSON, malformed event shape,
+  per-event overflow, total-stream overflow, and timeout, so a closed provider
+  failure is diagnosable without retaining provider content.
+
 - Fixed coding-worker hot reload after Codex CLI adapter changes. The bounded
   service build digest now covers both implementer adapters, so a long-lived
   MCP supervisor cannot keep spawning an old Codex adapter after its source is

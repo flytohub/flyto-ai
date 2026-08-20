@@ -2424,28 +2424,28 @@ Return the bounded source set imported by a coding worker.
 ### `current_service_build_id` (public)
 
 `current_service_build_id() -> str`
-Source: [`flyto_ai/coding/route_status.py:119`](../../../flyto_ai/coding/route_status.py#L119)
+Source: [`flyto_ai/coding/route_status.py:124`](../../../flyto_ai/coding/route_status.py#L124)
 
 Compute the coding control plane digest from the files on disk now.
 
 ### `service_build_id` (public)
 
 `service_build_id() -> str`
-Source: [`flyto_ai/coding/route_status.py:146`](../../../flyto_ai/coding/route_status.py#L146)
+Source: [`flyto_ai/coding/route_status.py:151`](../../../flyto_ai/coding/route_status.py#L151)
 
 Return the immutable startup digest of this coding control plane.
 
 ### `service_version` (public)
 
 `service_version() -> str`
-Source: [`flyto_ai/coding/route_status.py:162`](../../../flyto_ai/coding/route_status.py#L162)
+Source: [`flyto_ai/coding/route_status.py:167`](../../../flyto_ai/coding/route_status.py#L167)
 
 Return the human-readable package version that owns this instance.
 
 ### `_bounded_text` (internal)
 
 `_bounded_text(value: Any, pattern: 're.Pattern[str]', limit: int = 128) -> str`
-Source: [`flyto_ai/coding/route_status.py:172`](../../../flyto_ai/coding/route_status.py#L172)
+Source: [`flyto_ai/coding/route_status.py:177`](../../../flyto_ai/coding/route_status.py#L177)
 
 Accept only text matching one closed pattern; anything else becomes ''.
 
@@ -2453,56 +2453,56 @@ Accept only text matching one closed pattern; anything else becomes ''.
 
 `class CodingRouteStatus`
 
-Source: [`flyto_ai/coding/route_status.py:182`](../../../flyto_ai/coding/route_status.py#L182)
+Source: [`flyto_ai/coding/route_status.py:187`](../../../flyto_ai/coding/route_status.py#L187)
 
 One instance's latest bounded status.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingRouteStatus`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:219`](../../../flyto_ai/coding/route_status.py#L219) |
-| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `CodingRouteStatus`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:286`](../../../flyto_ai/coding/route_status.py#L286) |
-| `from_mapping(value: Mapping[str, Any]) -> 'CodingRouteStatus'` | public | Read one persisted status back; unknown fields fail closed. | [`flyto_ai/coding/route_status.py:317`](../../../flyto_ai/coding/route_status.py#L317) |
-| `index_entry() -> Dict[str, Any]` | public | Project the compact row the shared index keeps for this instance. | [`flyto_ai/coding/route_status.py:327`](../../../flyto_ai/coding/route_status.py#L327) |
+| `__post_init__() -> None` | internal | Internal `__post_init__` implementation on `CodingRouteStatus`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:224`](../../../flyto_ai/coding/route_status.py#L224) |
+| `to_mapping() -> Dict[str, Any]` | public | Public `to_mapping` implementation on `CodingRouteStatus`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:291`](../../../flyto_ai/coding/route_status.py#L291) |
+| `from_mapping(value: Mapping[str, Any]) -> 'CodingRouteStatus'` | public | Read one persisted status back; unknown fields fail closed. | [`flyto_ai/coding/route_status.py:322`](../../../flyto_ai/coding/route_status.py#L322) |
+| `index_entry() -> Dict[str, Any]` | public | Project the compact row the shared index keeps for this instance. | [`flyto_ai/coding/route_status.py:332`](../../../flyto_ai/coding/route_status.py#L332) |
 
 ### `project_index_row` (public)
 
 `project_index_row(value: Any) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/coding/route_status.py:364`](../../../flyto_ai/coding/route_status.py#L364)
+Source: [`flyto_ai/coding/route_status.py:369`](../../../flyto_ai/coding/route_status.py#L369)
 
 Return one validated index row, or `None` when it cannot be trusted.
 
 ### `process_alive` (public)
 
 `process_alive(process_id: int) -> Optional[bool]`
-Source: [`flyto_ai/coding/route_status.py:414`](../../../flyto_ai/coding/route_status.py#L414)
+Source: [`flyto_ai/coding/route_status.py:419`](../../../flyto_ai/coding/route_status.py#L419)
 
 Best-effort local liveness for one recorded pid.
 
 ### `lease_alive` (public)
 
 `lease_alive(lease_path: Path) -> Optional[bool]`
-Source: [`flyto_ai/coding/route_status.py:436`](../../../flyto_ai/coding/route_status.py#L436)
+Source: [`flyto_ai/coding/route_status.py:441`](../../../flyto_ai/coding/route_status.py#L441)
 
 Decide liveness from an instance's lease file, immune to pid reuse.
 
 ### `lease_collectable` (public)
 
 `lease_collectable(lease_path: Path) -> bool`
-Source: [`flyto_ai/coding/route_status.py:485`](../../../flyto_ai/coding/route_status.py#L485)
+Source: [`flyto_ai/coding/route_status.py:490`](../../../flyto_ai/coding/route_status.py#L490)
 
 Whether an instance's files may be removed by deterministic pruning.
 
 ### `route_progress` (public)
 
 `route_progress(record: Mapping[str, Any]) -> Tuple[str, str]`
-Source: [`flyto_ai/coding/route_status.py:504`](../../../flyto_ai/coding/route_status.py#L504)
+Source: [`flyto_ai/coding/route_status.py:509`](../../../flyto_ai/coding/route_status.py#L509)
 
 Derive `(lane, action)` for one job record without trusting prose.
 
 ### `route_mode` (public)
 
 `route_mode(record: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/coding/route_status.py:540`](../../../flyto_ai/coding/route_status.py#L540)
+Source: [`flyto_ai/coding/route_status.py:545`](../../../flyto_ai/coding/route_status.py#L545)
 
 Return the execution mode this record proves, defaulting to strict.
 
@@ -2510,36 +2510,36 @@ Return the execution mode this record proves, defaulting to strict.
 
 `class RouteStatusPublisher`
 
-Source: [`flyto_ai/coding/route_status.py:556`](../../../flyto_ai/coding/route_status.py#L556)
+Source: [`flyto_ai/coding/route_status.py:561`](../../../flyto_ai/coding/route_status.py#L561)
 
 Own one instance's status file and its row in the bounded shared index.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(state_root: Path, *, instance_id: str, started_at: Optional[float] = None, build_id: str = '', version: str = '', process_id: Optional[int] = None) -> None` | internal | Internal `__init__` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:564`](../../../flyto_ai/coding/route_status.py#L564) |
-| `index_path() -> Path` | public | Public `index_path` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:585`](../../../flyto_ai/coding/route_status.py#L585) |
-| `instance_path(instance_id: str = '') -> Path` | public | Public `instance_path` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:588`](../../../flyto_ai/coding/route_status.py#L588) |
-| `lease_path(instance_id: str = '') -> Path` | public | Public `lease_path` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:591`](../../../flyto_ai/coding/route_status.py#L591) |
-| `acquire_lease() -> bool` | public | Take this instance's crash-released liveness lease. | [`flyto_ai/coding/route_status.py:594`](../../../flyto_ai/coding/route_status.py#L594) |
-| `release_lease() -> None` | public | Drop the liveness lease on graceful shutdown. | [`flyto_ai/coding/route_status.py:626`](../../../flyto_ai/coding/route_status.py#L626) |
-| `publish(status: CodingRouteStatus) -> CodingRouteStatus` | public | Write this instance's status, then refresh the bounded index. | [`flyto_ai/coding/route_status.py:645`](../../../flyto_ai/coding/route_status.py#L645) |
-| `read_index() -> Dict[str, Any]` | public | Read the shared index through its closed schema. | [`flyto_ai/coding/route_status.py:654`](../../../flyto_ai/coding/route_status.py#L654) |
-| `read_instance(instance_id: str) -> Optional[CodingRouteStatus]` | public | Read one instance's status file through the closed schema. | [`flyto_ai/coding/route_status.py:686`](../../../flyto_ai/coding/route_status.py#L686) |
-| `inspect(*, now: Optional[float] = None) -> List[Dict[str, Any]]` | public | Return every known instance annotated for local inspection. | [`flyto_ai/coding/route_status.py:704`](../../../flyto_ai/coding/route_status.py#L704) |
-| `_instance_alive(entry: Mapping[str, Any]) -> Optional[bool]` | internal | Decide one row's liveness without ever trusting a bare pid. | [`flyto_ai/coding/route_status.py:740`](../../../flyto_ai/coding/route_status.py#L740) |
-| `_refresh_index(status: CodingRouteStatus) -> None` | internal | Replace this instance's row, then prune stale and excess instances. | [`flyto_ai/coding/route_status.py:771`](../../../flyto_ai/coding/route_status.py#L771) |
+| `__init__(state_root: Path, *, instance_id: str, started_at: Optional[float] = None, build_id: str = '', version: str = '', process_id: Optional[int] = None) -> None` | internal | Internal `__init__` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:569`](../../../flyto_ai/coding/route_status.py#L569) |
+| `index_path() -> Path` | public | Public `index_path` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:590`](../../../flyto_ai/coding/route_status.py#L590) |
+| `instance_path(instance_id: str = '') -> Path` | public | Public `instance_path` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:593`](../../../flyto_ai/coding/route_status.py#L593) |
+| `lease_path(instance_id: str = '') -> Path` | public | Public `lease_path` implementation on `RouteStatusPublisher`; the linked source is authoritative. | [`flyto_ai/coding/route_status.py:596`](../../../flyto_ai/coding/route_status.py#L596) |
+| `acquire_lease() -> bool` | public | Take this instance's crash-released liveness lease. | [`flyto_ai/coding/route_status.py:599`](../../../flyto_ai/coding/route_status.py#L599) |
+| `release_lease() -> None` | public | Drop the liveness lease on graceful shutdown. | [`flyto_ai/coding/route_status.py:631`](../../../flyto_ai/coding/route_status.py#L631) |
+| `publish(status: CodingRouteStatus) -> CodingRouteStatus` | public | Write this instance's status, then refresh the bounded index. | [`flyto_ai/coding/route_status.py:650`](../../../flyto_ai/coding/route_status.py#L650) |
+| `read_index() -> Dict[str, Any]` | public | Read the shared index through its closed schema. | [`flyto_ai/coding/route_status.py:659`](../../../flyto_ai/coding/route_status.py#L659) |
+| `read_instance(instance_id: str) -> Optional[CodingRouteStatus]` | public | Read one instance's status file through the closed schema. | [`flyto_ai/coding/route_status.py:691`](../../../flyto_ai/coding/route_status.py#L691) |
+| `inspect(*, now: Optional[float] = None) -> List[Dict[str, Any]]` | public | Return every known instance annotated for local inspection. | [`flyto_ai/coding/route_status.py:709`](../../../flyto_ai/coding/route_status.py#L709) |
+| `_instance_alive(entry: Mapping[str, Any]) -> Optional[bool]` | internal | Decide one row's liveness without ever trusting a bare pid. | [`flyto_ai/coding/route_status.py:745`](../../../flyto_ai/coding/route_status.py#L745) |
+| `_refresh_index(status: CodingRouteStatus) -> None` | internal | Replace this instance's row, then prune stale and excess instances. | [`flyto_ai/coding/route_status.py:776`](../../../flyto_ai/coding/route_status.py#L776) |
 
 ### `_row_timestamp` (internal)
 
 `_row_timestamp(row: Mapping[str, Any]) -> float`
-Source: [`flyto_ai/coding/route_status.py:814`](../../../flyto_ai/coding/route_status.py#L814)
+Source: [`flyto_ai/coding/route_status.py:819`](../../../flyto_ai/coding/route_status.py#L819)
 
 Internal `_row_timestamp` implementation on this module; the linked source is authoritative.
 
 ### `_atomic_write_json` (internal)
 
 `_atomic_write_json(path: Path, value: Mapping[str, Any]) -> None`
-Source: [`flyto_ai/coding/route_status.py:821`](../../../flyto_ai/coding/route_status.py#L821)
+Source: [`flyto_ai/coding/route_status.py:826`](../../../flyto_ai/coding/route_status.py#L826)
 
 Replace one status file atomically at mode 0600.
 

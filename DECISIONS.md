@@ -1,5 +1,23 @@
 # Decisions
 
+## 2026-08-20: Codex JSONL has separate per-frame and total-stream bounds
+
+Decision: accept one valid Codex CLI JSONL event up to 2 MiB while retaining
+the independent 8 MiB bound for the whole stdout stream. Record only bounded,
+content-free protocol counters and sizes in `coding.round` evidence.
+
+Reason: a legitimate tool-result event reached 1,048,577 bytes after JSON
+encoding and was rejected by the former 1 MiB frame bound even though the
+complete 1,448,355-byte stream was valid, completed, and far below its total
+ceiling. A 2 MiB event ceiling accepts that proved protocol shape without
+turning the 8 MiB stream budget into one unbounded frame.
+
+Boundary: malformed JSON or event shape, an event over 2 MiB, a stream over
+8 MiB, timeout, and missing completion still fail closed. Evidence records
+counts, byte sizes, and Booleans only; it stores no event body, prompt, path,
+error text, or secret. The route-status source inventory remains self-covered
+so an inventory expansion changes the digest observed by an older supervisor.
+
 ## 2026-08-20: The service build digest covers every implementer adapter
 
 Decision: the coding service build identity includes both

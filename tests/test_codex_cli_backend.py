@@ -39,6 +39,10 @@ def _fake_codex(tmp_path: Path) -> Path:
         "    print(json.dumps({'type': 'item.completed', 'item': {\n"
         "        'type': 'agent_message', 'text': 'x' * 512,\n"
         "    }}), flush=True)\n"
+        "if 'LARGE_VALID_OUTPUT' in prompt:\n"
+        "    print(json.dumps({'type': 'item.completed', 'item': {\n"
+        "        'type': 'agent_message', 'text': 'x' * (1024 * 1024 + 1),\n"
+        "    }}), flush=True)\n"
         "if 'TIMEOUT' in prompt:\n"
         "    time.sleep(2)\n"
         "if 'AUTH_FAIL' in prompt:\n"
@@ -327,7 +331,7 @@ def test_invalid_or_oversized_jsonl_never_becomes_success(
         case = tmp_path / "case-{}".format(index)
         case.mkdir()
         workspace = _workspace(case)
-        agent, _store = _agent(case, executable)
+        agent, store = _agent(case, executable)
         monkeypatch.setattr(codex_cli, "MAX_STREAM_BYTES", limit)
         result = asyncio.run(agent.run(CodingTaskRequest(
             message=message,
@@ -335,6 +339,80 @@ def test_invalid_or_oversized_jsonl_never_becomes_success(
         )))
         assert result.ok is False
         assert result.failure_code == "provider_failed"
+        events = [
+            json.loads(line)
+            for line in Path(store.evidence_path(SESSION)).read_text().splitlines()
+        ]
+        round_event = next(event for event in events if event["type"] == "coding.round")
+        evidence = round_event["data"]
+        assert evidence["protocol_invalid_output"] is True
+        assert evidence["turn_completed"] is True
+        assert evidence["timed_out"] is False
+        assert evidence["stdout_bytes"] > 0
+        assert evidence["largest_stdout_event_bytes"] > 0
+        if message == "INVALID_OUTPUT":
+            assert evidence["invalid_json_event_count"] == 1
+            assert evidence["invalid_shape_event_count"] == 0
+            assert evidence["oversized_event_count"] == 0
+            assert evidence["stream_limit_exceeded"] is False
+        else:
+            assert evidence["invalid_json_event_count"] == 0
+            assert evidence["invalid_shape_event_count"] == 0
+            assert evidence["oversized_event_count"] == 0
+            assert evidence["stream_limit_exceeded"] is True
+
+
+def test_an_oversized_single_jsonl_event_never_becomes_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import flyto_ai.agents.codex_cli as codex_cli
+
+    executable = _fake_codex(tmp_path)
+    workspace = _workspace(tmp_path)
+    agent, store = _agent(tmp_path, executable)
+    monkeypatch.setattr(codex_cli, "MAX_EVENT_BYTES", 256)
+
+    result = asyncio.run(agent.run(CodingTaskRequest(
+        message="BIG_OUTPUT",
+        working_dir=str(workspace),
+    )))
+
+    assert result.ok is False
+    assert result.failure_code == "provider_failed"
+    events = [
+        json.loads(line)
+        for line in Path(store.evidence_path(SESSION)).read_text().splitlines()
+    ]
+    round_event = next(event for event in events if event["type"] == "coding.round")
+    evidence = round_event["data"]
+    assert evidence["protocol_invalid_output"] is True
+    assert evidence["oversized_event_count"] == 1
+    assert evidence["stream_limit_exceeded"] is False
+
+
+def test_a_valid_jsonl_event_between_one_and_two_mib_is_accepted(tmp_path: Path) -> None:
+    executable = _fake_codex(tmp_path)
+    workspace = _workspace(tmp_path)
+    agent, store = _agent(tmp_path, executable)
+
+    result = asyncio.run(agent.run(CodingTaskRequest(
+        message="LARGE_VALID_OUTPUT",
+        working_dir=str(workspace),
+    )))
+
+    assert result.ok is True
+    assert result.failure_code is None
+    events = [
+        json.loads(line)
+        for line in Path(store.evidence_path(SESSION)).read_text().splitlines()
+    ]
+    round_event = next(event for event in events if event["type"] == "coding.round")
+    evidence = round_event["data"]
+    assert evidence["protocol_invalid_output"] is False
+    assert evidence["largest_stdout_event_bytes"] > 1024 * 1024
+    assert evidence["oversized_event_count"] == 0
+    assert evidence["stream_limit_exceeded"] is False
 
 
 def test_provider_session_hook_failure_is_terminal(tmp_path: Path) -> None:

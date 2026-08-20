@@ -20,7 +20,11 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 
 DEFAULT_TIMEOUT_SECONDS = 1800
-MAX_EVENT_BYTES = 1024 * 1024
+# A single Codex tool result can legitimately carry a little more than 1 MiB
+# after JSON escaping even when the whole bounded turn is small. Keep the
+# per-event ceiling below the independent 8 MiB stream ceiling, but leave room
+# for that valid protocol frame.
+MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_MESSAGE_CHARS = 2000
 MAX_ERROR_SCAN_CHARS = 4000
@@ -165,6 +169,12 @@ class CodexCliCodingAgent:
             "usage": {},
             "turn_completed": False,
             "invalid_output": False,
+            "stdout_bytes": 0,
+            "largest_stdout_event_bytes": 0,
+            "invalid_json_event_count": 0,
+            "invalid_shape_event_count": 0,
+            "oversized_event_count": 0,
+            "stream_limit_exceeded": False,
             "binding_failed": False,
             "errors": "",
         }
@@ -273,6 +283,20 @@ class CodexCliCodingAgent:
             "files_changed": len(changed),
             "provider_exit_code": returncode,
             "turn_completed": bool(state.get("turn_completed")),
+            "protocol_invalid_output": bool(state.get("invalid_output")),
+            "timed_out": timed_out,
+            "stdout_bytes": int(state.get("stdout_bytes", 0)),
+            "largest_stdout_event_bytes": int(
+                state.get("largest_stdout_event_bytes", 0)
+            ),
+            "invalid_json_event_count": int(
+                state.get("invalid_json_event_count", 0)
+            ),
+            "invalid_shape_event_count": int(
+                state.get("invalid_shape_event_count", 0)
+            ),
+            "oversized_event_count": int(state.get("oversized_event_count", 0)),
+            "stream_limit_exceeded": bool(state.get("stream_limit_exceeded")),
             "completed_with_nonzero_exit": bool(
                 protocol_completed and returncode != 0
             ),
@@ -428,11 +452,17 @@ class CodexCliCodingAgent:
             if not chunk:
                 break
             total += len(chunk)
+            state["stdout_bytes"] = total
             if total > MAX_STREAM_BYTES:
                 state["invalid_output"] = True
+                state["stream_limit_exceeded"] = True
             for byte in chunk:
                 if byte == 10:
                     if not discarding and buffer:
+                        state["largest_stdout_event_bytes"] = max(
+                            int(state.get("largest_stdout_event_bytes", 0)),
+                            len(buffer),
+                        )
                         self._consume_event(
                             bytes(buffer),
                             state,
@@ -446,11 +476,22 @@ class CodexCliCodingAgent:
                     continue
                 if len(buffer) >= MAX_EVENT_BYTES:
                     state["invalid_output"] = True
+                    state["oversized_event_count"] = int(
+                        state.get("oversized_event_count", 0)
+                    ) + 1
+                    state["largest_stdout_event_bytes"] = max(
+                        int(state.get("largest_stdout_event_bytes", 0)),
+                        MAX_EVENT_BYTES + 1,
+                    )
                     buffer.clear()
                     discarding = True
                     continue
                 buffer.append(byte)
         if buffer and not discarding:
+            state["largest_stdout_event_bytes"] = max(
+                int(state.get("largest_stdout_event_bytes", 0)),
+                len(buffer),
+            )
             self._consume_event(
                 bytes(buffer),
                 state,
@@ -482,9 +523,15 @@ class CodexCliCodingAgent:
             event = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             state["invalid_output"] = True
+            state["invalid_json_event_count"] = int(
+                state.get("invalid_json_event_count", 0)
+            ) + 1
             return
         if not isinstance(event, Mapping) or not isinstance(event.get("type"), str):
             state["invalid_output"] = True
+            state["invalid_shape_event_count"] = int(
+                state.get("invalid_shape_event_count", 0)
+            ) + 1
             return
         event_type = event["type"]
         if event_type == "thread.started":

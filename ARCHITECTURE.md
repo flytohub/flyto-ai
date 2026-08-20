@@ -803,6 +803,14 @@ for the rationale and operator semantics.
 
 ## Codex CLI completion boundary
 
+Codex stdout is a bounded JSONL protocol with two independent byte budgets: a
+2 MiB ceiling for any one event and an 8 MiB ceiling for the complete stream.
+The frame ceiling accommodates a proved valid tool result slightly above 1 MiB
+without allowing one frame to consume the whole stream budget. Each
+`coding.round` records only byte counts and content-free counters for invalid
+JSON, invalid event shape, oversized events, total-stream overflow, and
+timeout. It never preserves the raw frame or provider content.
+
 The Codex implementation process has two endings with different authority.
 `turn.completed` is the bounded structured protocol event that closes the
 model turn; process exit is lifecycle evidence for the child. Once the adapter
@@ -826,6 +834,11 @@ adapter drift changes the digest and causes a fresh worker to import the new
 source. The supervisor still preserves non-terminal jobs until their existing
 worker reaches a safe boundary; digest coverage does not authorize interruption
 or migration.
+
+The digest inventory is self-covered through `coding/route_status.py`. An
+older supervisor that does not yet know a newly added source path still sees
+the accompanying change to this already-covered inventory definition, reloads
+at the next safe boundary, and then computes the expanded inventory.
 
 ## Coding continuation boundary
 

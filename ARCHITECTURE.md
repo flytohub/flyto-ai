@@ -819,6 +819,14 @@ completed implementation still must pass Indexer post-validation and the
 independent exact-revision audit before it is landable. No process exit, model
 message, or green repository check can replace those gates.
 
+The long-lived MCP supervisor can enforce this boundary after a source-only
+rollout because the service build digest covers both implementation adapters:
+`agents/claude_code.py` and `agents/codex_cli.py`. At a safe request boundary,
+adapter drift changes the digest and causes a fresh worker to import the new
+source. The supervisor still preserves non-terminal jobs until their existing
+worker reaches a safe boundary; digest coverage does not authorize interruption
+or migration.
+
 ## Coding continuation boundary
 
 An audited repair that fails in Indexer/Blueprint before provider start enters

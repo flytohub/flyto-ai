@@ -801,6 +801,24 @@ This boundary changes no product topology: `flyto-cloud` remains parallel to the
 combined `flyto-code` / `flyto-engine` column. See `DECISIONS.md` (2026-08-10)
 for the rationale and operator semantics.
 
+## Codex CLI completion boundary
+
+The Codex implementation process has two endings with different authority.
+`turn.completed` is the bounded structured protocol event that closes the
+model turn; process exit is lifecycle evidence for the child. Once the adapter
+has received that event with valid JSONL, without stream-limit violation or
+timeout, a later non-zero exit cannot retroactively erase the completed turn.
+The adapter records `provider_exit_code`, `turn_completed`, and
+`completed_with_nonzero_exit` in the secret-free `coding.round` evidence, then
+continues through the same host-owned snapshot attribution and required checks.
+
+This is not a success shortcut. Without a valid completion event, or with
+invalid/oversized output, timeout, session mismatch, unexpected mutation,
+failed checks, or a required but absent change, the round stays failed. A
+completed implementation still must pass Indexer post-validation and the
+independent exact-revision audit before it is landable. No process exit, model
+message, or green repository check can replace those gates.
+
 ## Coding continuation boundary
 
 An audited repair that fails in Indexer/Blueprint before provider start enters

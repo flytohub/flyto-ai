@@ -47,4 +47,9 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # release/v1 (pinned, FLYA-18)
+      # v1.14.2, pinned by commit (FLYA-18). Bumped from ba38be9e because the
+      # twine it bundled (6.1.0) rejects `Metadata-Version: 2.5`, which the
+      # current hatchling emits — so the 0.17.0 upload failed its metadata
+      # check having built cleanly. v1.14.2 bundles twine 7.0.0, verified
+      # against the actual 0.17.0 wheel before this pin was chosen.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

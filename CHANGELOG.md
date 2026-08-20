@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixed the Codex CLI completion boundary. Once the adapter has received a
+  valid `turn.completed` event, with bounded valid JSONL and no timeout, a
+  later non-zero process exit is recorded as teardown evidence instead of
+  discarding an attributable implementation that still passes every
+  host-owned check. Missing completion, malformed or oversized output,
+  timeout, authentication failure, failed checks, and no-change rounds remain
+  closed failures.
+
 - Made Indexer rework amendments execute a proof-bound delta instead of the
   cumulative parent-plus-successor plan. Flyto2 AI now recomputes the versioned
   parent/content/entry digests and ids, validates complete chain linkage, the

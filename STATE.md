@@ -1,6 +1,18 @@
 # State
 
-Last updated: 2026-08-14
+Last updated: 2026-08-20
+
+## Codex CLI completion evidence (2026-08-20)
+
+The Codex implementation adapter now treats the bounded protocol terminal
+event, not later process teardown, as the model-turn completion authority. A
+valid `turn.completed` with no malformed/oversized output and no timeout may
+proceed to the existing host snapshots and required checks even when the CLI
+then exits non-zero. The `coding.round` evidence retains the exit code and a
+`completed_with_nonzero_exit` flag. Missing completion, invalid output,
+timeout, failed checks, and absent attributable changes retain their existing
+fail-closed results. No Indexer, Blueprint, Core, audit, commit, or deployment
+authority changed.
 
 ## Digest-bound amendment delta execution (2026-08-14)
 

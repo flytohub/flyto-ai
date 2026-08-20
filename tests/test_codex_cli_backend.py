@@ -44,6 +44,8 @@ def _fake_codex(tmp_path: Path) -> Path:
         "if 'AUTH_FAIL' in prompt:\n"
         "    print('unauthorized: not logged in', file=sys.stderr, flush=True)\n"
         "    raise SystemExit(1)\n"
+        "if 'EXIT_BEFORE_COMPLETE' in prompt:\n"
+        "    raise SystemExit(1)\n"
         "(root / 'result.txt').write_text('verified\\n', encoding='utf-8')\n"
         "print(json.dumps({'type': 'turn.started'}), flush=True)\n"
         "print(json.dumps({'type': 'item.completed', 'item': {\n"
@@ -51,7 +53,9 @@ def _fake_codex(tmp_path: Path) -> Path:
         "}}), flush=True)\n"
         "print(json.dumps({'type': 'turn.completed', 'usage': {\n"
         "    'input_tokens': 12, 'output_tokens': 3, 'bad-value': 'drop',\n"
-        "}}), flush=True)\n",
+        "}}), flush=True)\n"
+        "if 'EXIT_AFTER_COMPLETE' in prompt:\n"
+        "    raise SystemExit(1)\n",
         encoding="utf-8",
     )
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
@@ -236,6 +240,43 @@ def test_codex_provider_failure_is_closed_and_sanitized(tmp_path: Path) -> None:
     assert result.failure_code == "provider_auth_failed"
     assert "unauthorized" not in result.message.lower()
     assert result.thread_id == SESSION
+
+
+def test_nonzero_exit_after_completed_turn_keeps_host_verified_result(tmp_path: Path) -> None:
+    executable = _fake_codex(tmp_path)
+    workspace = _workspace(tmp_path)
+    agent, store = _agent(tmp_path, executable)
+
+    result = asyncio.run(agent.run(CodingTaskRequest(
+        message="EXIT_AFTER_COMPLETE",
+        working_dir=str(workspace),
+    )))
+
+    assert result.ok is True
+    assert result.failure_code is None
+    assert result.checks and result.checks[0].passed is True
+    events = [
+        json.loads(line)
+        for line in Path(store.evidence_path(SESSION)).read_text().splitlines()
+    ]
+    round_event = next(event for event in events if event["type"] == "coding.round")
+    assert round_event["data"]["provider_exit_code"] == 1
+    assert round_event["data"]["turn_completed"] is True
+    assert round_event["data"]["completed_with_nonzero_exit"] is True
+
+
+def test_nonzero_exit_without_completed_turn_stays_failed(tmp_path: Path) -> None:
+    executable = _fake_codex(tmp_path)
+    workspace = _workspace(tmp_path)
+    agent, _store = _agent(tmp_path, executable)
+
+    result = asyncio.run(agent.run(CodingTaskRequest(
+        message="EXIT_BEFORE_COMPLETE",
+        working_dir=str(workspace),
+    )))
+
+    assert result.ok is False
+    assert result.failure_code == "provider_failed"
 
 
 def test_resume_refuses_a_changed_provider_session(tmp_path: Path) -> None:

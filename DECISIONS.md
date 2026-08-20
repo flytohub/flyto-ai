@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-08-20: A completed Codex protocol turn survives teardown failure
+
+Decision: the Codex CLI adapter accepts the protocol's bounded, valid
+`turn.completed` event as completion of the implementation turn. A non-zero
+process exit that occurs afterward is recorded in `coding.round` evidence but
+does not erase that completion before host snapshots and repository checks run.
+
+Reason: the CLI can finish the model turn, write the complete attributable
+change, and emit its terminal event before a later teardown path exits
+non-zero. Treating both signals as mandatory made a fully produced change with
+all host-owned checks green non-landable while retaining no safe diagnostic.
+The terminal event is already the structured protocol authority; the process
+exit remains useful evidence rather than a second contradictory verdict.
+
+Boundary: missing completion, invalid or oversized JSONL, timeout, session
+mismatch, read-only mutation, failed checks, and no-change rounds still fail
+closed. This does not let checks replace Indexer post-validation or Codex audit,
+and it grants no commit, push, publish, or deployment authority.
+
 ## 2026-08-14 — Amendment contracts prove a bounded delta, not a larger execution budget
 
 Indexer amendments restate the parent execution plan before appending successor

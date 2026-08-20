@@ -252,12 +252,18 @@ class CodexCliCodingAgent:
             return self._failed(session, "thread_binding_failed")
 
         combined_error = "{}\n{}".format(state.get("errors", ""), stderr_text)
-        provider_ok = bool(
-            returncode == 0
-            and state.get("turn_completed")
+        protocol_completed = bool(
+            state.get("turn_completed")
             and not state.get("invalid_output")
             and not timed_out
         )
+        # ``turn.completed`` is the CLI protocol's terminal success event.  A
+        # later process-exit failure can come from teardown after the model has
+        # already finished and the workspace is ready for host verification.
+        # Requiring both signals made those fully completed, independently
+        # checked rounds non-landable.  Missing/invalid completion and timeout
+        # remain fail-closed; the non-zero exit is retained in evidence below.
+        provider_ok = protocol_completed
         provider_failure = ""
         if not provider_ok:
             provider_failure = self._provider_failure_code(combined_error)
@@ -265,6 +271,11 @@ class CodexCliCodingAgent:
             "backend": "codex-cli",
             "attempts": 1,
             "files_changed": len(changed),
+            "provider_exit_code": returncode,
+            "turn_completed": bool(state.get("turn_completed")),
+            "completed_with_nonzero_exit": bool(
+                protocol_completed and returncode != 0
+            ),
         })
 
         try:

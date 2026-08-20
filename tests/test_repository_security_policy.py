@@ -34,7 +34,7 @@ def test_pypi_publish_action_uses_patched_pin():
 
     assert (
         "pypa/gh-action-pypi-publish@"
-        "ba38be9e461d3875417946c167d0b5f3d385a247"
+        "dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
     ) in workflow
 
 
@@ -47,7 +47,7 @@ def test_grype_ignore_is_exactly_scoped_to_patched_action_sha():
                 "vulnerability": "GHSA-vxmw-7h4f-hqxh",
                 "package": {
                     "name": "pypa/gh-action-pypi-publish",
-                    "version": "ba38be9e461d3875417946c167d0b5f3d385a247",
+                    "version": "dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
                     "type": "github-action",
                 },
             }

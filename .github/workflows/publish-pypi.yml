@@ -47,4 +47,11 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # release/v1 (pinned, FLYA-18)
+      # v1.14.2, pinned by commit (FLYA-18). A patch bump from 1.14.1, whose
+      # bundled twine 6.1.0 rejects `Metadata-Version: 2.5` — what the current
+      # hatchling emits — so the 0.17.0 upload failed its metadata check
+      # having built cleanly. 1.14.2 bundles twine 7.0.0, verified against the
+      # actual 0.17.0 wheel before this pin was chosen. Both releases are above
+      # 1.13.0, so the `.grype.yaml` exception for GHSA-vxmw-7h4f-hqxh moves
+      # with the SHA rather than widening.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

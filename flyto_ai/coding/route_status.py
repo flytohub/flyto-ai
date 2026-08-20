@@ -110,6 +110,7 @@ def _service_source_paths() -> Tuple[Path, ...]:
         package_root / "cli.py",
         package_root / "config.py",
         package_root / "agents" / "claude_code.py",
+        package_root / "agents" / "codex_cli.py",
         package_root / "tools" / "core_tools.py",
     ))
     return tuple(sorted(path for path in candidates if path.is_file()))

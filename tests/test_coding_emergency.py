@@ -43,6 +43,8 @@ from flyto_ai.coding.route_status import (
     STATUS_INSTANCE_TTL_SECONDS,
     CodingRouteStatus,
     RouteStatusPublisher,
+    _service_source_paths,
+    current_service_build_id,
     project_index_row,
     route_mode,
     service_build_id,
@@ -524,6 +526,38 @@ def test_route_mode_reads_the_durable_execution_mode_first():
 def test_the_build_id_is_stable_within_one_process():
     assert service_build_id() == service_build_id()
     assert len(service_build_id()) == 32
+
+
+def test_the_build_id_covers_both_coding_implementer_adapters():
+    paths = {path.as_posix() for path in _service_source_paths()}
+    assert any(path.endswith("/agents/claude_code.py") for path in paths)
+    assert any(path.endswith("/agents/codex_cli.py") for path in paths)
+
+
+def test_the_current_build_id_changes_with_a_covered_source(
+    monkeypatch,
+):
+    import flyto_ai.coding.route_status as route_status_module
+
+    payload = [b"before\n"]
+
+    class CoveredSource:
+        def relative_to(self, _package_root):
+            return Path("agents/codex_cli.py")
+
+        def read_bytes(self):
+            return payload[0]
+
+    monkeypatch.setattr(
+        route_status_module,
+        "_service_source_paths",
+        lambda: (CoveredSource(),),
+    )
+
+    before = current_service_build_id()
+    payload[0] = b"after\n"
+
+    assert current_service_build_id() != before
 
 
 def test_a_changed_source_build_blocks_new_jobs_before_mutation(

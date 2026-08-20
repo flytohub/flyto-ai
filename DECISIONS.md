@@ -1,5 +1,23 @@
 # Decisions
 
+## 2026-08-20: The service build digest covers every implementer adapter
+
+Decision: the coding service build identity includes both
+`agents/claude_code.py` and `agents/codex_cli.py`, in addition to the bounded
+coding, provider, configuration, and Core-adapter source set it already
+covered.
+
+Reason: the MCP supervisor reloads a worker only when this digest changes. A
+Codex adapter repair that was absent from the digest left the reader and live
+worker claiming the same build while the worker still held the old imported
+module. A source repair therefore merged correctly but could not become active
+without restarting the host process.
+
+Boundary: this changes reload detection only. It does not alter job ownership,
+safe-boundary draining, backend selection, audit authority, or any failure
+gate. Regression coverage names both implementer adapters and proves covered
+source bytes change the computed build identity.
+
 ## 2026-08-20: A completed Codex protocol turn survives teardown failure
 
 Decision: the Codex CLI adapter accepts the protocol's bounded, valid

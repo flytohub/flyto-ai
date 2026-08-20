@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed coding-worker hot reload after Codex CLI adapter changes. The bounded
+  service build digest now covers both implementer adapters, so a long-lived
+  MCP supervisor cannot keep spawning an old Codex adapter after its source is
+  repaired.
+
 - Fixed the Codex CLI completion boundary. Once the adapter has received a
   valid `turn.completed` event, with bounded valid JSONL and no timeout, a
   later non-zero process exit is recorded as teardown evidence instead of

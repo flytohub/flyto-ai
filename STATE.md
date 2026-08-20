@@ -2,6 +2,15 @@
 
 Last updated: 2026-08-20
 
+## Codex adapter hot-reload coverage (2026-08-20)
+
+`current_service_build_id()` now includes both implementation adapters. A
+change under `agents/codex_cli.py` therefore marks an existing supervised
+worker stale and causes the ordinary safe-boundary reload before a later job;
+previously only the Claude adapter participated in that digest. This restores
+the documented source-only rollout behavior without expanding reload,
+execution, audit, commit, or deployment authority.
+
 ## Codex CLI completion evidence (2026-08-20)
 
 The Codex implementation adapter now treats the bounded protocol terminal

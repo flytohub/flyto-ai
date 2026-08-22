@@ -8,7 +8,12 @@ import argparse
 import asyncio
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Mapping
+
+from flyto_ai.capability_router import (
+    CapabilityRoutingError,
+    prepare_planner_request,
+)
 
 from flyto_ai.providers.ollama import (
     OllamaProvider,
@@ -22,6 +27,42 @@ from flyto_ai.robotics_planning import (
 
 
 PlannerCallable = Callable[[object], Any]
+PlannerPreparer = Callable[..., Awaitable[dict[str, Any]]]
+
+
+class GovernedRoboticsPlanner:
+    """Apply Flyto2 discovery before any robotics provider can see a request.
+
+    The Robotics caller supplies its local, executable capability catalog.  AI
+    narrows that catalog through the trusted Blueprint/Core discovery bridges;
+    it never widens the caller's execution authority.  Keeping this composition
+    in the host adapter means a production entry point cannot accidentally call
+    the model-facing service with an unprepared request.
+    """
+
+    def __init__(
+        self,
+        service: RoboticsPlanningService,
+        *,
+        prepare: PlannerPreparer = prepare_planner_request,
+    ) -> None:
+        self._service = service
+        self._prepare = prepare
+
+    async def plan(self, raw_request: object) -> dict[str, Any]:
+        if not isinstance(raw_request, Mapping):
+            raise RoboticsPlanningError("planner request must be an object")
+        try:
+            prepared = await self._prepare(
+                raw_request,
+                require_goal_frame=True,
+                require_discovery=True,
+            )
+        except CapabilityRoutingError as exc:
+            raise RoboticsPlanningError(
+                f"capability routing rejected the planner request: {exc}"
+            ) from exc
+        return await self._service.plan(prepared)
 
 
 class RoboticsPlannerHTTPServer(ThreadingHTTPServer):
@@ -137,7 +178,8 @@ def build_server(
         model=model.replace(":", "-"),
         timeout_seconds=timeout_seconds,
     )
-    return RoboticsPlannerHTTPServer((host, port), service.plan)
+    governed = GovernedRoboticsPlanner(service)
+    return RoboticsPlannerHTTPServer((host, port), governed.plan)
 
 
 def main() -> None:

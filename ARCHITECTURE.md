@@ -651,7 +651,9 @@ reason class, never raw provider error text.
 
 ```text
 Flyto2 Robotics routed request
-  -> validate request size, shortlist, capabilities, locations, routes
+  -> flyto.goal-frame.v1 normalization
+  -> required Blueprint reuse + Core capability discovery
+  -> validate request size, narrowed shortlist, capabilities, locations, routes
   -> compile provider-native JSON Schema
   -> structured model completion
   -> independent plan/safety/route validation
@@ -670,7 +672,10 @@ Flyto2 Robotics routed request
 - Provider validation is not execution authorization. Flyto2 Robotics verifies
   the hashes, route, policy, and executable plan again before movement.
 - `robotics_planner_server.py` is a loopback development adapter, not a public
-  authenticated service. It suppresses prompt-bearing access logs and bounds
+  authenticated service. Its host composition always calls
+  `prepare_planner_request(require_goal_frame=True, require_discovery=True)`
+  before the provider-facing planning service; discovery failure stops before
+  provider invocation. It suppresses prompt-bearing access logs and bounds
   request, response, timeout, and error detail sizes.
 
 ## Coding mission and state-root authority boundary
@@ -803,6 +808,14 @@ for the rationale and operator semantics.
 
 ## Codex CLI completion boundary
 
+Codex stdout is a bounded JSONL protocol with two independent byte budgets: a
+2 MiB ceiling for any one event and an 8 MiB ceiling for the complete stream.
+The frame ceiling accommodates a proved valid tool result slightly above 1 MiB
+without allowing one frame to consume the whole stream budget. Each
+`coding.round` records only byte counts and content-free counters for invalid
+JSON, invalid event shape, oversized events, total-stream overflow, and
+timeout. It never preserves the raw frame or provider content.
+
 The Codex implementation process has two endings with different authority.
 `turn.completed` is the bounded structured protocol event that closes the
 model turn; process exit is lifecycle evidence for the child. Once the adapter
@@ -826,6 +839,11 @@ adapter drift changes the digest and causes a fresh worker to import the new
 source. The supervisor still preserves non-terminal jobs until their existing
 worker reaches a safe boundary; digest coverage does not authorize interruption
 or migration.
+
+The digest inventory is self-covered through `coding/route_status.py`. An
+older supervisor that does not yet know a newly added source path still sees
+the accompanying change to this already-covered inventory definition, reloads
+at the next safe boundary, and then computes the expanded inventory.
 
 ## Coding continuation boundary
 

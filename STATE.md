@@ -1,6 +1,37 @@
 # State
 
-Last updated: 2026-08-20
+Last updated: 2026-08-22
+
+## Governed Robotics planner entry (2026-08-22)
+
+The loopback Robotics planner server no longer calls the provider-facing
+planning service directly. `GovernedRoboticsPlanner` first requires
+`flyto.goal-frame.v1` normalization plus Blueprint reuse and Core capability
+discovery through `prepare_planner_request`; a routing refusal ends before any
+provider call. The Robotics caller's local executable catalog remains the
+authority ceiling, and Flyto2 Robotics still revalidates the returned plan
+before motion.
+
+Focused planner, routing, planning, and Blueprint closed-loop coverage passes
+146 tests. Strict Indexer verification passes 18/18. This is a local contract
+closure only: no hardware, deployment, publication, or governed
+four-repository stack release is claimed.
+
+## Codex JSONL frame diagnostics and bound (2026-08-20)
+
+The Codex implementation adapter now accepts one valid JSONL event up to 2 MiB
+while retaining the separate 8 MiB total stdout ceiling. This closes a proved
+false failure where one valid 1,048,577-byte tool-result event appeared inside
+a valid 1,448,355-byte completed stream. `coding.round` records content-free
+byte counts plus malformed-JSON, malformed-shape, oversized-event,
+stream-overflow, invalid-output, and timeout indicators. It never records the
+offending frame or provider content.
+
+Focused regression coverage accepts a valid event between 1 MiB and 2 MiB and
+continues to reject malformed JSON, a single event over its configured bound,
+and a total stream over its independent bound. The source digest inventory is
+self-covering, allowing a long-lived supervisor with the older inventory to
+observe the inventory expansion at its next safe worker boundary.
 
 ## Codex adapter hot-reload coverage (2026-08-20)
 

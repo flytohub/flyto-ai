@@ -1,5 +1,41 @@
 # Decisions
 
+## 2026-08-22: Every formal Robotics planner entry performs governed discovery
+
+Decision: the host adapter exposed by `robotics_planner_server.py` must require
+goal-frame normalization and Blueprint/Core discovery before invoking
+`RoboticsPlanningService`. Discovery failure is a planning refusal and cannot
+fall through to the provider.
+
+Reason: the lower-level planning service deliberately accepts an already
+routed request so it remains provider-neutral and independently testable. The
+server is the composition root; leaving it wired directly to that service made
+the documented Blueprint/Core route optional in the one runnable planner
+entry. The caller's executable catalog remains the ceiling, so discovery may
+narrow authority but never add motor authority.
+
+Boundary: this changes planning admission only. Cloud still owns Task and
+assignment authority, Robotics validates and executes, and neither a provider
+plan nor a successful action can declare mission completion.
+
+## 2026-08-20: Codex JSONL has separate per-frame and total-stream bounds
+
+Decision: accept one valid Codex CLI JSONL event up to 2 MiB while retaining
+the independent 8 MiB bound for the whole stdout stream. Record only bounded,
+content-free protocol counters and sizes in `coding.round` evidence.
+
+Reason: a legitimate tool-result event reached 1,048,577 bytes after JSON
+encoding and was rejected by the former 1 MiB frame bound even though the
+complete 1,448,355-byte stream was valid, completed, and far below its total
+ceiling. A 2 MiB event ceiling accepts that proved protocol shape without
+turning the 8 MiB stream budget into one unbounded frame.
+
+Boundary: malformed JSON or event shape, an event over 2 MiB, a stream over
+8 MiB, timeout, and missing completion still fail closed. Evidence records
+counts, byte sizes, and Booleans only; it stores no event body, prompt, path,
+error text, or secret. The route-status source inventory remains self-covered
+so an inventory expansion changes the digest observed by an older supervisor.
+
 ## 2026-08-20: The service build digest covers every implementer adapter
 
 Decision: the coding service build identity includes both

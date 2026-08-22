@@ -101,7 +101,12 @@ _BUILD_ID: Optional[str] = None
 
 
 def _service_source_paths() -> Tuple[Path, ...]:
-    """Return the bounded source set imported by a coding worker."""
+    """Return the bounded source set imported by a coding worker.
+
+    This file is intentionally part of its own inventory. Expanding the source
+    set therefore also changes the digest seen by an already-running
+    supervisor, allowing its next safe worker to load the expanded inventory.
+    """
 
     package_root = Path(__file__).resolve().parents[1]
     candidates = list((package_root / "coding").glob("*.py"))

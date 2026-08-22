@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-08-22 | Governed Robotics planner entry | 2026-08-22-governed-robotics-planner-entry.md |
 | 2026-08-12 | Coding watchdog: consolidated release record (authoritative) | 2026-08-12-coding-watchdog-hardening.md |
 | 2026-08-12 | Host-only coding watchdog and remote dead-man switch (superseded by the record above) | 2026-08-12-coding-watchdog.md |
 | 2026-08-12 | Demand-scoped workspace authority repair | 2026-08-12-demand-scoped-workspace-authority.md |

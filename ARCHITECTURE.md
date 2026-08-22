@@ -651,7 +651,9 @@ reason class, never raw provider error text.
 
 ```text
 Flyto2 Robotics routed request
-  -> validate request size, shortlist, capabilities, locations, routes
+  -> flyto.goal-frame.v1 normalization
+  -> required Blueprint reuse + Core capability discovery
+  -> validate request size, narrowed shortlist, capabilities, locations, routes
   -> compile provider-native JSON Schema
   -> structured model completion
   -> independent plan/safety/route validation
@@ -670,7 +672,10 @@ Flyto2 Robotics routed request
 - Provider validation is not execution authorization. Flyto2 Robotics verifies
   the hashes, route, policy, and executable plan again before movement.
 - `robotics_planner_server.py` is a loopback development adapter, not a public
-  authenticated service. It suppresses prompt-bearing access logs and bounds
+  authenticated service. Its host composition always calls
+  `prepare_planner_request(require_goal_frame=True, require_discovery=True)`
+  before the provider-facing planning service; discovery failure stops before
+  provider invocation. It suppresses prompt-bearing access logs and bounds
   request, response, timeout, and error detail sizes.
 
 ## Coding mission and state-root authority boundary

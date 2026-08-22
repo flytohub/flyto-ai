@@ -1,5 +1,23 @@
 # Decisions
 
+## 2026-08-22: Every formal Robotics planner entry performs governed discovery
+
+Decision: the host adapter exposed by `robotics_planner_server.py` must require
+goal-frame normalization and Blueprint/Core discovery before invoking
+`RoboticsPlanningService`. Discovery failure is a planning refusal and cannot
+fall through to the provider.
+
+Reason: the lower-level planning service deliberately accepts an already
+routed request so it remains provider-neutral and independently testable. The
+server is the composition root; leaving it wired directly to that service made
+the documented Blueprint/Core route optional in the one runnable planner
+entry. The caller's executable catalog remains the ceiling, so discovery may
+narrow authority but never add motor authority.
+
+Boundary: this changes planning admission only. Cloud still owns Task and
+assignment authority, Robotics validates and executes, and neither a provider
+plan nor a successful action can declare mission completion.
+
 ## 2026-08-20: Codex JSONL has separate per-frame and total-stream bounds
 
 Decision: accept one valid Codex CLI JSONL event up to 2 MiB while retaining

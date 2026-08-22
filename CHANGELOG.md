@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Closed the runnable Robotics planner entry around the existing governed
+  capability router. The loopback server now requires goal-frame normalization
+  plus Blueprint/Core discovery before model planning, and routing failure
+  stops before the provider. Robotics retains final plan and motion authority.
+
 - Raised the Codex CLI adapter's bounded per-event JSONL ceiling from 1 MiB to
   2 MiB after a valid tool-result frame exceeded the former limit. The
   independent 8 MiB total-stream ceiling is unchanged. Secret-free round

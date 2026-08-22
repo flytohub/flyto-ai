@@ -1,6 +1,21 @@
 # State
 
-Last updated: 2026-08-20
+Last updated: 2026-08-22
+
+## Governed Robotics planner entry (2026-08-22)
+
+The loopback Robotics planner server no longer calls the provider-facing
+planning service directly. `GovernedRoboticsPlanner` first requires
+`flyto.goal-frame.v1` normalization plus Blueprint reuse and Core capability
+discovery through `prepare_planner_request`; a routing refusal ends before any
+provider call. The Robotics caller's local executable catalog remains the
+authority ceiling, and Flyto2 Robotics still revalidates the returned plan
+before motion.
+
+Focused planner, routing, planning, and Blueprint closed-loop coverage passes
+146 tests. Strict Indexer verification passes 18/18. This is a local contract
+closure only: no hardware, deployment, publication, or governed
+four-repository stack release is claimed.
 
 ## Codex JSONL frame diagnostics and bound (2026-08-20)
 

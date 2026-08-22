@@ -940,6 +940,11 @@ Parent and successor task profiles must mirror amendment identity and their own
 ledger/instruction fingerprints; intent and the immutable objective remain
 continuous, and a missing successor instruction context is a refusal rather
 than `not_applicable`.
+Intent-ledger schema labels are checked independently across a rolling upgrade:
+the historical producer label `task-context.v1` and canonical
+`intent-ledger.v1` are accepted only for ledger sections, while instruction
+sections remain exactly `task-context.v1`. Unknown labels, missing immutable
+intent, and all digest or mirror drift remain closed before provider start.
 It has no route, service, provider or sibling-package dependency. The pinned
 Indexer verifier accepts ancestry lengths below eight, so generation seven is
 the effective compatibility ceiling and generation/length eight fails closed

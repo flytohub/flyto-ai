@@ -22,6 +22,9 @@ PARENT_DIGEST_TAG = "task-amendment.parent.v1"
 ENTRY_DIGEST_TAG = "task-amendment.entry.v1"
 CONTRACT_DIGEST_TAG = "task-amendment.contract.v1"
 ROOT_DIGEST_TAG = "task-amendment.root.v1"
+INTENT_LEDGER_VERSIONS = frozenset(
+    {"intent-ledger.v1", "task-context.v1"}
+)
 MAX_AMENDMENT_CHAIN = 8
 MAX_CUMULATIVE_PATHS = 64
 MAX_TARGET_LENGTH = 512
@@ -254,14 +257,19 @@ def _validate_context_contract(
 ) -> None:
     """Validate the pinned v2 context schema and all profile mirrors."""
 
-    versions = (
+    profile_versions = (
         parent_profile.get("version"), successor_profile.get("version"),
+    )
+    ledger_versions = (
         parent_ledger.get("version"), successor_ledger.get("version"),
+    )
+    instruction_versions = (
         parent_instruction.get("version"), successor_instruction.get("version"),
     )
-    if versions != (
-        "task-contract.v2", "task-contract.v2", "intent-ledger.v1",
-        "intent-ledger.v1", "task-context.v1", "task-context.v1",
+    if (
+        profile_versions != ("task-contract.v2", "task-contract.v2")
+        or any(version not in INTENT_LEDGER_VERSIONS for version in ledger_versions)
+        or instruction_versions != ("task-context.v1", "task-context.v1")
     ):
         _fail("amendment_parent_proof_mismatch")
     fingerprints = (

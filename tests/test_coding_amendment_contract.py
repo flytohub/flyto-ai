@@ -119,6 +119,38 @@ def test_pinned_content_address_and_second_generation_chain_are_stable():
 
 
 @pytest.mark.parametrize(
+    ("parent_version", "successor_version"),
+    [
+        ("task-context.v1", "task-context.v1"),
+        ("task-context.v1", "intent-ledger.v1"),
+        ("intent-ledger.v1", "intent-ledger.v1"),
+    ],
+)
+def test_ledger_version_transition_preserves_parent_proof(
+    parent_version, successor_version,
+):
+    root = _root()
+    root["intent_ledger"]["version"] = parent_version
+    successor = _successor(root, "src/first.py")
+    successor["intent_ledger"]["version"] = successor_version
+
+    boundary = _validate(successor, root)
+
+    assert boundary.amendment_index == 1
+
+
+def test_unknown_ledger_version_remains_fail_closed():
+    root = _root()
+    successor = _successor(root, "src/first.py")
+    successor["intent_ledger"]["version"] = "intent-ledger.v99"
+
+    with pytest.raises(
+        AmendmentContractError, match="amendment_parent_proof_mismatch",
+    ):
+        _validate(successor, root)
+
+
+@pytest.mark.parametrize(
     "drift",
     [
         "missing_contract_id", "forged_contract_id", "wrong_parent_contract_id",

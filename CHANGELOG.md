@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Restored audited rework across the Indexer ledger-version transition. The
+  amendment boundary accepts both the historical `task-context.v1` ledger
+  label and canonical `intent-ledger.v1`, independently for parent and
+  successor, while unknown versions and every digest, identity, path,
+  fingerprint, and chain mismatch remain fail-closed. The shared stack lock is
+  refreshed to the exact Core and Indexer revisions that implement and verify
+  this closure.
+
 - Closed the runnable Robotics planner entry around the existing governed
   capability router. The loopback server now requires goal-frame normalization
   plus Blueprint/Core discovery before model planning, and routing failure

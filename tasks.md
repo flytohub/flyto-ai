@@ -4,6 +4,7 @@
 - [x] Add pre-execution schema validation for core module execution.
 - [x] Add MCP metadata to provider tool-call logs.
 - [x] Add focused tests for manifest, validation, and evidence logging.
+- [x] Restore parent-proof-compatible audited rework across the Indexer intent-ledger version transition.
 - [x] Add CI and generated index ignore.
 - [ ] Add reusable eval datasets for MCP tool selection.
 - [ ] Wire Cloud UI diagnostics to `/api/ai/tools/manifest`.

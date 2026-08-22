@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-08-22 — Ledger version transition is explicit and fail-closed
+
+Decision: validate parent and successor intent-ledger labels independently
+against the historical `task-context.v1` producer label and canonical
+`intent-ledger.v1`. Keep instruction context pinned to `task-context.v1` and
+retain every existing digest, identity, profile mirror, fingerprint, path,
+chain, and generation check.
+
+Reason: first-round plans never cross the amendment verifier, so a producer and
+consumer schema-label drift remained latent until an actual audited rework.
+Rolling compatibility keeps persisted jobs resumable while the producer moves
+to the canonical label; accepting arbitrary versions or skipping the parent
+proof would weaken the route and was rejected.
+
 ## 2026-08-22: Every formal Robotics planner entry performs governed discovery
 
 Decision: the host adapter exposed by `robotics_planner_server.py` must require

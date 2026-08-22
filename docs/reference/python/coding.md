@@ -173,264 +173,264 @@ Run a model/tool loop followed by mandatory real checks and repair.
 
 `class AmendmentContractError(ValueError)`
 
-Source: [`flyto_ai/coding/amendment_contract.py:37`](../../../flyto_ai/coding/amendment_contract.py#L37)
+Source: [`flyto_ai/coding/amendment_contract.py:40`](../../../flyto_ai/coding/amendment_contract.py#L40)
 
 One stable, content-free amendment contract refusal.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(code: str)` | internal | Internal `__init__` implementation on `AmendmentContractError`; the linked source is authoritative. | [`flyto_ai/coding/amendment_contract.py:40`](../../../flyto_ai/coding/amendment_contract.py#L40) |
+| `__init__(code: str)` | internal | Internal `__init__` implementation on `AmendmentContractError`; the linked source is authoritative. | [`flyto_ai/coding/amendment_contract.py:43`](../../../flyto_ai/coding/amendment_contract.py#L43) |
 
 ### `AmendmentBoundary` (public)
 
 `class AmendmentBoundary`
 
-Source: [`flyto_ai/coding/amendment_contract.py:46`](../../../flyto_ai/coding/amendment_contract.py#L46)
+Source: [`flyto_ai/coding/amendment_contract.py:49`](../../../flyto_ai/coding/amendment_contract.py#L49)
 
 The exact path partition and finite successor generation.
 
 ### `_fail` (internal)
 
 `_fail(code: str) -> None`
-Source: [`flyto_ai/coding/amendment_contract.py:54`](../../../flyto_ai/coding/amendment_contract.py#L54)
+Source: [`flyto_ai/coding/amendment_contract.py:57`](../../../flyto_ai/coding/amendment_contract.py#L57)
 
 Internal `_fail` implementation on this module; the linked source is authoritative.
 
 ### `_digest` (internal)
 
 `_digest(*parts) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:58`](../../../flyto_ai/coding/amendment_contract.py#L58)
+Source: [`flyto_ai/coding/amendment_contract.py:61`](../../../flyto_ai/coding/amendment_contract.py#L61)
 
 Internal `_digest` implementation on this module; the linked source is authoritative.
 
 ### `_text` (internal)
 
 `_text(value: Any, limit: int) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:65`](../../../flyto_ai/coding/amendment_contract.py#L65)
+Source: [`flyto_ai/coding/amendment_contract.py:68`](../../../flyto_ai/coding/amendment_contract.py#L68)
 
 Internal `_text` implementation on this module; the linked source is authoritative.
 
 ### `_index` (internal)
 
 `_index(value: Any) -> int`
-Source: [`flyto_ai/coding/amendment_contract.py:69`](../../../flyto_ai/coding/amendment_contract.py#L69)
+Source: [`flyto_ai/coding/amendment_contract.py:72`](../../../flyto_ai/coding/amendment_contract.py#L72)
 
 Internal `_index` implementation on this module; the linked source is authoritative.
 
 ### `parent_contract_digest` (public)
 
 `parent_contract_digest(parent: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:73`](../../../flyto_ai/coding/amendment_contract.py#L73)
+Source: [`flyto_ai/coding/amendment_contract.py:76`](../../../flyto_ai/coding/amendment_contract.py#L76)
 
 Reproduce Indexer's bounded ``task-amendment.parent.v1`` digest.
 
 ### `root_contract_id` (public)
 
 `root_contract_id(root_task_id: str, objective: str, paths: Sequence[str]) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:101`](../../../flyto_ai/coding/amendment_contract.py#L101)
+Source: [`flyto_ai/coding/amendment_contract.py:104`](../../../flyto_ai/coding/amendment_contract.py#L104)
 
 Public `root_contract_id` implementation on this module; the linked source is authoritative.
 
 ### `amendment_contract_id` (public)
 
 `amendment_contract_id(root_task_id: str, amendment_index: int, objective: str, cumulative_paths: Sequence[str], parent_contract_id: str, parent_digest: str) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:109`](../../../flyto_ai/coding/amendment_contract.py#L109)
+Source: [`flyto_ai/coding/amendment_contract.py:112`](../../../flyto_ai/coding/amendment_contract.py#L112)
 
 Public `amendment_contract_id` implementation on this module; the linked source is authoritative.
 
 ### `chain_entry_digest` (public)
 
 `chain_entry_digest(entry: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:128`](../../../flyto_ai/coding/amendment_contract.py#L128)
+Source: [`flyto_ai/coding/amendment_contract.py:131`](../../../flyto_ai/coding/amendment_contract.py#L131)
 
 Public `chain_entry_digest` implementation on this module; the linked source is authoritative.
 
 ### `chain_entry` (public)
 
 `chain_entry(*, contract_id: str, parent_contract_id: str | None, root_task_id: str, project: str, amendment_index: int, target_count: int, contract_digest: str) -> dict[str, Any]`
-Source: [`flyto_ai/coding/amendment_contract.py:141`](../../../flyto_ai/coding/amendment_contract.py#L141)
+Source: [`flyto_ai/coding/amendment_contract.py:144`](../../../flyto_ai/coding/amendment_contract.py#L144)
 
 Public `chain_entry` implementation on this module; the linked source is authoritative.
 
 ### `_bounded_index` (internal)
 
 `_bounded_index(value: Any) -> int`
-Source: [`flyto_ai/coding/amendment_contract.py:164`](../../../flyto_ai/coding/amendment_contract.py#L164)
+Source: [`flyto_ai/coding/amendment_contract.py:167`](../../../flyto_ai/coding/amendment_contract.py#L167)
 
 Internal `_bounded_index` implementation on this module; the linked source is authoritative.
 
 ### `_canonical_path` (internal)
 
 `_canonical_path(value: Any) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:171`](../../../flyto_ai/coding/amendment_contract.py#L171)
+Source: [`flyto_ai/coding/amendment_contract.py:174`](../../../flyto_ai/coding/amendment_contract.py#L174)
 
 Internal `_canonical_path` implementation on this module; the linked source is authoritative.
 
 ### `_bounded_path_list` (internal)
 
 `_bounded_path_list(value: Any, *, allow_empty: bool) -> list[str]`
-Source: [`flyto_ai/coding/amendment_contract.py:191`](../../../flyto_ai/coding/amendment_contract.py#L191)
+Source: [`flyto_ai/coding/amendment_contract.py:194`](../../../flyto_ai/coding/amendment_contract.py#L194)
 
 Internal `_bounded_path_list` implementation on this module; the linked source is authoritative.
 
 ### `_bounded_paths` (internal)
 
 `_bounded_paths(amendment: Mapping[str, Any], name: str) -> list[str]`
-Source: [`flyto_ai/coding/amendment_contract.py:202`](../../../flyto_ai/coding/amendment_contract.py#L202)
+Source: [`flyto_ai/coding/amendment_contract.py:205`](../../../flyto_ai/coding/amendment_contract.py#L205)
 
 Internal `_bounded_paths` implementation on this module; the linked source is authoritative.
 
 ### `_contract_sections` (internal)
 
 `_contract_sections(successor: Mapping[str, Any], parent: Mapping[str, Any], host_project: str) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]`
-Source: [`flyto_ai/coding/amendment_contract.py:208`](../../../flyto_ai/coding/amendment_contract.py#L208)
+Source: [`flyto_ai/coding/amendment_contract.py:211`](../../../flyto_ai/coding/amendment_contract.py#L211)
 
 Internal `_contract_sections` implementation on this module; the linked source is authoritative.
 
 ### `_profile_context_mirror` (internal)
 
 `_profile_context_mirror(profile: Mapping[str, Any], ledger: Mapping[str, Any], instruction: Mapping[str, Any]) -> bool`
-Source: [`flyto_ai/coding/amendment_contract.py:235`](../../../flyto_ai/coding/amendment_contract.py#L235)
+Source: [`flyto_ai/coding/amendment_contract.py:238`](../../../flyto_ai/coding/amendment_contract.py#L238)
 
 Internal `_profile_context_mirror` implementation on this module; the linked source is authoritative.
 
 ### `_validate_context_contract` (internal)
 
 `_validate_context_contract(parent_profile: Mapping[str, Any], successor_profile: Mapping[str, Any], parent_ledger: Mapping[str, Any], successor_ledger: Mapping[str, Any], parent_instruction: Mapping[str, Any], successor_instruction: Mapping[str, Any]) -> None`
-Source: [`flyto_ai/coding/amendment_contract.py:247`](../../../flyto_ai/coding/amendment_contract.py#L247)
+Source: [`flyto_ai/coding/amendment_contract.py:250`](../../../flyto_ai/coding/amendment_contract.py#L250)
 
 Validate the pinned v2 context schema and all profile mirrors.
 
 ### `_validate_task_identity` (internal)
 
 `_validate_task_identity(amendment: Mapping[str, Any], parent_profile: Mapping[str, Any], successor: Mapping[str, Any], host_project: str) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:285`](../../../flyto_ai/coding/amendment_contract.py#L285)
+Source: [`flyto_ai/coding/amendment_contract.py:293`](../../../flyto_ai/coding/amendment_contract.py#L293)
 
 Internal `_validate_task_identity` implementation on this module; the linked source is authoritative.
 
 ### `_parent_amendment_index` (internal)
 
 `_parent_amendment_index(amendment: Any, parent_profile: Mapping[str, Any]) -> int`
-Source: [`flyto_ai/coding/amendment_contract.py:307`](../../../flyto_ai/coding/amendment_contract.py#L307)
+Source: [`flyto_ai/coding/amendment_contract.py:315`](../../../flyto_ai/coding/amendment_contract.py#L315)
 
 Internal `_parent_amendment_index` implementation on this module; the linked source is authoritative.
 
 ### `_successor_index` (internal)
 
 `_successor_index(amendment: Mapping[str, Any], parent: Mapping[str, Any], parent_index: int) -> int`
-Source: [`flyto_ai/coding/amendment_contract.py:325`](../../../flyto_ai/coding/amendment_contract.py#L325)
+Source: [`flyto_ai/coding/amendment_contract.py:333`](../../../flyto_ai/coding/amendment_contract.py#L333)
 
 Internal `_successor_index` implementation on this module; the linked source is authoritative.
 
 ### `_validate_path_partition` (internal)
 
 `_validate_path_partition(successor: Mapping[str, Any], parent_ledger: Mapping[str, Any], original: Sequence[str], added: Sequence[str], cumulative: Sequence[str], host_requested_paths: Sequence[str]) -> None`
-Source: [`flyto_ai/coding/amendment_contract.py:337`](../../../flyto_ai/coding/amendment_contract.py#L337)
+Source: [`flyto_ai/coding/amendment_contract.py:345`](../../../flyto_ai/coding/amendment_contract.py#L345)
 
 Internal `_validate_path_partition` implementation on this module; the linked source is authoritative.
 
 ### `_entry_shape` (internal)
 
 `_entry_shape(item: Any) -> dict[str, Any]`
-Source: [`flyto_ai/coding/amendment_contract.py:364`](../../../flyto_ai/coding/amendment_contract.py#L364)
+Source: [`flyto_ai/coding/amendment_contract.py:372`](../../../flyto_ai/coding/amendment_contract.py#L372)
 
 Internal `_entry_shape` implementation on this module; the linked source is authoritative.
 
 ### `_validated_entry` (internal)
 
 `_validated_entry(item: Any, *, position: int, root_task_id: str, project: str, previous_id: str | None, previous_count: int) -> dict[str, Any]`
-Source: [`flyto_ai/coding/amendment_contract.py:388`](../../../flyto_ai/coding/amendment_contract.py#L388)
+Source: [`flyto_ai/coding/amendment_contract.py:396`](../../../flyto_ai/coding/amendment_contract.py#L396)
 
 Internal `_validated_entry` implementation on this module; the linked source is authoritative.
 
 ### `_validated_chain` (internal)
 
 `_validated_chain(raw_chain: Any, *, root_task_id: str, project: str, own_contract_id: Any) -> list[dict[str, Any]]`
-Source: [`flyto_ai/coding/amendment_contract.py:413`](../../../flyto_ai/coding/amendment_contract.py#L413)
+Source: [`flyto_ai/coding/amendment_contract.py:421`](../../../flyto_ai/coding/amendment_contract.py#L421)
 
 Internal `_validated_chain` implementation on this module; the linked source is authoritative.
 
 ### `_objective` (internal)
 
 `_objective(amendment: Mapping[str, Any], parent_ledger: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:444`](../../../flyto_ai/coding/amendment_contract.py#L444)
+Source: [`flyto_ai/coding/amendment_contract.py:452`](../../../flyto_ai/coding/amendment_contract.py#L452)
 
 Internal `_objective` implementation on this module; the linked source is authoritative.
 
 ### `_validate_profile_mirror` (internal)
 
 `_validate_profile_mirror(profile: Mapping[str, Any], amendment: Mapping[str, Any], objective: str, amendment_index: int) -> None`
-Source: [`flyto_ai/coding/amendment_contract.py:456`](../../../flyto_ai/coding/amendment_contract.py#L456)
+Source: [`flyto_ai/coding/amendment_contract.py:464`](../../../flyto_ai/coding/amendment_contract.py#L464)
 
 Require the producer's task-profile amendment mirror to be exact.
 
 ### `_parent_chain_authority` (internal)
 
 `_parent_chain_authority(*, parent: Mapping[str, Any], parent_index: int, root_task_id: str, project: str, objective: str, original: Sequence[str]) -> tuple[str, list[dict[str, Any]], str]`
-Source: [`flyto_ai/coding/amendment_contract.py:476`](../../../flyto_ai/coding/amendment_contract.py#L476)
+Source: [`flyto_ai/coding/amendment_contract.py:484`](../../../flyto_ai/coding/amendment_contract.py#L484)
 
 Internal `_parent_chain_authority` implementation on this module; the linked source is authoritative.
 
 ### `_validate_successor_chain` (internal)
 
 `_validate_successor_chain(*, amendment: Mapping[str, Any], parent: Mapping[str, Any], parent_profile: Mapping[str, Any], successor_profile: Mapping[str, Any], parent_ledger: Mapping[str, Any], host_project: str, parent_index: int, amendment_index: int, original: Sequence[str], cumulative: Sequence[str]) -> None`
-Source: [`flyto_ai/coding/amendment_contract.py:514`](../../../flyto_ai/coding/amendment_contract.py#L514)
+Source: [`flyto_ai/coding/amendment_contract.py:522`](../../../flyto_ai/coding/amendment_contract.py#L522)
 
 Internal `_validate_successor_chain` implementation on this module; the linked source is authoritative.
 
 ### `validate_amendment_contract` (public)
 
 `validate_amendment_contract(successor: Mapping[str, Any], parent: Mapping[str, Any], host_project: str, host_requested_paths: Sequence[str]) -> AmendmentBoundary`
-Source: [`flyto_ai/coding/amendment_contract.py:569`](../../../flyto_ai/coding/amendment_contract.py#L569)
+Source: [`flyto_ai/coding/amendment_contract.py:577`](../../../flyto_ai/coding/amendment_contract.py#L577)
 
 Validate one complete successor and return its exact path boundary.
 
 ### `plan_source_coordinates` (public)
 
 `plan_source_coordinates(source: Mapping[str, Any]) -> tuple[Sequence[Any], Sequence[Any]]`
-Source: [`flyto_ai/coding/amendment_contract.py:605`](../../../flyto_ai/coding/amendment_contract.py#L605)
+Source: [`flyto_ai/coding/amendment_contract.py:613`](../../../flyto_ai/coding/amendment_contract.py#L613)
 
 Public `plan_source_coordinates` implementation on this module; the linked source is authoritative.
 
 ### `covered_amendment_paths` (public)
 
 `covered_amendment_paths(sources: Sequence[Mapping[str, Any]]) -> frozenset[str]`
-Source: [`flyto_ai/coding/amendment_contract.py:620`](../../../flyto_ai/coding/amendment_contract.py#L620)
+Source: [`flyto_ai/coding/amendment_contract.py:628`](../../../flyto_ai/coding/amendment_contract.py#L628)
 
 Public `covered_amendment_paths` implementation on this module; the linked source is authoritative.
 
 ### `reusable_step_identity` (public)
 
 `reusable_step_identity(scope: str, step: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:631`](../../../flyto_ai/coding/amendment_contract.py#L631)
+Source: [`flyto_ai/coding/amendment_contract.py:639`](../../../flyto_ai/coding/amendment_contract.py#L639)
 
 Public `reusable_step_identity` implementation on this module; the linked source is authoritative.
 
 ### `reusable_parent_step_counts` (public)
 
 `reusable_parent_step_counts(groups: Sequence[tuple[str, Sequence[Mapping[str, Any]]]], gate_tools: frozenset[str]) -> dict[str, int]`
-Source: [`flyto_ai/coding/amendment_contract.py:647`](../../../flyto_ai/coding/amendment_contract.py#L647)
+Source: [`flyto_ai/coding/amendment_contract.py:655`](../../../flyto_ai/coding/amendment_contract.py#L655)
 
 Public `reusable_parent_step_counts` implementation on this module; the linked source is authoritative.
 
 ### `_coordinate_owners` (internal)
 
 `_coordinate_owners(resolved: Sequence[Any], original: frozenset[str], added: frozenset[str]) -> tuple[frozenset[str], Mapping[str, frozenset[str]]]`
-Source: [`flyto_ai/coding/amendment_contract.py:661`](../../../flyto_ai/coding/amendment_contract.py#L661)
+Source: [`flyto_ai/coding/amendment_contract.py:669`](../../../flyto_ai/coding/amendment_contract.py#L669)
 
 Internal `_coordinate_owners` implementation on this module; the linked source is authoritative.
 
 ### `_step_owner` (internal)
 
 `_step_owner(step: Mapping[str, Any], coordinate_owners: Mapping[str, frozenset[str]]) -> str`
-Source: [`flyto_ai/coding/amendment_contract.py:685`](../../../flyto_ai/coding/amendment_contract.py#L685)
+Source: [`flyto_ai/coding/amendment_contract.py:693`](../../../flyto_ai/coding/amendment_contract.py#L693)
 
 Internal `_step_owner` implementation on this module; the linked source is authoritative.
 
 ### `amendment_delta_steps` (public)
 
 `amendment_delta_steps(*, scope: str, steps: Sequence[Mapping[str, Any]], source: Mapping[str, Any], boundary: AmendmentBoundary, reusable_counts: dict[str, int], gate_tools: frozenset[str]) -> list[Mapping[str, Any]]`
-Source: [`flyto_ai/coding/amendment_contract.py:710`](../../../flyto_ai/coding/amendment_contract.py#L710)
+Source: [`flyto_ai/coding/amendment_contract.py:718`](../../../flyto_ai/coding/amendment_contract.py#L718)
 
 Derive exact novel work while rerunning every successor gate.
 

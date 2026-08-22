@@ -73,6 +73,12 @@ fingerprints must exactly mirror their corresponding contract sections. Intent
 and ledger description remain continuous, and a successor with a missing or
 malformed instruction context fails closed.
 
+The intent-ledger version boundary is rolling-compatible: persisted roots may
+carry the historical `task-context.v1` ledger label, while canonical producers
+emit `intent-ledger.v1`. Parent and successor are checked independently against
+that exact two-value set; instruction context remains strictly
+`task-context.v1`, and unknown versions still fail before provider start.
+
 All amendment and ledger paths must use exact canonical repository-relative
 POSIX spelling. The accepted cumulative scope is the ordered union of the
 authenticated parent ledger, exact audited prior implementation paths and the

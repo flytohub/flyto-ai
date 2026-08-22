@@ -247,6 +247,18 @@ def _profile_context_mirror(
     )
 
 
+def _profile_intent(profile: Mapping[str, Any]) -> str:
+    """Return the canonical root intent for ordinary and compound contracts."""
+
+    intent = profile.get("intent")
+    if isinstance(intent, str) and intent:
+        return intent
+    original = profile.get("original_intent")
+    if profile.get("compound") is True and isinstance(original, str) and original:
+        return original
+    return ""
+
+
 def _validate_context_contract(
     parent_profile: Mapping[str, Any],
     successor_profile: Mapping[str, Any],
@@ -278,8 +290,8 @@ def _validate_context_contract(
     )
     if any(not isinstance(item, str) or not _SHA256_RE.fullmatch(item) for item in fingerprints):
         _fail("amendment_parent_proof_mismatch")
-    intents = (parent_profile.get("intent"), successor_profile.get("intent"))
-    if not isinstance(intents[0], str) or not intents[0] or intents[0] != intents[1]:
+    intents = (_profile_intent(parent_profile), _profile_intent(successor_profile))
+    if not intents[0] or intents[0] != intents[1]:
         _fail("amendment_parent_proof_mismatch")
     if not _profile_context_mirror(parent_profile, parent_ledger, parent_instruction):
         _fail("amendment_profile_mismatch")

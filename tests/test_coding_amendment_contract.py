@@ -118,6 +118,29 @@ def test_pinned_content_address_and_second_generation_chain_are_stable():
     assert boundary.added == frozenset({"src/second.py"})
 
 
+def test_compound_root_original_intent_is_valid_parent_proof():
+    """Indexer compound roots expose original_intent instead of intent."""
+
+    root = _root()
+    root["task_profile"]["original_intent"] = root["task_profile"].pop("intent")
+    root["task_profile"]["compound"] = True
+    successor = _successor(root, "src/repair.py")
+
+    boundary = _validate(successor, root)
+
+    assert boundary.amendment_index == 1
+    assert boundary.added == frozenset({"src/repair.py"})
+
+
+def test_noncompound_missing_intent_still_fails_closed():
+    root = _root()
+    root["task_profile"]["original_intent"] = root["task_profile"].pop("intent")
+    successor = _successor(root, "src/repair.py")
+
+    with pytest.raises(AmendmentContractError, match="amendment_parent_proof_mismatch"):
+        _validate(successor, root)
+
+
 @pytest.mark.parametrize(
     ("parent_version", "successor_version"),
     [

@@ -8,7 +8,23 @@
   successor, while unknown versions and every digest, identity, path,
   fingerprint, and chain mismatch remain fail-closed. The shared stack lock is
   refreshed to the exact Core and Indexer revisions that implement and verify
-  this closure.
+  this boundary. The repaired same-job audit rework crossed that boundary but
+  then failed closed before provider start with `route_plan_bound_exceeded`:
+  36 cumulative steps exceeded the unchanged 32-step ceiling, so no same-job
+  completion is claimed.
+
+- Recorded the bounded recovery and Cloud landing evidence. Primary recovery
+  job `job_0b90e4cab8e14f5482aec5f6` selected the final implementation with all
+  ten governed gates green; holistic Cloud job
+  `job_497fc5ee77d948f2b71b26e8` was Codex-accepted; and follow-up job
+  `job_4f40e4fcb6e54ea387786fe7` was Codex-accepted with `landable=true`,
+  `audit_count=1`, and `rework_count=0`. Cloud PR
+  <https://github.com/flytohub/flyto-cloud/pull/231> merged by protected squash
+  to `main` commit `ee8c95678c9a18931890a096ea7c04f6a7295ad0` only after all
+  remote checks were green, including Playwright (136 total, 113 passed, 23
+  existing skips, 0 failed) and Audit Closure. Broad cumulative audited rework
+  can still exceed the route-plan ceiling; future repairs should bind active
+  scope to current findings rather than raise or bypass that ceiling.
 
 - Closed the runnable Robotics planner entry around the existing governed
   capability router. The loopback server now requires goal-frame normalization

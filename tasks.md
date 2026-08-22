@@ -5,6 +5,23 @@
 - [x] Add MCP metadata to provider tool-call logs.
 - [x] Add focused tests for manifest, validation, and evidence logging.
 - [x] Restore parent-proof-compatible audited rework across the Indexer intent-ledger version transition.
+- [x] Record that repaired same-job rework crossed the legacy/canonical
+  parent-proof boundary but failed closed before provider start with
+  `route_plan_bound_exceeded` when 36 cumulative steps exceeded the unchanged
+  32-step ceiling; no same-job completion is claimed.
+- [x] Record recovery primary job `job_0b90e4cab8e14f5482aec5f6` selecting the
+  final implementation with all ten governed gates green, holistic Cloud job
+  `job_497fc5ee77d948f2b71b26e8` being Codex-accepted, and follow-up job
+  `job_4f40e4fcb6e54ea387786fe7` being Codex-accepted with `landable=true`,
+  `audit_count=1`, and `rework_count=0`.
+- [x] Record Cloud PR <https://github.com/flytohub/flyto-cloud/pull/231>
+  protected-squash merge to `main` commit
+  `ee8c95678c9a18931890a096ea7c04f6a7295ad0` after all remote checks were
+  green, including Playwright (136 total, 113 passed, 23 existing skips, 0
+  failed) and Audit Closure.
+- [ ] Bind future broad audited repairs to the active scope of current findings
+  so cumulative rework stays within the unchanged route-plan ceiling; do not
+  raise or bypass the ceiling.
 - [x] Add CI and generated index ignore.
 - [ ] Add reusable eval datasets for MCP tool selection.
 - [ ] Wire Cloud UI diagnostics to `/api/ai/tools/manifest`.

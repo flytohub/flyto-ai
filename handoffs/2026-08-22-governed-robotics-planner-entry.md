@@ -22,7 +22,7 @@ AI path optional at the composition root.
 
 The focused planner/router suite passed 108 tests. Adding the Blueprint
 closed-loop suite passed 146 tests. Ruff passed on the touched code, strict
-Flyto Indexer verification passed 18/18, and the cross-repository contract
+Indexer verification passed 18/18, and the cross-repository contract
 smoke accepted one Cloud-generated handoff and one receipt through both edge
 and Cloud validators.
 

@@ -2,6 +2,28 @@
 
 Last updated: 2026-08-22
 
+## Amendment recovery and Cloud landing evidence (2026-08-22)
+
+The repaired same-job audit rework crossed the legacy/canonical parent-proof
+version boundary, then failed closed before provider start with
+`route_plan_bound_exceeded`: 36 cumulative steps exceeded the unchanged
+32-step ceiling. There is therefore no same-job completion claim.
+
+Recovery primary job `job_0b90e4cab8e14f5482aec5f6` selected the final
+implementation and all ten governed gates were green. Final holistic Cloud job
+`job_497fc5ee77d948f2b71b26e8` was Codex-accepted. Follow-up job
+`job_4f40e4fcb6e54ea387786fe7` was Codex-accepted with `landable=true`,
+`audit_count=1`, and `rework_count=0`.
+
+Cloud PR <https://github.com/flytohub/flyto-cloud/pull/231> merged by protected
+squash to `main` commit `ee8c95678c9a18931890a096ea7c04f6a7295ad0` only after
+all remote checks were green, including Playwright: 136 total, 113 passed, 23
+existing skips, 0 failed, plus Audit Closure.
+
+The bounded limitation remains: broad cumulative audited rework can exceed the
+route-plan ceiling. Future repairs should bind active scope to current findings
+instead of raising or bypassing the ceiling.
+
 ## Governed Robotics planner entry (2026-08-22)
 
 The loopback Robotics planner server no longer calls the provider-facing

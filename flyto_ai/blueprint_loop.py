@@ -21,9 +21,9 @@ from flyto_ai.closed_loop_v3 import (
     checkpoint_key,
     repair_from_result,
 )
+from flyto_ai.execution_verification import try_build_closed_loop_verification_receipt
 from flyto_ai.redaction import redact_args
 from flyto_ai.tools.blueprint_tools import _CLOSED_LOOP_EVIDENCE_CAPABILITY
-
 DispatchFn = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
 PreflightFn = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 _PREVIEW_LIMIT = 500
@@ -481,7 +481,6 @@ async def execute_blueprint_loop(
                         and checkpoint_source_execution_id
                     ):
                         execution_id = checkpoint_source_execution_id
-
     def save_checkpoint(status: str) -> Optional[str]:
         nonlocal checkpoint_write_count
         if checkpoint_store is None:
@@ -504,7 +503,6 @@ async def execute_blueprint_loop(
         except Exception as exc:
             return str(exc) or type(exc).__name__
         return None
-
     # Agent permission/policy preflight happens for the complete workflow
     # before parameter validation or any side effect.
     if not preflight_errors and preflight is not None:
@@ -530,7 +528,6 @@ async def execute_blueprint_loop(
                         else "Module access preflight returned a non-object result"
                     ),
                 })
-
     # Validate every static step before the first execute call. Dynamic steps
     # are validated immediately after their references resolve.
     if not preflight_errors:
@@ -551,7 +548,6 @@ async def execute_blueprint_loop(
                     "error": "Blueprint step validation failed",
                     "validation": validation,
                 })
-
     if preflight_errors:
         first_error = preflight_errors[0]
         failed_step_id = str(first_error.get("step_id") or "")
@@ -646,7 +642,6 @@ async def execute_blueprint_loop(
                     "result": failure,
                 })
                 break
-
             arguments = {"module_id": module_id, "params": params}
             validation = item["validation"]
             if validation is None:
@@ -682,7 +677,6 @@ async def execute_blueprint_loop(
                     "result": failure,
                 })
                 break
-
             attempts = []
             final_result: Dict[str, Any] = {}
             assertion_evidence: List[Dict[str, Any]] = []
@@ -711,7 +705,6 @@ async def execute_blueprint_loop(
                     wait_seconds = _retry_wait_seconds(item["retry"], attempt)
                     if wait_seconds:
                         await asyncio.sleep(wait_seconds)
-
             source_module_id = module_id
             for repair_index in range(max_repairs):
                 if ok:
@@ -763,7 +756,6 @@ async def execute_blueprint_loop(
                     )
                 ):
                     break
-
                 repair_arguments = {
                     "module_id": decision.module_id,
                     "params": copy.deepcopy(decision.params),
@@ -795,7 +787,6 @@ async def execute_blueprint_loop(
                         "phase": "preflight",
                     })
                     continue
-
                 repair_validation = await _call(
                     dispatch,
                     "validate_params",
@@ -819,7 +810,6 @@ async def execute_blueprint_loop(
                     arguments = repair_arguments
                     validation = repair_validation
                     continue
-
                 try:
                     repair_retry = _normalize_retry(decision.retry)
                     repair_assertions = item["assertions"]
@@ -887,7 +877,6 @@ async def execute_blueprint_loop(
                     "reason": decision.reason,
                     "phase": "execute",
                 })
-
             if assertion_evidence and not all(
                 assertion["ok"] for assertion in assertion_evidence
             ):
@@ -993,28 +982,40 @@ async def execute_blueprint_loop(
         evidence["planner_model_calls_used"] = 0
         evidence["model_call_scope"] = "planner"
 
+    checks = {
+        "validation_passed": validation_passed,
+        "assertion_passed": assertion_passed,
+        "workflow_succeeded": success,
+        "outcome_success": success,
+    }
+    verification = try_build_closed_loop_verification_receipt(
+        execution_id, executions, checks, len(executed_entries), workflow_hash,
+    )
+    runtime_evidence = {
+        "execution_id": execution_id,
+        "workflow_hash": workflow_hash,
+        "executor_version": _EXECUTOR_VERSION,
+        "selection_mode": selection_mode,
+        "duration_ms": evidence["duration_ms"],
+        "step_count": evidence["step_count"],
+        "total_attempts": evidence["total_attempts"],
+        "assertion_passed": assertion_passed,
+    }
     outcome = await _call(dispatch, "report_blueprint_outcome", {
         "blueprint_id": blueprint_id,
         "success": success,
         "execution_id": execution_id,
         "_evidence_capability": _CLOSED_LOOP_EVIDENCE_CAPABILITY,
-        "_execution_evidence": {
-            field: evidence[field]
-            for field in (
-                "duration_ms",
-                "step_count",
-                "total_attempts",
-                "assertion_passed",
-                "selection_mode",
-                "planner_model_calls_used",
-                "model_call_scope",
-                "workflow_hash",
-                "executor_version",
-            )
-            if field in evidence
-        },
+        "_execution_evidence": runtime_evidence,
+        "_verification_receipt": verification,
     })
-    outcome_reported = isinstance(outcome, dict) and bool(outcome.get("ok"))
+    outcome_reported = (
+        type(outcome) is dict
+        and outcome.get("ok") is True
+        and outcome.get("blueprint_id") == blueprint_id
+        and outcome.get("execution_id") == execution_id
+        and outcome.get("evidence_tier") == "local_verified"
+    )
     if success and outcome_reported and checkpoint_store is not None:
         try:
             checkpoint_store.delete(checkpoint_id)
@@ -1023,7 +1024,6 @@ async def execute_blueprint_loop(
             checkpoint_error = str(exc) or type(exc).__name__
     evidence["checkpoint_cleared"] = checkpoint_cleared
     evidence["checkpoint_error"] = checkpoint_error or None
-
     return {
         "ok": success,
         "closed_loop_ok": success and outcome_reported,

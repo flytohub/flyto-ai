@@ -355,6 +355,48 @@ async def test_trusted_campaign_scope_is_hash_bound_and_internal(
 
 
 @pytest.mark.asyncio
+async def test_private_outcome_host_rejects_unbound_evidence_without_persisting(
+    monkeypatch,
+    tmp_path,
+):
+    from flyto_ai import closed_loop_mcp
+
+    observed = {}
+
+    async def fake_loop(blueprint_id, steps, dispatch, **_kwargs):
+        observed["response"] = await dispatch("report_blueprint_outcome", {
+            "blueprint_id": blueprint_id,
+            "execution_id": "bp_unbound",
+            "success": True,
+            "_evidence_capability": "flyto-ai.closed-loop-verified",
+            "_execution_evidence": {
+                "execution_id": "bp_unbound",
+                "workflow_hash": "sha256:" + "a" * 64,
+            },
+            "_verification_receipt": None,
+        })
+        return {
+            "ok": True,
+            "closed_loop_ok": False,
+            "execution_id": "bp_unbound",
+            "outcome_reported": False,
+            "evidence": {},
+        }
+
+    monkeypatch.setattr(closed_loop_mcp, "execute_blueprint_loop", fake_loop)
+    server = ClosedLoopMCPServer(str(tmp_path))
+    planned = await server.call_tool("plan", {
+        "steps": [{"module": "string.uppercase", "params": {}}],
+    })
+    await server.call_tool("execute", {
+        "plan_id": planned["structuredContent"]["plan_id"],
+    })
+
+    assert observed["response"]["ok"] is False
+    assert server._load("outcome", "bp_unbound") is None
+
+
+@pytest.mark.asyncio
 async def test_core_dispatch_applies_scope_only_during_current_task(
     monkeypatch,
 ):

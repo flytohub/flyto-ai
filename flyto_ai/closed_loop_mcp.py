@@ -761,15 +761,15 @@ class ClosedLoopMCPServer:
                         "error": campaign_decision["reason"],
                     }
             if name == "report_blueprint_outcome":
-                execution_id = str(tool_args.get("execution_id") or "")
-                self._save("outcome", execution_id, {
-                    "version": MCP_CONTRACT_VERSION,
-                    "plan_id": plan_id,
-                    "blueprint_id": tool_args.get("blueprint_id"),
-                    "execution_id": execution_id,
-                    "success": bool(tool_args.get("success")),
+                from flyto_ai.tools.blueprint_tools import dispatch_blueprint_tool
+                validation = await dispatch_blueprint_tool("_validate_closed_loop_evidence", tool_args)
+                if validation.get("ok") is not True:
+                    return validation
+                self._save("outcome", validation["execution_id"], {
+                    "version": MCP_CONTRACT_VERSION, "plan_id": plan_id,
+                    "blueprint_id": validation["blueprint_id"], "execution_id": validation["execution_id"], "success": tool_args.get("success"),
                 })
-                return {"ok": True, "recorded": True}
+                return {**validation, "recorded": True}
             if name == "execute_module":
                 module_id = str(tool_args.get("module_id") or "")
                 counts[module_id] = counts.get(module_id, 0) + 1

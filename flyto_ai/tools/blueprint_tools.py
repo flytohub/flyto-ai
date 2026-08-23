@@ -144,6 +144,63 @@ async def dispatch_blueprint_tool(
     arguments: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Dispatch a blueprint tool call to flyto-blueprint engine."""
+    if name == "_validate_closed_loop_evidence":
+        from flyto_ai.execution_verification import build_execution_verification_receipt
+
+        runtime = arguments.get("_execution_evidence")
+        receipt = arguments.get("_verification_receipt")
+        runtime_fields = {
+            "execution_id", "workflow_hash", "executor_version", "selection_mode",
+            "duration_ms", "step_count", "total_attempts", "assertion_passed",
+        }
+        exact_runtime = (
+            type(runtime) is dict
+            and set(runtime) == runtime_fields
+            and all(
+                type(runtime[field]) is int
+                and 0 <= runtime[field] <= (1 << 53) - 1
+                for field in ("duration_ms", "step_count", "total_attempts")
+            )
+            and type(runtime["assertion_passed"]) is bool
+            and type(runtime["execution_id"]) is str
+            and 0 < len(runtime["execution_id"]) <= 128
+            and type(runtime["workflow_hash"]) is str
+            and len(runtime["workflow_hash"]) == 71
+            and type(runtime["executor_version"]) is str
+            and 0 < len(runtime["executor_version"]) <= 64
+            and runtime["selection_mode"] in {"deterministic", "model_selected"}
+        )
+        exact_receipt = False
+        if exact_runtime and type(receipt) is dict:
+            try:
+                canonical = build_execution_verification_receipt(
+                    "closed-loop:{}".format(arguments.get("execution_id")),
+                    receipt.get("evidence"), outcome_success=arguments.get("success"),
+                )
+                exact_receipt = (
+                    canonical == receipt
+                    and canonical["evidence"]["structural_digest"]
+                    == runtime["workflow_hash"]
+                    and runtime["execution_id"] == arguments.get("execution_id")
+                )
+            except (KeyError, TypeError, ValueError):
+                pass
+        valid = (
+            arguments.get("_evidence_capability")
+            is _CLOSED_LOOP_EVIDENCE_CAPABILITY
+            and exact_runtime and exact_receipt
+            and type(arguments.get("blueprint_id")) is str
+            and bool(arguments["blueprint_id"])
+        )
+        if not valid:
+            return {"ok": False, "error": "Unverified outcome evidence"}
+        return {
+            "ok": True,
+            "blueprint_id": arguments["blueprint_id"],
+            "execution_id": arguments["execution_id"],
+            "evidence_tier": "local_verified",
+        }
+
     try:
         from flyto_blueprint import get_engine
     except ImportError:
@@ -212,22 +269,41 @@ async def dispatch_blueprint_tool(
         )
 
     elif name == "report_blueprint_outcome":
-        host_verified = (
-            arguments.get("_evidence_capability")
-            is _CLOSED_LOOP_EVIDENCE_CAPABILITY
+        execution_evidence = arguments.get("_execution_evidence")
+        verification = arguments.get("_verification_receipt")
+        validation = await dispatch_blueprint_tool(
+            "_validate_closed_loop_evidence", arguments,
         )
+        host_verified = validation.get("ok") is True
         report_args = {
             "blueprint_id": arguments.get("blueprint_id", ""),
             "success": arguments.get("success", False),
             "execution_id": arguments.get("execution_id", ""),
             "evidence_tier": "local_verified" if host_verified else "community",
         }
-        execution_evidence = arguments.get("_execution_evidence")
-        if host_verified and isinstance(execution_evidence, dict):
+        if host_verified:
             report_args["evidence"] = execution_evidence
-        return engine.report_outcome(
-            **report_args,
-        )
+            report_args["verification"] = verification
+        response = engine.report_outcome(**report_args)
+        if type(response) is not dict or response.get("ok") is not True:
+            return response
+        if not host_verified:
+            return response
+        if (
+            type(response.get("blueprint_id")) is not str
+            or not response["blueprint_id"]
+            or response["blueprint_id"] != report_args["blueprint_id"]
+            or (
+                "execution_id" in response
+                and response["execution_id"] != report_args["execution_id"]
+            )
+        ):
+            return response
+        bound = dict(response)
+        bound["execution_id"] = report_args["execution_id"]
+        if bound.get("skipped") == "already_reported":
+            bound["evidence_tier"] = "local_verified"
+        return bound
 
     elif name == "export_blueprint":
         return engine.export_blueprint(

@@ -135,6 +135,35 @@ def test_builder_binds_exact_observed_outcome_inside_hashed_evidence():
         )
 
 
+def test_closed_loop_validator_binds_execution_workflow_and_outcome():
+    workflow_hash = "sha256:" + "b" * 64
+    structural = build_closed_loop_verification_receipt(
+        "bp_exact",
+        [{
+            "step_id": "one",
+            "module_id": "string.uppercase",
+            "executed": True,
+            "validation": {"valid": True},
+            "assertions": [{"ok": True}],
+        }],
+        {"validation_passed": True},
+        1,
+        workflow_hash,
+    )
+    receipt = build_execution_verification_receipt(
+        structural["evidence_id"], structural["evidence"], outcome_success=True,
+    )
+    assert receipt["evidence_id"] == "closed-loop:bp_exact"
+    assert receipt["evidence"]["structural_digest"] == workflow_hash
+    assert receipt["evidence"]["outcome_success"] is True
+    tampered = copy.deepcopy(receipt)
+    tampered["evidence"]["steps"][0]["executed"] = False
+    rebuilt = build_execution_verification_receipt(
+        tampered["evidence_id"], tampered["evidence"], outcome_success=True,
+    )
+    assert rebuilt != tampered
+
+
 def test_blueprint_rejects_missing_malformed_tampered_and_mismatched_without_mutation():
     from flyto_blueprint import BlueprintEngine, MemoryBackend
 

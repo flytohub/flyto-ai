@@ -290,13 +290,13 @@ def build_closed_loop_verification_receipt(
         steps.append({
             "step_id": str(item.get("step_id") or "step_{}".format(index)),
             "module_id": str(item.get("module_id") or ""),
-            "validation_ok": bool(isinstance(validation, dict) and (
-                validation.get("valid") is True or validation.get("ok") is True
-            )),
-            "assertion_count": sum(
-                1 for assertion in assertions
-                if isinstance(assertion, dict) and assertion.get("ok") is True
-            ),
+            "validation_ok": bool(isinstance(validation, dict) and
+                                  (validation.get("valid") is True or validation.get("ok") is True)),
+            "assertions_ok": all(type(assertion) is dict and assertion.get("ok") is True
+                                 for assertion in assertions),
+            "executed": item.get("executed") is True,
+            "assertion_count": sum(1 for assertion in assertions
+                                   if isinstance(assertion, dict) and assertion.get("ok") is True),
         })
     return build_execution_verification_receipt(
         "closed-loop:{}".format(execution_id),
@@ -305,7 +305,7 @@ def build_closed_loop_verification_receipt(
             "counts": {"executed_steps": len(executions), "evidence_items": evidence_count},
             "steps": steps,
             "structural_digest": structural_digest,
-        },
+        }, outcome_success=checks.get("outcome_success"),
     )
 
 

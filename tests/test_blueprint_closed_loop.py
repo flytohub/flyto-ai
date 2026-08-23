@@ -22,6 +22,7 @@ from flyto_ai.providers.base import dispatch_and_log_tool
 from flyto_ai.providers.failover import ProviderChain
 from flyto_ai.tools import blueprint_tools
 from flyto_ai.tools.blueprint_tools import dispatch_blueprint_tool
+from flyto_ai.execution_verification import build_execution_verification_receipt
 
 
 def _bare_agent(dispatch, permission_level="workspace_write"):
@@ -54,6 +55,16 @@ def _bare_agent(dispatch, permission_level="workspace_write"):
     return agent
 
 
+def _bound_outcome(arguments, **extra):
+    return {
+        "ok": True,
+        "blueprint_id": arguments["blueprint_id"],
+        "execution_id": arguments["execution_id"],
+        "evidence_tier": "local_verified",
+        **extra,
+    }
+
+
 @pytest.mark.asyncio
 async def test_blueprint_loop_validates_executes_and_reports_once():
     calls = []
@@ -68,7 +79,7 @@ async def test_blueprint_loop_validates_executes_and_reports_once():
                 "data": {"value": arguments["params"]["text"].upper()},
             }
         if name == "report_blueprint_outcome":
-            return {"ok": True, "score": 75}
+            return _bound_outcome(arguments, score=75)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -104,6 +115,101 @@ async def test_blueprint_loop_validates_executes_and_reports_once():
 
 
 @pytest.mark.asyncio
+async def test_identity_free_ok_response_does_not_close_loop():
+    async def dispatch(name, arguments):
+        if name == "validate_params":
+            return {"valid": True}
+        if name == "execute_module":
+            return {"ok": True}
+        if name == "report_blueprint_outcome":
+            return {"ok": True}
+        raise AssertionError(name)
+
+    result = await execute_blueprint_loop(
+        "identity_required",
+        [{"module": "string.uppercase", "params": {"text": "safe"}}],
+        dispatch,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome_reported"] is False
+    assert result["closed_loop_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_through_tool_identity_free_trusted_response_fails_closed(monkeypatch):
+    class IdentityFreeEngine:
+        def report_outcome(self, **_arguments):
+            return {"ok": True, "evidence_tier": "local_verified"}
+
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: IdentityFreeEngine())
+
+    async def dispatch(name, arguments):
+        if name == "validate_params":
+            return {"valid": True}
+        if name == "execute_module":
+            return {"ok": True}
+        return await dispatch_blueprint_tool(name, arguments)
+
+    result = await execute_blueprint_loop(
+        "identity_required_through_tool",
+        [{"module": "string.uppercase", "params": {"text": "safe"}}],
+        dispatch,
+    )
+
+    assert result["outcome_reported"] is False
+    assert result["closed_loop_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_unsafe_step_receipt_falls_back_to_community_and_keeps_checkpoint(
+    monkeypatch, tmp_path,
+):
+    class CommunityEchoEngine:
+        def __init__(self):
+            self.calls = []
+
+        def report_outcome(self, **arguments):
+            self.calls.append(arguments)
+            return {
+                "ok": True,
+                "blueprint_id": arguments["blueprint_id"],
+                "execution_id": arguments["execution_id"],
+                "evidence_tier": arguments["evidence_tier"],
+            }
+
+    engine = CommunityEchoEngine()
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+
+    async def dispatch(name, arguments):
+        if name == "validate_params":
+            return {"valid": True}
+        if name == "execute_module":
+            return {"ok": True}
+        return await dispatch_blueprint_tool(name, arguments)
+
+    result = await execute_blueprint_loop(
+        "community_fallback",
+        [{
+            "id": "unsafe step id",
+            "module": "string.uppercase",
+            "params": {"text": "safe"},
+        }],
+        dispatch,
+        checkpoint_store=JsonCheckpointStore(str(tmp_path)),
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"]["evidence_tier"] == "community"
+    assert result["outcome_reported"] is False
+    assert result["closed_loop_ok"] is False
+    assert result["evidence"]["checkpoint_cleared"] is False
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert engine.calls[0]["evidence_tier"] == "community"
+    assert "verification" not in engine.calls[0]
+
+
+@pytest.mark.asyncio
 async def test_blueprint_loop_stops_on_validation_failure_and_reports_failure():
     calls = []
 
@@ -112,7 +218,7 @@ async def test_blueprint_loop_stops_on_validation_failure_and_reports_failure():
         if name == "validate_params":
             return {"valid": False, "errors": ["text is required"]}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError("Execution must stop after failed validation")
 
     result = await execute_blueprint_loop(
@@ -146,7 +252,7 @@ async def test_whole_workflow_preflight_prevents_partial_side_effects():
         if name == "execute_module":
             raise AssertionError("Preflight failure must prevent every side effect")
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -192,7 +298,7 @@ async def test_blueprint_loop_resolves_core_step_outputs_and_asserts_result():
             assert arguments["params"] == {"text": "HELLO"}
             return {"status": "success", "data": {"result": "OLLEH"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -235,7 +341,7 @@ async def test_blueprint_loop_resolves_core_step_outputs_and_asserts_result():
 async def test_blueprint_loop_retries_failed_result_with_bounded_policy():
     execute_count = 0
 
-    async def dispatch(name, _arguments):
+    async def dispatch(name, arguments):
         nonlocal execute_count
         if name == "validate_params":
             return {"valid": True}
@@ -245,7 +351,7 @@ async def test_blueprint_loop_retries_failed_result_with_bounded_policy():
                 return {"ok": False, "error": "transient"}
             return {"status": "success", "data": {"result": "done"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -282,7 +388,7 @@ async def test_assertion_failure_fails_outcome_and_emits_resume_point():
             return {"status": "success", "data": {"result": "unexpected"}}
         if name == "report_blueprint_outcome":
             report_args = arguments
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -315,7 +421,7 @@ async def test_forward_reference_fails_structural_preflight():
     async def dispatch(name, arguments):
         calls.append((name, arguments))
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError("Structural failure must not reach Core")
 
     result = await execute_blueprint_loop(
@@ -361,7 +467,7 @@ async def test_agent_auto_executes_safe_blueprint_through_nested_dispatch():
         if name == "execute_module":
             return {"status": "success", "data": {"value": "HELLO"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await _bare_agent(raw_dispatch)._make_safe_dispatch()(
@@ -396,7 +502,7 @@ async def test_nested_blueprint_execution_cannot_bypass_agent_permission():
         if name == "validate_params":
             return {"valid": True}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         if name == "execute_module":
             raise AssertionError("Dangerous module reached the raw dispatcher")
         raise AssertionError(name)
@@ -438,7 +544,7 @@ async def test_agent_preflights_later_danger_before_safe_step_side_effect():
                 ],
             }
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         if name in {"validate_params", "execute_module"}:
             raise AssertionError("Access preflight must happen before Core calls")
         raise AssertionError(name)
@@ -550,7 +656,7 @@ async def test_deterministic_blueprint_reuse_is_zero_planner_model_calls(monkeyp
         if name == "execute_module":
             return {"status": "success", "data": {"value": "HELLO"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     from flyto_ai.intelligence import planner
@@ -584,9 +690,9 @@ async def test_deterministic_blueprint_reuse_is_zero_planner_model_calls(monkeyp
     assert response.tool_calls[0]["evidence"]["model_call_scope"] == "planner"
     report_arguments = calls[-1][1]
     assert report_arguments["_execution_evidence"]["selection_mode"] == "deterministic"
-    assert report_arguments["_execution_evidence"]["planner_model_calls_used"] == 0
+    assert "planner_model_calls_used" not in report_arguments["_execution_evidence"]
     assert "model_calls_used" not in report_arguments["_execution_evidence"]
-    assert report_arguments["_execution_evidence"]["model_call_scope"] == "planner"
+    assert "model_call_scope" not in report_arguments["_execution_evidence"]
     assert [name for name, _ in calls] == [
         "use_blueprint",
         "validate_params",
@@ -606,7 +712,7 @@ async def test_planner_call_scope_does_not_claim_llm_step_is_token_free():
         if name == "execute_module":
             return {"status": "success", "data": {"value": "mocked"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -623,8 +729,8 @@ async def test_planner_call_scope_does_not_claim_llm_step_is_token_free():
 
     runtime_evidence = calls[-1][1]["_execution_evidence"]
     assert result["ok"] is True
-    assert runtime_evidence["planner_model_calls_used"] == 0
-    assert runtime_evidence["model_call_scope"] == "planner"
+    assert "planner_model_calls_used" not in runtime_evidence
+    assert "model_call_scope" not in runtime_evidence
     assert "model_calls_used" not in runtime_evidence
     assert "workflow_model_calls_used" not in runtime_evidence
 
@@ -706,6 +812,7 @@ async def test_blueprint_tool_forwards_execution_id(monkeypatch):
             execution_id="",
             evidence_tier="local_verified",
             evidence=None,
+            verification=None,
         ):
             self.reported = (
                 blueprint_id,
@@ -755,6 +862,7 @@ async def test_closed_loop_capability_marks_only_host_execution_verified(
             execution_id="",
             evidence_tier="local_verified",
             evidence=None,
+            verification=None,
         ):
             self.reported.append({
                 "blueprint_id": blueprint_id,
@@ -762,8 +870,13 @@ async def test_closed_loop_capability_marks_only_host_execution_verified(
                 "execution_id": execution_id,
                 "evidence_tier": evidence_tier,
                 "evidence": evidence,
+                "verification": verification,
             })
-            return {"ok": True, "evidence_tier": evidence_tier}
+            return {
+                "ok": True,
+                "blueprint_id": blueprint_id,
+                "evidence_tier": evidence_tier,
+            }
 
     engine = FakeEngine()
     import flyto_blueprint
@@ -808,7 +921,78 @@ async def test_closed_loop_capability_marks_only_host_execution_verified(
     ]
     assert engine.reported[0]["evidence"]["step_count"] == 1
     assert engine.reported[0]["evidence"]["selection_mode"] == "model_selected"
+    assert engine.reported[0]["verification"]["evidence"]["outcome_success"] is True
     assert engine.reported[1]["evidence"] is None
+
+
+@pytest.mark.asyncio
+async def test_real_blueprint_engine_trusted_outcome_is_bound_and_idempotent(
+    monkeypatch,
+):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    engine = BlueprintEngine(storage=MemoryBackend())
+    workflow = {
+        "name": "real trusted loop",
+        "steps": [
+            {"id": "one", "module": "string.uppercase", "params": {}},
+            {"id": "two", "module": "string.lowercase", "params": {}},
+            {"id": "three", "module": "string.reverse", "params": {}},
+        ],
+    }
+    learning_receipt = build_execution_verification_receipt(
+        "learning:real-loop",
+        {
+            "steps": [
+                {"step_id": "one", "module_id": "string.uppercase"},
+                {"step_id": "two", "module_id": "string.lowercase"},
+                {"step_id": "three", "module_id": "string.reverse"},
+            ],
+            "checks": {"fixture_valid": True},
+            "counts": {"step_count": 3},
+            "structural_digest": "sha256:" + "a" * 64,
+        },
+    )
+    learned = engine.learn_from_execution(workflow, verification=learning_receipt)
+    blueprint_id = learned["data"]["id"]
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    reports = []
+
+    async def dispatch(name, arguments):
+        if name == "validate_params":
+            return {"valid": True}
+        if name == "execute_module":
+            return {"ok": True, "data": {"result": "SAFE"}}
+        reports.append(arguments)
+        return await dispatch_blueprint_tool(name, arguments)
+
+    before = engine._blueprints[blueprint_id]["score"]
+    result = await execute_blueprint_loop(
+        blueprint_id,
+        workflow["steps"],
+        dispatch,
+    )
+    trusted = engine._blueprints[blueprint_id]
+    assert result["closed_loop_ok"] is True
+    assert trusted["score"] == before + 5
+    assert len(trusted["evidence_samples"]) == 1
+
+    duplicate = await dispatch_blueprint_tool(
+        "report_blueprint_outcome", reports[0],
+    )
+    assert duplicate["skipped"] == "already_reported"
+    assert engine._blueprints[blueprint_id]["score"] == before + 5
+
+    tampered = dict(reports[0])
+    tampered["_verification_receipt"] = dict(reports[0]["_verification_receipt"])
+    tampered["_verification_receipt"]["evidence_sha256"] = "0" * 64
+    await dispatch_blueprint_tool("report_blueprint_outcome", tampered)
+    forged = dict(reports[0])
+    forged["execution_id"] = "copied_dictionary"
+    forged["_evidence_capability"] = "flyto-ai.closed-loop-verified"
+    await dispatch_blueprint_tool("report_blueprint_outcome", forged)
+    assert engine._blueprints[blueprint_id]["score"] == before + 5
+    assert len(engine._blueprints[blueprint_id]["evidence_samples"]) == 1
 
 
 @pytest.mark.asyncio
@@ -918,7 +1102,7 @@ async def test_real_core_dataflow_and_assertion_integration():
 
     async def dispatch(name, arguments):
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         return await dispatch_core_tool(name, arguments)
 
     result = await execute_blueprint_loop(
@@ -991,7 +1175,7 @@ async def test_checkpoint_resumes_without_replaying_completed_side_effect(tmp_pa
             assert arguments["params"]["text"] == "FLYTO"
             return {"ok": True, "data": {"result": "OTYLF"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     steps = [
@@ -1057,7 +1241,7 @@ async def test_structured_repair_changes_strategy_before_outcome():
                 }
             return {"ok": True, "data": {"result": "FIXED"}}
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -1093,7 +1277,7 @@ async def test_malformed_repair_contract_is_bounded_failure():
                 },
             }
         if name == "report_blueprint_outcome":
-            return {"ok": True}
+            return _bound_outcome(arguments)
         raise AssertionError(name)
 
     result = await execute_blueprint_loop(
@@ -1187,6 +1371,7 @@ async def test_middleware_forwards_configured_distillation_threshold(monkeypatch
         })
 
     monkeypatch.setattr(middleware_module.router, "feedback", fake_feedback)
+    monkeypatch.setattr(middleware_module.router, "init_storage", lambda: None)
     assistant = middleware_module.AssistantMiddleware(
         distillation_min_steps=7,
     )

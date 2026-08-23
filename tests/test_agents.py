@@ -111,7 +111,7 @@ class TestGuardianBlockedPatterns:
     def test_allowed_extensions_has_common_types(self):
         for ext in [
             ".py", ".ts", ".js", ".mjs", ".vue", ".html", ".css", ".json",
-            ".yaml", ".md", ".service",
+            ".yaml", ".md", ".service", ".lock",
         ]:
             assert ext in ALLOWED_EXTENSIONS
 
@@ -131,6 +131,9 @@ class TestGuardianBlockedPatterns:
 
     def test_is_extension_allowed_systemd_service(self):
         assert _is_extension_allowed("turtlebot3-bringup.service") is True
+
+    def test_is_extension_allowed_dependency_lock(self):
+        assert _is_extension_allowed("requirements-ce.lock") is True
 
     def test_is_extension_allowed_binary(self):
         assert _is_extension_allowed("app.exe") is False

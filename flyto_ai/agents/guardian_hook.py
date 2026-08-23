@@ -56,7 +56,7 @@ BLOCKED_PATHS = [
 # ── Allowed file extensions for Edit/Write ──
 ALLOWED_EXTENSIONS: Set[str] = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue", ".html", ".css", ".scss",
-    ".json", ".yaml", ".yml", ".md", ".txt", ".toml", ".cfg", ".ini",
+    ".json", ".yaml", ".yml", ".md", ".txt", ".toml", ".cfg", ".ini", ".lock",
     ".sh", ".bash", ".zsh", ".service", ".sql", ".graphql", ".proto",
     ".xml", ".svg", ".csv", ".env.example", ".gitignore",
     ".dockerfile", ".dockerignore", ".editorconfig",

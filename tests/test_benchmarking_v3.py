@@ -93,6 +93,15 @@ def test_verified_blueprints_learn_search_and_expand_through_real_engine():
         assert len(expanded["data"]["steps"]) == 3
 
 
+def test_verified_engine_fixtures_store_receipts_and_warm_outcomes():
+    engine = _build_verified_engine({"runtime": "python3.11"})
+    blueprint = engine._blueprints[WORKFLOW_IDS["real-coding-change-and-test"]]
+    assert blueprint["verification"]["receipt_version"] == (
+        "flyto.execution-verification-receipt.v1"
+    )
+    assert blueprint["score"] == 100
+
+
 def test_v3_environment_binds_full_host_identity():
     config = _config()
     local = HostIdentity(

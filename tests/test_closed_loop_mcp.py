@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from flyto_ai.closed_loop_v3 import evaluate_distillation
 from flyto_ai.closed_loop_mcp import (
     MCP_CONTRACT_VERSION,
     ClosedLoopMCPServer,
@@ -488,6 +489,9 @@ async def test_real_stdio_mcp_executes_verifies_and_saves_tokens(tmp_path):
         assert verification["distillation"]["eligible"] is True
         assert verification["distillation"]["score"] == 70
         assert verification["distillation"]["blueprint_id"]
+        receipt = verification["distillation"]["verification_receipt"]
+        assert receipt["receipt_version"] == "flyto.execution-verification-receipt.v1"
+        assert receipt["evidence"]["counts"]["executed_steps"] == 3
 
         raw = await client.call("get_evidence", {
             "execution_id": execution["execution_id"],
@@ -562,3 +566,148 @@ async def test_real_stdio_mcp_executes_verifies_and_saves_tokens(tmp_path):
 
 def test_contract_version_is_stable():
     assert MCP_CONTRACT_VERSION == "flyto.closed-loop-mcp.v1"
+
+
+@pytest.mark.parametrize("legacy_step", [
+    {"module_id": "string.uppercase", "ok": True},
+    {"module_id": "string.uppercase", "ok": True, "executed": True},
+])
+def test_ok_only_steps_cannot_be_distilled_as_verified(legacy_step):
+    decision = evaluate_distillation(
+        [],
+        [dict(legacy_step, step_id="s{}".format(index)) for index in range(3)],
+        "legacy compatible result",
+    )
+    assert decision.eligible is False
+    assert decision.reason == "step lacks validation evidence"
+
+
+def _verified_server(tmp_path):
+    server = ClosedLoopMCPServer(str(tmp_path))
+    plan_id = "plan_learning_boundary"
+    execution_id = "execution_learning_boundary"
+    executions = [{
+        "module_id": "string.uppercase",
+        "step_id": "step_{}".format(index),
+        "ok": True,
+        "executed": True,
+        "validation": {"valid": True},
+        "assertions": [],
+        "arguments": {"params": {}},
+    } for index in range(3)]
+    server._save("plan", plan_id, {"message": "verified workflow"})
+    server._save("evidence", execution_id, {
+        "plan_id": plan_id,
+        "result": {
+            "execution_id": execution_id,
+            "closed_loop_ok": True,
+            "outcome_reported": True,
+            "executions": executions,
+            "evidence": {
+                "plan_gate_passed": True,
+                "validation_passed": True,
+                "assertion_passed": True,
+                "checkpoint_cleared": True,
+                "workflow_hash": "sha256:" + "a" * 64,
+            },
+        },
+    })
+    return server, execution_id
+
+
+@pytest.mark.asyncio
+async def test_receipt_construction_rejection_fails_closed_before_blueprint(
+    tmp_path, monkeypatch,
+):
+    from flyto_ai import closed_loop_mcp as module
+
+    server, execution_id = _verified_server(tmp_path)
+    calls = []
+
+    class BlueprintMustNotRun:
+        def learn_from_execution(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError("Blueprint must not run")
+
+    server._blueprint_engine = BlueprintMustNotRun()
+    monkeypatch.setattr(
+        module, "verified_learning_distillation",
+        lambda *args, **kwargs: (
+            False,
+            {"eligible": False, "reason": "execution verification receipt rejected"},
+        ),
+    )
+
+    response = await server._verify({"execution_id": execution_id})
+    verification = response["structuredContent"]
+    assert calls == []
+    assert verification["ok"] is False
+    assert verification["verified"] is False
+    assert verification["distillation"]["eligible"] is False
+    assert verification["distillation"]["reason"] == (
+        "execution verification receipt rejected"
+    )
+    assert "result" not in verification["distillation"]
+    assert "verification_receipt" not in verification["distillation"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blueprint_response", [
+    {"ok": False, "error": "rejected"},
+    {"ok": True},
+    {"ok": True, "data": {}},
+    {"ok": True, "blueprint_id": ""},
+])
+async def test_blueprint_rejection_or_missing_identity_fails_distillation(
+    tmp_path, blueprint_response,
+):
+    server, execution_id = _verified_server(tmp_path)
+
+    class BlueprintResponse:
+        def learn_from_execution(self, *args, **kwargs):
+            return blueprint_response
+
+    server._blueprint_engine = BlueprintResponse()
+    response = await server._verify({"execution_id": execution_id})
+    verification = response["structuredContent"]
+
+    assert verification["ok"] is False
+    assert verification["verified"] is False
+    assert verification["distillation"]["eligible"] is False
+    assert verification["distillation"]["reason"] == (
+        "Blueprint rejected verified learning"
+    )
+    assert verification["distillation"]["result"] == blueprint_response
+    assert "blueprint_id" not in verification["distillation"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsafe_execution_id", [
+    "", "closed-loop:", "../execution", "execution/child", "execution:child",
+    "execution//child",
+])
+async def test_missing_or_unsafe_execution_binding_never_calls_blueprint(
+    tmp_path, unsafe_execution_id,
+):
+    server, execution_id = _verified_server(tmp_path)
+    evidence = server._load("evidence", execution_id)
+    evidence["result"]["execution_id"] = unsafe_execution_id
+    server._save("evidence", execution_id, evidence)
+    calls = []
+
+    class BlueprintMustNotRun:
+        def learn_from_execution(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError("Blueprint must not run")
+
+    server._blueprint_engine = BlueprintMustNotRun()
+    response = await server._verify({"execution_id": execution_id})
+    verification = response["structuredContent"]
+
+    assert calls == []
+    assert verification["ok"] is False
+    assert verification["verified"] is False
+    assert verification["distillation"]["eligible"] is False
+    assert verification["distillation"]["reason"] == (
+        "execution verification receipt rejected"
+    )

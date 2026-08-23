@@ -27,6 +27,7 @@ from flyto_ai.closed_loop_v3 import (
     evaluate_distillation,
     stable_hash,
 )
+from flyto_ai.execution_verification import verified_learning_distillation
 from flyto_ai.mcp_server import (
     DISCOVERY_TTL_MS,
     STATIC_LIST_TTL_MS,
@@ -979,17 +980,12 @@ class ClosedLoopMCPServer:
             "evidence_count": decision.evidence_count,
         }
         if verified and decision.eligible and decision.workflow:
-            learned = self._ensure_blueprint_engine().learn_from_execution(
-                decision.workflow,
-                name=decision.workflow.get("name") or "Verified MCP workflow",
-                tags=["mcp", "verified", PLAN_IR_VERSION],
+            learning_ok, learning_state = verified_learning_distillation(
+                self._ensure_blueprint_engine(), decision.workflow, evidence,
+                checks, decision.evidence_count, PLAN_IR_VERSION,
             )
-            distillation["result"] = learned
-            if learned.get("data"):
-                distillation["blueprint_id"] = learned["data"].get("id")
-                distillation["score"] = learned["data"].get("score")
-            else:
-                distillation["blueprint_id"] = learned.get("blueprint_id")
+            distillation.update(learning_state)
+            verified = verified and learning_ok
 
         verification = {
             "ok": verified,

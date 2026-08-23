@@ -38,6 +38,7 @@ from flyto_ai.benchmarking import (
     build_environment_digest,
     write_runs,
 )
+from flyto_ai.execution_verification import build_benchmark_workflow_receipt as _receipt
 from flyto_ai.intelligence.planner import (
     blueprint_is_trusted,
     classify_tool_intent,
@@ -782,20 +783,14 @@ def _build_verified_engine(compatibility: Mapping[str, str]):
     for task_id in sorted(REAL_TASK_IDS):
         blueprint_id = WORKFLOW_IDS[task_id]
         workflow = _reference_workflow(task_id)
-        result = engine.learn_from_workflow(
+        learning_receipt = _receipt("benchmark-fixture:{}".format(blueprint_id), workflow)
+        result = engine.learn_from_execution(
             workflow,
             blueprint_id=blueprint_id,
             name=workflow["name"],
             tags=workflow["tags"],
-            verified=True,
             compatibility=dict(compatibility),
-            verification={
-                "assertions": [
-                    "real execution completed",
-                    "output digest verified",
-                ]
-            },
-            trust_tier="ci_verified",
+            verification=learning_receipt,
         )
         if not result.get("ok"):
             raise BenchmarkHostError(
@@ -814,6 +809,10 @@ def _build_verified_engine(compatibility: Mapping[str, str]):
                     "assertion_passed": True,
                     "planner_model_calls_used": 0,
                 },
+                verification=_receipt(
+                    "benchmark-warm:{}:{}".format(blueprint_id, index),
+                    workflow, outcome_success=True,
+                ),
             )
             if not outcome.get("ok"):
                 raise BenchmarkHostError(

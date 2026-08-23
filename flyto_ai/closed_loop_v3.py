@@ -567,11 +567,10 @@ def evaluate_distillation(
             isinstance(item, dict) and item.get("ok") is True
             for item in assertions
         )
-        # Provider tool logs predate explicit validation evidence. Their ``ok``
-        # field is still accepted, while v3 records must carry stronger proof.
-        is_v3_record = "executed" in result or "validation" in result
-        if is_v3_record and not (validation_ok or assertions_ok):
-            return DistillationDecision(False, "v3 step lacks validation evidence")
+        # An ``ok`` result is transport/runtime compatibility only. It never
+        # establishes the validation evidence required for trusted learning.
+        if not (validation_ok or assertions_ok):
+            return DistillationDecision(False, "step lacks validation evidence")
         evidence_count += int(validation_ok) + sum(
             1 for item in assertions
             if isinstance(item, dict) and item.get("ok") is True

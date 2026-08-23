@@ -1,5 +1,33 @@
 # Decisions
 
+## 2026-08-23 — Layer 1 declares its own product role, and the sibling floors are exact
+
+Decision: this repository ships `flyto-product.toml` declaring `flyto-ai` as
+layer 1 `intent_governance`, asserted exactly by `tests/test_product_contract.py`,
+and its sibling dependency floors name the exact releases the behaviour needs
+(`flyto-core[browser]>=2.28.1`, `flyto-blueprint>=0.3.0`).
+
+Why the contract: `flyto-blueprint` and `flyto-core` both declared theirs and
+both listed "intent and provider governance" under `does_not_own`. The
+responsibility was therefore disclaimed twice and claimed nowhere. A topology
+whose layers are each asserted locally still has a hole if one layer never
+speaks.
+
+Why the floors: both were nominal. `>=2.16.1` accepted Core releases predating
+all 33 published advisories, and nothing in this package checks a Core version
+for security, so an environment holding an old Core satisfied the requirement
+and ran. `>=0.1.0` was worse than loose — `tools/blueprint_tools.py` probes the
+engine signature for `available_module_ids` and treats its absence as legacy
+unfiltered behaviour, and no published Blueprint had that parameter, so the
+module-availability gate was inert for every install resolved from PyPI while
+reading as enforced in the source. A signature-probed feature is only as real
+as the floor that guarantees the signature.
+
+Consequence: `[full]` and `[dev]` now require a Core that carries every advisory
+fix and a Blueprint that can be gated. Blueprint 0.3.0 must be published before
+this floor resolves; that release is prepared in its repository and tagged
+separately.
+
 ## 2026-08-22 — Ledger version transition is explicit and fail-closed
 
 Decision: validate parent and successor intent-ledger labels independently

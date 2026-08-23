@@ -20,6 +20,23 @@
 
 ---
 
+**AI said it finished. Flyto2 shows the proof.**
+
+Flyto2 is one product delivered as three independently usable packages:
+
+| Choose | When you need |
+| --- | --- |
+| `flyto-ai` | Understand, route, and govern new work and provider use. |
+| `flyto-blueprint` | Store, learn from, and score reusable procedures; it never executes them. |
+| `flyto-core` | Validate schemas, execute and replay deterministically, and emit evidence. |
+
+`flyto-ai` is the layer-one package: it owns intent and provider governance and
+guarded dispatch into the execution layer. It does not own procedure learning
+and scoring, deterministic execution and replay, or hosted product and account
+logic. The declaration lives in [`flyto-product.toml`](flyto-product.toml).
+
+---
+
 ## The Monday-morning problem
 
 Every Monday, you ask an agent to open the same dashboards, check the same

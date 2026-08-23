@@ -724,25 +724,17 @@ try:
         is_session_dead as _is_session_dead,
     )
 except ImportError:
-    # Fallback: inline patterns if flyto-core is too old
-    _TRANSIENT_PATTERNS = [
-        "timeout", "timed out", "target closed", "session closed",
-        "navigation failed", "browser disconnected",
-        "execution context was destroyed", "connection refused",
-        "net::err_", "page crashed",
-    ]
-    _SESSION_DEAD_PATTERNS = [
-        "target closed", "session closed", "browser disconnected",
-        "browser has been closed", "browser.close",
-    ]
-
+    # No second copy of Core's pattern lists. Both classifiers are only ever
+    # asked about an error returned by a `browser.*` dispatch, and that dispatch
+    # goes through Core — with no Core installed there is no error here to
+    # classify. A duplicated list would be an unreachable branch that silently
+    # falls behind whatever Core learns about browser failures, which is how the
+    # snapshot/interact sets in assistant/resilience.py drifted.
     def _is_transient_error(error_msg: str) -> bool:
-        lower = error_msg.lower()
-        return any(p in lower for p in _TRANSIENT_PATTERNS)
+        return False
 
     def _is_session_dead(error_msg: str) -> bool:
-        lower = error_msg.lower()
-        return any(p in lower for p in _SESSION_DEAD_PATTERNS)
+        return False
 
 
 async def _relaunch_browser() -> Dict[str, Any]:

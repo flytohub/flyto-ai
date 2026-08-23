@@ -1,8 +1,18 @@
 name: Coding watchdog
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
+  # The 15-minute schedule is off until a publisher exists. `FLYTO_CODING_HEARTBEAT`
+  # has never been set on this repository, so every scheduled run reported
+  # `heartbeat_missing` and failed -- 400 consecutive red runs in the visible
+  # window and one incident issue open since 2026-08-13. A dead-man switch that is
+  # always firing cannot separate "the control plane died" from "nothing ever
+  # published", which is the only question it exists to answer, and it spends
+  # Actions minutes to say nothing. Manual dispatch still works and still reports
+  # honestly. Re-enable this trigger in the same change that installs the
+  # publisher (`flyto-ai code-watchdog --install --github-repository OWNER/REPO`),
+  # never before it.
+  # schedule:
+  #   - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:

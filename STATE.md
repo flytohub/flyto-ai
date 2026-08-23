@@ -1,6 +1,34 @@
 # State
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
+
+## Cross-repository contract repair (2026-08-23)
+
+Four things that were true in the source tree and false everywhere else:
+
+- `stack-lock.json` pinned Blueprint `f3eb62e` and Core `23efc93` while both
+  mains had moved on, so the required `stack_lock` check failed locally — no
+  audited coding job could start — and CI was integration-testing this package
+  against sibling revisions two feature commits stale. The lock now pins the
+  current Blueprint and Core revisions.
+- `flyto-core[browser]>=2.16.1` accepted every Core release predating all 33
+  published advisories, and `flyto-blueprint>=0.1.0` accepted engines with no
+  `available_module_ids` parameter, which `tools/blueprint_tools.py` treats as
+  "call it the legacy unfiltered way". The module-availability gate was
+  therefore off for every PyPI install while reading as enforced here. Floors
+  are now `>=2.28.1` and `>=0.3.0`; Blueprint 0.3.0 is prepared but not yet
+  tagged, so the second floor does not resolve until that tag is pushed.
+- `flyto-product.toml` did not exist here, while Blueprint and Core each shipped
+  one disclaiming "intent and provider governance". Layer 1 now declares itself
+  and `tests/test_product_contract.py` asserts it exactly.
+- The ImportError fallbacks in `assistant/resilience.py` and
+  `tools/core_tools.py` were second copies of Core browser constants, and the
+  first had already drifted from Core with nothing in the suite touching it.
+  Both are now inert, and `tests/test_core_constant_parity.py` fails if a copy
+  returns or if a borrowed value stops matching Core.
+
+Verified locally on this checkout: `stack_lock`, `compile`, Ruff
+(`E9,F63,F7,F82`), 23 generated reference files current, and the full suite.
 
 ## Amendment recovery and Cloud landing evidence (2026-08-22)
 
@@ -217,9 +245,18 @@ evidence or credentials. A single `flock` prevents overlapping runs.
 default). `--github-repository OWNER/REPO` publishes the secret-free heartbeat
 to a GitHub Actions repository variable via the already-authenticated `gh` CLI;
 no token reaches the plist or any health file.
-`.github/workflows/coding-watchdog.yml` polls that variable every 15 minutes
-and opens, refreshes or closes one labelled issue. It is deterministic Actions,
-not an agentic workflow, so healthy polling consumes no model quota.
+`.github/workflows/coding-watchdog.yml` reads that variable and opens, refreshes
+or closes one labelled issue. It is deterministic Actions, not an agentic
+workflow, so healthy polling consumes no model quota.
+
+Scheduled polling is disabled as of 2026-08-23. The publisher was never
+installed against this repository, so `FLYTO_CODING_HEARTBEAT` was never set and
+every 15-minute run failed `heartbeat_missing` -- 400 consecutive red runs in the
+visible window, with incident issue #38 open since 2026-08-13. A permanently
+firing dead-man switch reports the same thing whether the control plane is dead
+or was never wired, so the `schedule` trigger is commented out and only
+`workflow_dispatch` remains. Restore the trigger in the same change that runs
+`flyto-ai code-watchdog --install --github-repository OWNER/REPO`.
 
 Alert-only in this release: recovery stays with the existing explicit
 subtractive commands. The MCP tool inventory is unchanged.

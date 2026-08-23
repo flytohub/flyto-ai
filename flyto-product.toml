@@ -1,0 +1,19 @@
+schema = "flyto.product-contract.v1"
+product = "Flyto2"
+promise = "Turn AI work into verified, replayable procedures."
+proof_line = "AI said it finished. Flyto2 shows the proof."
+
+[package]
+name = "flyto-ai"
+layer = "intent_governance"
+layer_order = 1
+owns = [
+    "intent and provider governance",
+    "guarded dispatch into the execution layer",
+    "the audited coding route and its lane evidence",
+]
+does_not_own = [
+    "reusable procedure learning and scoring",
+    "deterministic execution, replay, and evidence",
+    "hosted product and account logic",
+]

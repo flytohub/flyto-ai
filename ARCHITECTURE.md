@@ -88,6 +88,14 @@ Invariants:
 - Both product columns converge on `flyto-ai`, the unified AI gateway/SDK.
 - The platform chain below `flyto-ai` is LLM providers -> `flyto-blueprint` ->
   `flyto-core`. Every `flyto-modules-*` extension registers with Core.
+- Those three packages each declare their own slice of that chain in a repo-root
+  `flyto-product.toml` (`flyto.product-contract.v1`), asserted exactly by a test
+  in each repository: `flyto-ai` is layer 1 `intent_governance`,
+  `flyto-blueprint` layer 2 `procedure_memory`, `flyto-core` layer 3
+  `execution`. Each file also lists what it does **not** own, so a
+  responsibility cannot sit unclaimed between two repositories — which is what
+  had happened here: Blueprint and Core both disclaimed "intent and provider
+  governance" while this repository declared no contract at all.
 - `flyto-indexer` scans `flyto-core` and every `flyto-modules-*` extension as
   two separate inputs, builds the index, and feeds it to `flyto-engine`. That
   lower arrow is an index/data feed only; it does not place Engine lower in the

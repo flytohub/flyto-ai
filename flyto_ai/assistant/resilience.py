@@ -13,20 +13,31 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-# Import shared resilience primitives from flyto-core (canonical source)
+# Import shared resilience primitives from flyto-core (canonical source).
+#
+# The fallback is empty on purpose. It used to be a hand-written copy of Core's
+# two sets, and the copy drifted: it had lost `browser.detect_list` and
+# `browser.readability` from the snapshot set, and its interact set carried
+# `browser.extract` while missing `browser.hover` and `browser.drag`. Nothing
+# noticed, because nothing referenced these names in a test. A second copy of a
+# set that only Core can populate correctly will drift again the next time Core
+# adds a browser module.
+#
+# Empty is also the honest value: every module in both sets is a `browser.*`
+# module, and browser modules are dispatched through Core. With no Core
+# installed there is no browser call to guard or heal, so a guard that matches
+# nothing suppresses exactly the work that could not happen anyway.
 try:
     from core.modules.atomic.llm._resilience import _INTERACT_MODULES, _SNAPSHOT_MODULES
     _HAS_CORE_RESILIENCE = True
 except ImportError:
     _HAS_CORE_RESILIENCE = False
+    _INTERACT_MODULES = frozenset()
+    _SNAPSHOT_MODULES = frozenset()
 
 logger = logging.getLogger(__name__)
 
 _FAIL_HINTS = ("not found", "no element", "timeout", "waiting for selector", "failed to find")
-if not _HAS_CORE_RESILIENCE:
-    _INTERACT_MODULES = frozenset(("browser.click", "browser.type", "browser.extract",
-                                    "browser.wait", "browser.find", "browser.form", "browser.select"))
-    _SNAPSHOT_MODULES = frozenset(("browser.snapshot", "browser.extract"))
 
 # Anti-bot detection signals in page content
 _ANTIBOT_SIGNALS = (

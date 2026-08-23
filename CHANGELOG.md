@@ -1,6 +1,45 @@
 # Changelog
 
-## Unreleased
+## 0.18.0
+
+Release ordering matters here: `flyto-blueprint 0.3.0` must be on PyPI before
+this version's `v0.18.0` tag is pushed. The `blueprint`, `full` and `dev` extras
+require `flyto-blueprint>=0.3.0`, and until that release exists those extras do
+not resolve.
+
+- Declared this package's product role in a repo-root `flyto-product.toml`
+  (`flyto.product-contract.v1`, layer 1 `intent_governance`) with an exact test.
+  Blueprint and Core already shipped theirs and both disclaimed "intent and
+  provider governance", so the layer that owns it was the one layer no file
+  claimed.
+- Made the sibling dependency floors exact. `flyto-core[browser]` moves to
+  `>=2.28.1`, the first Core release clearing every published advisory; the old
+  `>=2.16.1` predated all of them and nothing here checks a Core version.
+  `flyto-blueprint` moves to `>=0.3.0`, because `tools/blueprint_tools.py`
+  probes the engine signature for `available_module_ids` and no published
+  Blueprint had that parameter — the module-availability gate was inert for
+  every install resolved from PyPI.
+- Removed the duplicated Core browser constants behind the ImportError
+  fallbacks. `assistant/resilience.py` carried a hand-written copy of Core's
+  snapshot and interact module sets that had drifted (missing
+  `browser.detect_list` and `browser.readability`, carrying `browser.extract`,
+  missing `browser.hover` and `browser.drag`) with no test referencing it, and
+  `tools/core_tools.py` carried a copy of Core's transient/session-dead error
+  patterns. Every value in both is about `browser.*` modules, which only Core
+  can dispatch, so the fallbacks are now empty and inert rather than a second
+  source of truth. `tests/test_core_constant_parity.py` asserts the remaining
+  borrowed values match Core and that no copy comes back.
+- Stopped the coding watchdog's scheduled polling and refreshed the shared stack
+  lock. `FLYTO_CODING_HEARTBEAT` was never published for this repository, so
+  every 15-minute run failed `heartbeat_missing`: 400 consecutive red runs in
+  the visible window and one incident issue open since 2026-08-13. An alarm that
+  never stops firing says the same thing whether the control plane died or was
+  never wired, so the `schedule` trigger is commented out and `workflow_dispatch`
+  remains the live entry. Validation, incident handling and the untrusted-input
+  bounds are unchanged; restoring the trigger belongs in the same change that
+  installs the publisher. The stack lock now pins the current Blueprint and Core
+  revisions, so the required `stack_lock` check and CI's sibling checkouts agree
+  with the repositories they claim to verify against.
 
 - Restored audited rework across the Indexer ledger-version transition. The
   amendment boundary accepts both the historical `task-context.v1` ledger

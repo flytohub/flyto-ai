@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flyto-ai"
-version = "0.17.0"
+version = "0.18.0"
 description = "Open-source AI agent layer for natural-language workflow automation with runtime-discovered modules and reusable YAML recipes."
 readme = "README.md"
 license = "Apache-2.0"
@@ -38,15 +38,31 @@ serve = ["aiohttp>=3.8"]
 # Chrome download, which is what made flyto-ai uninstallable in a slim
 # image that only wants e.g. OpenAIProvider. Split into extras so a light
 # install stays light; "full" reproduces the pre-0.16.0 base exactly.
+#
+# The two sibling floors are exact, not nominal:
+#
+# `flyto-core[browser]>=2.28.1` — 2.28.1 is the first Core release that clears
+# every published advisory (flyto-core SECURITY_STATUS.md lists 33: 6 critical,
+# 21 high, 6 medium, earliest fix in 2.26.3). The previous `>=2.16.1` floor
+# predated all of them, and nothing in flyto_ai checks a Core version for
+# security, so an environment already holding an old Core satisfied this
+# requirement and ran anyway.
+#
+# `flyto-blueprint>=0.3.0` — `tools/blueprint_tools.py` decides whether to pass
+# host-derived `available_module_ids` by inspecting the engine signature, and an
+# engine without it is called exactly as before, i.e. unfiltered. Blueprint
+# 0.2.2 has no such parameter, so with the old `>=0.1.0` floor the module
+# availability gate was silently off for every install resolved from PyPI. A
+# floor is the only thing that makes a signature-probed feature reachable.
 anthropic = ["anthropic>=0.20.0"]
-browser = ["flyto-core[browser]>=2.16.1"]
+browser = ["flyto-core[browser]>=2.28.1"]
 pro = ["flyto-pro-core>=0.1.0"]
-blueprint = ["flyto-blueprint>=0.1.0"]
+blueprint = ["flyto-blueprint>=0.3.0"]
 full = [
     "anthropic>=0.20.0",
-    "flyto-core[browser]>=2.16.1",
+    "flyto-core[browser]>=2.28.1",
     "flyto-pro-core>=0.1.0",
-    "flyto-blueprint>=0.1.0",
+    "flyto-blueprint>=0.3.0",
 ]
 # The native coding control plane uses the normal Flyto provider stack.  The
 # Claude SDK remains an explicitly detachable compatibility backend.
@@ -63,9 +79,9 @@ dev = [
     "pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0",
     "claude-agent-sdk>=0.1.0",
     "anthropic>=0.20.0",
-    "flyto-core[browser]>=2.16.1",
+    "flyto-core[browser]>=2.28.1",
     "flyto-pro-core>=0.1.0",
-    "flyto-blueprint>=0.1.0",
+    "flyto-blueprint>=0.3.0",
 ]
 
 [project.scripts]

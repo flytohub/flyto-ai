@@ -1179,10 +1179,14 @@ send-interval bookkeeping only means the next turn republishes an unchanged
 heartbeat; losing the record means the remote switch reads `healthy` while the
 local evidence a human would inspect was never written.
 
-`.github/workflows/coding-watchdog.yml` is the external dead-man switch. Every
-15 minutes it checks that the heartbeat is healthy and no older than 45
-minutes. Failure opens or refreshes one labelled issue and fails the Actions
-run; recovery closes that issue. This remote witness catches the case the
+`.github/workflows/coding-watchdog.yml` is the external dead-man switch. It
+checks that the heartbeat is healthy and no older than 45 minutes. Failure opens
+or refreshes one labelled issue and fails the Actions run; recovery closes that
+issue. The 15-minute `schedule` trigger is commented out as of 2026-08-23
+because no publisher was ever installed against this repository: the variable
+stayed unset, every run failed `heartbeat_missing`, and a switch that fires
+permanently cannot distinguish a dead control plane from an unwired one. Only
+`workflow_dispatch` is live until the publisher is installed. This remote witness catches the case the
 local machine or LaunchAgent dies. Runs are serialized but never cancelled: the
 job's product is an incident, so a dispatch arriving between "the heartbeat is
 stale" and "open the issue" must not cancel the only step that reports it. It uses ordinary deterministic Actions, not

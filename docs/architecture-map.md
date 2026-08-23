@@ -90,6 +90,11 @@ Invariants:
 - Both product columns converge on `flyto-ai`, the unified AI gateway/SDK.
 - The platform chain below `flyto-ai` is LLM providers -> `flyto-blueprint` ->
   `flyto-core`. Every `flyto-modules-*` extension registers with Core.
+- Each of the three declares its layer in a repo-root `flyto-product.toml`
+  (`flyto.product-contract.v1`) with an exact test beside it: `flyto-ai` layer 1
+  `intent_governance`, `flyto-blueprint` layer 2 `procedure_memory`,
+  `flyto-core` layer 3 `execution`. The `does_not_own` list in each file is what
+  keeps a responsibility from falling between two repositories.
 - `flyto-indexer` scans `flyto-core` and every `flyto-modules-*` extension as
   two separate inputs, builds the index, and feeds it to `flyto-engine`. That
   lower arrow is an index/data feed only; it does not place Engine lower in the

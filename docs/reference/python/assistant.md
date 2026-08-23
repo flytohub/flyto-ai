@@ -125,7 +125,7 @@ Extract the most meaningful content from execution results.
 ### `should_heal` (public)
 
 `should_heal(func_name: str, func_args: dict, result: dict) -> bool`
-Source: [`flyto_ai/assistant/resilience.py:42`](../../../flyto_ai/assistant/resilience.py#L42)
+Source: [`flyto_ai/assistant/resilience.py:53`](../../../flyto_ai/assistant/resilience.py#L53)
 
 Check if a failed browser module call is a candidate for selector healing.
 
@@ -133,49 +133,49 @@ Check if a failed browser module call is a candidate for selector healing.
 
 `class SnapshotGuard`
 
-Source: [`flyto_ai/assistant/resilience.py:54`](../../../flyto_ai/assistant/resilience.py#L54)
+Source: [`flyto_ai/assistant/resilience.py:65`](../../../flyto_ai/assistant/resilience.py#L65)
 
 Track whether a snapshot has been taken before interaction.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__() -> None` | internal | Internal `__init__` implementation on `SnapshotGuard`; the linked source is authoritative. | [`flyto_ai/assistant/resilience.py:61`](../../../flyto_ai/assistant/resilience.py#L61) |
-| `on_tool_call(func_name: str, func_args: dict) -> bool` | public | Track snapshot state. | [`flyto_ai/assistant/resilience.py:65`](../../../flyto_ai/assistant/resilience.py#L65) |
-| `needs_snapshot(func_name: str, func_args: dict) -> bool` | public | Check if a snapshot should be auto-injected before this call. | [`flyto_ai/assistant/resilience.py:78`](../../../flyto_ai/assistant/resilience.py#L78) |
-| `record_snapshot(result: Dict[str, Any]) -> None` | public | Store the latest snapshot result for healing reference. | [`flyto_ai/assistant/resilience.py:87`](../../../flyto_ai/assistant/resilience.py#L87) |
+| `__init__() -> None` | internal | Internal `__init__` implementation on `SnapshotGuard`; the linked source is authoritative. | [`flyto_ai/assistant/resilience.py:72`](../../../flyto_ai/assistant/resilience.py#L72) |
+| `on_tool_call(func_name: str, func_args: dict) -> bool` | public | Track snapshot state. | [`flyto_ai/assistant/resilience.py:76`](../../../flyto_ai/assistant/resilience.py#L76) |
+| `needs_snapshot(func_name: str, func_args: dict) -> bool` | public | Check if a snapshot should be auto-injected before this call. | [`flyto_ai/assistant/resilience.py:89`](../../../flyto_ai/assistant/resilience.py#L89) |
+| `record_snapshot(result: Dict[str, Any]) -> None` | public | Store the latest snapshot result for healing reference. | [`flyto_ai/assistant/resilience.py:98`](../../../flyto_ai/assistant/resilience.py#L98) |
 
 ### `AntibotGuard` (public)
 
 `class AntibotGuard`
 
-Source: [`flyto_ai/assistant/resilience.py:93`](../../../flyto_ai/assistant/resilience.py#L93)
+Source: [`flyto_ai/assistant/resilience.py:104`](../../../flyto_ai/assistant/resilience.py#L104)
 
 Detect anti-bot blocking after browser.goto and auto-retry with system Chrome.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__() -> None` | internal | Internal `__init__` implementation on `AntibotGuard`; the linked source is authoritative. | [`flyto_ai/assistant/resilience.py:103`](../../../flyto_ai/assistant/resilience.py#L103) |
-| `check_result(func_name: str, func_args: dict, result: dict) -> bool` | public | Check if a goto result shows anti-bot blocking. | [`flyto_ai/assistant/resilience.py:107`](../../../flyto_ai/assistant/resilience.py#L107) |
-| `async retry_with_system_chrome(dispatch: Callable, url: str) -> Optional[Dict[str, Any]]` | public | Close browser, re-launch with system Chrome, re-navigate. | [`flyto_ai/assistant/resilience.py:137`](../../../flyto_ai/assistant/resilience.py#L137) |
+| `__init__() -> None` | internal | Internal `__init__` implementation on `AntibotGuard`; the linked source is authoritative. | [`flyto_ai/assistant/resilience.py:114`](../../../flyto_ai/assistant/resilience.py#L114) |
+| `check_result(func_name: str, func_args: dict, result: dict) -> bool` | public | Check if a goto result shows anti-bot blocking. | [`flyto_ai/assistant/resilience.py:118`](../../../flyto_ai/assistant/resilience.py#L118) |
+| `async retry_with_system_chrome(dispatch: Callable, url: str) -> Optional[Dict[str, Any]]` | public | Close browser, re-launch with system Chrome, re-navigate. | [`flyto_ai/assistant/resilience.py:148`](../../../flyto_ai/assistant/resilience.py#L148) |
 
 ### `try_heal` (public)
 
 `async try_heal(dispatch: Callable, original_args: dict) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/assistant/resilience.py:177`](../../../flyto_ai/assistant/resilience.py#L177)
+Source: [`flyto_ai/assistant/resilience.py:188`](../../../flyto_ai/assistant/resilience.py#L188)
 
 Attempt to heal a broken selector using snapshot data.
 
 ### `_extract_candidates` (internal)
 
 `_extract_candidates(snapshot: Dict[str, Any], module_id: str) -> List[Dict[str, str]]`
-Source: [`flyto_ai/assistant/resilience.py:247`](../../../flyto_ai/assistant/resilience.py#L247)
+Source: [`flyto_ai/assistant/resilience.py:258`](../../../flyto_ai/assistant/resilience.py#L258)
 
 Extract candidate selectors from snapshot interactive hints.
 
 ### `_find_best_match` (internal)
 
 `_find_best_match(broken_selector: str, candidates: List[Dict[str, str]]) -> Optional[str]`
-Source: [`flyto_ai/assistant/resilience.py:273`](../../../flyto_ai/assistant/resilience.py#L273)
+Source: [`flyto_ai/assistant/resilience.py:284`](../../../flyto_ai/assistant/resilience.py#L284)
 
 Find the best matching selector from candidates for a broken one.
 

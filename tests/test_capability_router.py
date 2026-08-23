@@ -14,6 +14,7 @@ from flyto_ai.capability_router import (
     DISCOVERY_STATUSES,
     EMITTED_PROVIDER_ROW_LIMIT,
     CapabilityRoutingError,
+    GOAL_FRAME_VERSION,
     CapabilityRetrievalAuthority,
     _selected_manifests,
     capability_routing_bounds,
@@ -23,6 +24,8 @@ from flyto_ai.capability_router import (
     route_with_flyto,
     validate_capability_retrieval,
 )
+
+_ABSENT = object()
 
 
 def _manifest(
@@ -1723,9 +1726,10 @@ def _core_module(
     plugin: object = "",
     category: str = "vision",
     score: float = 10.0,
+    semantics: object = _ABSENT,
 ) -> dict[str, object]:
     """Build one `search_modules` result exactly as flyto-core now returns it."""
-    return {
+    result = {
         "module_id": module_id,
         "label": module_id,
         "description": f"Registry module {module_id}.",
@@ -1734,6 +1738,212 @@ def _core_module(
         "plugin": plugin,
         "score": score,
     }
+    if semantics is not _ABSENT:
+        result["semantics"] = semantics
+    return result
+
+
+_SOLVER_ROUTES = (
+    (
+        "math.rigid_transform_3d",
+        "domain.solve.rigid-transform-3d",
+        "solve.rigid-transform-3d",
+        "transform.point-3d",
+    ),
+    (
+        "physics.kinematics_constant_acceleration",
+        "domain.solve.constant-acceleration-kinematics",
+        "solve.constant-acceleration-kinematics",
+        "compute.position-velocity",
+    ),
+    (
+        "chemistry.ideal_dilution",
+        "domain.solve.ideal-dilution",
+        "solve.ideal-dilution",
+        "compute.stock-diluent-volume",
+    ),
+)
+
+
+def _solver_semantics(intent: str, affordance: str) -> dict[str, list[str]]:
+    return {
+        "intent_ids": [intent],
+        "affordances": [affordance],
+        "effects": ["data.compute-only"],
+        "handled_events": ["domain.solve.requested"],
+    }
+
+
+def _solver_frame(intent: str, affordance: str) -> dict[str, object]:
+    return {
+        "contract_version": GOAL_FRAME_VERSION,
+        "intent_ids": [intent],
+        "required_affordances": [affordance],
+        "desired_effects": ["data.compute-only"],
+        "trigger_events": ["domain.solve.requested"],
+        "constraints": [],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_id,capability_id,intent,affordance", _SOLVER_ROUTES)
+async def test_core_solver_routes_use_only_exact_nested_semantics(
+    module_id: str, capability_id: str, intent: str, affordance: str
+) -> None:
+    decision = await route_with_flyto(
+        "labels descriptions aliases and blueprint prose are not authority",
+        [],
+        goal_frame=_solver_frame(intent, affordance),
+        core_dispatch=_core_dispatch(
+            search={
+                "total": 2,
+                "results": [
+                    _core_module(
+                        "string.trim",
+                        provides_capability="",
+                        plugin="",
+                        category="string",
+                        semantics={},
+                    ),
+                    _core_module(
+                        module_id,
+                        provides_capability=capability_id,
+                        category="domain",
+                        semantics=_solver_semantics(intent, affordance),
+                    ),
+                ],
+            }
+        ),
+        blueprint_search=lambda _query: [
+            {
+                "id": "official.unrelated",
+                "trust_tier": "official",
+                "module_ids": ["invented.provider"],
+            }
+        ],
+    )
+
+    assert [
+        (item["runtime_name"], item["canonical_id"])
+        for item in decision["route"]["candidates"]
+    ] == [(module_id, capability_id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "semantics",
+    [
+        pytest.param(_ABSENT, id="missing"),
+        pytest.param([], id="wrong_shape"),
+        pytest.param({"intent_ids": ["solve.x"]}, id="incomplete"),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "extra": []}, id="extra_key"
+        ),
+        pytest.param(_solver_semantics("unsafe value", "compute.x"), id="unsafe"),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "effects": "effect.x"},
+            id="field_string",
+        ),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "effects": 1},
+            id="field_integer",
+        ),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "effects": None},
+            id="field_null",
+        ),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "effects": [{}]},
+            id="unhashable_mapping_member",
+        ),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "effects": [[]]},
+            id="unhashable_list_member",
+        ),
+        pytest.param(
+            {**_solver_semantics("solve.x", "compute.x"), "effects": [1]},
+            id="non_string_member",
+        ),
+        pytest.param(
+            {
+                **_solver_semantics("solve.x", "compute.x"),
+                "intent_ids": ["solve.x", "solve.x"],
+            },
+            id="duplicate",
+        ),
+        pytest.param(
+            {
+                **_solver_semantics("solve.x", "compute.x"),
+                "effects": [f"effect.{i}" for i in range(17)],
+            },
+            id="field_oversized",
+        ),
+        pytest.param(
+            {**_solver_semantics("x" * 97, "compute.x")}, id="identifier_oversized"
+        ),
+    ],
+)
+async def test_goal_frame_provider_semantics_fail_before_projection(
+    semantics: object,
+) -> None:
+    item = _core_module(
+        "domain.provider",
+        provides_capability="domain.solve.provider",
+        semantics=semantics,
+    )
+    decision = await route_with_flyto(
+        "provider",
+        [],
+        goal_frame=_solver_frame("solve.x", "compute.x"),
+        core_dispatch=_core_dispatch(search={"total": 1, "results": [item]}),
+        blueprint_search=lambda _query: [],
+    )
+    assert decision["discovery_evidence"]["core"]["status"] == "failed"
+    assert decision["discovery_evidence"]["core"]["candidate_count"] == 0
+    assert decision["route"]["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_goal_frame_result_missing_capability_identity_fails_closed() -> None:
+    item = _core_module(
+        "domain.provider", semantics=_solver_semantics("solve.x", "compute.x")
+    )
+    item.pop("provides_capability")
+    decision = await route_with_flyto(
+        "provider",
+        [],
+        goal_frame=_solver_frame("solve.x", "compute.x"),
+        core_dispatch=_core_dispatch(search={"total": 1, "results": [item]}),
+        blueprint_search=lambda _query: [],
+    )
+    core = decision["discovery_evidence"]["core"]
+    assert core["status"] == "failed"
+    assert core["status_reason"] == "search_malformed"
+    assert core["candidate_count"] == 0
+    assert decision["route"]["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_raw_goal_legacy_provider_may_omit_semantics_but_present_bad_semantics_fails() -> (
+    None
+):
+    legacy = _core_module("legacy.provider", provides_capability="legacy.capability@1")
+    accepted = await route_with_flyto(
+        "legacy",
+        [],
+        core_dispatch=_core_dispatch(search={"total": 1, "results": [legacy]}),
+        blueprint_search=lambda _query: [],
+    )
+    malformed = {**legacy, "semantics": {"intent_ids": ["legacy"]}}
+    rejected = await route_with_flyto(
+        "legacy",
+        [],
+        core_dispatch=_core_dispatch(search={"total": 1, "results": [malformed]}),
+        blueprint_search=lambda _query: [],
+    )
+    assert accepted["route"]["candidates"][0]["runtime_name"] == "legacy.provider"
+    assert rejected["discovery_evidence"]["core"]["status"] == "failed"
+    assert rejected["route"]["candidates"] == []
 
 
 @pytest.mark.asyncio
@@ -1846,7 +2056,7 @@ async def test_unsafe_declared_capability_id_is_excluded_never_repaired(
 
     core = decision["discovery_evidence"]["core"]
     assert core["candidate_count"] == 0
-    assert core["status"] == "not_applicable"
+    assert core["status"] == "failed"
     assert all(
         item["runtime_name"] != "vision.detect_objects"
         for item in decision["route"]["candidates"]

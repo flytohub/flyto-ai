@@ -343,6 +343,49 @@ def test_real_installed_core_module_ids_exclude_capabilities_and_plugins(
     assert not module_ids & (plugin_ids - declared_modules)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,module_id,capability_id,intent,affordance",
+    [
+        (
+            "solve.rigid-transform-3d transform.point-3d data.compute-only domain.solve.requested",
+            "math.rigid_transform_3d",
+            "domain.solve.rigid-transform-3d",
+            "solve.rigid-transform-3d",
+            "transform.point-3d",
+        ),
+        (
+            "solve.constant-acceleration-kinematics compute.position-velocity data.compute-only domain.solve.requested",
+            "physics.kinematics_constant_acceleration",
+            "domain.solve.constant-acceleration-kinematics",
+            "solve.constant-acceleration-kinematics",
+            "compute.position-velocity",
+        ),
+        (
+            "solve.ideal-dilution compute.stock-diluent-volume data.compute-only domain.solve.requested",
+            "chemistry.ideal_dilution",
+            "domain.solve.ideal-dilution",
+            "solve.ideal-dilution",
+            "compute.stock-diluent-volume",
+        ),
+    ],
+)
+async def test_real_core_bridge_exposes_exact_nested_solver_semantics(
+    query, module_id, capability_id, intent, affordance
+):
+    result = await core_tools.dispatch_core_tool(
+        "search_modules", {"query": query, "limit": 100}
+    )
+    hit = next(item for item in result["results"] if item["module_id"] == module_id)
+    assert hit["provides_capability"] == capability_id
+    assert hit["semantics"] == {
+        "intent_ids": [intent],
+        "affordances": [affordance],
+        "effects": ["data.compute-only"],
+        "handled_events": ["domain.solve.requested"],
+    }
+
+
 def test_core_tool_defs_include_manifest_and_metadata(monkeypatch):
     handler = _fake_handler()
     monkeypatch.setattr(core_tools, "_get_mcp_handler", lambda: handler)

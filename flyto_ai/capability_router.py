@@ -1414,10 +1414,10 @@ def _core_capability_providers(result: Mapping[str, Any]) -> list[dict[str, Any]
                 "compatible_robots": [],
                 "positive_examples": [],
                 "negative_examples": [],
-                "intent_ids": [],
-                "affordances": [],
-                "effects": [],
-                "handled_events": [],
+                "intent_ids": list(item.get("semantics", {}).get("intent_ids", [])),
+                "affordances": list(item.get("semantics", {}).get("affordances", [])),
+                "effects": list(item.get("semantics", {}).get("effects", [])),
+                "handled_events": list(item.get("semantics", {}).get("handled_events", [])),
                 "discovery_score": item.get("score", 0.0),
             }
         )
@@ -1497,33 +1497,33 @@ def _core_runtime_issue(
 
 
 def _core_results_malformed(core_result: Mapping[str, Any]) -> bool:
-    """Report whether the Core search response violates its bounded shape.
+    """Report whether the Core search response violates its bounded shape."""
+    semantic_fields = ("intent_ids", "affordances", "effects", "handled_events")
+    def valid_semantics(value: object) -> bool:
+        if type(value) is not dict or set(value) != set(semantic_fields):
+            return False
+        fields = [value[name] for name in semantic_fields]
+        return all(
+            type(field) is list and 0 < len(field) <= 16
+            and all(type(item) is str and len(item) <= 96 and re.fullmatch(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*", item) for item in field) and len(field) == len(set(field))
+            for field in fields
+        ) and sum(map(len, fields)) <= 48
 
-    A malformed entry is a broken bridge, so it must surface as ``failed``.  It
-    must never be silently filtered out and reported as a legitimate no-match.
-    """
-    if not isinstance(core_result, Mapping):
+    def valid_item(item: object) -> bool:
+        if type(item) is not dict or not {"module_id", "provides_capability", "plugin"} <= item.keys():
+            return False
+        identities = tuple(item.get(name, "") for name in ("module_id", "provides_capability", "plugin"))
+        semantics = item.get("semantics", _MISSING)
+        return bool(identities[0]) and all(
+            type(value) is str and len(value) <= 96 and (not value or _SAFE_ID.fullmatch(value)) for value in identities
+        ) and (semantics is _MISSING or (valid_semantics(semantics) if identities[1] else semantics == {}))
+    if type(core_result) is not dict:
         return True
-    ok = core_result.get("ok", _MISSING)
-    if ok is not _MISSING and (not isinstance(ok, bool) or ok is False):
+    ok, raw_results = core_result.get("ok", _MISSING), core_result.get("results", _MISSING)
+    if type(raw_results) is not list:
         return True
-    raw_results = core_result.get("results", _MISSING)
-    if raw_results is _MISSING or not isinstance(raw_results, list):
-        return True
-    for item in raw_results:
-        if not isinstance(item, Mapping):
-            return True
-        module_id = item.get("module_id", "")
-        if not isinstance(module_id, str) or not _SAFE_ID.fullmatch(module_id):
-            return True
-        # Core normalizes both identity fields to a registry value or "".  A
-        # present non-string is a broken bridge, and coercing it with str()
-        # would manufacture an identity, so it fails the search contract.
-        for field in ("provides_capability", "plugin"):
-            value = item.get(field, _MISSING)
-            if value is not _MISSING and not isinstance(value, str):
-                return True
-    return False
+    providers = [tuple(item.get(name, "") for name in ("module_id", "provides_capability", "plugin")) for item in raw_results if type(item) is dict and item.get("provides_capability", "")]
+    return (ok is not _MISSING and (type(ok) is not bool or ok is False)) or not all(valid_item(item) for item in raw_results) or len(providers) != len(set(providers))
 
 
 def _core_discovery_status(
@@ -1532,8 +1532,9 @@ def _core_discovery_status(
     core_candidate_count: int,
 ) -> tuple[str, str]:
     """Classify Core discovery from the bridge responses alone."""
+    # Runtime evidence takes precedence over the bounded search result.
     runtime_issue = _core_runtime_issue(core_runtime_manifest)
-    if runtime_issue is not None:
+    if runtime_issue:
         return runtime_issue
     if _core_results_malformed(core_result):
         return DISCOVERY_FAILED, "search_malformed"
@@ -1541,8 +1542,7 @@ def _core_discovery_status(
         return DISCOVERY_APPLIED, "discovery_matched"
     raw_results = core_result.get("results", [])
     if isinstance(raw_results, list) and raw_results:
-        # Well-formed hits that declare no capability are ordinary modules, so
-        # the lane resolved cleanly with nothing routable to contribute.
+        # Well-formed hits without capabilities are ordinary Core modules.
         return DISCOVERY_NOT_APPLICABLE, "no_capability_providers"
     return DISCOVERY_NOT_APPLICABLE, "discovery_empty"
 
@@ -1583,13 +1583,7 @@ async def _route_with_flyto_catalog(
     core_dispatch: CoreDispatch | None = None,
     blueprint_search: BlueprintSearch | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Route and also return the exact catalog the route was decided over.
-
-    The catalog is the supplied manifests plus the verified Core-discovered
-    capability providers.  Callers that must resolve a selected candidate back
-    to a manifest need this combined view; resolving against the request's
-    original list alone would silently drop a legitimately discovered provider.
-    """
+    """Route and also return the exact catalog the route was decided over."""
     if not 1 <= core_limit <= 100:
         raise CapabilityRoutingError("core_limit must be between 1 and 100")
     active_goal_frame = (
@@ -1633,21 +1627,27 @@ async def _route_with_flyto_catalog(
         # Bounded, typed failure; the underlying text stays out of the contract.
         raise CapabilityRoutingError("flyto-core discovery bridge call failed") from exc
     combined = [dict(item) for item in manifests]
-    core_candidates = _core_capability_providers(core_result)
+    def invalid_core_result(
+        result: Mapping[str, Any], result_limit: int, require_semantics: bool
+    ) -> bool:
+        if _core_results_malformed(result):
+            return True
+        results, total = result["results"], result.get("total")
+        return type(total) is not int or total < len(results) or len(results) > result_limit or require_semantics and any(
+            item.get("provides_capability", "") and "semantics" not in item for item in results
+        )
+    core_results_malformed = invalid_core_result(
+        core_result, core_limit, active_goal_frame is not None
+    )
+    core_candidates = [] if core_results_malformed else _core_capability_providers(core_result)
     combined.extend(core_candidates)
     if "allowed_sources" not in active_context:
-        # An explicit ceiling is preserved exactly.  Only when the caller gave
-        # none may installed, registry-declared Core providers join the default
-        # scope; an ordinary Core search hit never reaches this point because it
-        # is not projected into a manifest at all.
         sources = {_manifest_source(item) for item in manifests}
         if core_candidates:
             sources.add("flyto-core")
         active_context["allowed_sources"] = sorted(sources or {"external"})
-    core_status, core_status_reason = _core_discovery_status(
-        core_result,
-        core_runtime_manifest,
-        len(core_candidates),
+    core_status, core_status_reason = (DISCOVERY_FAILED, "search_malformed") if core_results_malformed else _core_discovery_status(
+        core_result, core_runtime_manifest, len(core_candidates)
     )
     route = route_capabilities(
         goal,

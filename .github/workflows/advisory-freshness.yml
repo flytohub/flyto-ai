@@ -1,0 +1,73 @@
+name: Advisory freshness
+
+# The floor gate in `tests/test_stack_security_floor.py` reads Core's advisory
+# manifest instead of a constant, so it cannot go stale the way a copied number
+# would. It can still go stale a level up: CI checks Core out at the revision
+# `stack-lock.json` pins, so the manifest it reads is only ever as fresh as the
+# last time someone bumped the lock. That is not hypothetical -- the floor was
+# set to 2.28.1 and Core published five further advisories, one critical,
+# against `<= 2.28.1` the next day, while the pinned gate stayed green.
+#
+# This job asks the same question against Core's `main`. It is deliberately a
+# separate workflow rather than a step in CI: a pull request must not fail
+# because an unrelated repository published an advisory an hour earlier, but
+# somebody does need to be told within a day.
+#
+# It is green when it lands. If it goes red, the fix is to raise the floors in
+# `pyproject.toml` and `../flyto-blueprint/pyproject.toml` to the version the
+# failure names -- a real, actionable red, not a dead-man switch nobody wired.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisory-freshness
+  cancel-in-progress: true
+
+jobs:
+  floors-still-clear-every-advisory:
+    name: Declared floors vs flyto-core@main
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out flyto-ai
+        uses: actions/checkout@v7.0.1
+        with:
+          path: flyto-ai
+
+      # `main`, not the locked revision. That difference is the entire point of
+      # this workflow.
+      - name: Check out flyto-core at main
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: flytohub/flyto-core
+          ref: main
+          path: flyto-core
+
+      - name: Check out flyto-blueprint at main
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: flytohub/flyto-blueprint
+          ref: main
+          path: flyto-blueprint
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest only
+        run: python -m pip install --upgrade pip pytest
+
+      # The floor test reads the two pyprojects and Core's manifest off disk and
+      # imports nothing from this package, so it needs no install of flyto-ai
+      # itself and no sibling packages.
+      - name: Floors must clear every advisory Core has published
+        working-directory: flyto-ai
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_stack_security_floor.py

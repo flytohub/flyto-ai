@@ -2,11 +2,25 @@
 
 ## Installation Profiles
 
-- default: providers, Core browser modules, Pro contracts, blueprint storage,
-  memory, rich CLI, and cryptography;
+This list describes what `pip install` actually resolves. It stopped doing so at
+0.16.0, when Core, Pro, Blueprint and the Anthropic provider moved out of the
+base install and into extras, and was not updated -- an operator reading it
+would have expected browser automation and Blueprint storage in a default
+install and found neither.
+
+- default: OpenAI provider, language detection, YAML/pydantic, `aiosqlite`
+  memory, rich CLI, and cryptography. No Core, no Blueprint, no Pro, no
+  Anthropic;
+- `browser`: adds `flyto-core[browser]`, which is what makes Core modules and
+  browser automation available at all;
+- `blueprint`: adds `flyto-blueprint` procedure storage;
+- `pro`: adds `flyto-pro-core` contracts;
+- `anthropic`: adds the Anthropic provider;
+- `full`: all four of the above together, reproducing the pre-0.16.0 base;
+- `lite`: YAML and pydantic only;
 - `serve`: adds `aiohttp` HTTP/SSE serving;
-- `agent`: adds Claude Agent SDK coding mode;
-- `dev`: adds pytest, asyncio test support, and Ruff.
+- `agent` / `claude-sdk`: adds the Claude Agent SDK coding backend;
+- `dev`: the `full` set plus pytest, asyncio test support, and Ruff.
 
 Core browser workflows additionally require the corresponding browser runtime.
 Ollama requires a separately running local service and selected model.

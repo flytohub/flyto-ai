@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-08-24 — Freshness is a separate question from correctness, and needs its own schedule
+
+Decision: the advisory floor is checked twice. `tests/test_stack_security_floor.py`
+runs in CI against the locked Core revision and answers "are the declared floors
+consistent with the Core this change was tested against". A scheduled workflow
+runs the same test against `flyto-core@main` and answers "are they still
+consistent with what Core has published since".
+
+Why: reading Core's manifest instead of copying a constant removed one kind of
+staleness and left another. CI checks Core out at the pinned revision, so the
+gate was green by construction regardless of what Core published — and Core
+published five advisories, one critical, against `<= 2.28.1` the day after the
+floor was set to 2.28.1.
+
+Why two jobs rather than one: a pull request must not fail because an unrelated
+repository published an advisory an hour earlier. That would make the gate noise
+and the next person would weaken it. Daily is soon enough for a floor bump and
+never blocks a merge.
+
 ## 2026-08-23 — A claim is checked where it is consumed, not where it is written
 
 Decision: every cross-boundary claim this package makes gets a check that runs

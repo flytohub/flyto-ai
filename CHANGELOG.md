@@ -2,6 +2,28 @@
 
 ## 0.18.0
 
+### Boundary gates, second round
+
+- `.github/workflows/advisory-freshness.yml` asks the floor question against
+  `flyto-core@main` on a daily schedule. The floor gate reads Core's advisory
+  manifest rather than a copied constant, so it cannot go stale the way a number
+  would — but CI checks Core out at the revision `stack-lock.json` pins, so the
+  manifest it reads is only as fresh as the last lock bump. That gap was not
+  hypothetical: the floor was set to 2.28.1 and Core published five further
+  advisories, one critical, against `<= 2.28.1` the next day while the pinned
+  gate stayed green. A separate scheduled workflow rather than a CI step, so a
+  pull request never fails because another repository published an advisory an
+  hour earlier.
+
+### Changed
+
+- `flyto-core[browser]` floors at `>=2.29.0`, the version clearing those five.
+- `docs/OPERATIONS.md` described the pre-0.16.0 base install: it told operators
+  the default install ships Core browser modules, Pro contracts and blueprint
+  storage. All four moved to extras at 0.16.0. An operator following it would
+  have expected browser automation in a default install and found none.
+- `CONTRIBUTING.md` said Python 3.10; `requires-python` is `>=3.11`.
+
 Release ordering matters here: `flyto-blueprint 0.3.0` must be on PyPI before
 this version's `v0.18.0` tag is pushed. The `blueprint`, `full` and `dev` extras
 require `flyto-blueprint>=0.3.0`, and until that release exists those extras do

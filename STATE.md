@@ -1,6 +1,21 @@
 # State
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
+
+## The floor gate proved itself, and showed where it was still pinned (2026-08-24)
+
+Within a day of landing, `tests/test_stack_security_floor.py` went red for a real
+reason: Core published five further advisories, one critical, affecting
+`<= 2.28.1`, and both declared floors still said 2.28.1. That is the derived
+number working as designed.
+
+It also exposed the level the design had not covered. CI checks Core out at the
+revision `stack-lock.json` pins, so the manifest the gate reads is only as fresh
+as the last lock bump — the gate could not have gone red in CI no matter what
+Core published. `.github/workflows/advisory-freshness.yml` now asks the same
+question against `flyto-core@main`, daily, in a workflow separate from CI so a
+pull request never fails for an unrelated repository's publication. Both floors
+are at `>=2.29.0` and the job is green as it lands.
 
 ## Cross-repository contract repair (2026-08-23)
 

@@ -1,6 +1,6 @@
 # Contributing
 
-Use Python 3.10 or newer. Install the development profile with
+Use Python 3.11 or newer, matching `requires-python` in `pyproject.toml`. Install the development profile with
 `python -m pip install -e ".[dev]"` and keep provider/network credentials out of
 the repository.
 

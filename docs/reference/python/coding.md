@@ -1378,6 +1378,324 @@ Count infrastructure failures for one process and open exactly once.
 | `note_activation() -> str` | public | Record that one emergency round ran and return the circuit state. | [`flyto_ai/coding/emergency.py:412`](../../../flyto_ai/coding/emergency.py#L412) |
 | `force_open() -> str` | public | Reopen the breaker for a job already bound to emergency authority. | [`flyto_ai/coding/emergency.py:420`](../../../flyto_ai/coding/emergency.py#L420) |
 
+## `flyto_ai.coding.errors`
+
+### `CodingServiceError` (public)
+
+`class CodingServiceError(RuntimeError)`
+
+Source: [`flyto_ai/coding/errors.py:29`](../../../flyto_ai/coding/errors.py#L29)
+
+Base error with a stable, non-sensitive service code.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `context() -> Dict[str, Any]` | public | Subclass-specific bounded context; empty by default. | [`flyto_ai/coding/errors.py:59`](../../../flyto_ai/coding/errors.py#L59) |
+| `details() -> Dict[str, Any]` | public | The typed envelope plus whatever bounded context a subclass added. | [`flyto_ai/coding/errors.py:67`](../../../flyto_ai/coding/errors.py#L67) |
+
+### `CodingServiceBusy` (public)
+
+`class CodingServiceBusy(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:80`](../../../flyto_ai/coding/errors.py#L80)
+
+The service cannot take more work right now; the request itself is fine.
+
+### `CodingCapacityUnavailable` (public)
+
+`class CodingCapacityUnavailable(CodingServiceBusy)`
+
+Source: [`flyto_ai/coding/errors.py:88`](../../../flyto_ai/coding/errors.py#L88)
+
+The bounded job queue is saturated.
+
+### `VerificationRequired` (public)
+
+`class VerificationRequired(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:100`](../../../flyto_ai/coding/errors.py#L100)
+
+This repository has not declared how a change to it must be verified.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(message: str, required_actions: Sequence[str] = ()) -> None` | internal | Internal `__init__` implementation on `VerificationRequired`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:112`](../../../flyto_ai/coding/errors.py#L112) |
+
+### `VerificationContractInvalid` (public)
+
+`class VerificationContractInvalid(VerificationRequired)`
+
+Source: [`flyto_ai/coding/errors.py:117`](../../../flyto_ai/coding/errors.py#L117)
+
+A verification contract exists but cannot be honoured as written.
+
+### `VerificationContractChanged` (public)
+
+`class VerificationContractChanged(VerificationRequired)`
+
+Source: [`flyto_ai/coding/errors.py:123`](../../../flyto_ai/coding/errors.py#L123)
+
+The contract moved between observing this repository and committing to it.
+
+### `VerificationToolMissing` (public)
+
+`class VerificationToolMissing(VerificationRequired)`
+
+Source: [`flyto_ai/coding/errors.py:149`](../../../flyto_ai/coding/errors.py#L149)
+
+A required check is declared correctly and its program is not installed.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(message: str, required_actions: Sequence[str] = (), blockers: Sequence[str] = ()) -> None` | internal | Internal `__init__` implementation on `VerificationToolMissing`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:165`](../../../flyto_ai/coding/errors.py#L165) |
+| `context() -> Dict[str, Any]` | public | Public `context` implementation on `VerificationToolMissing`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:175`](../../../flyto_ai/coding/errors.py#L175) |
+
+### `CapabilityUnavailable` (public)
+
+`class CapabilityUnavailable(VerificationRequired)`
+
+Source: [`flyto_ai/coding/errors.py:181`](../../../flyto_ai/coding/errors.py#L181)
+
+A required capability cannot be attached on this host.
+
+### `CodingAuthorityConflict` (public)
+
+`class CodingAuthorityConflict(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:191`](../../../flyto_ai/coding/errors.py#L191)
+
+This state root's active work belongs to a different startup authority.
+
+### `CodingAuthorityUnavailable` (public)
+
+`class CodingAuthorityUnavailable(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:217`](../../../flyto_ai/coding/errors.py#L217)
+
+This host cannot bind a state root to one startup authority at all.
+
+### `CodingWorkspaceAuthorityConflict` (public)
+
+`class CodingWorkspaceAuthorityConflict(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:236`](../../../flyto_ai/coding/errors.py#L236)
+
+Another coding state root owns a configured workspace root.
+
+### `CodingWorkspaceAuthorityBusy` (public)
+
+`class CodingWorkspaceAuthorityBusy(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:254`](../../../flyto_ai/coding/errors.py#L254)
+
+The host-global registry was mid-transaction past the bounded deadline.
+
+### `CodingWorkspaceAuthorityUnavailable` (public)
+
+`class CodingWorkspaceAuthorityUnavailable(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:273`](../../../flyto_ai/coding/errors.py#L273)
+
+Workspace ownership cannot be established on this host at all.
+
+### `HostReleaseValveRootUnusable` (public)
+
+`class HostReleaseValveRootUnusable(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:286`](../../../flyto_ai/coding/errors.py#L286)
+
+The valve was pointed at something that is not an established root.
+
+### `HostReleaseValveRefused` (public)
+
+`class HostReleaseValveRefused(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:306`](../../../flyto_ai/coding/errors.py#L306)
+
+A subtractive host release was asked to do something additive.
+
+### `CodingServiceReloadRequired` (public)
+
+`class CodingServiceReloadRequired(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:322`](../../../flyto_ai/coding/errors.py#L322)
+
+The source tree changed after this long-lived service imported it.
+
+### `CodingJobNotFound` (public)
+
+`class CodingJobNotFound(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:328`](../../../flyto_ai/coding/errors.py#L328)
+
+Public `CodingJobNotFound` implementation on this module; the linked source is authoritative.
+
+### `IdempotencyConflict` (public)
+
+`class IdempotencyConflict(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:332`](../../../flyto_ai/coding/errors.py#L332)
+
+Public `IdempotencyConflict` implementation on this module; the linked source is authoritative.
+
+### `WorkspaceDenied` (public)
+
+`class WorkspaceDenied(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:336`](../../../flyto_ai/coding/errors.py#L336)
+
+Public `WorkspaceDenied` implementation on this module; the linked source is authoritative.
+
+### `WorkspaceBusy` (public)
+
+`class WorkspaceBusy(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:340`](../../../flyto_ai/coding/errors.py#L340)
+
+Another job owns this worktree until its audit loop closes.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(message: str, owner_job_id: str = '') -> None` | internal | Internal `__init__` implementation on `WorkspaceBusy`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:352`](../../../flyto_ai/coding/errors.py#L352) |
+| `context() -> Dict[str, Any]` | public | Public `context` implementation on `WorkspaceBusy`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:357`](../../../flyto_ai/coding/errors.py#L357) |
+
+### `WorkspaceClaimUnresolved` (public)
+
+`class WorkspaceClaimUnresolved(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:361`](../../../flyto_ai/coding/errors.py#L361)
+
+A worktree carries a claim whose authority cannot be evaluated.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(message: str, owner_job_id: str = '') -> None` | internal | Internal `__init__` implementation on `WorkspaceClaimUnresolved`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:374`](../../../flyto_ai/coding/errors.py#L374) |
+| `context() -> Dict[str, Any]` | public | Public `context` implementation on `WorkspaceClaimUnresolved`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:379`](../../../flyto_ai/coding/errors.py#L379) |
+
+### `AbandonStateConflict` (public)
+
+`class AbandonStateConflict(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:383`](../../../flyto_ai/coding/errors.py#L383)
+
+Only an audit-ready job may be abandoned, and only into a failure.
+
+### `AuditNotEnabled` (public)
+
+`class AuditNotEnabled(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:389`](../../../flyto_ai/coding/errors.py#L389)
+
+Public `AuditNotEnabled` implementation on this module; the linked source is authoritative.
+
+### `AuditStateConflict` (public)
+
+`class AuditStateConflict(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:393`](../../../flyto_ai/coding/errors.py#L393)
+
+Public `AuditStateConflict` implementation on this module; the linked source is authoritative.
+
+### `RevisionMismatch` (public)
+
+`class RevisionMismatch(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:397`](../../../flyto_ai/coding/errors.py#L397)
+
+Public `RevisionMismatch` implementation on this module; the linked source is authoritative.
+
+### `RevisionUnavailable` (public)
+
+`class RevisionUnavailable(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:401`](../../../flyto_ai/coding/errors.py#L401)
+
+Public `RevisionUnavailable` implementation on this module; the linked source is authoritative.
+
+### `SessionBindingFailed` (public)
+
+`class SessionBindingFailed(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:405`](../../../flyto_ai/coding/errors.py#L405)
+
+Public `SessionBindingFailed` implementation on this module; the linked source is authoritative.
+
+### `ContinuationRefused` (public)
+
+`class ContinuationRefused(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:409`](../../../flyto_ai/coding/errors.py#L409)
+
+A resume request was not granted, and says as little as it safely can.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(message: str, code: str = CONTINUATION_UNAVAILABLE) -> None` | internal | Internal `__init__` implementation on `ContinuationRefused`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:427`](../../../flyto_ai/coding/errors.py#L427) |
+
+### `PlanAuthorityUnprovable` (public)
+
+`class PlanAuthorityUnprovable(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:451`](../../../flyto_ai/coding/errors.py#L451)
+
+This job cannot prove what its root task is authorized to change.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(code: str) -> None` | internal | Internal `__init__` implementation on `PlanAuthorityUnprovable`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:478`](../../../flyto_ai/coding/errors.py#L478) |
+
+### `ReworkLimitReached` (public)
+
+`class ReworkLimitReached(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:483`](../../../flyto_ai/coding/errors.py#L483)
+
+Public `ReworkLimitReached` implementation on this module; the linked source is authoritative.
+
+### `ReworkNotResumable` (public)
+
+`class ReworkNotResumable(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:487`](../../../flyto_ai/coding/errors.py#L487)
+
+Public `ReworkNotResumable` implementation on this module; the linked source is authoritative.
+
+### `RouteEvidenceMissing` (public)
+
+`class RouteEvidenceMissing(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:491`](../../../flyto_ai/coding/errors.py#L491)
+
+Public `RouteEvidenceMissing` implementation on this module; the linked source is authoritative.
+
+### `AuditBlockersUnresolved` (public)
+
+`class AuditBlockersUnresolved(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:495`](../../../flyto_ai/coding/errors.py#L495)
+
+An auditable revision still carries host blockers, so it cannot land.
+
+### `EmergencyAuthorityMissing` (public)
+
+`class EmergencyAuthorityMissing(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:506`](../../../flyto_ai/coding/errors.py#L506)
+
+An emergency-bound job cannot be served without its authority contract.
+
+### `MissionRouteRefused` (public)
+
+`class MissionRouteRefused(CodingServiceError)`
+
+Source: [`flyto_ai/coding/errors.py:512`](../../../flyto_ai/coding/errors.py#L512)
+
+The mission lane refused this job, under the kernel's own stable code.
+
+| Method | Visibility | Purpose | Source |
+|---|---|---|---|
+| `__init__(exc: MissionRouteError) -> None` | internal | Internal `__init__` implementation on `MissionRouteRefused`; the linked source is authoritative. | [`flyto_ai/coding/errors.py:525`](../../../flyto_ai/coding/errors.py#L525) |
+
 ## `flyto_ai.coding.execution_policy`
 
 ### `ExecutionLimits` (public)
@@ -2594,348 +2912,32 @@ Run independent adapter suites with bounded cross-scenario concurrency.
 
 ## `flyto_ai.coding.service`
 
-### `CodingServiceError` (public)
-
-`class CodingServiceError(RuntimeError)`
-
-Source: [`flyto_ai/coding/service.py:274`](../../../flyto_ai/coding/service.py#L274)
-
-Base error with a stable, non-sensitive service code.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `context() -> Dict[str, Any]` | public | Subclass-specific bounded context; empty by default. | [`flyto_ai/coding/service.py:304`](../../../flyto_ai/coding/service.py#L304) |
-| `details() -> Dict[str, Any]` | public | The typed envelope plus whatever bounded context a subclass added. | [`flyto_ai/coding/service.py:312`](../../../flyto_ai/coding/service.py#L312) |
-
-### `CodingServiceBusy` (public)
-
-`class CodingServiceBusy(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:325`](../../../flyto_ai/coding/service.py#L325)
-
-The service cannot take more work right now; the request itself is fine.
-
-### `CodingCapacityUnavailable` (public)
-
-`class CodingCapacityUnavailable(CodingServiceBusy)`
-
-Source: [`flyto_ai/coding/service.py:333`](../../../flyto_ai/coding/service.py#L333)
-
-The bounded job queue is saturated.
-
-### `VerificationRequired` (public)
-
-`class VerificationRequired(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:345`](../../../flyto_ai/coding/service.py#L345)
-
-This repository has not declared how a change to it must be verified.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(message: str, required_actions: Sequence[str] = ()) -> None` | internal | Internal `__init__` implementation on `VerificationRequired`; the linked source is authoritative. | [`flyto_ai/coding/service.py:357`](../../../flyto_ai/coding/service.py#L357) |
-
-### `VerificationContractInvalid` (public)
-
-`class VerificationContractInvalid(VerificationRequired)`
-
-Source: [`flyto_ai/coding/service.py:362`](../../../flyto_ai/coding/service.py#L362)
-
-A verification contract exists but cannot be honoured as written.
-
-### `VerificationContractChanged` (public)
-
-`class VerificationContractChanged(VerificationRequired)`
-
-Source: [`flyto_ai/coding/service.py:368`](../../../flyto_ai/coding/service.py#L368)
-
-The contract moved between observing this repository and committing to it.
-
-### `VerificationToolMissing` (public)
-
-`class VerificationToolMissing(VerificationRequired)`
-
-Source: [`flyto_ai/coding/service.py:394`](../../../flyto_ai/coding/service.py#L394)
-
-A required check is declared correctly and its program is not installed.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(message: str, required_actions: Sequence[str] = (), blockers: Sequence[str] = ()) -> None` | internal | Internal `__init__` implementation on `VerificationToolMissing`; the linked source is authoritative. | [`flyto_ai/coding/service.py:410`](../../../flyto_ai/coding/service.py#L410) |
-| `context() -> Dict[str, Any]` | public | Public `context` implementation on `VerificationToolMissing`; the linked source is authoritative. | [`flyto_ai/coding/service.py:420`](../../../flyto_ai/coding/service.py#L420) |
-
-### `CapabilityUnavailable` (public)
-
-`class CapabilityUnavailable(VerificationRequired)`
-
-Source: [`flyto_ai/coding/service.py:426`](../../../flyto_ai/coding/service.py#L426)
-
-A required capability cannot be attached on this host.
-
-### `CodingAuthorityConflict` (public)
-
-`class CodingAuthorityConflict(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:436`](../../../flyto_ai/coding/service.py#L436)
-
-This state root's active work belongs to a different startup authority.
-
-### `CodingAuthorityUnavailable` (public)
-
-`class CodingAuthorityUnavailable(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:462`](../../../flyto_ai/coding/service.py#L462)
-
-This host cannot bind a state root to one startup authority at all.
-
-### `CodingWorkspaceAuthorityConflict` (public)
-
-`class CodingWorkspaceAuthorityConflict(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:481`](../../../flyto_ai/coding/service.py#L481)
-
-Another coding state root owns a configured workspace root.
-
-### `CodingWorkspaceAuthorityBusy` (public)
-
-`class CodingWorkspaceAuthorityBusy(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:499`](../../../flyto_ai/coding/service.py#L499)
-
-The host-global registry was mid-transaction past the bounded deadline.
-
-### `CodingWorkspaceAuthorityUnavailable` (public)
-
-`class CodingWorkspaceAuthorityUnavailable(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:518`](../../../flyto_ai/coding/service.py#L518)
-
-Workspace ownership cannot be established on this host at all.
-
-### `HostReleaseValveRootUnusable` (public)
-
-`class HostReleaseValveRootUnusable(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:531`](../../../flyto_ai/coding/service.py#L531)
-
-The valve was pointed at something that is not an established root.
-
-### `HostReleaseValveRefused` (public)
-
-`class HostReleaseValveRefused(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:551`](../../../flyto_ai/coding/service.py#L551)
-
-A subtractive host release was asked to do something additive.
-
-### `CodingServiceReloadRequired` (public)
-
-`class CodingServiceReloadRequired(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:567`](../../../flyto_ai/coding/service.py#L567)
-
-The source tree changed after this long-lived service imported it.
-
-### `CodingJobNotFound` (public)
-
-`class CodingJobNotFound(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:573`](../../../flyto_ai/coding/service.py#L573)
-
-Public `CodingJobNotFound` implementation on this module; the linked source is authoritative.
-
-### `IdempotencyConflict` (public)
-
-`class IdempotencyConflict(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:577`](../../../flyto_ai/coding/service.py#L577)
-
-Public `IdempotencyConflict` implementation on this module; the linked source is authoritative.
-
-### `WorkspaceDenied` (public)
-
-`class WorkspaceDenied(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:581`](../../../flyto_ai/coding/service.py#L581)
-
-Public `WorkspaceDenied` implementation on this module; the linked source is authoritative.
-
-### `WorkspaceBusy` (public)
-
-`class WorkspaceBusy(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:585`](../../../flyto_ai/coding/service.py#L585)
-
-Another job owns this worktree until its audit loop closes.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(message: str, owner_job_id: str = '') -> None` | internal | Internal `__init__` implementation on `WorkspaceBusy`; the linked source is authoritative. | [`flyto_ai/coding/service.py:597`](../../../flyto_ai/coding/service.py#L597) |
-| `context() -> Dict[str, Any]` | public | Public `context` implementation on `WorkspaceBusy`; the linked source is authoritative. | [`flyto_ai/coding/service.py:602`](../../../flyto_ai/coding/service.py#L602) |
-
-### `WorkspaceClaimUnresolved` (public)
-
-`class WorkspaceClaimUnresolved(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:606`](../../../flyto_ai/coding/service.py#L606)
-
-A worktree carries a claim whose authority cannot be evaluated.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(message: str, owner_job_id: str = '') -> None` | internal | Internal `__init__` implementation on `WorkspaceClaimUnresolved`; the linked source is authoritative. | [`flyto_ai/coding/service.py:619`](../../../flyto_ai/coding/service.py#L619) |
-| `context() -> Dict[str, Any]` | public | Public `context` implementation on `WorkspaceClaimUnresolved`; the linked source is authoritative. | [`flyto_ai/coding/service.py:624`](../../../flyto_ai/coding/service.py#L624) |
-
-### `AbandonStateConflict` (public)
-
-`class AbandonStateConflict(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:628`](../../../flyto_ai/coding/service.py#L628)
-
-Only an audit-ready job may be abandoned, and only into a failure.
-
-### `AuditNotEnabled` (public)
-
-`class AuditNotEnabled(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:634`](../../../flyto_ai/coding/service.py#L634)
-
-Public `AuditNotEnabled` implementation on this module; the linked source is authoritative.
-
-### `AuditStateConflict` (public)
-
-`class AuditStateConflict(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:638`](../../../flyto_ai/coding/service.py#L638)
-
-Public `AuditStateConflict` implementation on this module; the linked source is authoritative.
-
-### `RevisionMismatch` (public)
-
-`class RevisionMismatch(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:642`](../../../flyto_ai/coding/service.py#L642)
-
-Public `RevisionMismatch` implementation on this module; the linked source is authoritative.
-
-### `RevisionUnavailable` (public)
-
-`class RevisionUnavailable(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:646`](../../../flyto_ai/coding/service.py#L646)
-
-Public `RevisionUnavailable` implementation on this module; the linked source is authoritative.
-
-### `SessionBindingFailed` (public)
-
-`class SessionBindingFailed(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:650`](../../../flyto_ai/coding/service.py#L650)
-
-Public `SessionBindingFailed` implementation on this module; the linked source is authoritative.
-
-### `ContinuationRefused` (public)
-
-`class ContinuationRefused(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:654`](../../../flyto_ai/coding/service.py#L654)
-
-A resume request was not granted, and says as little as it safely can.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(message: str, code: str = CONTINUATION_UNAVAILABLE) -> None` | internal | Internal `__init__` implementation on `ContinuationRefused`; the linked source is authoritative. | [`flyto_ai/coding/service.py:672`](../../../flyto_ai/coding/service.py#L672) |
-
-### `PlanAuthorityUnprovable` (public)
-
-`class PlanAuthorityUnprovable(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:696`](../../../flyto_ai/coding/service.py#L696)
-
-This job cannot prove what its root task is authorized to change.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(code: str) -> None` | internal | Internal `__init__` implementation on `PlanAuthorityUnprovable`; the linked source is authoritative. | [`flyto_ai/coding/service.py:723`](../../../flyto_ai/coding/service.py#L723) |
-
-### `ReworkLimitReached` (public)
-
-`class ReworkLimitReached(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:728`](../../../flyto_ai/coding/service.py#L728)
-
-Public `ReworkLimitReached` implementation on this module; the linked source is authoritative.
-
-### `ReworkNotResumable` (public)
-
-`class ReworkNotResumable(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:732`](../../../flyto_ai/coding/service.py#L732)
-
-Public `ReworkNotResumable` implementation on this module; the linked source is authoritative.
-
-### `RouteEvidenceMissing` (public)
-
-`class RouteEvidenceMissing(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:736`](../../../flyto_ai/coding/service.py#L736)
-
-Public `RouteEvidenceMissing` implementation on this module; the linked source is authoritative.
-
-### `AuditBlockersUnresolved` (public)
-
-`class AuditBlockersUnresolved(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:740`](../../../flyto_ai/coding/service.py#L740)
-
-An auditable revision still carries host blockers, so it cannot land.
-
-### `EmergencyAuthorityMissing` (public)
-
-`class EmergencyAuthorityMissing(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:751`](../../../flyto_ai/coding/service.py#L751)
-
-An emergency-bound job cannot be served without its authority contract.
-
 ### `_RoundSettlement` (internal)
 
 `class _RoundSettlement`
 
-Source: [`flyto_ai/coding/service.py:758`](../../../flyto_ai/coding/service.py#L758)
+Source: [`flyto_ai/coding/service.py:322`](../../../flyto_ai/coding/service.py#L322)
 
 One round's mission closure: performed once, published with its state.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(service: 'CodingService', work: Optional['DispatchedWork'], tenant_ref: str, job_id: str) -> None` | internal | Internal `__init__` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:781`](../../../flyto_ai/coding/service.py#L781) |
-| `settled() -> bool` | public | Public `settled` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:798`](../../../flyto_ai/coding/service.py#L798) |
-| `work_item_id() -> str` | public | Public `work_item_id` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:802`](../../../flyto_ai/coding/service.py#L802) |
-| `__call__(*, revision: str = '', files: Sequence[str] = (), state: str = '', failure_code: str = '') -> Dict[str, Any]` | internal | Internal `__call__` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:805`](../../../flyto_ai/coding/service.py#L805) |
-
-### `MissionRouteRefused` (public)
-
-`class MissionRouteRefused(CodingServiceError)`
-
-Source: [`flyto_ai/coding/service.py:830`](../../../flyto_ai/coding/service.py#L830)
-
-The mission lane refused this job, under the kernel's own stable code.
-
-| Method | Visibility | Purpose | Source |
-|---|---|---|---|
-| `__init__(exc: MissionRouteError) -> None` | internal | Internal `__init__` implementation on `MissionRouteRefused`; the linked source is authoritative. | [`flyto_ai/coding/service.py:843`](../../../flyto_ai/coding/service.py#L843) |
+| `__init__(service: 'CodingService', work: Optional['DispatchedWork'], tenant_ref: str, job_id: str) -> None` | internal | Internal `__init__` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:345`](../../../flyto_ai/coding/service.py#L345) |
+| `settled() -> bool` | public | Public `settled` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:362`](../../../flyto_ai/coding/service.py#L362) |
+| `work_item_id() -> str` | public | Public `work_item_id` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:366`](../../../flyto_ai/coding/service.py#L366) |
+| `__call__(*, revision: str = '', files: Sequence[str] = (), state: str = '', failure_code: str = '') -> Dict[str, Any]` | internal | Internal `__call__` implementation on `_RoundSettlement`; the linked source is authoritative. | [`flyto_ai/coding/service.py:369`](../../../flyto_ai/coding/service.py#L369) |
 
 ### `route_blocks_implementation` (public)
 
 `route_blocks_implementation(route: 'CodingRouteReceipt') -> bool`
-Source: [`flyto_ai/coding/service.py:969`](../../../flyto_ai/coding/service.py#L969)
+Source: [`flyto_ai/coding/service.py:516`](../../../flyto_ai/coding/service.py#L516)
 
 Whether a failed route stopped only on the implementation's own result.
 
 ### `recorded_blockers` (public)
 
 `recorded_blockers(record: Mapping[str, Any]) -> Tuple[str, ...]`
-Source: [`flyto_ai/coding/service.py:984`](../../../flyto_ai/coding/service.py#L984)
+Source: [`flyto_ai/coding/service.py:531`](../../../flyto_ai/coding/service.py#L531)
 
 Read one record's blocker list, dropping anything outside the bounds.
 
@@ -2943,33 +2945,33 @@ Read one record's blocker list, dropping anything outside the bounds.
 
 `class _RoundProgress`
 
-Source: [`flyto_ai/coding/service.py:998`](../../../flyto_ai/coding/service.py#L998)
+Source: [`flyto_ai/coding/service.py:545`](../../../flyto_ai/coding/service.py#L545)
 
 What one execution round actually did, tracked by the host itself.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(on_start: Optional[Callable[[], None]] = None) -> None` | internal | Internal `__init__` implementation on `_RoundProgress`; the linked source is authoritative. | [`flyto_ai/coding/service.py:1007`](../../../flyto_ai/coding/service.py#L1007) |
-| `begin() -> None` | public | Record the start of one implementer invocation, exactly once. | [`flyto_ai/coding/service.py:1018`](../../../flyto_ai/coding/service.py#L1018) |
+| `__init__(on_start: Optional[Callable[[], None]] = None) -> None` | internal | Internal `__init__` implementation on `_RoundProgress`; the linked source is authoritative. | [`flyto_ai/coding/service.py:554`](../../../flyto_ai/coding/service.py#L554) |
+| `begin() -> None` | public | Record the start of one implementer invocation, exactly once. | [`flyto_ai/coding/service.py:565`](../../../flyto_ai/coding/service.py#L565) |
 
 ### `_arm_start_marker` (internal)
 
 `_arm_start_marker(store: Any, progress: Optional[Any]) -> None`
-Source: [`flyto_ai/coding/service.py:1027`](../../../flyto_ai/coding/service.py#L1027)
+Source: [`flyto_ai/coding/service.py:574`](../../../flyto_ai/coding/service.py#L574)
 
 Let the adapter say when a provider attempt really begins.
 
 ### `_arm_session_binding` (internal)
 
 `_arm_session_binding(store: Any, binder: Optional[Callable[[str], None]]) -> None`
-Source: [`flyto_ai/coding/service.py:1054`](../../../flyto_ai/coding/service.py#L1054)
+Source: [`flyto_ai/coding/service.py:601`](../../../flyto_ai/coding/service.py#L601)
 
 Let the adapter say which session the provider actually established.
 
 ### `_reconcile_start_marker` (internal)
 
 `_reconcile_start_marker(progress: Optional[Any], result: Any) -> None`
-Source: [`flyto_ai/coding/service.py:1082`](../../../flyto_ai/coding/service.py#L1082)
+Source: [`flyto_ai/coding/service.py:629`](../../../flyto_ai/coding/service.py#L629)
 
 Record a start the adapter proved but did not signal.
 
@@ -2977,39 +2979,39 @@ Record a start the adapter proved but did not signal.
 
 `class CodingImplementer(Protocol)`
 
-Source: [`flyto_ai/coding/service.py:1095`](../../../flyto_ai/coding/service.py#L1095)
+Source: [`flyto_ai/coding/service.py:642`](../../../flyto_ai/coding/service.py#L642)
 
 One implementation round, whichever backend the host selected.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `async run(request: CodingTaskRequest) -> CodingTaskResult` | public | Run the primary operation implemented by `CodingImplementer`. | [`flyto_ai/coding/service.py:1103`](../../../flyto_ai/coding/service.py#L1103) |
+| `async run(request: CodingTaskRequest) -> CodingTaskResult` | public | Run the primary operation implemented by `CodingImplementer`. | [`flyto_ai/coding/service.py:650`](../../../flyto_ai/coding/service.py#L650) |
 
 ### `request_from_mapping` (public)
 
 `request_from_mapping(value: Mapping[str, Any]) -> CodingTaskRequest`
-Source: [`flyto_ai/coding/service.py:1110`](../../../flyto_ai/coding/service.py#L1110)
+Source: [`flyto_ai/coding/service.py:657`](../../../flyto_ai/coding/service.py#L657)
 
 Decode the public service request; provider and tenant fields are forbidden.
 
 ### `error_details` (public)
 
 `error_details(exc: BaseException) -> Dict[str, Any]`
-Source: [`flyto_ai/coding/service.py:1163`](../../../flyto_ai/coding/service.py#L1163)
+Source: [`flyto_ai/coding/service.py:710`](../../../flyto_ai/coding/service.py#L710)
 
 Project one error's structured context, or nothing at all.
 
 ### `receipt_to_mapping` (public)
 
 `receipt_to_mapping(receipt: CodingJobReceipt) -> Dict[str, Any]`
-Source: [`flyto_ai/coding/service.py:1212`](../../../flyto_ai/coding/service.py#L1212)
+Source: [`flyto_ai/coding/service.py:759`](../../../flyto_ai/coding/service.py#L759)
 
 Return a JSON-safe, secret-redacted public receipt.
 
 ### `_release_valve_never_implements` (internal)
 
 `_release_valve_never_implements(store: Any) -> Any`
-Source: [`flyto_ai/coding/service.py:1240`](../../../flyto_ai/coding/service.py#L1240)
+Source: [`flyto_ai/coding/service.py:787`](../../../flyto_ai/coding/service.py#L787)
 
 The agent factory a host release valve is built with.
 
@@ -3017,181 +3019,181 @@ The agent factory a host release valve is built with.
 
 `class CodingService`
 
-Source: [`flyto_ai/coding/service.py:1255`](../../../flyto_ai/coding/service.py#L1255)
+Source: [`flyto_ai/coding/service.py:802`](../../../flyto_ai/coding/service.py#L802)
 
 Bounded asynchronous facade; provider credentials never enter a job.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `open_host_release_valve(*, state_root: str, workspace_roots: Sequence[str]) -> 'CodingService'` | public | Open this state root for one strictly subtractive host release. | [`flyto_ai/coding/service.py:1259`](../../../flyto_ai/coding/service.py#L1259) |
-| `open_host_abandon_valve(*, state_root: str, workspace_roots: Sequence[str]) -> 'CodingService'` | public | Open the narrow abandon-only valve beside live peer services. | [`flyto_ai/coding/service.py:1307`](../../../flyto_ai/coding/service.py#L1307) |
-| `_init_release_valve(*, state_root: str, workspace_roots: Sequence[str], permit_live_services: bool) -> None` | internal | Construct only what a subtractive host release can possibly need. | [`flyto_ai/coding/service.py:1334`](../../../flyto_ai/coding/service.py#L1334) |
-| `_open_existing_valve_lock(name: str) -> int` | internal | Open one required lock file that must already exist. | [`flyto_ai/coding/service.py:1446`](../../../flyto_ai/coding/service.py#L1446) |
-| `_release_valve_descriptors() -> None` | internal | Close every descriptor this mode may have taken, in reverse order. | [`flyto_ai/coding/service.py:1463`](../../../flyto_ai/coding/service.py#L1463) |
-| `__init__(agent_factory: AgentFactory, *, state_root: str, workspace_roots: Sequence[str], max_workers: int = 2, max_queued: int = 100, approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER, sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE, config_path: str = '.flyto/coding.yaml', sandbox_image: str = 'python:3.12-slim', require_codex_audit: bool = False, implementation_backend: str = 'native', attachable_capability_kinds: Optional[Sequence[str]] = None, max_rework_rounds: int = 3, route_policy: Optional[CodingRoutePolicy] = None, emergency_policy: Optional[EmergencyOverflowPolicy] = None, workspace_registry_root: Optional[str] = None) -> None` | internal | Internal `__init__` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:1474`](../../../flyto_ai/coding/service.py#L1474) |
-| `_construct(agent_factory: AgentFactory, *, state_root: str, max_workers: int, max_queued: int, approval_policy: ApprovalPolicy, sandbox_mode: SandboxMode, config_path: str, sandbox_image: str, require_codex_audit: bool, implementation_backend: str, attachable_capability_kinds: Optional[Sequence[str]], max_rework_rounds: int, route_policy: Optional[CodingRoutePolicy], emergency_policy: Optional[EmergencyOverflowPolicy]) -> None` | internal | Construct durable state; workspace ownership remains demand-scoped. | [`flyto_ai/coding/service.py:1558`](../../../flyto_ai/coding/service.py#L1558) |
-| `submit(tenant_id: str, idempotency_key: str, request: CodingTaskRequest) -> CodingJobReceipt` | public | Create or reuse one tenant-owned job and schedule it exactly once. | [`flyto_ai/coding/service.py:1747`](../../../flyto_ai/coding/service.py#L1747) |
-| `_pin_verified_contract(workspace: str) -> ContractSnapshot` | internal | Prove this repository can be verified, and pin what it declared. | [`flyto_ai/coding/service.py:1843`](../../../flyto_ai/coding/service.py#L1843) |
-| `_record_pinned_contract(record: Mapping[str, Any]) -> Optional[ContractSnapshot]` | internal | Rebuild a job's pin from its own durable record, or refuse to guess. | [`flyto_ai/coding/service.py:1873`](../../../flyto_ai/coding/service.py#L1873) |
-| `_observed_config_digest(workspace: str) -> str` | internal | The current contract file's digest, or "" when it has none to give. | [`flyto_ai/coding/service.py:1899`](../../../flyto_ai/coding/service.py#L1899) |
-| `_restore_pinned_contract(tenant_ref: str, authority: ContinuationAuthority) -> ContractSnapshot` | internal | Recover the origin job's pin, and prove it is the one bound here. | [`flyto_ai/coding/service.py:1915`](../../../flyto_ai/coding/service.py#L1915) |
-| `_replayed_receipt(tenant_ref: str, tenant_dir: Path, idempotency_path: Path, request_digest: str) -> Optional[CodingJobReceipt]` | internal | Return the receipt an idempotency key already names, or `None`. | [`flyto_ai/coding/service.py:1959`](../../../flyto_ai/coding/service.py#L1959) |
-| `_retry_rework_route_submit(*, tenant_ref: str, tenant_dir: Path, idempotency_path: Path, request: CodingTaskRequest) -> Optional[CodingJobReceipt]` | internal | Consume one exact pre-provider repair-route retry, if one exists. | [`flyto_ai/coding/service.py:1987`](../../../flyto_ai/coding/service.py#L1987) |
-| `_prove_rework_route_recovery(tenant_ref: str, job_id: str, record: Mapping[str, Any], request: CodingTaskRequest, *, require_legacy_terminal: bool) -> None` | internal | Require every fact that makes repeating a route safe. | [`flyto_ai/coding/service.py:2210`](../../../flyto_ai/coding/service.py#L2210) |
-| `_prove_legacy_rework_git_tree(record: Mapping[str, Any]) -> None` | internal | Bind a legacy terminal rescue to one unchanged, single Git tree. | [`flyto_ai/coding/service.py:2330`](../../../flyto_ai/coding/service.py#L2330) |
-| `_commit_admission(tenant_ref: str, tenant_dir: Path, idempotency_path: Path, request: CodingTaskRequest, request_digest: str, authorized_config: str, observed: Optional[ContinuationAuthority], pinned: ContractSnapshot, observed_config: str) -> CodingJobReceipt` | internal | Re-prove the stopped tree, then take the short guarded transition. | [`flyto_ai/coding/service.py:2400`](../../../flyto_ai/coding/service.py#L2400) |
-| `_require_verifiable_repository(workspace: str) -> str` | internal | Refuse, before anything exists, a repository that cannot be verified. | [`flyto_ai/coding/service.py:2684`](../../../flyto_ai/coding/service.py#L2684) |
-| `_reassert_audit_claim(tenant_ref: str, record: Mapping[str, Any]) -> None` | internal | Prove the awaiting job still owns its worktree; the caller holds the guard. | [`flyto_ai/coding/service.py:2723`](../../../flyto_ai/coding/service.py#L2723) |
-| `_with_startup_authority(request: CodingTaskRequest) -> CodingTaskRequest` | internal | Overwrite every authority field from this process's startup config. | [`flyto_ai/coding/service.py:2747`](../../../flyto_ai/coding/service.py#L2747) |
-| `_startup_snapshot_policy(route_policy: Any) -> SnapshotPolicy` | internal | Decide, once, which projection this host is entitled to use. | [`flyto_ai/coding/service.py:2776`](../../../flyto_ai/coding/service.py#L2776) |
-| `_admission_lock(workspace: str) -> Iterator[None]` | internal | Serialize observe-then-claim for one workspace, and only that one. | [`flyto_ai/coding/service.py:2805`](../../../flyto_ai/coding/service.py#L2805) |
-| `_observe_continuation(tenant_ref: str, request: CodingTaskRequest) -> Optional[ContinuationAuthority]` | internal | Decide whether this submit may re-enter an existing backend session. | [`flyto_ai/coding/service.py:2831`](../../../flyto_ai/coding/service.py#L2831) |
-| `_prove_stopped_tree(authority: ContinuationAuthority) -> None` | internal | Prove the workspace is still, byte for byte, the tree that stopped. | [`flyto_ai/coding/service.py:2946`](../../../flyto_ai/coding/service.py#L2946) |
-| `_claim_continuation(tenant_ref: str, job_id: str, observed: Optional[ContinuationAuthority]) -> Optional[ContinuationAuthority]` | internal | Consume exactly the authority that was observed, or refuse. | [`flyto_ai/coding/service.py:2987`](../../../flyto_ai/coding/service.py#L2987) |
-| `_revert_continuation_claim(tenant_ref: str, granted: Optional[ContinuationAuthority], job_id: str) -> None` | internal | Settle a claim whose job failed to come into existence. | [`flyto_ai/coding/service.py:3014`](../../../flyto_ai/coding/service.py#L3014) |
-| `get(tenant_id: str, job_id: str) -> CodingJobReceipt` | public | Read a job only from the authenticated tenant namespace. | [`flyto_ai/coding/service.py:3047`](../../../flyto_ai/coding/service.py#L3047) |
-| `audit(tenant_id: str, job_id: str, implementation_revision_sha256: str, verdict: CodingAuditVerdict, findings: Sequence[CodingAuditFinding]) -> CodingJobReceipt` | public | Apply one authenticated audit decision to one exact revision. | [`flyto_ai/coding/service.py:3069`](../../../flyto_ai/coding/service.py#L3069) |
-| `abandon(tenant_id: str, job_id: str) -> CodingJobReceipt` | public | Fail one provably stranded job closed so its worktree can be reused. | [`flyto_ai/coding/service.py:3183`](../../../flyto_ai/coding/service.py#L3183) |
-| `repair_workspace_claim(workspace: str) -> Dict[str, Any]` | public | Clear an unevaluable workspace claim on explicit host authority. | [`flyto_ai/coding/service.py:3256`](../../../flyto_ai/coding/service.py#L3256) |
-| `close(*, wait: bool = True) -> None` | public | Release resources owned by `CodingService`. | [`flyto_ai/coding/service.py:3283`](../../../flyto_ai/coding/service.py#L3283) |
-| `_schedule_rework(path: Path, tenant_ref: str, job_id: str, record: Mapping[str, Any], findings: Sequence[CodingAuditFinding], digest: str, audit_count: int) -> CodingJobReceipt` | internal | Queue one same-session repair round; the caller holds the lock. | [`flyto_ai/coding/service.py:3346`](../../../flyto_ai/coding/service.py#L3346) |
-| `_settle_at_rework_limit(path: Path, tenant_ref: str, job_id: str, record: Mapping[str, Any], audit_count: int, audit_findings_sha256: str) -> None` | internal | Terminalize a job that has used every repair round it was given. | [`flyto_ai/coding/service.py:3460`](../../../flyto_ai/coding/service.py#L3460) |
-| `_rework_message(original: str, findings: Sequence[CodingAuditFinding]) -> str` | internal | Render bounded, deterministic feedback from typed findings only. | [`flyto_ai/coding/service.py:3512`](../../../flyto_ai/coding/service.py#L3512) |
-| `_run_job(tenant_ref: str, job_id: str, request: CodingTaskRequest, *, rework: bool = False, work: Optional[DispatchedWork] = None) -> None` | internal | Internal `_run_job` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:3527`](../../../flyto_ai/coding/service.py#L3527) |
-| `_admit_mission(tenant_ref: str, job_id: str, request: CodingTaskRequest) -> 'MissionAdmission'` | internal | Create or validate this job's mission and place its one work item. | [`flyto_ai/coding/service.py:3618`](../../../flyto_ai/coding/service.py#L3618) |
-| `_submit_repair(tenant_ref: str, job_id: str, record: Mapping[str, Any], rework_count: int) -> 'MissionAdmission'` | internal | Place one repair child for this job's next round. | [`flyto_ai/coding/service.py:3637`](../../../flyto_ai/coding/service.py#L3637) |
-| `_record_projection(record: Mapping[str, Any]) -> Optional[CodingMissionProjection]` | internal | Rebuild a job's mission projection, revalidating it on the way out. | [`flyto_ai/coding/service.py:3666`](../../../flyto_ai/coding/service.py#L3666) |
-| `_pump_dispatch() -> None` | internal | Run exactly one store-selected work item, whichever job owns it. | [`flyto_ai/coding/service.py:3684`](../../../flyto_ai/coding/service.py#L3684) |
-| `_schedule_pump() -> None` | internal | Queue one pump for work that is already durable and recoverable. | [`flyto_ai/coding/service.py:3756`](../../../flyto_ai/coding/service.py#L3756) |
-| `_prime_pump() -> None` | internal | Queue one more pump when the shared queue still holds ready work. | [`flyto_ai/coding/service.py:3778`](../../../flyto_ai/coding/service.py#L3778) |
-| `_dispatch_once() -> str` | internal | Take the next work item the store chose and run its owning job. | [`flyto_ai/coding/service.py:3793`](../../../flyto_ai/coding/service.py#L3793) |
-| `_run_dispatched(work: 'DispatchedWork') -> str` | internal | Resolve one dispatched work item back to its private owner and run it. | [`flyto_ai/coding/service.py:3811`](../../../flyto_ai/coding/service.py#L3811) |
-| `_execution_authority() -> Dict[str, Any]` | internal | The bounded startup authority a job admitted here may run under. | [`flyto_ai/coding/service.py:3907`](../../../flyto_ai/coding/service.py#L3907) |
-| `_workspace_registry_digest() -> str` | internal | Digest of the canonical host-global registry this service uses. | [`flyto_ai/coding/service.py:3954`](../../../flyto_ai/coding/service.py#L3954) |
-| `_workspace_root_set_digest() -> str` | internal | Digest of the canonical configured tree set, order-independent. | [`flyto_ai/coding/service.py:3964`](../../../flyto_ai/coding/service.py#L3964) |
-| `_policy_digest(policy: Any) -> str` | internal | A bounded, stable digest of one startup policy's *whole* semantics. | [`flyto_ai/coding/service.py:3979`](../../../flyto_ai/coding/service.py#L3979) |
-| `_policy_semantics(value: Any, depth: int) -> Any` | internal | Canonicalize one policy value, recursively and within bounds. | [`flyto_ai/coding/service.py:4022`](../../../flyto_ai/coding/service.py#L4022) |
-| `_acquire_state_root_authority() -> None` | internal | Take this state root's durable authority lease, or refuse to run. | [`flyto_ai/coding/service.py:4051`](../../../flyto_ai/coding/service.py#L4051) |
-| `_join_workspace_root_authority(state_root: Path, workspace_roots: Sequence[Any]) -> None` | internal | Atomically add one job's repository set to this process's holds. | [`flyto_ai/coding/service.py:4153`](../../../flyto_ai/coding/service.py#L4153) |
-| `_ensure_workspace_authority_locked(workspace_roots: Sequence[Any]) -> None` | internal | Atomically own the repositories one durable job can touch. | [`flyto_ai/coding/service.py:4184`](../../../flyto_ai/coding/service.py#L4184) |
-| `_start_workspace_authority_monitor_locked() -> None` | internal | Start one bounded idle-release observer for this service process. | [`flyto_ai/coding/service.py:4208`](../../../flyto_ai/coding/service.py#L4208) |
-| `_workspace_authority_monitor_loop() -> None` | internal | Release a lease after a peer settles this state root's last job. | [`flyto_ai/coding/service.py:4232`](../../../flyto_ai/coding/service.py#L4232) |
-| `_release_workspace_authority_if_idle_locked() -> None` | internal | Retain exactly the repo leases durable open work still needs. | [`flyto_ai/coding/service.py:4248`](../../../flyto_ai/coding/service.py#L4248) |
-| `_acquire_state_root_authority_exclusively() -> None` | internal | Take the whole state root for one subtractive host release, or refuse. | [`flyto_ai/coding/service.py:4283`](../../../flyto_ai/coding/service.py#L4283) |
-| `_acquire_state_root_authority_for_online_abandon() -> None` | internal | Join only the kernel lease needed for a live-safe abandonment. | [`flyto_ai/coding/service.py:4335`](../../../flyto_ai/coding/service.py#L4335) |
-| `_refuse_release_valve(operation: str) -> None` | internal | Refuse an additive operation on a service that never bound a root. | [`flyto_ai/coding/service.py:4365`](../../../flyto_ai/coding/service.py#L4365) |
-| `_open_authority_lock() -> int` | internal | Open the lease file itself, never something standing in for it. | [`flyto_ai/coding/service.py:4375`](../../../flyto_ai/coding/service.py#L4375) |
-| `_release_state_root_authority() -> None` | internal | Give the lease back. | [`flyto_ai/coding/service.py:4415`](../../../flyto_ai/coding/service.py#L4415) |
-| `_authority_marker_path() -> Path` | internal | Internal `_authority_marker_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:4431`](../../../flyto_ai/coding/service.py#L4431) |
-| `_read_authority_marker() -> Optional[Dict[str, Any]]` | internal | The authority this root names, or `None` only when it names none. | [`flyto_ai/coding/service.py:4434`](../../../flyto_ai/coding/service.py#L4434) |
-| `_read_authority_marker_bytes() -> Optional[bytes]` | internal | The marker's exact bytes, read through one descriptor, or `None`. | [`flyto_ai/coding/service.py:4471`](../../../flyto_ai/coding/service.py#L4471) |
-| `_write_authority_marker(authority: Mapping[str, Any]) -> None` | internal | Internal `_write_authority_marker` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:4542`](../../../flyto_ai/coding/service.py#L4542) |
-| `_require_all_jobs_terminal() -> None` | internal | Refuse rotation while any job of the old authority is still open. | [`flyto_ai/coding/service.py:4548`](../../../flyto_ai/coding/service.py#L4548) |
-| `_bind_startup_authority(mine: Mapping[str, Any], *, adopt: bool) -> None` | internal | Refuse this state root unless its live work is this authority's. | [`flyto_ai/coding/service.py:4571`](../../../flyto_ai/coding/service.py#L4571) |
-| `_settle_unfingerprinted_record(path: Path, record: Mapping[str, Any], state: str, mine: Mapping[str, Any], adopt: bool) -> None` | internal | Adopt a pre-upgrade record only on proof, and never on absence. | [`flyto_ai/coding/service.py:4629`](../../../flyto_ai/coding/service.py#L4629) |
-| `_terminalize_unbound(path: Path, tenant_ref: str, job_id: str, record: Mapping[str, Any]) -> None` | internal | Close one unattributable record, its mission item and its worktree. | [`flyto_ai/coding/service.py:4708`](../../../flyto_ai/coding/service.py#L4708) |
-| `_may_execute(record: Mapping[str, Any]) -> bool` | internal | Whether this service shares the authority this job was admitted under. | [`flyto_ai/coding/service.py:4733`](../../../flyto_ai/coding/service.py#L4733) |
-| `_fail_unrunnable_record(tenant_ref: str, job_id: str, code: str) -> None` | internal | Terminalize a queued record whose durable round cannot be rebuilt. | [`flyto_ai/coding/service.py:4751`](../../../flyto_ai/coding/service.py#L4751) |
-| `_reconstruct_request(tenant_ref: str, job_id: str, record: Mapping[str, Any], round_envelope: Mapping[str, Any]) -> Optional[CodingTaskRequest]` | internal | Rebuild the private request one dispatched round must execute. | [`flyto_ai/coding/service.py:4777`](../../../flyto_ai/coding/service.py#L4777) |
-| `_account_unrunnable(work: 'DispatchedWork', reason: str) -> None` | internal | Close one work item nobody can run, with the whole accounting. | [`flyto_ai/coding/service.py:4820`](../../../flyto_ai/coding/service.py#L4820) |
-| `_close_round_item(work: 'DispatchedWork', tenant_ref: str, job_id: str, *, revision: str, files: Sequence[str], state: str, failure_code: str) -> Dict[str, Any]` | internal | Owner-close this round's work item and return the record change. | [`flyto_ai/coding/service.py:4858`](../../../flyto_ai/coding/service.py#L4858) |
-| `_projection_change(work: 'DispatchedWork', *, status: str, disposition: str = '') -> Dict[str, Any]` | internal | Build the record change that moves *this round's* projection. | [`flyto_ai/coding/service.py:4929`](../../../flyto_ai/coding/service.py#L4929) |
-| `_advance_projection(path: Path, *, status: str, disposition: str = '', mission_status: Optional[str] = None, returned_to_main_axis: Optional[bool] = None) -> None` | internal | Move the record's stored projection, or leave it exactly as it was. | [`flyto_ai/coding/service.py:4966`](../../../flyto_ai/coding/service.py#L4966) |
-| `_accept_mission(tenant_ref: str, job_id: str, record: Mapping[str, Any], path: Path) -> None` | internal | Apply one accepted audit to this job's mission. | [`flyto_ai/coding/service.py:4999`](../../../flyto_ai/coding/service.py#L4999) |
-| `mission_fleet(*, limit: int = 50) -> Dict[str, Any]` | public | A bounded, snapshot-only, secret-free view of every mission here. | [`flyto_ai/coding/service.py:5043`](../../../flyto_ai/coding/service.py#L5043) |
-| `mission_context(tenant_id: str, job_id: str) -> Dict[str, Any]` | public | Full mission context for one job, for its owning tenant only. | [`flyto_ai/coding/service.py:5055`](../../../flyto_ai/coding/service.py#L5055) |
-| `_round_path(tenant_ref: str, work_item_id: str) -> Path` | internal | Internal `_round_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5080`](../../../flyto_ai/coding/service.py#L5080) |
-| `_write_round_envelope(tenant_ref: str, job_id: str, work_item_id: str, *, rework: bool, message: str = '') -> None` | internal | Bind one placed work item to the exact round it stands for. | [`flyto_ai/coding/service.py:5088`](../../../flyto_ai/coding/service.py#L5088) |
-| `_read_round_envelope(tenant_ref: str, work_item_id: str) -> Optional[Dict[str, Any]]` | internal | Read one round envelope, or refuse a file that is not exactly one. | [`flyto_ai/coding/service.py:5114`](../../../flyto_ai/coding/service.py#L5114) |
-| `_claim_round(job_id: str) -> bool` | internal | Take execution authority over one round, or decline to run it. | [`flyto_ai/coding/service.py:5134`](../../../flyto_ai/coding/service.py#L5134) |
-| `_release_round(job_id: str) -> None` | internal | Internal `_release_round` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5152`](../../../flyto_ai/coding/service.py#L5152) |
-| `async _run_round(store: ThreadStore, request: CodingTaskRequest, job_id: str, path: Path, progress: _RoundProgress, *, rework: bool = False) -> 'tuple[CodingTaskResult, Optional[CodingRouteReceipt], Optional[EmergencyAuthorityReceipt]]'` | internal | Run the strict route, then the emergency lane only if it is earned. | [`flyto_ai/coding/service.py:5160`](../../../flyto_ai/coding/service.py#L5160) |
-| `_mark_implementer_started(path: Path) -> None` | internal | Durably record that the implementer is about to be invoked. | [`flyto_ai/coding/service.py:5214`](../../../flyto_ai/coding/service.py#L5214) |
-| `_session_binder(path: Path, tenant_ref: str, job_id: str, workspace: str) -> Callable[[str], None]` | internal | Build this round's durable session-binding callback. | [`flyto_ai/coding/service.py:5231`](../../../flyto_ai/coding/service.py#L5231) |
-| `_bind_provider_session(path: Path, tenant_ref: str, job_id: str, workspace: str, session_id: str) -> None` | internal | Persist the session the provider just established, or refuse the round. | [`flyto_ai/coding/service.py:5241`](../../../flyto_ai/coding/service.py#L5241) |
-| `_plan_authority_digest(job_id: str, request_sha256: str, workspace_sha256: str, contract: Mapping[str, Any]) -> str` | internal | Internal `_plan_authority_digest` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5299`](../../../flyto_ai/coding/service.py#L5299) |
-| `_persist_plan_authority(path: Path, record: Mapping[str, Any], contract: Mapping[str, Any]) -> None` | internal | Record which contract this round was authorized against. | [`flyto_ai/coding/service.py:5318`](../../../flyto_ai/coding/service.py#L5318) |
-| `_load_plan_authority(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]` | internal | Return the exact parent contract this job may amend, or `None`. | [`flyto_ai/coding/service.py:5363`](../../../flyto_ai/coding/service.py#L5363) |
-| `_prove_prior_scope(record: Mapping[str, Any], request: CodingTaskRequest, tenant_ref: str, job_id: str) -> Tuple[str, ...]` | internal | Re-prove what this job already owns, *before* the implementer edits. | [`flyto_ai/coding/service.py:5400`](../../../flyto_ai/coding/service.py#L5400) |
-| `_cumulative_route_scope(prior: Sequence[str], session_bound: str, result: CodingTaskResult, request: CodingTaskRequest) -> Tuple[str, ...]` | internal | Union the proven prior scope with this round's host snapshot. | [`flyto_ai/coding/service.py:5463`](../../../flyto_ai/coding/service.py#L5463) |
-| `_bound_emergency_authority(record: Mapping[str, Any], job_id: str, *, rework: bool) -> Optional[EmergencyAuthorityReceipt]` | internal | Return the authority that may continue this exact rework round. | [`flyto_ai/coding/service.py:5505`](../../../flyto_ai/coding/service.py#L5505) |
-| `_overflow_trigger(route: Optional['CodingRouteReceipt'], result: CodingTaskResult, progress: _RoundProgress, path: Path) -> Optional[EmergencyTrigger]` | internal | Classify one failed round as broken infrastructure, or refuse. | [`flyto_ai/coding/service.py:5561`](../../../flyto_ai/coding/service.py#L5561) |
-| `async _emergency_round(store: ThreadStore, request: CodingTaskRequest, job_id: str, request_sha256: str, path: Path, progress: _RoundProgress, trigger: EmergencyTrigger, *, mode: str) -> 'tuple[CodingTaskResult, Optional[EmergencyAuthorityReceipt]]'` | internal | Run the startup-selected implementer directly under open-circuit authority. | [`flyto_ai/coding/service.py:5598`](../../../flyto_ai/coding/service.py#L5598) |
-| `async _implement(store: ThreadStore, request: CodingTaskRequest, progress: Optional[_RoundProgress] = None, *, rework_binding: Optional[Tuple[Mapping[str, Any], str, str]] = None, job_binding: Optional[Tuple[Path, str, str]] = None) -> 'tuple[CodingTaskResult, Optional[CodingRouteReceipt]]'` | internal | Run the selected implementer, wrapped by the host-owned route. | [`flyto_ai/coding/service.py:5673`](../../../flyto_ai/coding/service.py#L5673) |
-| `_promote_verified_cumulative_no_change(result: CodingTaskResult, request: CodingTaskRequest, record: Mapping[str, Any], tenant_ref: str, job_id: str) -> CodingTaskResult` | internal | Close a clean no-op rework against the already audited revision. | [`flyto_ai/coding/service.py:5821`](../../../flyto_ai/coding/service.py#L5821) |
-| `_lane_dispatcher(manager: Any, specs: Sequence[Any]) -> Any` | internal | Map a bare lane tool name onto its provider-scoped capability tool. | [`flyto_ai/coding/service.py:5865`](../../../flyto_ai/coding/service.py#L5865) |
-| `_core_dispatcher() -> Any` | internal | Route Core validation through the one supported adapter boundary. | [`flyto_ai/coding/service.py:5880`](../../../flyto_ai/coding/service.py#L5880) |
-| `_unavailable_lane(policy: Any, missing: Sequence[str]) -> str` | internal | Name the lane whose provider was actually unavailable at startup. | [`flyto_ai/coding/service.py:5895`](../../../flyto_ai/coding/service.py#L5895) |
-| `_route_unavailable(request: CodingTaskRequest, code: str = 'route_capability_unavailable', *, lane: str = 'indexer_pre') -> CodingTaskResult` | internal | Internal `_route_unavailable` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5912`](../../../flyto_ai/coding/service.py#L5912) |
-| `_route_unavailable_receipt(policy: Any, code: str = 'capability_unavailable', *, lane: str = 'indexer_pre') -> 'CodingRouteReceipt'` | internal | Internal `_route_unavailable_receipt` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5929`](../../../flyto_ai/coding/service.py#L5929) |
-| `_record_outcome(path: Path, tenant_ref: str, job_id: str, request: CodingTaskRequest, result: CodingTaskResult, store: ThreadStore, rework: bool, route: Optional['CodingRouteReceipt'] = None, *, progress: Optional[_RoundProgress] = None, authority: Optional[EmergencyAuthorityReceipt] = None, settle: Optional['_RoundSettlement'] = None) -> None` | internal | Move one finished implementation round into its durable state. | [`flyto_ai/coding/service.py:5949`](../../../flyto_ai/coding/service.py#L5949) |
-| `_is_pre_provider_rework_route_failure(record: Mapping[str, Any], result: CodingTaskResult, route: Optional['CodingRouteReceipt'], *, rework: bool, started: bool) -> bool` | internal | Whether one failed repair is safe to hold for a host-route retry. | [`flyto_ai/coding/service.py:6180`](../../../flyto_ai/coding/service.py#L6180) |
-| `_close_continuation(tenant_ref: str, job_id: str, path: Path, failure_code: str, proof: Mapping[str, Any]) -> None` | internal | Open, rotate, or settle this job's continuation authority. | [`flyto_ai/coding/service.py:6228`](../../../flyto_ai/coding/service.py#L6228) |
-| `_settle_continuation(tenant_ref: str, job_id: str, path: Optional[Path] = None) -> None` | internal | Close this job's continuation authority, exactly once and only its own. | [`flyto_ai/coding/service.py:6353`](../../../flyto_ai/coding/service.py#L6353) |
-| `_cumulative_attribution(record: Optional[Mapping[str, Any]], result: CodingTaskResult, request: CodingTaskRequest, tenant_ref: str, job_id: str) -> Tuple[str, ...]` | internal | Prove a rework round is still bound to a real earlier revision. | [`flyto_ai/coding/service.py:6382`](../../../flyto_ai/coding/service.py#L6382) |
-| `_auditable_failure(result: CodingTaskResult, route: Optional['CodingRouteReceipt'], authority: Optional[EmergencyAuthorityReceipt], started: bool, cumulative: Tuple[str, ...] = ()) -> bool` | internal | Whether a failed round is real work awaiting rework, not a dead end. | [`flyto_ai/coding/service.py:6493`](../../../flyto_ai/coding/service.py#L6493) |
-| `_implementation_failure_code(result: CodingTaskResult) -> str` | internal | Return what the implementer said, never what a lane said about it. | [`flyto_ai/coding/service.py:6559`](../../../flyto_ai/coding/service.py#L6559) |
-| `_implementation_blockers(result: CodingTaskResult, route: Optional['CodingRouteReceipt']) -> Tuple[str, ...]` | internal | Derive the bounded, stable reasons this revision cannot be accepted. | [`flyto_ai/coding/service.py:6572`](../../../flyto_ai/coding/service.py#L6572) |
-| `_failed_round_proof(request: CodingTaskRequest, result: CodingTaskResult, started: bool, outcome: Mapping[str, Any], scope: Sequence[str] = ()) -> Dict[str, Any]` | internal | Keep bounded proof that an implementation ran, without landability. | [`flyto_ai/coding/service.py:6606`](../../../flyto_ai/coding/service.py#L6606) |
-| `_fail_job(path: Path, tenant_ref: str, job_id: str, code: str, exc: BaseException, progress: Optional[_RoundProgress] = None, *, settle: Optional['_RoundSettlement'] = None) -> None` | internal | Force one terminal fail-closed record for any worker exit. | [`flyto_ai/coding/service.py:6659`](../../../flyto_ai/coding/service.py#L6659) |
-| `status_health() -> Dict[str, Any]` | public | Report whether the diagnostic recorder itself is working. | [`flyto_ai/coding/service.py:6706`](../../../flyto_ai/coding/service.py#L6706) |
-| `_close_status() -> None` | internal | Republish the last known facts with a `closed` lifecycle. | [`flyto_ai/coding/service.py:6722`](../../../flyto_ai/coding/service.py#L6722) |
-| `_publish_status(record: Mapping[str, Any], *, lifecycle: str = 'active') -> None` | internal | Refresh this instance's bounded runtime status. | [`flyto_ai/coding/service.py:6742`](../../../flyto_ai/coding/service.py#L6742) |
-| `_require_execution_authority(record: Mapping[str, Any]) -> None` | internal | Accept exactly one valid execution authority for this exact round. | [`flyto_ai/coding/service.py:6817`](../../../flyto_ai/coding/service.py#L6817) |
-| `_require_emergency_authority(record: Mapping[str, Any], stored: Mapping[str, Any]) -> None` | internal | Validate one emergency authority against this service and this job. | [`flyto_ai/coding/service.py:6896`](../../../flyto_ai/coding/service.py#L6896) |
-| `_stored_revision(record: Mapping[str, Any]) -> str` | internal | Recompute the digest of a persisted attributable change set. | [`flyto_ai/coding/service.py:6936`](../../../flyto_ai/coding/service.py#L6936) |
-| `_revision_digest(working_dir: str, files: Sequence[str]) -> str` | internal | Hash the exact current bytes of one bounded attributable change set. | [`flyto_ai/coding/service.py:6952`](../../../flyto_ai/coding/service.py#L6952) |
-| `_revision_entry(target: Path, remaining: int) -> Optional[Tuple[str, str, int]]` | internal | Read one file's type, mode, and bytes through a single descriptor. | [`flyto_ai/coding/service.py:6979`](../../../flyto_ai/coding/service.py#L6979) |
-| `_revision_target(root: Path, relative: str) -> Path` | internal | Resolve one attributable path or fail closed. | [`flyto_ai/coding/service.py:7038`](../../../flyto_ai/coding/service.py#L7038) |
-| `_forget_future(future: Future[Any], job_id: str = '') -> None` | internal | Internal `_forget_future` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7063`](../../../flyto_ai/coding/service.py#L7063) |
-| `_with_repository_authority(request: CodingTaskRequest) -> CodingTaskRequest` | internal | Resolve and validate the atomic repository set for one job. | [`flyto_ai/coding/service.py:7069`](../../../flyto_ai/coding/service.py#L7069) |
-| `_assert_workspace(workspace: str) -> None` | internal | Internal `_assert_workspace` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7136`](../../../flyto_ai/coding/service.py#L7136) |
-| `_workspace_lock(workspace: str) -> Iterator[None]` | internal | Serialize edits to one workspace across threads and MCP processes. | [`flyto_ai/coding/service.py:7142`](../../../flyto_ai/coding/service.py#L7142) |
-| `_workspace_digest(workspace: str) -> str` | internal | Internal `_workspace_digest` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7162`](../../../flyto_ai/coding/service.py#L7162) |
-| `_record_repository_roots(record: Mapping[str, Any]) -> Tuple[str, ...]` | internal | Decode the exact private repo set, with a v1 workspace fallback. | [`flyto_ai/coding/service.py:7165`](../../../flyto_ai/coding/service.py#L7165) |
-| `_record_repository_digests(record: Mapping[str, Any]) -> Tuple[str, ...]` | internal | Re-prove the persisted path/digest binding for one repo set. | [`flyto_ai/coding/service.py:7193`](../../../flyto_ai/coding/service.py#L7193) |
-| `_workspace_claim_path(workspace: str) -> Path` | internal | Internal `_workspace_claim_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7213`](../../../flyto_ai/coding/service.py#L7213) |
-| `_workspace_authority(workspace: str) -> Tuple[str, str]` | internal | Decide who may edit one worktree: `(status, owner_job_id)`. | [`flyto_ai/coding/service.py:7218`](../../../flyto_ai/coding/service.py#L7218) |
-| `_claim_is_well_formed(claim: Mapping[str, Any], digest: str) -> bool` | internal | Require the exact claim shape, bounded values, and this worktree. | [`flyto_ai/coding/service.py:7287`](../../../flyto_ai/coding/service.py#L7287) |
-| `_record_binds_claim(record: Mapping[str, Any], job_id: str, digest: str) -> bool` | internal | Require the owner record to name this job and this exact worktree. | [`flyto_ai/coding/service.py:7324`](../../../flyto_ai/coding/service.py#L7324) |
-| `_assert_workspace_available(job_id: str, workspace: str) -> str` | internal | Refuse a worktree owned by another job or by an unevaluable claim. | [`flyto_ai/coding/service.py:7349`](../../../flyto_ai/coding/service.py#L7349) |
-| `_create_workspace_claim(tenant_ref: str, job_id: str, workspace: str, state: str) -> None` | internal | Take a first hold for a job that does not exist yet. | [`flyto_ai/coding/service.py:7370`](../../../flyto_ai/coding/service.py#L7370) |
-| `_create_repository_claims(tenant_ref: str, job_id: str, repositories: Sequence[str], state: str) -> None` | internal | Atomically claim a job's whole repo set under the state guard. | [`flyto_ai/coding/service.py:7386`](../../../flyto_ai/coding/service.py#L7386) |
-| `_reassert_workspace_claim(tenant_ref: str, job_id: str, workspace: str, state: str) -> None` | internal | Require an existing hold this exact job already owns, and restate it. | [`flyto_ai/coding/service.py:7411`](../../../flyto_ai/coding/service.py#L7411) |
-| `_reassert_repository_claims(tenant_ref: str, job_id: str, record: Mapping[str, Any], state: str) -> None` | internal | Require every member of the persisted set to remain this job's. | [`flyto_ai/coding/service.py:7434`](../../../flyto_ai/coding/service.py#L7434) |
-| `_require_owned_claim(tenant_ref: str, job_id: str, workspace: str) -> Mapping[str, Any]` | internal | Return the live, fully bound claim this exact tenant+job owns. | [`flyto_ai/coding/service.py:7453`](../../../flyto_ai/coding/service.py#L7453) |
-| `_write_claim(tenant_ref: str, job_id: str, workspace: str, state: str, *, claimed_at: float, now: float) -> None` | internal | Internal `_write_claim` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7483`](../../../flyto_ai/coding/service.py#L7483) |
-| `_release_workspace_claim(job_id: str, workspace: str) -> None` | internal | Drop this job's hold, never another job's and never an unreadable one. | [`flyto_ai/coding/service.py:7505`](../../../flyto_ai/coding/service.py#L7505) |
-| `_release_repository_claims(job_id: str, record: Mapping[str, Any]) -> None` | internal | Release exactly this job's valid repo claims, never a foreign set. | [`flyto_ai/coding/service.py:7523`](../../../flyto_ai/coding/service.py#L7523) |
-| `_sweep_workspace_claims() -> None` | internal | Drop only the claims whose owning record proves the job has settled. | [`flyto_ai/coding/service.py:7535`](../../../flyto_ai/coding/service.py#L7535) |
-| `_resume_path(tenant_ref: str, job_id: str) -> Path` | internal | Internal `_resume_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7578`](../../../flyto_ai/coding/service.py#L7578) |
-| `_write_resume_envelope(tenant_ref: str, job_id: str, request: CodingTaskRequest, request_sha256: str, session_bound: str = '') -> None` | internal | Persist only what one job's rework may replay, and nothing more. | [`flyto_ai/coding/service.py:7583`](../../../flyto_ai/coding/service.py#L7583) |
-| `_load_resume_request(tenant_ref: str, job_id: str, request_sha256: str, session_bound: Optional[str] = None) -> Optional[CodingTaskRequest]` | internal | Rebuild one job's original request from its durable envelope. | [`flyto_ai/coding/service.py:7614`](../../../flyto_ai/coding/service.py#L7614) |
-| `_read_resume_envelope(tenant_ref: str, job_id: str, record: Mapping[str, Any]) -> Optional[CodingTaskRequest]` | internal | Return the request a rework may replay into this job's exact session. | [`flyto_ai/coding/service.py:7655`](../../../flyto_ai/coding/service.py#L7655) |
-| `_seal_resume_envelope(tenant_ref: str, job_id: str, request: CodingTaskRequest, request_sha256: str, session: str) -> None` | internal | Bind the stored request to the session this round actually produced. | [`flyto_ai/coding/service.py:7670`](../../../flyto_ai/coding/service.py#L7670) |
-| `_discard_resume(tenant_ref: str, job_id: str) -> None` | internal | Forget one job's resume context in memory and on disk together. | [`flyto_ai/coding/service.py:7692`](../../../flyto_ai/coding/service.py#L7692) |
-| `_discard_path(path: Path) -> None` | internal | Internal `_discard_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7702`](../../../flyto_ai/coding/service.py#L7702) |
-| `_state_guard() -> Iterator[None]` | internal | Protect short state mutations without owning the root for process life. | [`flyto_ai/coding/service.py:7709`](../../../flyto_ai/coding/service.py#L7709) |
-| `_job_lease_path(job_id: str) -> Path` | internal | Internal `_job_lease_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7724`](../../../flyto_ai/coding/service.py#L7724) |
-| `_acquire_job_lease(job_id: str) -> bool` | internal | Claim one execution round; leases are released automatically on crash. | [`flyto_ai/coding/service.py:7729`](../../../flyto_ai/coding/service.py#L7729) |
-| `_release_job_lease(job_id: str) -> None` | internal | Internal `_release_job_lease` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7745`](../../../flyto_ai/coding/service.py#L7745) |
-| `_tenant_ref(tenant_id: str) -> str` | internal | Internal `_tenant_ref` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7755`](../../../flyto_ai/coding/service.py#L7755) |
-| `_tenant_dir(tenant_ref: str, *, create: bool = True) -> Path` | internal | Internal `_tenant_dir` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7760`](../../../flyto_ai/coding/service.py#L7760) |
-| `_request_digest(request: CodingTaskRequest) -> str` | internal | Identity of what the *caller* asked for, host authority excluded. | [`flyto_ai/coding/service.py:7768`](../../../flyto_ai/coding/service.py#L7768) |
-| `_read_json(path: Path) -> Dict[str, Any]` | internal | Internal `_read_json` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7800`](../../../flyto_ai/coding/service.py#L7800) |
-| `_write_json(path: Path, value: Mapping[str, Any]) -> None` | internal | Internal `_write_json` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7807`](../../../flyto_ai/coding/service.py#L7807) |
-| `_update_record(path: Path, **changes) -> None` | internal | Internal `_update_record` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7825`](../../../flyto_ai/coding/service.py#L7825) |
-| `_update_record_locked(path: Path, **changes) -> None` | internal | Update one record while the caller owns the cross-process guard. | [`flyto_ai/coding/service.py:7829`](../../../flyto_ai/coding/service.py#L7829) |
-| `_decode_result(value: Any) -> Optional[CodingTaskResult]` | internal | Internal `_decode_result` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7875`](../../../flyto_ai/coding/service.py#L7875) |
-| `_bounded_generation(value: Any) -> int` | internal | A generation is a small counter or it is nothing. | [`flyto_ai/coding/service.py:7890`](../../../flyto_ai/coding/service.py#L7890) |
-| `_public_receipt(tenant_ref: str, record: Mapping[str, Any]) -> CodingJobReceipt` | internal | Project one job, including whether anything is left to continue. | [`flyto_ai/coding/service.py:7899`](../../../flyto_ai/coding/service.py#L7899) |
-| `_receipt(record: Mapping[str, Any]) -> CodingJobReceipt` | internal | Internal `_receipt` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7929`](../../../flyto_ai/coding/service.py#L7929) |
-| `_reconcile_interrupted_jobs() -> None` | internal | Internal `_reconcile_interrupted_jobs` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7973`](../../../flyto_ai/coding/service.py#L7973) |
-| `_reconcile_queued_job(path: Path, observed: Mapping[str, Any]) -> None` | internal | Classify one queued record under its round's execution barrier. | [`flyto_ai/coding/service.py:8035`](../../../flyto_ai/coding/service.py#L8035) |
-| `_settle_unavailable_queued_item(path: Path, record: Mapping[str, Any], item: Optional[Any]) -> None` | internal | Fail one queued record whose exact Mission authority cannot run. | [`flyto_ai/coding/service.py:8081`](../../../flyto_ai/coding/service.py#L8081) |
-| `_reclaim_mission_item(path: Path, record: Mapping[str, Any]) -> None` | internal | Return one interrupted job's work item to the queue, on proof. | [`flyto_ai/coding/service.py:8123`](../../../flyto_ai/coding/service.py#L8123) |
-| `_reconcile_continuation_claims() -> None` | internal | Resolve authorities whose claiming job died before it could settle. | [`flyto_ai/coding/service.py:8158`](../../../flyto_ai/coding/service.py#L8158) |
-| `_force_settle(authority: ContinuationAuthority) -> None` | internal | Settle forward. | [`flyto_ai/coding/service.py:8221`](../../../flyto_ai/coding/service.py#L8221) |
+| `open_host_release_valve(*, state_root: str, workspace_roots: Sequence[str]) -> 'CodingService'` | public | Open this state root for one strictly subtractive host release. | [`flyto_ai/coding/service.py:806`](../../../flyto_ai/coding/service.py#L806) |
+| `open_host_abandon_valve(*, state_root: str, workspace_roots: Sequence[str]) -> 'CodingService'` | public | Open the narrow abandon-only valve beside live peer services. | [`flyto_ai/coding/service.py:854`](../../../flyto_ai/coding/service.py#L854) |
+| `_init_release_valve(*, state_root: str, workspace_roots: Sequence[str], permit_live_services: bool) -> None` | internal | Construct only what a subtractive host release can possibly need. | [`flyto_ai/coding/service.py:881`](../../../flyto_ai/coding/service.py#L881) |
+| `_open_existing_valve_lock(name: str) -> int` | internal | Open one required lock file that must already exist. | [`flyto_ai/coding/service.py:993`](../../../flyto_ai/coding/service.py#L993) |
+| `_release_valve_descriptors() -> None` | internal | Close every descriptor this mode may have taken, in reverse order. | [`flyto_ai/coding/service.py:1010`](../../../flyto_ai/coding/service.py#L1010) |
+| `__init__(agent_factory: AgentFactory, *, state_root: str, workspace_roots: Sequence[str], max_workers: int = 2, max_queued: int = 100, approval_policy: ApprovalPolicy = ApprovalPolicy.NEVER, sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE, config_path: str = '.flyto/coding.yaml', sandbox_image: str = 'python:3.12-slim', require_codex_audit: bool = False, implementation_backend: str = 'native', attachable_capability_kinds: Optional[Sequence[str]] = None, max_rework_rounds: int = 3, route_policy: Optional[CodingRoutePolicy] = None, emergency_policy: Optional[EmergencyOverflowPolicy] = None, workspace_registry_root: Optional[str] = None) -> None` | internal | Internal `__init__` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:1021`](../../../flyto_ai/coding/service.py#L1021) |
+| `_construct(agent_factory: AgentFactory, *, state_root: str, max_workers: int, max_queued: int, approval_policy: ApprovalPolicy, sandbox_mode: SandboxMode, config_path: str, sandbox_image: str, require_codex_audit: bool, implementation_backend: str, attachable_capability_kinds: Optional[Sequence[str]], max_rework_rounds: int, route_policy: Optional[CodingRoutePolicy], emergency_policy: Optional[EmergencyOverflowPolicy]) -> None` | internal | Construct durable state; workspace ownership remains demand-scoped. | [`flyto_ai/coding/service.py:1105`](../../../flyto_ai/coding/service.py#L1105) |
+| `submit(tenant_id: str, idempotency_key: str, request: CodingTaskRequest) -> CodingJobReceipt` | public | Create or reuse one tenant-owned job and schedule it exactly once. | [`flyto_ai/coding/service.py:1294`](../../../flyto_ai/coding/service.py#L1294) |
+| `_pin_verified_contract(workspace: str) -> ContractSnapshot` | internal | Prove this repository can be verified, and pin what it declared. | [`flyto_ai/coding/service.py:1390`](../../../flyto_ai/coding/service.py#L1390) |
+| `_record_pinned_contract(record: Mapping[str, Any]) -> Optional[ContractSnapshot]` | internal | Rebuild a job's pin from its own durable record, or refuse to guess. | [`flyto_ai/coding/service.py:1420`](../../../flyto_ai/coding/service.py#L1420) |
+| `_observed_config_digest(workspace: str) -> str` | internal | The current contract file's digest, or "" when it has none to give. | [`flyto_ai/coding/service.py:1446`](../../../flyto_ai/coding/service.py#L1446) |
+| `_restore_pinned_contract(tenant_ref: str, authority: ContinuationAuthority) -> ContractSnapshot` | internal | Recover the origin job's pin, and prove it is the one bound here. | [`flyto_ai/coding/service.py:1462`](../../../flyto_ai/coding/service.py#L1462) |
+| `_replayed_receipt(tenant_ref: str, tenant_dir: Path, idempotency_path: Path, request_digest: str) -> Optional[CodingJobReceipt]` | internal | Return the receipt an idempotency key already names, or `None`. | [`flyto_ai/coding/service.py:1506`](../../../flyto_ai/coding/service.py#L1506) |
+| `_retry_rework_route_submit(*, tenant_ref: str, tenant_dir: Path, idempotency_path: Path, request: CodingTaskRequest) -> Optional[CodingJobReceipt]` | internal | Consume one exact pre-provider repair-route retry, if one exists. | [`flyto_ai/coding/service.py:1534`](../../../flyto_ai/coding/service.py#L1534) |
+| `_prove_rework_route_recovery(tenant_ref: str, job_id: str, record: Mapping[str, Any], request: CodingTaskRequest, *, require_legacy_terminal: bool) -> None` | internal | Require every fact that makes repeating a route safe. | [`flyto_ai/coding/service.py:1757`](../../../flyto_ai/coding/service.py#L1757) |
+| `_prove_legacy_rework_git_tree(record: Mapping[str, Any]) -> None` | internal | Bind a legacy terminal rescue to one unchanged, single Git tree. | [`flyto_ai/coding/service.py:1877`](../../../flyto_ai/coding/service.py#L1877) |
+| `_commit_admission(tenant_ref: str, tenant_dir: Path, idempotency_path: Path, request: CodingTaskRequest, request_digest: str, authorized_config: str, observed: Optional[ContinuationAuthority], pinned: ContractSnapshot, observed_config: str) -> CodingJobReceipt` | internal | Re-prove the stopped tree, then take the short guarded transition. | [`flyto_ai/coding/service.py:1947`](../../../flyto_ai/coding/service.py#L1947) |
+| `_require_verifiable_repository(workspace: str) -> str` | internal | Refuse, before anything exists, a repository that cannot be verified. | [`flyto_ai/coding/service.py:2231`](../../../flyto_ai/coding/service.py#L2231) |
+| `_reassert_audit_claim(tenant_ref: str, record: Mapping[str, Any]) -> None` | internal | Prove the awaiting job still owns its worktree; the caller holds the guard. | [`flyto_ai/coding/service.py:2270`](../../../flyto_ai/coding/service.py#L2270) |
+| `_with_startup_authority(request: CodingTaskRequest) -> CodingTaskRequest` | internal | Overwrite every authority field from this process's startup config. | [`flyto_ai/coding/service.py:2294`](../../../flyto_ai/coding/service.py#L2294) |
+| `_startup_snapshot_policy(route_policy: Any) -> SnapshotPolicy` | internal | Decide, once, which projection this host is entitled to use. | [`flyto_ai/coding/service.py:2323`](../../../flyto_ai/coding/service.py#L2323) |
+| `_admission_lock(workspace: str) -> Iterator[None]` | internal | Serialize observe-then-claim for one workspace, and only that one. | [`flyto_ai/coding/service.py:2352`](../../../flyto_ai/coding/service.py#L2352) |
+| `_observe_continuation(tenant_ref: str, request: CodingTaskRequest) -> Optional[ContinuationAuthority]` | internal | Decide whether this submit may re-enter an existing backend session. | [`flyto_ai/coding/service.py:2378`](../../../flyto_ai/coding/service.py#L2378) |
+| `_prove_stopped_tree(authority: ContinuationAuthority) -> None` | internal | Prove the workspace is still, byte for byte, the tree that stopped. | [`flyto_ai/coding/service.py:2493`](../../../flyto_ai/coding/service.py#L2493) |
+| `_claim_continuation(tenant_ref: str, job_id: str, observed: Optional[ContinuationAuthority]) -> Optional[ContinuationAuthority]` | internal | Consume exactly the authority that was observed, or refuse. | [`flyto_ai/coding/service.py:2534`](../../../flyto_ai/coding/service.py#L2534) |
+| `_revert_continuation_claim(tenant_ref: str, granted: Optional[ContinuationAuthority], job_id: str) -> None` | internal | Settle a claim whose job failed to come into existence. | [`flyto_ai/coding/service.py:2561`](../../../flyto_ai/coding/service.py#L2561) |
+| `get(tenant_id: str, job_id: str) -> CodingJobReceipt` | public | Read a job only from the authenticated tenant namespace. | [`flyto_ai/coding/service.py:2594`](../../../flyto_ai/coding/service.py#L2594) |
+| `audit(tenant_id: str, job_id: str, implementation_revision_sha256: str, verdict: CodingAuditVerdict, findings: Sequence[CodingAuditFinding]) -> CodingJobReceipt` | public | Apply one authenticated audit decision to one exact revision. | [`flyto_ai/coding/service.py:2616`](../../../flyto_ai/coding/service.py#L2616) |
+| `abandon(tenant_id: str, job_id: str) -> CodingJobReceipt` | public | Fail one provably stranded job closed so its worktree can be reused. | [`flyto_ai/coding/service.py:2730`](../../../flyto_ai/coding/service.py#L2730) |
+| `repair_workspace_claim(workspace: str) -> Dict[str, Any]` | public | Clear an unevaluable workspace claim on explicit host authority. | [`flyto_ai/coding/service.py:2803`](../../../flyto_ai/coding/service.py#L2803) |
+| `close(*, wait: bool = True) -> None` | public | Release resources owned by `CodingService`. | [`flyto_ai/coding/service.py:2830`](../../../flyto_ai/coding/service.py#L2830) |
+| `_schedule_rework(path: Path, tenant_ref: str, job_id: str, record: Mapping[str, Any], findings: Sequence[CodingAuditFinding], digest: str, audit_count: int) -> CodingJobReceipt` | internal | Queue one same-session repair round; the caller holds the lock. | [`flyto_ai/coding/service.py:2893`](../../../flyto_ai/coding/service.py#L2893) |
+| `_settle_at_rework_limit(path: Path, tenant_ref: str, job_id: str, record: Mapping[str, Any], audit_count: int, audit_findings_sha256: str) -> None` | internal | Terminalize a job that has used every repair round it was given. | [`flyto_ai/coding/service.py:3007`](../../../flyto_ai/coding/service.py#L3007) |
+| `_rework_message(original: str, findings: Sequence[CodingAuditFinding]) -> str` | internal | Render bounded, deterministic feedback from typed findings only. | [`flyto_ai/coding/service.py:3059`](../../../flyto_ai/coding/service.py#L3059) |
+| `_run_job(tenant_ref: str, job_id: str, request: CodingTaskRequest, *, rework: bool = False, work: Optional[DispatchedWork] = None) -> None` | internal | Internal `_run_job` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:3074`](../../../flyto_ai/coding/service.py#L3074) |
+| `_admit_mission(tenant_ref: str, job_id: str, request: CodingTaskRequest) -> 'MissionAdmission'` | internal | Create or validate this job's mission and place its one work item. | [`flyto_ai/coding/service.py:3165`](../../../flyto_ai/coding/service.py#L3165) |
+| `_submit_repair(tenant_ref: str, job_id: str, record: Mapping[str, Any], rework_count: int) -> 'MissionAdmission'` | internal | Place one repair child for this job's next round. | [`flyto_ai/coding/service.py:3184`](../../../flyto_ai/coding/service.py#L3184) |
+| `_record_projection(record: Mapping[str, Any]) -> Optional[CodingMissionProjection]` | internal | Rebuild a job's mission projection, revalidating it on the way out. | [`flyto_ai/coding/service.py:3213`](../../../flyto_ai/coding/service.py#L3213) |
+| `_pump_dispatch() -> None` | internal | Run exactly one store-selected work item, whichever job owns it. | [`flyto_ai/coding/service.py:3231`](../../../flyto_ai/coding/service.py#L3231) |
+| `_schedule_pump() -> None` | internal | Queue one pump for work that is already durable and recoverable. | [`flyto_ai/coding/service.py:3303`](../../../flyto_ai/coding/service.py#L3303) |
+| `_prime_pump() -> None` | internal | Queue one more pump when the shared queue still holds ready work. | [`flyto_ai/coding/service.py:3325`](../../../flyto_ai/coding/service.py#L3325) |
+| `_dispatch_once() -> str` | internal | Take the next work item the store chose and run its owning job. | [`flyto_ai/coding/service.py:3340`](../../../flyto_ai/coding/service.py#L3340) |
+| `_run_dispatched(work: 'DispatchedWork') -> str` | internal | Resolve one dispatched work item back to its private owner and run it. | [`flyto_ai/coding/service.py:3358`](../../../flyto_ai/coding/service.py#L3358) |
+| `_execution_authority() -> Dict[str, Any]` | internal | The bounded startup authority a job admitted here may run under. | [`flyto_ai/coding/service.py:3454`](../../../flyto_ai/coding/service.py#L3454) |
+| `_workspace_registry_digest() -> str` | internal | Digest of the canonical host-global registry this service uses. | [`flyto_ai/coding/service.py:3501`](../../../flyto_ai/coding/service.py#L3501) |
+| `_workspace_root_set_digest() -> str` | internal | Digest of the canonical configured tree set, order-independent. | [`flyto_ai/coding/service.py:3511`](../../../flyto_ai/coding/service.py#L3511) |
+| `_policy_digest(policy: Any) -> str` | internal | A bounded, stable digest of one startup policy's *whole* semantics. | [`flyto_ai/coding/service.py:3526`](../../../flyto_ai/coding/service.py#L3526) |
+| `_policy_semantics(value: Any, depth: int) -> Any` | internal | Canonicalize one policy value, recursively and within bounds. | [`flyto_ai/coding/service.py:3569`](../../../flyto_ai/coding/service.py#L3569) |
+| `_acquire_state_root_authority() -> None` | internal | Take this state root's durable authority lease, or refuse to run. | [`flyto_ai/coding/service.py:3598`](../../../flyto_ai/coding/service.py#L3598) |
+| `_join_workspace_root_authority(state_root: Path, workspace_roots: Sequence[Any]) -> None` | internal | Atomically add one job's repository set to this process's holds. | [`flyto_ai/coding/service.py:3700`](../../../flyto_ai/coding/service.py#L3700) |
+| `_ensure_workspace_authority_locked(workspace_roots: Sequence[Any]) -> None` | internal | Atomically own the repositories one durable job can touch. | [`flyto_ai/coding/service.py:3731`](../../../flyto_ai/coding/service.py#L3731) |
+| `_start_workspace_authority_monitor_locked() -> None` | internal | Start one bounded idle-release observer for this service process. | [`flyto_ai/coding/service.py:3755`](../../../flyto_ai/coding/service.py#L3755) |
+| `_workspace_authority_monitor_loop() -> None` | internal | Release a lease after a peer settles this state root's last job. | [`flyto_ai/coding/service.py:3779`](../../../flyto_ai/coding/service.py#L3779) |
+| `_release_workspace_authority_if_idle_locked() -> None` | internal | Retain exactly the repo leases durable open work still needs. | [`flyto_ai/coding/service.py:3795`](../../../flyto_ai/coding/service.py#L3795) |
+| `_acquire_state_root_authority_exclusively() -> None` | internal | Take the whole state root for one subtractive host release, or refuse. | [`flyto_ai/coding/service.py:3830`](../../../flyto_ai/coding/service.py#L3830) |
+| `_acquire_state_root_authority_for_online_abandon() -> None` | internal | Join only the kernel lease needed for a live-safe abandonment. | [`flyto_ai/coding/service.py:3882`](../../../flyto_ai/coding/service.py#L3882) |
+| `_refuse_release_valve(operation: str) -> None` | internal | Refuse an additive operation on a service that never bound a root. | [`flyto_ai/coding/service.py:3912`](../../../flyto_ai/coding/service.py#L3912) |
+| `_open_authority_lock() -> int` | internal | Open the lease file itself, never something standing in for it. | [`flyto_ai/coding/service.py:3922`](../../../flyto_ai/coding/service.py#L3922) |
+| `_release_state_root_authority() -> None` | internal | Give the lease back. | [`flyto_ai/coding/service.py:3962`](../../../flyto_ai/coding/service.py#L3962) |
+| `_authority_marker_path() -> Path` | internal | Internal `_authority_marker_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:3978`](../../../flyto_ai/coding/service.py#L3978) |
+| `_read_authority_marker() -> Optional[Dict[str, Any]]` | internal | The authority this root names, or `None` only when it names none. | [`flyto_ai/coding/service.py:3981`](../../../flyto_ai/coding/service.py#L3981) |
+| `_read_authority_marker_bytes() -> Optional[bytes]` | internal | The marker's exact bytes, read through one descriptor, or `None`. | [`flyto_ai/coding/service.py:4018`](../../../flyto_ai/coding/service.py#L4018) |
+| `_write_authority_marker(authority: Mapping[str, Any]) -> None` | internal | Internal `_write_authority_marker` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:4089`](../../../flyto_ai/coding/service.py#L4089) |
+| `_require_all_jobs_terminal() -> None` | internal | Refuse rotation while any job of the old authority is still open. | [`flyto_ai/coding/service.py:4095`](../../../flyto_ai/coding/service.py#L4095) |
+| `_bind_startup_authority(mine: Mapping[str, Any], *, adopt: bool) -> None` | internal | Refuse this state root unless its live work is this authority's. | [`flyto_ai/coding/service.py:4118`](../../../flyto_ai/coding/service.py#L4118) |
+| `_settle_unfingerprinted_record(path: Path, record: Mapping[str, Any], state: str, mine: Mapping[str, Any], adopt: bool) -> None` | internal | Adopt a pre-upgrade record only on proof, and never on absence. | [`flyto_ai/coding/service.py:4176`](../../../flyto_ai/coding/service.py#L4176) |
+| `_terminalize_unbound(path: Path, tenant_ref: str, job_id: str, record: Mapping[str, Any]) -> None` | internal | Close one unattributable record, its mission item and its worktree. | [`flyto_ai/coding/service.py:4255`](../../../flyto_ai/coding/service.py#L4255) |
+| `_may_execute(record: Mapping[str, Any]) -> bool` | internal | Whether this service shares the authority this job was admitted under. | [`flyto_ai/coding/service.py:4280`](../../../flyto_ai/coding/service.py#L4280) |
+| `_fail_unrunnable_record(tenant_ref: str, job_id: str, code: str) -> None` | internal | Terminalize a queued record whose durable round cannot be rebuilt. | [`flyto_ai/coding/service.py:4298`](../../../flyto_ai/coding/service.py#L4298) |
+| `_reconstruct_request(tenant_ref: str, job_id: str, record: Mapping[str, Any], round_envelope: Mapping[str, Any]) -> Optional[CodingTaskRequest]` | internal | Rebuild the private request one dispatched round must execute. | [`flyto_ai/coding/service.py:4324`](../../../flyto_ai/coding/service.py#L4324) |
+| `_account_unrunnable(work: 'DispatchedWork', reason: str) -> None` | internal | Close one work item nobody can run, with the whole accounting. | [`flyto_ai/coding/service.py:4367`](../../../flyto_ai/coding/service.py#L4367) |
+| `_close_round_item(work: 'DispatchedWork', tenant_ref: str, job_id: str, *, revision: str, files: Sequence[str], state: str, failure_code: str) -> Dict[str, Any]` | internal | Owner-close this round's work item and return the record change. | [`flyto_ai/coding/service.py:4405`](../../../flyto_ai/coding/service.py#L4405) |
+| `_projection_change(work: 'DispatchedWork', *, status: str, disposition: str = '') -> Dict[str, Any]` | internal | Build the record change that moves *this round's* projection. | [`flyto_ai/coding/service.py:4476`](../../../flyto_ai/coding/service.py#L4476) |
+| `_advance_projection(path: Path, *, status: str, disposition: str = '', mission_status: Optional[str] = None, returned_to_main_axis: Optional[bool] = None) -> None` | internal | Move the record's stored projection, or leave it exactly as it was. | [`flyto_ai/coding/service.py:4513`](../../../flyto_ai/coding/service.py#L4513) |
+| `_accept_mission(tenant_ref: str, job_id: str, record: Mapping[str, Any], path: Path) -> None` | internal | Apply one accepted audit to this job's mission. | [`flyto_ai/coding/service.py:4546`](../../../flyto_ai/coding/service.py#L4546) |
+| `mission_fleet(*, limit: int = 50) -> Dict[str, Any]` | public | A bounded, snapshot-only, secret-free view of every mission here. | [`flyto_ai/coding/service.py:4590`](../../../flyto_ai/coding/service.py#L4590) |
+| `mission_context(tenant_id: str, job_id: str) -> Dict[str, Any]` | public | Full mission context for one job, for its owning tenant only. | [`flyto_ai/coding/service.py:4602`](../../../flyto_ai/coding/service.py#L4602) |
+| `_round_path(tenant_ref: str, work_item_id: str) -> Path` | internal | Internal `_round_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:4627`](../../../flyto_ai/coding/service.py#L4627) |
+| `_write_round_envelope(tenant_ref: str, job_id: str, work_item_id: str, *, rework: bool, message: str = '') -> None` | internal | Bind one placed work item to the exact round it stands for. | [`flyto_ai/coding/service.py:4635`](../../../flyto_ai/coding/service.py#L4635) |
+| `_read_round_envelope(tenant_ref: str, work_item_id: str) -> Optional[Dict[str, Any]]` | internal | Read one round envelope, or refuse a file that is not exactly one. | [`flyto_ai/coding/service.py:4661`](../../../flyto_ai/coding/service.py#L4661) |
+| `_claim_round(job_id: str) -> bool` | internal | Take execution authority over one round, or decline to run it. | [`flyto_ai/coding/service.py:4681`](../../../flyto_ai/coding/service.py#L4681) |
+| `_release_round(job_id: str) -> None` | internal | Internal `_release_round` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:4699`](../../../flyto_ai/coding/service.py#L4699) |
+| `async _run_round(store: ThreadStore, request: CodingTaskRequest, job_id: str, path: Path, progress: _RoundProgress, *, rework: bool = False) -> 'tuple[CodingTaskResult, Optional[CodingRouteReceipt], Optional[EmergencyAuthorityReceipt]]'` | internal | Run the strict route, then the emergency lane only if it is earned. | [`flyto_ai/coding/service.py:4707`](../../../flyto_ai/coding/service.py#L4707) |
+| `_mark_implementer_started(path: Path) -> None` | internal | Durably record that the implementer is about to be invoked. | [`flyto_ai/coding/service.py:4761`](../../../flyto_ai/coding/service.py#L4761) |
+| `_session_binder(path: Path, tenant_ref: str, job_id: str, workspace: str) -> Callable[[str], None]` | internal | Build this round's durable session-binding callback. | [`flyto_ai/coding/service.py:4778`](../../../flyto_ai/coding/service.py#L4778) |
+| `_bind_provider_session(path: Path, tenant_ref: str, job_id: str, workspace: str, session_id: str) -> None` | internal | Persist the session the provider just established, or refuse the round. | [`flyto_ai/coding/service.py:4788`](../../../flyto_ai/coding/service.py#L4788) |
+| `_plan_authority_digest(job_id: str, request_sha256: str, workspace_sha256: str, contract: Mapping[str, Any]) -> str` | internal | Internal `_plan_authority_digest` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:4846`](../../../flyto_ai/coding/service.py#L4846) |
+| `_persist_plan_authority(path: Path, record: Mapping[str, Any], contract: Mapping[str, Any]) -> None` | internal | Record which contract this round was authorized against. | [`flyto_ai/coding/service.py:4865`](../../../flyto_ai/coding/service.py#L4865) |
+| `_load_plan_authority(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]` | internal | Return the exact parent contract this job may amend, or `None`. | [`flyto_ai/coding/service.py:4910`](../../../flyto_ai/coding/service.py#L4910) |
+| `_prove_prior_scope(record: Mapping[str, Any], request: CodingTaskRequest, tenant_ref: str, job_id: str) -> Tuple[str, ...]` | internal | Re-prove what this job already owns, *before* the implementer edits. | [`flyto_ai/coding/service.py:4947`](../../../flyto_ai/coding/service.py#L4947) |
+| `_cumulative_route_scope(prior: Sequence[str], session_bound: str, result: CodingTaskResult, request: CodingTaskRequest) -> Tuple[str, ...]` | internal | Union the proven prior scope with this round's host snapshot. | [`flyto_ai/coding/service.py:5010`](../../../flyto_ai/coding/service.py#L5010) |
+| `_bound_emergency_authority(record: Mapping[str, Any], job_id: str, *, rework: bool) -> Optional[EmergencyAuthorityReceipt]` | internal | Return the authority that may continue this exact rework round. | [`flyto_ai/coding/service.py:5052`](../../../flyto_ai/coding/service.py#L5052) |
+| `_overflow_trigger(route: Optional['CodingRouteReceipt'], result: CodingTaskResult, progress: _RoundProgress, path: Path) -> Optional[EmergencyTrigger]` | internal | Classify one failed round as broken infrastructure, or refuse. | [`flyto_ai/coding/service.py:5108`](../../../flyto_ai/coding/service.py#L5108) |
+| `async _emergency_round(store: ThreadStore, request: CodingTaskRequest, job_id: str, request_sha256: str, path: Path, progress: _RoundProgress, trigger: EmergencyTrigger, *, mode: str) -> 'tuple[CodingTaskResult, Optional[EmergencyAuthorityReceipt]]'` | internal | Run the startup-selected implementer directly under open-circuit authority. | [`flyto_ai/coding/service.py:5145`](../../../flyto_ai/coding/service.py#L5145) |
+| `async _implement(store: ThreadStore, request: CodingTaskRequest, progress: Optional[_RoundProgress] = None, *, rework_binding: Optional[Tuple[Mapping[str, Any], str, str]] = None, job_binding: Optional[Tuple[Path, str, str]] = None) -> 'tuple[CodingTaskResult, Optional[CodingRouteReceipt]]'` | internal | Run the selected implementer, wrapped by the host-owned route. | [`flyto_ai/coding/service.py:5220`](../../../flyto_ai/coding/service.py#L5220) |
+| `_promote_verified_cumulative_no_change(result: CodingTaskResult, request: CodingTaskRequest, record: Mapping[str, Any], tenant_ref: str, job_id: str) -> CodingTaskResult` | internal | Close a clean no-op rework against the already audited revision. | [`flyto_ai/coding/service.py:5368`](../../../flyto_ai/coding/service.py#L5368) |
+| `_lane_dispatcher(manager: Any, specs: Sequence[Any]) -> Any` | internal | Map a bare lane tool name onto its provider-scoped capability tool. | [`flyto_ai/coding/service.py:5412`](../../../flyto_ai/coding/service.py#L5412) |
+| `_core_dispatcher() -> Any` | internal | Route Core validation through the one supported adapter boundary. | [`flyto_ai/coding/service.py:5427`](../../../flyto_ai/coding/service.py#L5427) |
+| `_unavailable_lane(policy: Any, missing: Sequence[str]) -> str` | internal | Name the lane whose provider was actually unavailable at startup. | [`flyto_ai/coding/service.py:5442`](../../../flyto_ai/coding/service.py#L5442) |
+| `_route_unavailable(request: CodingTaskRequest, code: str = 'route_capability_unavailable', *, lane: str = 'indexer_pre') -> CodingTaskResult` | internal | Internal `_route_unavailable` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5459`](../../../flyto_ai/coding/service.py#L5459) |
+| `_route_unavailable_receipt(policy: Any, code: str = 'capability_unavailable', *, lane: str = 'indexer_pre') -> 'CodingRouteReceipt'` | internal | Internal `_route_unavailable_receipt` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:5476`](../../../flyto_ai/coding/service.py#L5476) |
+| `_record_outcome(path: Path, tenant_ref: str, job_id: str, request: CodingTaskRequest, result: CodingTaskResult, store: ThreadStore, rework: bool, route: Optional['CodingRouteReceipt'] = None, *, progress: Optional[_RoundProgress] = None, authority: Optional[EmergencyAuthorityReceipt] = None, settle: Optional['_RoundSettlement'] = None) -> None` | internal | Move one finished implementation round into its durable state. | [`flyto_ai/coding/service.py:5496`](../../../flyto_ai/coding/service.py#L5496) |
+| `_is_pre_provider_rework_route_failure(record: Mapping[str, Any], result: CodingTaskResult, route: Optional['CodingRouteReceipt'], *, rework: bool, started: bool) -> bool` | internal | Whether one failed repair is safe to hold for a host-route retry. | [`flyto_ai/coding/service.py:5727`](../../../flyto_ai/coding/service.py#L5727) |
+| `_close_continuation(tenant_ref: str, job_id: str, path: Path, failure_code: str, proof: Mapping[str, Any]) -> None` | internal | Open, rotate, or settle this job's continuation authority. | [`flyto_ai/coding/service.py:5775`](../../../flyto_ai/coding/service.py#L5775) |
+| `_settle_continuation(tenant_ref: str, job_id: str, path: Optional[Path] = None) -> None` | internal | Close this job's continuation authority, exactly once and only its own. | [`flyto_ai/coding/service.py:5900`](../../../flyto_ai/coding/service.py#L5900) |
+| `_cumulative_attribution(record: Optional[Mapping[str, Any]], result: CodingTaskResult, request: CodingTaskRequest, tenant_ref: str, job_id: str) -> Tuple[str, ...]` | internal | Prove a rework round is still bound to a real earlier revision. | [`flyto_ai/coding/service.py:5929`](../../../flyto_ai/coding/service.py#L5929) |
+| `_auditable_failure(result: CodingTaskResult, route: Optional['CodingRouteReceipt'], authority: Optional[EmergencyAuthorityReceipt], started: bool, cumulative: Tuple[str, ...] = ()) -> bool` | internal | Whether a failed round is real work awaiting rework, not a dead end. | [`flyto_ai/coding/service.py:6040`](../../../flyto_ai/coding/service.py#L6040) |
+| `_implementation_failure_code(result: CodingTaskResult) -> str` | internal | Return what the implementer said, never what a lane said about it. | [`flyto_ai/coding/service.py:6106`](../../../flyto_ai/coding/service.py#L6106) |
+| `_implementation_blockers(result: CodingTaskResult, route: Optional['CodingRouteReceipt']) -> Tuple[str, ...]` | internal | Derive the bounded, stable reasons this revision cannot be accepted. | [`flyto_ai/coding/service.py:6119`](../../../flyto_ai/coding/service.py#L6119) |
+| `_failed_round_proof(request: CodingTaskRequest, result: CodingTaskResult, started: bool, outcome: Mapping[str, Any], scope: Sequence[str] = ()) -> Dict[str, Any]` | internal | Keep bounded proof that an implementation ran, without landability. | [`flyto_ai/coding/service.py:6153`](../../../flyto_ai/coding/service.py#L6153) |
+| `_fail_job(path: Path, tenant_ref: str, job_id: str, code: str, exc: BaseException, progress: Optional[_RoundProgress] = None, *, settle: Optional['_RoundSettlement'] = None) -> None` | internal | Force one terminal fail-closed record for any worker exit. | [`flyto_ai/coding/service.py:6206`](../../../flyto_ai/coding/service.py#L6206) |
+| `status_health() -> Dict[str, Any]` | public | Report whether the diagnostic recorder itself is working. | [`flyto_ai/coding/service.py:6253`](../../../flyto_ai/coding/service.py#L6253) |
+| `_close_status() -> None` | internal | Republish the last known facts with a `closed` lifecycle. | [`flyto_ai/coding/service.py:6269`](../../../flyto_ai/coding/service.py#L6269) |
+| `_publish_status(record: Mapping[str, Any], *, lifecycle: str = 'active') -> None` | internal | Refresh this instance's bounded runtime status. | [`flyto_ai/coding/service.py:6289`](../../../flyto_ai/coding/service.py#L6289) |
+| `_require_execution_authority(record: Mapping[str, Any]) -> None` | internal | Accept exactly one valid execution authority for this exact round. | [`flyto_ai/coding/service.py:6364`](../../../flyto_ai/coding/service.py#L6364) |
+| `_require_emergency_authority(record: Mapping[str, Any], stored: Mapping[str, Any]) -> None` | internal | Validate one emergency authority against this service and this job. | [`flyto_ai/coding/service.py:6443`](../../../flyto_ai/coding/service.py#L6443) |
+| `_stored_revision(record: Mapping[str, Any]) -> str` | internal | Recompute the digest of a persisted attributable change set. | [`flyto_ai/coding/service.py:6483`](../../../flyto_ai/coding/service.py#L6483) |
+| `_revision_digest(working_dir: str, files: Sequence[str]) -> str` | internal | Hash the exact current bytes of one bounded attributable change set. | [`flyto_ai/coding/service.py:6499`](../../../flyto_ai/coding/service.py#L6499) |
+| `_revision_entry(target: Path, remaining: int) -> Optional[Tuple[str, str, int]]` | internal | Read one file's type, mode, and bytes through a single descriptor. | [`flyto_ai/coding/service.py:6526`](../../../flyto_ai/coding/service.py#L6526) |
+| `_revision_target(root: Path, relative: str) -> Path` | internal | Resolve one attributable path or fail closed. | [`flyto_ai/coding/service.py:6585`](../../../flyto_ai/coding/service.py#L6585) |
+| `_forget_future(future: Future[Any], job_id: str = '') -> None` | internal | Internal `_forget_future` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:6610`](../../../flyto_ai/coding/service.py#L6610) |
+| `_with_repository_authority(request: CodingTaskRequest) -> CodingTaskRequest` | internal | Resolve and validate the atomic repository set for one job. | [`flyto_ai/coding/service.py:6616`](../../../flyto_ai/coding/service.py#L6616) |
+| `_assert_workspace(workspace: str) -> None` | internal | Internal `_assert_workspace` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:6683`](../../../flyto_ai/coding/service.py#L6683) |
+| `_workspace_lock(workspace: str) -> Iterator[None]` | internal | Serialize edits to one workspace across threads and MCP processes. | [`flyto_ai/coding/service.py:6689`](../../../flyto_ai/coding/service.py#L6689) |
+| `_workspace_digest(workspace: str) -> str` | internal | Internal `_workspace_digest` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:6709`](../../../flyto_ai/coding/service.py#L6709) |
+| `_record_repository_roots(record: Mapping[str, Any]) -> Tuple[str, ...]` | internal | Decode the exact private repo set, with a v1 workspace fallback. | [`flyto_ai/coding/service.py:6712`](../../../flyto_ai/coding/service.py#L6712) |
+| `_record_repository_digests(record: Mapping[str, Any]) -> Tuple[str, ...]` | internal | Re-prove the persisted path/digest binding for one repo set. | [`flyto_ai/coding/service.py:6740`](../../../flyto_ai/coding/service.py#L6740) |
+| `_workspace_claim_path(workspace: str) -> Path` | internal | Internal `_workspace_claim_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:6760`](../../../flyto_ai/coding/service.py#L6760) |
+| `_workspace_authority(workspace: str) -> Tuple[str, str]` | internal | Decide who may edit one worktree: `(status, owner_job_id)`. | [`flyto_ai/coding/service.py:6765`](../../../flyto_ai/coding/service.py#L6765) |
+| `_claim_is_well_formed(claim: Mapping[str, Any], digest: str) -> bool` | internal | Require the exact claim shape, bounded values, and this worktree. | [`flyto_ai/coding/service.py:6834`](../../../flyto_ai/coding/service.py#L6834) |
+| `_record_binds_claim(record: Mapping[str, Any], job_id: str, digest: str) -> bool` | internal | Require the owner record to name this job and this exact worktree. | [`flyto_ai/coding/service.py:6871`](../../../flyto_ai/coding/service.py#L6871) |
+| `_assert_workspace_available(job_id: str, workspace: str) -> str` | internal | Refuse a worktree owned by another job or by an unevaluable claim. | [`flyto_ai/coding/service.py:6896`](../../../flyto_ai/coding/service.py#L6896) |
+| `_create_workspace_claim(tenant_ref: str, job_id: str, workspace: str, state: str) -> None` | internal | Take a first hold for a job that does not exist yet. | [`flyto_ai/coding/service.py:6917`](../../../flyto_ai/coding/service.py#L6917) |
+| `_create_repository_claims(tenant_ref: str, job_id: str, repositories: Sequence[str], state: str) -> None` | internal | Atomically claim a job's whole repo set under the state guard. | [`flyto_ai/coding/service.py:6933`](../../../flyto_ai/coding/service.py#L6933) |
+| `_reassert_workspace_claim(tenant_ref: str, job_id: str, workspace: str, state: str) -> None` | internal | Require an existing hold this exact job already owns, and restate it. | [`flyto_ai/coding/service.py:6958`](../../../flyto_ai/coding/service.py#L6958) |
+| `_reassert_repository_claims(tenant_ref: str, job_id: str, record: Mapping[str, Any], state: str) -> None` | internal | Require every member of the persisted set to remain this job's. | [`flyto_ai/coding/service.py:6981`](../../../flyto_ai/coding/service.py#L6981) |
+| `_require_owned_claim(tenant_ref: str, job_id: str, workspace: str) -> Mapping[str, Any]` | internal | Return the live, fully bound claim this exact tenant+job owns. | [`flyto_ai/coding/service.py:7000`](../../../flyto_ai/coding/service.py#L7000) |
+| `_write_claim(tenant_ref: str, job_id: str, workspace: str, state: str, *, claimed_at: float, now: float) -> None` | internal | Internal `_write_claim` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7030`](../../../flyto_ai/coding/service.py#L7030) |
+| `_release_workspace_claim(job_id: str, workspace: str) -> None` | internal | Drop this job's hold, never another job's and never an unreadable one. | [`flyto_ai/coding/service.py:7052`](../../../flyto_ai/coding/service.py#L7052) |
+| `_release_repository_claims(job_id: str, record: Mapping[str, Any]) -> None` | internal | Release exactly this job's valid repo claims, never a foreign set. | [`flyto_ai/coding/service.py:7070`](../../../flyto_ai/coding/service.py#L7070) |
+| `_sweep_workspace_claims() -> None` | internal | Drop only the claims whose owning record proves the job has settled. | [`flyto_ai/coding/service.py:7082`](../../../flyto_ai/coding/service.py#L7082) |
+| `_resume_path(tenant_ref: str, job_id: str) -> Path` | internal | Internal `_resume_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7125`](../../../flyto_ai/coding/service.py#L7125) |
+| `_write_resume_envelope(tenant_ref: str, job_id: str, request: CodingTaskRequest, request_sha256: str, session_bound: str = '') -> None` | internal | Persist only what one job's rework may replay, and nothing more. | [`flyto_ai/coding/service.py:7130`](../../../flyto_ai/coding/service.py#L7130) |
+| `_load_resume_request(tenant_ref: str, job_id: str, request_sha256: str, session_bound: Optional[str] = None) -> Optional[CodingTaskRequest]` | internal | Rebuild one job's original request from its durable envelope. | [`flyto_ai/coding/service.py:7161`](../../../flyto_ai/coding/service.py#L7161) |
+| `_read_resume_envelope(tenant_ref: str, job_id: str, record: Mapping[str, Any]) -> Optional[CodingTaskRequest]` | internal | Return the request a rework may replay into this job's exact session. | [`flyto_ai/coding/service.py:7202`](../../../flyto_ai/coding/service.py#L7202) |
+| `_seal_resume_envelope(tenant_ref: str, job_id: str, request: CodingTaskRequest, request_sha256: str, session: str) -> None` | internal | Bind the stored request to the session this round actually produced. | [`flyto_ai/coding/service.py:7217`](../../../flyto_ai/coding/service.py#L7217) |
+| `_discard_resume(tenant_ref: str, job_id: str) -> None` | internal | Forget one job's resume context in memory and on disk together. | [`flyto_ai/coding/service.py:7239`](../../../flyto_ai/coding/service.py#L7239) |
+| `_discard_path(path: Path) -> None` | internal | Internal `_discard_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7249`](../../../flyto_ai/coding/service.py#L7249) |
+| `_state_guard() -> Iterator[None]` | internal | Protect short state mutations without owning the root for process life. | [`flyto_ai/coding/service.py:7256`](../../../flyto_ai/coding/service.py#L7256) |
+| `_job_lease_path(job_id: str) -> Path` | internal | Internal `_job_lease_path` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7271`](../../../flyto_ai/coding/service.py#L7271) |
+| `_acquire_job_lease(job_id: str) -> bool` | internal | Claim one execution round; leases are released automatically on crash. | [`flyto_ai/coding/service.py:7276`](../../../flyto_ai/coding/service.py#L7276) |
+| `_release_job_lease(job_id: str) -> None` | internal | Internal `_release_job_lease` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7292`](../../../flyto_ai/coding/service.py#L7292) |
+| `_tenant_ref(tenant_id: str) -> str` | internal | Internal `_tenant_ref` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7302`](../../../flyto_ai/coding/service.py#L7302) |
+| `_tenant_dir(tenant_ref: str, *, create: bool = True) -> Path` | internal | Internal `_tenant_dir` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7307`](../../../flyto_ai/coding/service.py#L7307) |
+| `_request_digest(request: CodingTaskRequest) -> str` | internal | Identity of what the *caller* asked for, host authority excluded. | [`flyto_ai/coding/service.py:7315`](../../../flyto_ai/coding/service.py#L7315) |
+| `_read_json(path: Path) -> Dict[str, Any]` | internal | Internal `_read_json` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7347`](../../../flyto_ai/coding/service.py#L7347) |
+| `_write_json(path: Path, value: Mapping[str, Any]) -> None` | internal | Internal `_write_json` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7354`](../../../flyto_ai/coding/service.py#L7354) |
+| `_update_record(path: Path, **changes) -> None` | internal | Internal `_update_record` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7372`](../../../flyto_ai/coding/service.py#L7372) |
+| `_update_record_locked(path: Path, **changes) -> None` | internal | Update one record while the caller owns the cross-process guard. | [`flyto_ai/coding/service.py:7376`](../../../flyto_ai/coding/service.py#L7376) |
+| `_decode_result(value: Any) -> Optional[CodingTaskResult]` | internal | Internal `_decode_result` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7422`](../../../flyto_ai/coding/service.py#L7422) |
+| `_bounded_generation(value: Any) -> int` | internal | A generation is a small counter or it is nothing. | [`flyto_ai/coding/service.py:7437`](../../../flyto_ai/coding/service.py#L7437) |
+| `_public_receipt(tenant_ref: str, record: Mapping[str, Any]) -> CodingJobReceipt` | internal | Project one job, including whether anything is left to continue. | [`flyto_ai/coding/service.py:7446`](../../../flyto_ai/coding/service.py#L7446) |
+| `_receipt(record: Mapping[str, Any]) -> CodingJobReceipt` | internal | Internal `_receipt` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7476`](../../../flyto_ai/coding/service.py#L7476) |
+| `_reconcile_interrupted_jobs() -> None` | internal | Internal `_reconcile_interrupted_jobs` implementation on `CodingService`; the linked source is authoritative. | [`flyto_ai/coding/service.py:7520`](../../../flyto_ai/coding/service.py#L7520) |
+| `_reconcile_queued_job(path: Path, observed: Mapping[str, Any]) -> None` | internal | Classify one queued record under its round's execution barrier. | [`flyto_ai/coding/service.py:7582`](../../../flyto_ai/coding/service.py#L7582) |
+| `_settle_unavailable_queued_item(path: Path, record: Mapping[str, Any], item: Optional[Any]) -> None` | internal | Fail one queued record whose exact Mission authority cannot run. | [`flyto_ai/coding/service.py:7628`](../../../flyto_ai/coding/service.py#L7628) |
+| `_reclaim_mission_item(path: Path, record: Mapping[str, Any]) -> None` | internal | Return one interrupted job's work item to the queue, on proof. | [`flyto_ai/coding/service.py:7670`](../../../flyto_ai/coding/service.py#L7670) |
+| `_reconcile_continuation_claims() -> None` | internal | Resolve authorities whose claiming job died before it could settle. | [`flyto_ai/coding/service.py:7705`](../../../flyto_ai/coding/service.py#L7705) |
+| `_force_settle(authority: ContinuationAuthority) -> None` | internal | Settle forward. | [`flyto_ai/coding/service.py:7768`](../../../flyto_ai/coding/service.py#L7768) |
 
 ## `flyto_ai.coding.stack`
 

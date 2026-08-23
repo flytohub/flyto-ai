@@ -171,6 +171,11 @@ architecture-invariant rule in [`../AGENTS.md`](../AGENTS.md).
   resume envelope that lets any live worker continue — never restart — the
   original implementation session. Claims are keyed by workspace digest, so
   parallel jobs in different repositories are unaffected.
+- `flyto_ai/coding/errors.py`: the closed vocabulary of typed service failures.
+  Each carries a stable `code` a caller may branch on and no sensitive content,
+  and none reads service state, so they live beside the service rather than
+  inside it. Every name is re-exported from `flyto_ai.coding.service`, which
+  stays the import path callers use.
 - `docs/`, `workflows/`, and `handoffs/`: project memory, release process, and
   handoff evidence.
 

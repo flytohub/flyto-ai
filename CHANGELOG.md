@@ -7,6 +7,44 @@ this version's `v0.18.0` tag is pushed. The `blueprint`, `full` and `dev` extras
 require `flyto-blueprint>=0.3.0`, and until that release exists those extras do
 not resolve.
 
+### Gates for claims that were never checked
+
+Every finding this release answers had the same shape: the working tree was
+correct and something outside it was not. Four checks now hold the boundary
+instead of a convention.
+
+- `tests/test_stack_security_floor.py` reads
+  `flyto-core/security/advisories.json` from the sibling checkout `stack-lock.json`
+  guarantees, derives the lowest Core version clearing every published advisory,
+  and fails if any declared `flyto-core` floor predates it — in this repository
+  *and* in Blueprint, since this is the only place in the stack where all three
+  checkouts exist. The number is read, never restated, so advisory 34 tightens
+  the floor without anyone remembering to.
+- `scripts/check_release_drift.py` (also a required check in `.flyto/coding.yaml`)
+  fails when a tag `v<version>` exists and the packaged source at HEAD differs
+  from it. It asks for a correct version number, not a release: an unreleased
+  version passes.
+- `tests/test_complexity_budget.py` puts a ratchet on module size and parameter
+  count. Everything over budget today is recorded in
+  `tests/complexity_baseline.json` — 22 files over 800 lines, 23 functions over
+  8 parameters — and may only shrink; anything new is held to the budget
+  immediately. `scripts/update_complexity_baseline.py` refuses to raise a
+  recorded number without `--accept-new`, so the register cannot be quietly
+  re-cut around a regression.
+- `tests/test_core_constant_parity.py` (from the same round) fails if a borrowed
+  Core value stops matching Core or if a fallback copy returns.
+
+### Changed
+
+- Moved the 35 typed service failures and `PLAN_AUTHORITY_CODES` out of
+  `coding/service.py` into `coding/errors.py`; `service.py` goes from 8,227 to
+  7,774 lines. They are a closed vocabulary callers branch on and they touch no
+  service state, so sitting beside a 6,973-line class only made both harder to
+  read. Everything is re-exported from `flyto_ai.coding.service`, so no import
+  path, error identity, `code`, or inheritance edge changed. The 6,973-line
+  class itself is untouched and is now the largest single item in the recorded
+  complexity debt.
+
 - Declared this package's product role in a repo-root `flyto-product.toml`
   (`flyto.product-contract.v1`, layer 1 `intent_governance`) with an exact test.
   Blueprint and Core already shipped theirs and both disclaimed "intent and

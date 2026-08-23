@@ -1,5 +1,44 @@
 # Decisions
 
+## 2026-08-23 — A claim is checked where it is consumed, not where it is written
+
+Decision: every cross-boundary claim this package makes gets a check that runs
+against the boundary, not against the working tree. Concretely: the Core advisory
+floor is derived from Core's own manifest at test time, release drift is measured
+against the tag the version names, complexity is measured against a committed
+register, and values borrowed from Core are compared to Core.
+
+Why: the audit that prompted this found six defects with one shape. The stack
+lock pinned revisions both siblings had moved past. The Blueprint floor made a
+signature-probed gate unreachable for every PyPI install. The Core floor predated
+33 advisories. `requires-python` named a version the package could not install
+on. The watchdog watched a heartbeat nobody published. A local wheel build
+carried `node_modules` because CI happened to install them one step later. In
+every case the source was correct and the check was pointed at the source, so a
+green run was true and useless at the same time.
+
+Consequence: these checks can fail for reasons no code change caused — Core
+publishing advisory 34 tightens this repository's floor, and a sibling moving
+invalidates the lock. That is the intended behaviour, not a defect in the gates.
+The alternative is what was there before, which reported nothing.
+
+## 2026-08-23 — Complexity debt is registered and ratcheted, not thresholded
+
+Decision: module size and parameter count are enforced against
+`tests/complexity_baseline.json`. New code meets the budget (800 lines, 8
+parameters) immediately; recorded entries may only shrink; the updater refuses to
+raise a number without an explicit `--accept-new`.
+
+Why: a plain threshold has no honest setting here. At today's worst it licenses
+every future module to be 8,000 lines. At the target the suite is red until a
+refactor that cannot be done safely in one pass. The register makes the debt
+countable and directional instead of aspirational, and makes the day it is paid
+down visible in a diff.
+
+Consequence: `CodingService` stays a 6,973-line class for now, and that is
+recorded rather than implied. `coding/errors.py` was the first payment — 453
+lines of closed failure vocabulary that never touched service state.
+
 ## 2026-08-23 — Layer 1 declares its own product role, and the sibling floors are exact
 
 Decision: this repository ships `flyto-product.toml` declaring `flyto-ai` as

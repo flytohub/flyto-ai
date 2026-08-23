@@ -24,6 +24,13 @@ checks:
     argv: [.venv/bin/python, -m, ruff, check, --select, "E9,F63,F7,F82", flyto_ai, tests]
     timeout_seconds: 120
     required: true
+  # A version number that already shipped different code makes every other
+  # check here describe an artifact nobody can install. Passes while the
+  # version is unreleased, so it asks for a correct number, not a release.
+  - name: release_drift
+    argv: [.venv/bin/python, scripts/check_release_drift.py]
+    timeout_seconds: 60
+    required: true
   # Generated reference must stay current with the source it documents.
   - name: generated_reference
     argv: [.venv/bin/python, scripts/generate_reference.py, --check]

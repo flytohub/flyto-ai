@@ -26,10 +26,16 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
+      # `fetch-tags` because the release-drift check compares HEAD against the
+      # tag the declared version names. Without tag history it cannot separate
+      # "this version is unreleased" from "this version already shipped other
+      # code", and it fails loudly rather than reporting a pass it did not earn.
       - name: Check out flyto-ai
         uses: actions/checkout@v7.0.1
         with:
           path: flyto-ai
+          fetch-depth: 0
+          fetch-tags: true
       - name: Read shared stack lock
         id: stack_lock
         run: python scripts/stack_lock.py --github-output "$GITHUB_OUTPUT"
@@ -81,6 +87,8 @@ jobs:
         run: python -m ruff check --select E9,F63,F7,F82 flyto_ai tests
       - name: Check generated reference
         run: python scripts/generate_reference.py --check
+      - name: Check release drift
+        run: python scripts/check_release_drift.py
       - name: Verify MCP contract smoke
         run: |
           echo "verify: mcp contract smoke"

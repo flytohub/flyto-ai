@@ -30,6 +30,51 @@ Four things that were true in the source tree and false everywhere else:
 Verified locally on this checkout: `stack_lock`, `compile`, Ruff
 (`E9,F63,F7,F82`), 23 generated reference files current, and the full suite.
 
+## Gates at the boundary, and recorded complexity debt (2026-08-23)
+
+Four checks now hold claims that only a convention held before. `stack-lock.json`
+puts Blueprint, Core and the Indexer on disk beside this repository, which makes
+this the only place in the stack that can check the stack:
+
+- **Advisory floor.** `tests/test_stack_security_floor.py` derives the lowest
+  Core version clearing every published advisory from
+  `flyto-core/security/advisories.json` and fails if any declared `flyto-core`
+  floor predates it — here and in Blueprint. Read, never restated.
+- **Release drift.** `scripts/check_release_drift.py`, a required check in
+  `.flyto/coding.yaml` and a CI step, fails when a tag `v<version>` exists and
+  the packaged source differs from it. An unreleased version passes; it asks for
+  a correct number, not a release.
+- **Complexity ratchet.** `tests/test_complexity_budget.py` holds new code to 800
+  lines per module and 8 parameters per function, and holds existing debt to
+  `tests/complexity_baseline.json`, which may only shrink.
+- **Borrowed-value parity.** `tests/test_core_constant_parity.py` fails if a value
+  taken from Core stops matching Core or a fallback copy returns.
+
+Recorded debt today: 22 modules over 800 lines and 23 functions over 8
+parameters. The largest is `CodingService`, one 6,973-line class inside a
+7,774-line module — `coding/errors.py` took the 35 typed failures out of it, but
+the class itself is untouched. Splitting it is real work with a real blast
+radius on the audited route; the ratchet exists so it cannot get worse in the
+meantime.
+
+## Coding control plane is dormant, observed 2026-08-23
+
+Stated rather than left ambiguous, because most of the complexity above serves
+this and a reader should not have to guess whether it is live.
+
+A read-only `flyto-ai code-watchdog` against `~/.flyto/coding-service` reports
+`health: degraded`, `reason_codes: [codex_audit_backlog, rolling_build_reload]`,
+with `awaiting_codex_audit=9`, `live_current_build=0`, `live_stale_build=1` and
+32 recorded instances. `jobs.sqlite` has not advanced since 2026-08-10 and no
+worker process is running. So the records describe nine jobs waiting on an audit
+that nothing is going to perform, and one live instance pinned to a build that
+has since been replaced.
+
+This is a state, not an incident: the scheduled watchdog is off precisely so it
+stops reporting it as one. Reviving the route means clearing the audit backlog,
+reloading the stale-build worker, installing the heartbeat publisher and
+restoring the schedule — in one change, in that order.
+
 ## Amendment recovery and Cloud landing evidence (2026-08-22)
 
 The repaired same-job audit rework crossed the legacy/canonical parent-proof

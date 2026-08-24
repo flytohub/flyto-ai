@@ -122,14 +122,19 @@ def test_the_floor_is_read_from_core_rather_than_restated(floor: str) -> None:
 
 
 def test_browser_full_and_dev_cannot_resolve_below_domain_capability_floor() -> None:
-    """Every packaging surface exposing Core must include the three solvers."""
+    """Core surfaces keep their exact extras and include the three solvers."""
     import tomllib
 
     pyproject = DEPENDENT_PYPROJECTS["flyto-ai"]
     extras = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
         "optional-dependencies"
     ]
-    for extra in ("browser", "full", "dev"):
+    expected_core_extras = {
+        "browser": {"browser"},
+        "full": {"browser"},
+        "dev": {"browser", "api"},
+    }
+    for extra, expected_extras in expected_core_extras.items():
         requirements = [
             requirement
             for requirement in extras[extra]
@@ -138,6 +143,14 @@ def test_browser_full_and_dev_cannot_resolve_below_domain_capability_floor() -> 
         assert len(requirements) == 1, f"{extra} must declare exactly one Core floor"
         matched = REQUIREMENT.fullmatch(f'"{requirements[0]}"')
         assert matched is not None
+        declared_extras = {
+            item.strip()
+            for item in (matched.group("extras") or "")[1:-1].split(",")
+            if item.strip()
+        }
+        assert declared_extras == expected_extras, (
+            f"{extra} must declare exactly Core extras {sorted(expected_extras)}"
+        )
         floor_match = FLOOR.fullmatch(matched.group("spec").strip())
         assert floor_match is not None
         assert _version_key(floor_match.group("version")) >= _version_key(

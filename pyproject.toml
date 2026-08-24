@@ -74,15 +74,18 @@ claude-sdk = ["claude-agent-sdk>=0.1.0"]
 # Same four packages as `full`, listed again rather than referenced: dev/CI
 # needs the complete feature surface to test Blueprint, Pro and the Anthropic
 # provider, which the base install no longer carries for free now that those
-# are extras. Found by running the real test suite against a bare `[dev]`
-# install, not assumed — test_benchmarking_v3.py (flyto_blueprint) and
+# are extras. Core's `api` extra is development-only: the locked sibling source
+# contract imports Core's API surface during test collection. Keep the public
+# `browser` and `full` surfaces browser-only so they do not acquire Core's API
+# server dependencies. Found by running the real test suite against a bare
+# `[dev]` install, not assumed — test_benchmarking_v3.py (flyto_blueprint) and
 # manual_tg_test.py (aiohttp, the pre-existing `serve` extra) both broke
 # collection the moment the split landed.
 dev = [
     "pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0",
     "claude-agent-sdk>=0.1.0",
     "anthropic>=0.20.0",
-    "flyto-core[browser]>=2.31.0",
+    "flyto-core[browser,api]>=2.31.0",
     "flyto-pro-core>=0.1.0",
     "flyto-blueprint>=0.3.0",
 ]

@@ -4320,6 +4320,64 @@ def test_explicit_new_file_under_existing_parent_enters_the_intent_ledger(tmp_pa
     assert _plan_targets(indexer) == [target]
 
 
+def test_exact_numbered_path_allowlist_authorizes_a_described_new_test(tmp_path):
+    """An exact list declaration governs an item beyond the local verb window."""
+    paths = [
+        "docs/reference/source-api.md",
+        "reports/eslint-warning-audit.json",
+        "reports/visual-system-audit.json",
+        "reports/visual-system-audit.md",
+        "src-next/app/(control-panel)/flyto/workspace/components/WorkspaceSidebar.tsx",
+    ]
+    for relative in paths:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("seed\n", encoding="utf-8")
+    new_test = "src-next/lib/engine/__tests__/workspaceSidebarRequestContract.test.ts"
+    (tmp_path / new_test).parent.mkdir(parents=True, exist_ok=True)
+    requested = paths + [new_test]
+    message = (
+        "The target/intent ledger explicitly includes EACH of these six "
+        "repo-relative paths before editing: "
+        "(1) generated source API reference {} ; "
+        "(2) generated lint report {} ; "
+        "(3) generated visual JSON {} ; "
+        "(4) generated visual Markdown {} ; "
+        "(5) existing workspace sidebar component {} ; "
+        "(6) a new source-contract regression test located at {}"
+    ).format(*requested)
+    indexer = IndexerDouble(search_results=[
+        {"path": "unrelated.py", "name": "unrelated"},
+    ])
+
+    result, receipt = _run(
+        _policy(), RouteDouble(indexer), _request(tmp_path, message),
+        Implementer(changed=tuple(requested)),
+    )
+
+    assert result.ok is True and receipt.ok is True
+    assert _plan_targets(indexer) == requested
+
+
+@pytest.mark.parametrize("message", [
+    "Review these repo-relative paths: (1) tests/new_contract.py",
+    "The report includes each of these repo-relative paths: tests/new_contract.py",
+    "The report includes each of these repo-relative paths: (1) tests/new_contract.py",
+    (
+        "The target/intent ledger includes each of these repo-relative paths: "
+        "(1) do not create tests/new_contract.py"
+    ),
+])
+def test_path_list_prose_without_exact_numbered_positive_authority_is_not_scope(
+    tmp_path, message,
+):
+    (tmp_path / "tests").mkdir()
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == []
+
+
 @pytest.mark.parametrize("target", [
     "missing-parent/new.py",
     "nested/missing/new.py",

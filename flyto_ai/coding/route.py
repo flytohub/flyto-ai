@@ -58,6 +58,7 @@ from flyto_ai.coding.contracts import (
     CodingTaskResult,
     safe_blockers,
 )
+from flyto_ai.coding.path_authority import is_numbered_exact_path_item
 
 
 ROUTE_CONTRACT_VERSION = "flyto.coding-route.v1"
@@ -194,14 +195,11 @@ _MUTATION_VERB_RE = re.compile(
     r"rename|move|delete|remove|drop|touch|append|extend)\b[^A-Za-z0-9]*$",
     re.IGNORECASE,
 )
-#: How far back a mutation verb may sit and still govern the candidate. Long
-#: enough for "please add a new file called ...", short enough that a verb from
-#: an unrelated clause cannot reach across a sentence.
+#: Bounded local reach for a mutation verb governing a candidate path.
 _MUTATION_VERB_WINDOW = 48
 #: Amendment prose contains commands and evidence as well as edit requests.
 #: Only a mutation cue in the same local clause may turn an existing path into
-#: *new* authority during rework.  First-round parsing deliberately keeps its
-#: historical filesystem-backed behaviour.
+#: new authority during rework; first-round parsing remains filesystem-backed.
 _AMENDMENT_TRAILING_MUTATION_RE = re.compile(
     r"^\s*(?:must|should|needs?\s+to|has\s+to|is\s+to|please)?\s*"
     r"(?:be\s+)?(?:updated|edited|modified|changed|rewritten|replaced|amended|"
@@ -1921,12 +1919,14 @@ class CodingRouteOrchestrator:
                             or _VERSION_LABEL_SUFFIX_RE.fullmatch(suffix)
                         ):
                             continue
-                        if not _MUTATION_VERB_RE.search(
-                            text[max(0, match.start(1) - _MUTATION_VERB_WINDOW):match.start(1)],
+                        if (
+                            not _MUTATION_VERB_RE.search(text[
+                                max(0, match.start(1) - _MUTATION_VERB_WINDOW):match.start(1)
+                            ])
+                            and not is_numbered_exact_path_item(text, match.start(1))
                         ):
                             # Named, but not requested. An identifier that
-                            # merely appears in audit feedback is evidence
-                            # about the round, not authority to create a file.
+                            # appears in audit feedback is context, not scope.
                             continue
                         # ``exists`` is false for a broken final symlink too;
                         # never mistake that for authority to replace it.

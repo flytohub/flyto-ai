@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-08-25 | Numbered intent-ledger path authority | 2026-08-25-numbered-intent-ledger-path-authority.md |
 | 2026-08-22 | Amendment ledger-version interoperability | 2026-08-22-amendment-ledger-version-interoperability.md |
 | 2026-08-22 | Governed Robotics planner entry | 2026-08-22-governed-robotics-planner-entry.md |
 | 2026-08-12 | Coding watchdog: consolidated release record (authoritative) | 2026-08-12-coding-watchdog-hardening.md |

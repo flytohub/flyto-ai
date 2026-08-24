@@ -996,6 +996,14 @@ existing literal paths; the host new-file parser plus Indexer resolution prevent
 a nonexistent milestone such as `M1.1` from creating authority, while `.7z`
 stays typed.
 
+For a first-round request, a strongly declared exact/only/each set of
+repository-relative paths may carry authority through a colon-delimited,
+numbered list even when an item's description exceeds the local mutation-verb
+window. This is not generic inclusion authority: unnumbered lists and ordinary
+evidence prose remain context only. Every item still passes the same polarity,
+canonical-path, typed-suffix, existing-parent, final-symlink and 64-target
+bounds. Audit rework retains its stricter same-clause mutation projection.
+
 Audit-target parsing also distinguishes dotted milestone labels from typed new
 files. A numeric-only suffix such as `M1.1` cannot grant new-file authority, while
 a typed suffix that contains a letter, including `.7z`, remains eligible when an

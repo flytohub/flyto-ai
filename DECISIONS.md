@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-08-25 — An exact numbered allowlist carries item-level path authority
+
+Decision: first-round target projection treats a strongly declared exact path
+set with numbered items as edit authority for each item, even when descriptive
+text separates a new-file path from the nearest mutation verb. The declaration
+must name an exact/only/each set of repository-relative paths or files, end in a
+colon, and each path must sit in a bounded numbered item.
+
+Why: the local 48-character mutation window correctly prevents a distant verb
+from authorizing an incidental dotted identifier, but it also rejected a real
+six-path allowlist after all required checks had passed. Repeating `create`
+beside every new path is prompt choreography, not a stronger authority proof
+than the exact list the host already received.
+
+Consequence: generic `include` prose, unnumbered evidence lists, negative
+clauses, unsafe spellings, missing parents, final symlinks and more than 64
+targets remain closed. Amendment parsing still applies its additional
+same-clause mutation filter; this change does not widen audit rework findings.
+
 ## 2026-08-24 — Domain capability floor and exact repository authority
 
 - Core-bearing `browser`, `full`, and `dev` extras use `>=2.31.0`, independently

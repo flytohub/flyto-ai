@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed strict-route intent-ledger projection for an explicitly declared,
+  numbered exact path list whose new-file item carries a description longer
+  than the local mutation-verb window. Generic inclusion prose remains
+  non-authoritative, and all path, polarity, parent, symlink and count bounds
+  remain fail-closed.
 - Completed exact multi-repository Codex authority: `working_dir` remains
   `--cd`; other normalized leased roots become ordered exec-level `--add-dir`
   options for initial and resumed rounds, with no derived parent.

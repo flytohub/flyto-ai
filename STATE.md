@@ -1,6 +1,19 @@
 # State
 
-Last updated: 2026-08-24
+Last updated: 2026-08-25
+
+## Exact numbered path-list authority (2026-08-25)
+
+- Three audited Code jobs completed their required verification and then
+  failed Indexer post-validation because the request's new regression-test
+  path was omitted from `intent_ledger.allowed_paths`. The path appeared in a
+  numbered, explicitly exact six-path list, but its item description placed it
+  outside the 48-character local mutation-verb window.
+- The first-round parser now recognizes only a strong exact-set declaration
+  followed by a colon and numbered items. It still requires a typed suffix,
+  an existing in-root parent, no final symlink, canonical repository-relative
+  spelling, positive polarity and the existing 64-target bound. Generic
+  inclusion prose and unnumbered lists remain context rather than authority.
 
 ## Domain solver and Codex authority implementation (2026-08-24)
 

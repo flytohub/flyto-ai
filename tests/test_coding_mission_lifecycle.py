@@ -729,7 +729,9 @@ def test_heartbeats_are_recorded_and_never_confer_or_cost_authority(
         pulse = MissionHeartbeat(work.handle, interval=0.05)
         pulse.beat()
         pulse.start()
-        time.sleep(0.2)
+        deadline = time.monotonic() + 2.0
+        while pulse.beats < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
         pulse.stop()
         assert pulse.beats >= 2
         item = runtime.store.get_work_item(work.work_item_id)

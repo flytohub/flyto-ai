@@ -22,7 +22,10 @@ from flyto_ai.providers.base import dispatch_and_log_tool
 from flyto_ai.providers.failover import ProviderChain
 from flyto_ai.tools import blueprint_tools
 from flyto_ai.tools.blueprint_tools import dispatch_blueprint_tool
-from flyto_ai.execution_verification import build_execution_verification_receipt
+from flyto_ai.execution_verification import (
+    build_benchmark_workflow_receipt,
+    build_execution_verification_receipt,
+)
 
 
 def _bare_agent(dispatch, permission_level="workspace_write"):
@@ -741,9 +744,14 @@ def test_feedback_reused_blueprint_is_idempotent_and_not_relearned(monkeypatch):
             self.reported = []
             self.learned = []
 
-        def report_outcome(self, blueprint_id, success, execution_id=""):
-            self.reported.append((blueprint_id, success, execution_id))
-            return {"ok": True}
+        def report_outcome(self, blueprint_id, success, **kwargs):
+            self.reported.append((blueprint_id, success, kwargs))
+            return {
+                "ok": True,
+                "blueprint_id": blueprint_id,
+                "execution_id": kwargs["execution_id"],
+                "evidence_tier": kwargs["evidence_tier"],
+            }
 
         def learn_from_execution(self, **kwargs):
             self.learned.append(kwargs)
@@ -757,7 +765,7 @@ def test_feedback_reused_blueprint_is_idempotent_and_not_relearned(monkeypatch):
         tool_calls=[{
             "function": "use_blueprint",
             "arguments": {"blueprint_id": "learned_copy"},
-            "execution_id": "bp_execution_1",
+            "execution_id": "",
         }],
         execution_results=[{
             "module_id": "string.uppercase",
@@ -767,8 +775,255 @@ def test_feedback_reused_blueprint_is_idempotent_and_not_relearned(monkeypatch):
         user_message="repeat text=hello",
     )
 
-    assert engine.reported == [("learned_copy", True, "bp_execution_1")]
+    assert len(engine.reported) == 1
+    blueprint_id, success, outcome = engine.reported[0]
+    assert (blueprint_id, success) == ("learned_copy", True)
+    assert outcome["execution_id"].startswith("assistant_")
+    assert outcome["evidence_tier"] == "community"
+    assert outcome["verification"] is None
     assert engine.learned == []
+
+
+def _feedback_execution():
+    tool_calls = []
+    execution_results = []
+    for module in ("string.uppercase", "string.reverse", "string.lowercase"):
+        call = {
+            "function": "execute_module",
+            "arguments": {"module_id": module, "params": {"text": "hello"}},
+            "module_id": module,
+            "ok": True,
+            "validation": {"valid": True},
+        }
+        tool_calls.append(call)
+        execution_results.append(call)
+    return tool_calls, execution_results
+
+
+def _feedback_receipt(*, outcome_success=None):
+    return build_execution_verification_receipt(
+        "assistant-feedback:test",
+        {
+            "modules": ["string.uppercase", "string.reverse", "string.lowercase"],
+            "checks": {"execution_ok": True},
+            "counts": {"step_count": 3},
+            "structural_digest": "sha256:" + "1" * 64,
+        },
+        outcome_success=outcome_success,
+    )
+
+
+def _attach_feedback_receipt(tool_calls, receipt, capability=None):
+    tool_calls[0]["_blueprint_feedback_verification"] = {
+        "capability": (
+            blueprint_tools._CLOSED_LOOP_EVIDENCE_CAPABILITY
+            if capability is None else capability
+        ),
+        "receipt": receipt,
+    }
+
+
+def test_feedback_no_receipt_distillation_makes_no_mutation(monkeypatch):
+    class FakeEngine:
+        def __init__(self):
+            self.learned = []
+
+        def learn_from_execution(self, **kwargs):
+            self.learned.append(kwargs)
+            return {"ok": True, "data": {"id": "should_not_exist"}}
+
+    engine = FakeEngine()
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    tool_calls, results = _feedback_execution()
+
+    feedback(tool_calls, results, "transform text")
+
+    assert engine.learned == []
+
+
+def test_feedback_valid_receipt_creates_trusted_learning(monkeypatch):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    backend = MemoryBackend()
+    engine = BlueprintEngine(storage=backend)
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    tool_calls, results = _feedback_execution()
+    receipt = _feedback_receipt()
+    _attach_feedback_receipt(tool_calls, receipt)
+
+    feedback(tool_calls, results, "transform text")
+
+    learned = backend.load_all()
+    assert len(learned) == 1
+    assert learned[0]["trust_tier"] == "local_verified"
+    assert learned[0]["verification"] == receipt
+
+
+@pytest.mark.parametrize("receipt", [None, {"ok": True}])
+def test_feedback_missing_or_malformed_receipt_never_calls_learning(
+    monkeypatch, receipt,
+):
+    class FakeEngine:
+        def learn_from_execution(self, **kwargs):
+            raise AssertionError("unverified learning must not mutate Blueprint")
+
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: FakeEngine())
+    tool_calls, results = _feedback_execution()
+    if receipt is not None:
+        _attach_feedback_receipt(tool_calls, receipt)
+
+    feedback(tool_calls, results, "transform text")
+
+
+def test_feedback_nominal_ok_without_identity_is_not_logged_as_trusted(
+    monkeypatch, caplog,
+):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    backend = MemoryBackend()
+    real_engine = BlueprintEngine(storage=backend)
+
+    class IdentityFreeEngine:
+        def learn_from_execution(self, **kwargs):
+            return {"ok": True}
+
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: IdentityFreeEngine())
+    tool_calls, results = _feedback_execution()
+    _attach_feedback_receipt(tool_calls, _feedback_receipt())
+
+    with caplog.at_level("INFO"):
+        feedback(tool_calls, results, "transform text")
+
+    assert backend.load_all() == []
+    assert real_engine._storage is backend
+    assert "Blueprint distilled" not in caplog.text
+
+
+def test_feedback_forwards_tampered_receipt_for_blueprint_rejection(
+    monkeypatch, caplog,
+):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    backend = MemoryBackend()
+    engine = BlueprintEngine(storage=backend)
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    tool_calls, results = _feedback_execution()
+    receipt = _feedback_receipt()
+    receipt["evidence"]["counts"]["step_count"] = 4
+    _attach_feedback_receipt(tool_calls, receipt)
+
+    with caplog.at_level("INFO"):
+        feedback(tool_calls, results, "transform text")
+
+    assert backend.load_all() == []
+    assert "Blueprint distilled" not in caplog.text
+
+
+@pytest.mark.parametrize("capability", [object(), "flyto-ai.closed-loop-verified"])
+def test_feedback_serialized_or_foreign_capability_cannot_create_trusted_learning(
+    monkeypatch, capability, caplog,
+):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    backend = MemoryBackend()
+    engine = BlueprintEngine(storage=backend)
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    tool_calls, results = _feedback_execution()
+    _attach_feedback_receipt(tool_calls, _feedback_receipt(), capability=capability)
+
+    with caplog.at_level("INFO"):
+        feedback(tool_calls, results, "transform text")
+
+    assert backend.load_all() == []
+    assert "Blueprint distilled" not in caplog.text
+
+
+def test_feedback_real_engine_community_and_verified_outcomes_are_separate(
+    monkeypatch, caplog,
+):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    backend = MemoryBackend()
+    engine = BlueprintEngine(storage=backend)
+    workflow = {
+        "name": "Outcome target",
+        "steps": [
+            {"module": module, "params": {"text": "hello"}}
+            for module in ("string.uppercase", "string.reverse", "string.lowercase")
+        ],
+    }
+    learned = engine.learn_from_execution(
+        workflow,
+        verification=build_benchmark_workflow_receipt("seed:outcome", workflow),
+    )
+    blueprint_id = learned["data"]["id"]
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    before = backend.load_one(blueprint_id)
+
+    community_call = [{
+        "function": "use_blueprint",
+        "arguments": {"blueprint_id": blueprint_id},
+        "execution_id": "",
+    }]
+    feedback(community_call, [{"ok": True}], "community observation")
+    community = backend.load_one(blueprint_id)
+
+    assert community["score"] == before["score"]
+    assert community.get("success_count", 0) == before.get("success_count", 0)
+    assert community["community_success_count"] == 1
+
+    verified_call = [{
+        "function": "use_blueprint",
+        "arguments": {"blueprint_id": blueprint_id},
+        "execution_id": "assistant_verified_1",
+    }]
+    receipt = _feedback_receipt(outcome_success=True)
+    _attach_feedback_receipt(verified_call, receipt)
+    with caplog.at_level("INFO"):
+        feedback(verified_call, [{"ok": True}], "verified observation")
+    verified = backend.load_one(blueprint_id)
+
+    assert verified["score"] == before["score"] + 5
+    assert verified["success_count"] == before.get("success_count", 0) + 1
+    assert verified["community_success_count"] == 1
+    assert "Blueprint outcome:" in caplog.text
+
+
+def test_feedback_real_engine_rejects_outcome_mismatch_without_mutation(
+    monkeypatch, caplog,
+):
+    from flyto_blueprint import BlueprintEngine, MemoryBackend
+
+    backend = MemoryBackend()
+    engine = BlueprintEngine(storage=backend)
+    workflow = {
+        "name": "Mismatch target",
+        "steps": [
+            {"module": module, "params": {"text": "hello"}}
+            for module in ("string.uppercase", "string.reverse", "string.lowercase")
+        ],
+    }
+    learned = engine.learn_from_execution(
+        workflow,
+        verification=build_benchmark_workflow_receipt("seed:mismatch", workflow),
+    )
+    blueprint_id = learned["data"]["id"]
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: engine)
+    before = backend.load_one(blueprint_id)
+    tool_calls = [{
+        "function": "use_blueprint",
+        "arguments": {"blueprint_id": blueprint_id},
+        "execution_id": "assistant_mismatch_1",
+    }]
+    _attach_feedback_receipt(
+        tool_calls, _feedback_receipt(outcome_success=False),
+    )
+
+    with caplog.at_level("INFO"):
+        feedback(tool_calls, [{"ok": True}], "mismatched observation")
+
+    assert backend.load_one(blueprint_id) == before
+    assert "Blueprint outcome:" not in caplog.text
 
 
 def test_feedback_does_not_verify_blueprint_without_execution_evidence(
@@ -797,6 +1052,25 @@ def test_feedback_does_not_verify_blueprint_without_execution_evidence(
     )
 
     assert engine.reported == []
+
+
+def test_feedback_reuse_without_safe_blueprint_identity_makes_no_mutation(
+    monkeypatch,
+):
+    class FakeEngine:
+        def report_outcome(self, *args, **kwargs):
+            raise AssertionError("missing identity must skip outcome mutation")
+
+    monkeypatch.setattr("flyto_blueprint.get_engine", lambda: FakeEngine())
+
+    feedback(
+        tool_calls=[{
+            "function": "use_blueprint",
+            "arguments": {"blueprint_id": "../unsafe"},
+        }],
+        execution_results=[{"module_id": "string.uppercase", "ok": True}],
+        user_message="unsafe identity",
+    )
 
 
 @pytest.mark.asyncio

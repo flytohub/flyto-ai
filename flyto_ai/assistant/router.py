@@ -142,29 +142,97 @@ def feedback(
     engine = get_engine()
     all_ok = all(r.get("ok", False) for r in execution_results)
 
+    import hashlib
+    import re
+    from flyto_ai.tools.blueprint_tools import _CLOSED_LOOP_EVIDENCE_CAPABILITY
+
+    safe_blueprint_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,191}\Z")
+    safe_execution_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+    receipt_fields = {
+        "receipt_version", "success", "status", "evidence_id",
+        "evidence_sha256", "evidence",
+    }
+
+    def safe_identity(value: Any, pattern: Any) -> bool:
+        return (
+            type(value) is str and pattern.fullmatch(value) is not None
+            and ".." not in value and "//" not in value
+        )
+
+    verification_receipt = None
+    for item in [*tool_calls, *execution_results]:
+        reserved = item.get("_blueprint_feedback_verification")
+        if (
+            type(reserved) is dict
+            and set(reserved) == {"capability", "receipt"}
+            and reserved.get("capability") is _CLOSED_LOOP_EVIDENCE_CAPABILITY
+            and type(reserved.get("receipt")) is dict
+            and set(reserved["receipt"]) == receipt_fields
+        ):
+            verification_receipt = reserved["receipt"]
+            break
+
+    def accepted_identity(
+        result: Any,
+        blueprint_id: str,
+        evidence_tier: Optional[str] = None,
+    ) -> bool:
+        if type(result) is not dict or result.get("ok") is not True:
+            return False
+        data = result.get("data")
+        identity = data if type(data) is dict else result
+        returned_id = identity.get("id", identity.get("blueprint_id"))
+        if returned_id != blueprint_id or not safe_identity(returned_id, safe_blueprint_id):
+            return False
+        return not (
+            evidence_tier is not None
+            and identity.get("evidence_tier") != evidence_tier
+        )
+
     # Report outcome if a blueprint was used
     used_blueprint_id = None
-    blueprint_execution_id = ""
+    blueprint_tool_call = None
     for tc in tool_calls:
         if tc.get("function") == "use_blueprint":
             used_blueprint_id = tc.get("arguments", {}).get("blueprint_id", "")
-            blueprint_execution_id = tc.get("execution_id", "")
+            blueprint_tool_call = tc
             break
 
     if used_blueprint_id:
+        if not safe_identity(used_blueprint_id, safe_blueprint_id):
+            logger.debug("Blueprint outcome skipped without safe identity")
+            return
         if not execution_results:
             logger.debug(
                 "Blueprint outcome skipped without execution evidence: %s",
                 used_blueprint_id,
             )
             return
+        supplied_execution_id = (blueprint_tool_call or {}).get("execution_id")
+        if safe_identity(supplied_execution_id, safe_execution_id):
+            execution_id = supplied_execution_id
+        else:
+            digest = hashlib.sha256(used_blueprint_id.encode("utf-8")).hexdigest()[:24]
+            execution_id = "assistant_community_{}".format(digest)
+        trusted = verification_receipt is not None
+        evidence_tier = "local_verified" if trusted else "community"
         try:
-            engine.report_outcome(
+            result = engine.report_outcome(
                 used_blueprint_id,
                 success=all_ok,
-                execution_id=blueprint_execution_id,
+                execution_id=execution_id,
+                evidence_tier=evidence_tier,
+                verification=verification_receipt if trusted else None,
             )
-            logger.info("Blueprint outcome: %s %s", used_blueprint_id, "OK" if all_ok else "FAIL")
+            if accepted_identity(
+                result, used_blueprint_id, evidence_tier=evidence_tier,
+            ):
+                logger.info(
+                    "Blueprint outcome: %s %s (%s)", used_blueprint_id,
+                    "OK" if all_ok else "FAIL", evidence_tier,
+                )
+            else:
+                logger.debug("Blueprint outcome rejected or missing identity: %s", used_blueprint_id)
         except Exception as e:
             logger.debug("Blueprint report_outcome failed: %s", e)
         # Reuse should update the existing blueprint exactly once. Learning the
@@ -191,19 +259,27 @@ def feedback(
     if len(steps) < 3:
         return
 
+    if verification_receipt is None:
+        logger.debug("Blueprint distillation skipped without exact verification receipt")
+        return
+
     categories = list({s["module"].split(".")[0] for s in steps if "." in s["module"]})
 
     try:
-        engine.learn_from_execution(
+        result = engine.learn_from_execution(
             workflow=decision.workflow,
             name=user_message[:80],
             tags=categories,
+            verification=verification_receipt,
         )
-        logger.info(
-            "Blueprint distilled: %s (%d steps, %d evidence)",
-            user_message[:40],
-            len(steps),
-            decision.evidence_count,
-        )
+        data = result.get("data") if type(result) is dict else None
+        learned_id = data.get("id") if type(data) is dict else None
+        if accepted_identity(result, learned_id or ""):
+            logger.info(
+                "Blueprint distilled: %s as %s (%d steps, %d evidence)",
+                user_message[:40], learned_id, len(steps), decision.evidence_count,
+            )
+        else:
+            logger.debug("Blueprint learning rejected or missing identity")
     except Exception as e:
         logger.debug("Blueprint learn failed: %s", e)

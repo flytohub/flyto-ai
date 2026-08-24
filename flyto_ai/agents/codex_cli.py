@@ -185,6 +185,7 @@ class CodexCliCodingAgent:
 
         argv = self._argv(
             request.working_dir,
+            repository_roots=request.repository_roots,
             writable=writable,
             resume=bool(request.resume),
             session_id=expected_session,
@@ -348,6 +349,7 @@ class CodexCliCodingAgent:
         self,
         workspace: str,
         *,
+        repository_roots: Sequence[str] = (),
         writable: bool,
         resume: bool,
         session_id: str,
@@ -399,6 +401,13 @@ class CodexCliCodingAgent:
             "--cd",
             workspace,
         ]
+        # `--cd` is the primary repository authority. Every other repository
+        # was already normalized and leased by the host, so preserve that
+        # exact ordered set instead of deriving a common parent (which would
+        # silently widen the implementer's filesystem authority).
+        for repository_root in repository_roots:
+            if repository_root != workspace:
+                common.extend(("--add-dir", repository_root))
         if resume:
             return [*common, "resume", session_id, "-"]
         return [*common, "-"]

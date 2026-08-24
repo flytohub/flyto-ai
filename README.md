@@ -35,6 +35,32 @@ guarded dispatch into the execution layer. It does not own procedure learning
 and scoring, deterministic execution and replay, or hosted product and account
 logic. The declaration lives in [`flyto-product.toml`](flyto-product.toml).
 
+### Deterministic domain-solver boundary
+
+The implemented closed loop is deliberately narrow:
+
+```text
+intent / goal frame
+  -> declared Core semantics
+  -> deterministic solver
+  -> six-field verification receipt
+  -> Blueprint verified learning / outcome
+```
+
+The current compute-only baselines are exactly
+`math.rigid_transform_3d`, `physics.kinematics_constant_acceleration`, and
+`chemistry.ideal_dilution`. This is software arithmetic and contract
+verification—not sensor calibration, hardware motion, real physical-frame,
+laboratory chemistry, medical, handling, or safety validation. These baselines
+are not complete mathematics, physics, chemistry, Physical AI, or a universal
+world model.
+
+Equations alone are not a moat. The defensible layer is governed capability
+discovery, exact contracts, falsification evidence, adapters and ecosystem,
+operational data, and distribution. An open-source foundation is a practical
+recommendation for interoperable contracts and adoption, not a claim that the
+baseline equations are proprietary differentiation.
+
 ---
 
 ## The Monday-morning problem

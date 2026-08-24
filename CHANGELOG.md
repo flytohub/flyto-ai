@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Completed exact multi-repository Codex authority: `working_dir` remains
+  `--cd`; other normalized leased roots become ordered exec-level `--add-dir`
+  options for initial and resumed rounds, with no derived parent.
+- Raised every Core-bearing extra to `flyto-core[browser]>=2.31.0`, the first
+  release containing the three declared deterministic solver capabilities,
+  while retaining the independent advisory-derived security floor.
+- Added the required `domain_solver_closed_loop` coding check and documented
+  its compute-only, non-safety boundary.
+
 ## 0.18.0
 
 ### Boundary gates, second round

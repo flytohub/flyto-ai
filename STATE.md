@@ -2,6 +2,24 @@
 
 Last updated: 2026-08-24
 
+## Domain solver and Codex authority implementation (2026-08-24)
+
+- Core-bearing extras now require `>=2.31.0`; the advisory-derived security
+  floor remains independent.
+- Codex keeps the exact `working_dir` as `--cd`, forwards only other normalized
+  leased roots as ordered exec-level `--add-dir`, derives no parent, and keeps
+  the same authority on resume.
+- In the governed stack workspace, required `stack_lock` makes the locked Core
+  sibling mandatory and `domain_solver_closed_loop` runs that sibling's source
+  semantic contract. Its always-running AI closure exercises the
+  installed/imported Core capabilities through all three known-answer and
+  rejection cases before Blueprint verified learning. The source-contract test
+  skips only for an isolated flyto-ai checkout where the sibling is absent; a
+  skip is not presented as execution. The three named baselines verify software
+  arithmetic and contracts only, not sensors, hardware, real physical frames,
+  laboratory chemistry, medicine, handling, or safety, and make no Physical AI
+  or universal-world-model claim.
+
 ## The floor gate proved itself, and showed where it was still pinned (2026-08-24)
 
 Within a day of landing, `tests/test_stack_security_floor.py` went red for a real
@@ -14,8 +32,9 @@ revision `stack-lock.json` pins, so the manifest the gate reads is only as fresh
 as the last lock bump — the gate could not have gone red in CI no matter what
 Core published. `.github/workflows/advisory-freshness.yml` now asks the same
 question against `flyto-core@main`, daily, in a workflow separate from CI so a
-pull request never fails for an unrelated repository's publication. Both floors
-are at `>=2.29.0` and the job is green as it lands.
+pull request never fails for an unrelated repository's publication. The
+advisory-derived security minimum is satisfied, and the independently higher
+domain-capability floor is `>=2.31.0` as it lands.
 
 ## Cross-repository contract repair (2026-08-23)
 

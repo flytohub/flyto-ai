@@ -1,5 +1,18 @@
 # Decisions
 
+## 2026-08-24 — Domain capability floor and exact repository authority
+
+- Core-bearing `browser`, `full`, and `dev` extras use `>=2.31.0`, independently
+  of the advisory-derived security floor, because 2.31.0 first contains the
+  three declared deterministic solver baselines.
+- Codex receives `working_dir` unchanged as `--cd` and every other normalized,
+  leased request root in order as exec-level `--add-dir`. No common parent is
+  derived; initial and rework rounds preserve the same authority set.
+- The solver contract stops at software arithmetic, a six-field receipt, and
+  Blueprint verified learning/outcome. Open source supports interoperability
+  and adoption; equations alone are not defensible differentiation or evidence
+  of broad domain completeness.
+
 ## 2026-08-24 — Freshness is a separate question from correctness, and needs its own schedule
 
 Decision: the advisory floor is checked twice. `tests/test_stack_security_floor.py`

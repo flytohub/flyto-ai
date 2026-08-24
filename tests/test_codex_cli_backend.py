@@ -183,6 +183,71 @@ def test_codex_cli_rework_resumes_the_exact_provider_session(tmp_path: Path) -> 
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv
 
 
+def test_codex_cli_forwards_exact_multi_repository_authority_in_request_order(
+    tmp_path: Path,
+) -> None:
+    executable = _fake_codex(tmp_path)
+    workspace = _workspace(tmp_path)
+    second = tmp_path / "second-repository"
+    third = tmp_path / "third-repository"
+    second.mkdir()
+    third.mkdir()
+    roots = (str(workspace), str(third), str(second))
+    agent, _store = _agent(tmp_path, executable)
+
+    first = asyncio.run(agent.run(CodingTaskRequest(
+        message="multi-repository round",
+        working_dir=str(workspace),
+        repository_roots=roots,
+    )))
+    assert first.ok is True
+    initial_argv = json.loads(
+        (workspace / "codex-invocation.json").read_text(encoding="utf-8"),
+    )["argv"]
+
+    resumed = asyncio.run(agent.run(CodingTaskRequest(
+        message="multi-repository rework",
+        working_dir=str(workspace),
+        repository_roots=roots,
+        thread_id=SESSION,
+        resume=True,
+    )))
+    assert resumed.ok is True
+    resume_argv = json.loads(
+        (workspace / "codex-invocation.json").read_text(encoding="utf-8"),
+    )["argv"]
+
+    expected = ["--add-dir", str(third), "--add-dir", str(second)]
+    for argv in (initial_argv, resume_argv):
+        cd_index = argv.index("--cd")
+        assert argv[cd_index + 1] == str(workspace)
+        assert argv[cd_index + 2:cd_index + 6] == expected
+        assert str(tmp_path) not in argv
+    assert resume_argv.index("--add-dir") < resume_argv.index("resume")
+
+
+def test_codex_cli_single_repository_does_not_add_or_derive_authority(
+    tmp_path: Path,
+) -> None:
+    executable = _fake_codex(tmp_path)
+    workspace = _workspace(tmp_path)
+    agent, _store = _agent(tmp_path, executable)
+
+    result = asyncio.run(agent.run(CodingTaskRequest(
+        message="single repository round",
+        working_dir=str(workspace),
+        repository_roots=(str(workspace),),
+    )))
+
+    assert result.ok is True
+    argv = json.loads(
+        (workspace / "codex-invocation.json").read_text(encoding="utf-8"),
+    )["argv"]
+    assert argv[argv.index("--cd") + 1] == str(workspace)
+    assert "--add-dir" not in argv
+    assert str(tmp_path) not in argv
+
+
 def test_codex_cli_initial_and_resume_argv_are_not_ephemeral(tmp_path: Path) -> None:
     executable = _fake_codex(tmp_path)
     workspace = _workspace(tmp_path)

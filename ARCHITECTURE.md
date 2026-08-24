@@ -109,6 +109,22 @@ implemented. The dated current-alignment snapshot — including the
 
 Runtime flow:
 
+The implemented deterministic solver edge is `intent / goal frame -> declared
+Core semantics -> deterministic solver -> six-field verification receipt ->
+Blueprint verified learning / outcome`. Its current compute-only baselines are
+exactly `math.rigid_transform_3d`,
+`physics.kinematics_constant_acceleration`, and
+`chemistry.ideal_dilution`.
+
+This verifies software arithmetic and contracts only—not sensor calibration,
+hardware motion, real physical frames, laboratory chemistry, medicine,
+handling, or safety—and is not complete mathematics, physics, chemistry,
+Physical AI, or a universal world model. Equations alone are not a moat; the
+defensible layer is governed capability discovery, exact contracts,
+falsification evidence, adapters and ecosystem, operational data, and
+distribution. An open-source foundation is an interoperability and adoption
+recommendation, not a broader capability claim.
+
 ```text
 user/cloud/CLI
   -> Agent

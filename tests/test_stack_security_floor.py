@@ -41,6 +41,7 @@ DEPENDENT_PYPROJECTS = {
 # silence about that is how the original gap survived.
 REQUIREMENT = re.compile(r"""["']flyto-core(?P<extras>\[[^\]]*\])?(?P<spec>[^"']*)["']""")
 FLOOR = re.compile(r"^>=\s*(?P<version>\d+(?:\.\d+)*)$")
+DOMAIN_CAPABILITY_FLOOR = "2.31.0"
 
 
 def _version_key(version: str) -> Tuple[int, ...]:
@@ -118,3 +119,27 @@ def test_the_floor_is_read_from_core_rather_than_restated(floor: str) -> None:
     """
     assert ADVISORIES.is_file()
     assert _version_key(floor) >= (2, 28, 1)
+
+
+def test_browser_full_and_dev_cannot_resolve_below_domain_capability_floor() -> None:
+    """Every packaging surface exposing Core must include the three solvers."""
+    import tomllib
+
+    pyproject = DEPENDENT_PYPROJECTS["flyto-ai"]
+    extras = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+        "optional-dependencies"
+    ]
+    for extra in ("browser", "full", "dev"):
+        requirements = [
+            requirement
+            for requirement in extras[extra]
+            if requirement.startswith("flyto-core")
+        ]
+        assert len(requirements) == 1, f"{extra} must declare exactly one Core floor"
+        matched = REQUIREMENT.fullmatch(f'"{requirements[0]}"')
+        assert matched is not None
+        floor_match = FLOOR.fullmatch(matched.group("spec").strip())
+        assert floor_match is not None
+        assert _version_key(floor_match.group("version")) >= _version_key(
+            DOMAIN_CAPABILITY_FLOOR
+        )

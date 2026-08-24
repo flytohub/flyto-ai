@@ -1,7 +1,12 @@
-"""Pinned Core -> AI receipt -> Blueprint deterministic solver closure.
+"""Locked Core source contract plus installed Core -> AI -> Blueprint closure.
 
 This validates software arithmetic only. It is not sensor, hardware,
 physical-frame, reaction, laboratory, medical, handling, or safety validation.
+
+The governed stack check requires and runs the locked sibling Core source
+contract. Its narrow skip supports an isolated flyto-ai checkout only. The AI
+closure always exercises the installed/imported Core capabilities through all
+three known-answer and rejection cases.
 """
 
 from __future__ import annotations
@@ -9,6 +14,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -66,6 +74,35 @@ _CASES = (
         {"stock_volume": 0.25, "diluent_volume": 0.75},
     ),
 )
+
+
+def test_real_core_domain_solver_semantic_contract() -> None:
+    """Run the locked sibling's source contract in a governed stack workspace.
+
+    An isolated flyto-ai checkout lacks the stack_lock-required sibling, so only
+    that development shape skips this source-contract portion.
+    """
+    core = Path(__file__).resolve().parents[2] / "flyto-core"
+    contract = core / "tests" / "core" / "test_domain_solvers.py"
+    if not contract.is_file():
+        pytest.skip("the locked flyto-core sibling checkout is unavailable")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-o",
+            "addopts=",
+            str(contract.relative_to(core)),
+        ],
+        cwd=core,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def _goal_frame(intent: str, affordance: str) -> dict[str, object]:

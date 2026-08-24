@@ -145,6 +145,21 @@ architecture-invariant rule in [`../AGENTS.md`](../AGENTS.md).
 
 ## Core Areas
 
+The implemented deterministic solver edge is `intent / goal frame -> declared
+Core semantics -> deterministic solver -> six-field verification receipt ->
+Blueprint verified learning / outcome`. Only `math.rigid_transform_3d`,
+`physics.kinematics_constant_acceleration`, and
+`chemistry.ideal_dilution` are current compute-only baselines.
+
+This is software arithmetic and contract verification, not sensor calibration,
+hardware motion, real physical-frame, laboratory chemistry, medical, handling,
+or safety validation. It does not establish complete mathematics, physics,
+chemistry, Physical AI, or a universal world model. Equations alone are not a
+moat; the defensible layer is governed capability discovery, exact contracts,
+falsification evidence, adapters and ecosystem, operational data, and
+distribution. The open-source foundation recommendation concerns
+interoperability and adoption, not completeness of the baselines.
+
 - `flyto_ai/agent.py`, `flyto_ai/assistant/`, and `flyto_ai/orchestration/`:
   prompt routing, sub-agent coordination, approvals, resilience, and agent
   execution flow.

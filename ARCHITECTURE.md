@@ -765,10 +765,16 @@ holding the root against its successor.
 Host-global workspace authority is separate from this lifetime state-root
 authority. It is held only while the shared state root has durable
 non-terminal work. The configured root is only the allowed boundary: admission
-leases the nearest Git repository, or an explicitly declared atomic set of up
-to sixteen non-overlapping Git repositories, before the first job mutation.
-The exact set is durable; restart reacquires open sets and final settlement
-releases only repositories no remaining job needs.
+leases the nearest Git repository before the first job mutation. The public
+route currently refuses a request naming more than one repository: checks,
+Indexer post-validation, attributable paths, and
+`implementation_revision_sha256` are workspace-relative, so granting sibling
+write authority would let unbound bytes escape the independent audit. A
+cross-repository change therefore uses one governed job and exact revision per
+repository, followed by a Codex integration audit; multi-root admission remains
+closed until every proof lane and the revision contract are root-qualified.
+The exact single-root claim is durable; restart reacquires open claims and final
+settlement releases only repositories no remaining job needs.
 Since a peer can settle a job admitted by another process, each holder runs a
 bounded guarded idle observer so the submitter cannot retain a stale lease.
 Idle MCP workers therefore coexist without reserving product trees, while

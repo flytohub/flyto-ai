@@ -346,14 +346,16 @@ See `ARCHITECTURE.md` and `DECISIONS.md` (2026-08-10).
 ## Multi-Codex repository scheduling note (2026-08-12)
 
 The outer Flytohub topology above is unchanged. Locally, the coding control
-plane now leases the nearest Git repository (or one explicitly declared atomic
-repo set) instead of leasing the whole Flytohub parent, so `flyto-cloud`,
-`flyto-code`, and `flyto-engine` can execute in parallel at the same
-architectural level when their sets do not overlap. MissionStore remains the
-generic source of main-axis, side-branch and ordering truth; host-only
-`code-task-window` projects that truth without adding a model-visible tool or a
-domain taxonomy. Blueprint/Core/Indexer CI and local verification revisions
-come from the same `stack-lock.json`.
+plane leases the nearest Git repository instead of the whole Flytohub parent,
+so `flyto-cloud`, `flyto-code`, and `flyto-engine` can execute in parallel at
+the same architectural level when their roots do not overlap. Public multi-root
+jobs are fail-closed because the current verifier, Indexer post-lane,
+attributable-path ledger, and revision digest are workspace-relative; a
+cross-repository change uses one governed job per repository plus a final Codex
+integration audit. MissionStore remains the generic source of main-axis,
+side-branch and ordering truth; host-only `code-task-window` projects that truth
+without adding a model-visible tool or a domain taxonomy. Blueprint/Core/Indexer
+CI and local verification revisions come from the same `stack-lock.json`.
 
 ## Coding observability note (2026-08-12)
 

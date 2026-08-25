@@ -751,6 +751,7 @@ def test_route_retry_flag_is_publicly_decodable_without_adding_a_tool(tmp_path) 
     request_schema = tools["flyto_coding_submit"]["inputSchema"]["properties"]["request"]
     assert request_schema["additionalProperties"] is False
     assert request_schema["properties"]["retry_rework_route"] == {"type": "boolean"}
+    assert request_schema["properties"]["repository_roots"]["maxItems"] == 1
     with pytest.raises(ValueError, match="must be a boolean"):
         request_from_mapping({
             "message": "resume the audited repair",

@@ -22,6 +22,7 @@ from flyto_ai.coding.service import (
     AbandonStateConflict,
     CodingService,
     CodingWorkspaceAuthorityConflict,
+    WorkspaceDenied,
     WorkspaceBusy,
 )
 from flyto_ai.coding.workspace_authority import (
@@ -172,7 +173,9 @@ def test_parent_config_uses_nearest_git_repo_leases_for_parallel_children(
         first.close()
 
 
-def test_cross_repo_set_is_atomic_and_blocks_each_member(tmp_path: Path) -> None:
+def test_cross_repo_set_is_refused_until_each_repo_is_independently_auditable(
+    tmp_path: Path,
+) -> None:
     parent = _workspace(tmp_path, "flytohub")
     alpha = _workspace(parent, "alpha")
     beta = _workspace(parent, "beta")
@@ -189,21 +192,18 @@ def test_cross_repo_set_is_atomic_and_blocks_each_member(tmp_path: Path) -> None
             repository_roots=(str(alpha), str(beta)),
             owner_ref="codex-main-axis",
         )
-        queued = owner.submit("tenant-audit", "set-001", request)
-        held = _wait(owner, "tenant-audit", queued.job_id)
-        assert held.state is CodingJobState.AWAITING_CODEX_AUDIT
-        with pytest.raises(WorkspaceBusy):
-            peer.submit("tenant-audit", "beta-peer-001", _request(beta))
+        with pytest.raises(
+            WorkspaceDenied,
+            match="multi-repository jobs lack exact audit authority",
+        ):
+            owner.submit("tenant-audit", "set-001", request)
+
+        # Refusal happens before claims or provider work, so both repositories
+        # remain available for separate exact-revision jobs.
+        beta_job = _awaiting(peer, "tenant-audit", "beta-peer-001", beta)
+        assert beta_job.state is CodingJobState.AWAITING_CODEX_AUDIT
         with pytest.raises(CodingWorkspaceAuthorityConflict):
             intruder.submit("tenant-audit", "beta-001", _request(beta))
-
-        tenant_ref = owner._tenant_ref("tenant-audit")
-        record = owner._read_json(
-            owner.state_root / "tenants" / tenant_ref / "jobs" / (held.job_id + ".json"),
-        )
-        assert record["repository_roots"] == sorted([str(alpha), str(beta)])
-        assert len(record["repository_digests"]) == 2
-        assert record["owner_ref"] == "codex-main-axis"
     finally:
         intruder.close()
         peer.close()

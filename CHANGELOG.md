@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-25
+
+- Fail closed on public multi-repository coding jobs whose sibling edits were
+  not covered by the primary workspace verifier, Indexer post-lane, changed-path
+  ledger, or implementation revision. Cross-repository delivery now requires
+  one governed job per repository plus a final integration audit.
+
 ## Unreleased
 
 - Fixed strict-route intent-ledger projection for an explicitly declared,

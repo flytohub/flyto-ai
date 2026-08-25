@@ -267,7 +267,7 @@ class CodingMCPServer:
                                 "repository_roots": {
                                     "type": "array",
                                     "minItems": 1,
-                                    "maxItems": 16,
+                                    "maxItems": 1,
                                     "uniqueItems": True,
                                     "items": {
                                         "type": "string", "minLength": 1, "maxLength": 4096,

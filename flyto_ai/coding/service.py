@@ -6620,11 +6620,9 @@ class CodingService:
 
         The default is the nearest real Git boundary containing the working
         directory.  This is what lets ``flyto-code`` and ``flyto-engine`` run
-        concurrently even though one configured parent contains both.  A
-        caller may declare several repositories for a cross-repo change, but
-        every member must be a real, non-overlapping Git checkout under the
-        startup-configured workspace boundary.  The set is then persisted by
-        value and reacquired on restart; it is never inferred a second time.
+        concurrently even though one configured parent contains both.  The
+        public route accepts at most one declared repository because its proof lanes
+        are workspace-relative. The exact root is persisted, never re-inferred.
 
         A non-Git workspace keeps the legacy conservative fallback of claiming
         its exact working directory.  This preserves existing library users
@@ -6639,6 +6637,8 @@ class CodingService:
             )
             if len(repositories) != len(request.repository_roots):
                 raise WorkspaceDenied("repository_roots must be unique")
+            if len(repositories) != 1:
+                raise WorkspaceDenied("multi-repository jobs lack exact audit authority; submit one job per repository")
             for repository in repositories:
                 self._assert_workspace(str(repository))
                 marker = repository / ".git"

@@ -1,5 +1,26 @@
 # Decisions
 
+## 2026-08-25 — One auditable revision owns one repository
+
+Decision: public coding submission refuses more than one `repository_root`.
+Cross-repository delivery is decomposed into one governed job per repository
+and closed by an independent Codex integration audit.
+
+Why: the existing multi-root path leased and forwarded sibling roots as
+`--add-dir`, but the pinned checks, Indexer post-lane, attributable file list,
+and `implementation_revision_sha256` remained relative to `working_dir`. A
+successful audit could therefore sign Code while Engine bytes changed outside
+the revision. Atomic write authority without atomic proof is not authority we
+can safely expose.
+
+Consequence: public MCP advertises a single-item `repository_roots` array and
+the service independently enforces the same rule before claims or provider
+startup. The lower-level adapter keeps its exact argument construction for
+future root-qualified proof work, but it is unreachable from public multi-root
+submission. Restoring multi-root jobs requires per-root contract pins and
+checks, root-qualified Indexer pre/post evidence, a bounded root-qualified
+changed-path ledger, and one revision digest over every declared root.
+
 ## 2026-08-25 — An exact numbered allowlist carries item-level path authority
 
 Decision: first-round target projection treats a strongly declared exact path

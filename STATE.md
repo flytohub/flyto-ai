@@ -2,6 +2,18 @@
 
 Last updated: 2026-08-25
 
+## Multi-repository audit authority is fail-closed (2026-08-25)
+
+- A live Code + Engine job proved that `repository_roots` granted the Codex
+  implementer sibling write authority while source checks, Indexer post-work,
+  `implementation_files`, and `implementation_revision_sha256` still described
+  only the primary `working_dir`. Engine bytes could therefore be edited but
+  were not part of the revision an auditor signed.
+- Public submission now accepts one repository root. Cross-repository work uses
+  one governed job and exact revision per repository, followed by an independent
+  Codex integration audit. Multi-root execution stays closed until all proof
+  lanes and the revision/changed-path contract are root-qualified.
+
 ## Exact numbered path-list authority (2026-08-25)
 
 - Three audited Code jobs completed their required verification and then
@@ -19,9 +31,10 @@ Last updated: 2026-08-25
 
 - Core-bearing extras now require `>=2.31.0`; the advisory-derived security
   floor remains independent.
-- Codex keeps the exact `working_dir` as `--cd`, forwards only other normalized
-  leased roots as ordered exec-level `--add-dir`, derives no parent, and keeps
-  the same authority on resume.
+- The Codex adapter retains exact `--cd`/`--add-dir` construction for internal
+  compatibility, but the public service now refuses multiple repository roots
+  before provider startup because those additional roots are not yet covered by
+  independent verification and revision authority.
 - In the governed stack workspace, required `stack_lock` makes the locked Core
   sibling mandatory and `domain_solver_closed_loop` runs that sibling's source
   semantic contract. Its always-running AI closure exercises the

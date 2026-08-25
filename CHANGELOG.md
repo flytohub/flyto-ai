@@ -6,6 +6,10 @@
   not covered by the primary workspace verifier, Indexer post-lane, changed-path
   ledger, or implementation revision. Cross-repository delivery now requires
   one governed job per repository plus a final integration audit.
+- Fix audit rework for large root scopes: the parent contract retains its
+  cumulative ledger, while one amendment sends only newly attributed or
+  explicitly authorized repair paths to Indexer. The 32-target amendment bound
+  no longer rejects a valid root task with more than 32 paths.
 
 ## Unreleased
 

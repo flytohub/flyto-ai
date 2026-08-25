@@ -929,15 +929,19 @@ all bind - equality, not inclusion.
 
 That same proven prior set is also an input to every rework pre-plan. Audit
 findings normally name only the immediate repair, so using their prose alone as
-the amendment target list can narrow the intent ledger below files earlier
-rounds already attributed to the job. The host therefore unions the bounded,
-revision-proven prior paths with the explicit targets parsed from the new audit
-finding before `task(action="plan")`; first-round requests remain unchanged.
+the cumulative ledger can narrow authority below files earlier rounds already
+attributed to the job. The authenticated parent contract already carries its
+cumulative scope. The host therefore declares only revision-proven prior paths
+missing from that parent plus explicit targets parsed from the new audit
+finding; Indexer owns the ordered cumulative union. A same-scope repair
+redeclares one authenticated parent path so the amendment is nonempty without
+widening authority. This keeps the per-amendment 32-target bound independent
+from a valid root task with up to 64 paths; first-round requests remain
+unchanged.
 Because audit prose also carries commands, check output, and evidence
-references, an existing path mentioned there becomes a new amendment target
+references, an existing path mentioned there becomes an amendment target
 only when a mutation cue governs it in the same bounded clause. Execution and
-evidence references remain context, not edit authority; the proven prior set is
-still sent unchanged when no new mutation target exists.
+evidence references remain context, not edit authority.
 The projection recognizes regeneration of a tracked output as mutation, while
 a later execution connector (`using`, `via`, `use`, `call`, `calling`, `run`,
 `execute`, `invoke`, `with`, `through`, or bare `by`) cuts off that authority
@@ -995,8 +999,8 @@ Every amendment path is also revalidated as one bounded, canonical,
 repository-relative POSIX lexical token: absolute, drive, traversal, glob,
 control, backslash, dot-segment and non-normal spellings are refused. The
 successor cumulative scope must equal the ordered union of the authenticated
-parent ledger, the exact revision/audit-proven prior implementation scope and
-the current filesystem-validated explicit targets. The producer may neither
+parent ledger, any exact revision/audit-proven prior implementation paths absent
+from that ledger, and the current filesystem-validated explicit targets. The producer may neither
 omit one of those paths nor invent another. Numeric suffixes remain legal for
 existing literal paths; the host new-file parser plus Indexer resolution prevent
 a nonexistent milestone such as `M1.1` from creating authority, while `.7z`

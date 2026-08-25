@@ -1,5 +1,22 @@
 # Decisions
 
+## 2026-08-25 — Amendment limits apply to the delta, not the root ledger
+
+Decision: an audit rework plan sends Indexer only exact prior-attributable paths
+missing from the authenticated parent ledger plus explicit repair targets. A
+same-scope repair redeclares one authenticated parent path. The parent contract,
+not the request target array, carries cumulative authority.
+
+Why: forwarding every parent path turned a valid 41-path root task into 41 new
+amendment targets and crossed Indexer's independent 32-target amendment bound.
+No provider continuation could start even though the intended repair touched a
+small subset.
+
+Consequence: cumulative scope is still the exact ordered union proved by
+Indexer post-work and the implementation revision, but root-task size no longer
+consumes the next round's amendment budget. More than 32 genuinely new repair
+targets remains fail-closed.
+
 ## 2026-08-25 — One auditable revision owns one repository
 
 Decision: public coding submission refuses more than one `repository_root`.

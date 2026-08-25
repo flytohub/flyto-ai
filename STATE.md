@@ -2,6 +2,17 @@
 
 Last updated: 2026-08-25
 
+## Rework target scope is amendment-local (2026-08-25)
+
+- A live 41-path Engine job reached audit, but its rework route copied all 41
+  authenticated parent paths into Indexer's new amendment target list. Indexer
+  correctly caps one amendment at 32, so the repair could never reach the same
+  implementation session.
+- The parent ledger now remains cumulative authority. Rework declares only
+  prior-attributable paths absent from that ledger plus explicit audit repair
+  targets; a same-scope repair repeats one authenticated parent path. Indexer
+  forms and verifies the ordered cumulative union.
+
 ## Multi-repository audit authority is fail-closed (2026-08-25)
 
 - A live Code + Engine job proved that `repository_roots` granted the Codex

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from typing import Mapping, Sequence
 
 
 # A task may declare an exact numbered path allowlist before describing each
@@ -46,3 +47,28 @@ def is_numbered_exact_path_item(message: str, position: int) -> bool:
         if any(_NUMBERED_PATH_ITEM_RE.finditer(text, item_start, position)):
             return True
     return False
+
+
+def amendment_delta_targets(
+    parent_contract: Mapping[str, object],
+    prior_scope: Sequence[str],
+    explicit_targets: Sequence[str],
+) -> list[str]:
+    """Return a bounded amendment delta without replaying parent authority."""
+    ledger = parent_contract.get("intent_ledger")
+    ledger = ledger if isinstance(ledger, Mapping) else {}
+    raw_parent_paths = ledger.get("allowed_paths")
+    if not isinstance(raw_parent_paths, (list, tuple)):
+        raw_parent_paths = ledger.get("targets")
+    parent_order = [
+        item for item in (raw_parent_paths or ()) if isinstance(item, str)
+    ]
+    parent_paths = set(parent_order)
+    targets = list(dict.fromkeys(
+        [item for item in prior_scope if item not in parent_paths]
+        + [item for item in explicit_targets if item not in parent_paths]
+    ))
+    if targets:
+        return targets
+    named_parent = [item for item in explicit_targets if item in parent_paths]
+    return named_parent[:1] or parent_order[:1]

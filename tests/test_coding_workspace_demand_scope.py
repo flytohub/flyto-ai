@@ -23,7 +23,6 @@ from flyto_ai.coding.service import (
     CodingService,
     CodingWorkspaceAuthorityConflict,
     WorkspaceDenied,
-    WorkspaceBusy,
 )
 from flyto_ai.coding.workspace_authority import (
     describe_workspace_root,

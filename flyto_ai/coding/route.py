@@ -58,7 +58,7 @@ from flyto_ai.coding.contracts import (
     CodingTaskResult,
     safe_blockers,
 )
-from flyto_ai.coding.path_authority import is_numbered_exact_path_item
+from flyto_ai.coding.path_authority import amendment_delta_targets, is_numbered_exact_path_item
 
 
 ROUTE_CONTRACT_VERSION = "flyto.coding-route.v1"
@@ -164,6 +164,8 @@ _EXPLICIT_PATH_RE = re.compile(
 # the scope finite, but large enough for a 16-locale source+dist closure plus
 # its focused regression test (51 files).
 _MAX_EXPLICIT_REQUEST_TARGETS = 64
+#: Indexer bounds each amendment delta, not the cumulative root-task scope.
+_MAX_INDEXER_AMENDMENT_TARGETS = 32
 #: What a *new* file's extension may look like. Audit codes, gate names and
 #: evidence refs share the conservative path grammar - `check.generated_reference`,
 #: `human.approval`, `module.identifier`, `pkg/check.some_capability` all parse as
@@ -1243,16 +1245,14 @@ class CodingRouteOrchestrator:
                 request.message, request.working_dir,
             )
         if parent_contract:
-            # Audit prose normally names only the finding being repaired.  The
-            # host, however, has already re-proved every path this same job
-            # owns.  Carry that cumulative authority into the amendment so the
-            # new contract can validate the same set the final revision binds.
-            # Dropping these paths here leaves a green multi-round job with an
-            # `unplanned_diff` that no later post-lane can repair.
-            targets = list(dict.fromkeys(
-                [str(item) for item in prior_scope] + explicit_targets,
-            ))
-            if len(targets) > _MAX_EXPLICIT_REQUEST_TARGETS:
+            # The parent contract already carries its cumulative ledger. An
+            # amendment declares only newly discovered prior-attributable paths
+            # plus paths explicitly authorized by the audit finding; Indexer
+            # forms the ordered cumulative union itself. Re-declaring every
+            # parent path here incorrectly turns a large valid root scope into
+            # >32 new amendment targets and makes rework impossible.
+            targets = amendment_delta_targets(parent_contract, prior_scope, explicit_targets)
+            if len(targets) > _MAX_INDEXER_AMENDMENT_TARGETS:
                 raise CodingRouteError("plan_target_bound_exceeded", lane)
         else:
             targets = explicit_targets or self._derive_targets(found)

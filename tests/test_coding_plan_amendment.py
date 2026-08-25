@@ -518,9 +518,7 @@ def test_a_rework_plan_carries_host_proven_prior_scope(repo):
     ))
 
     assert indexer.plans[-1]["targets"] == [
-        "README.md",
-        "docs/reference/python/coding.md",
-        "docs/reference/python/README.md",
+        "README.md", "docs/reference/python/README.md",
     ]
     assert set(second["task_contract"]["intent_ledger"]["allowed_paths"]) == {
         "README.md",
@@ -558,7 +556,7 @@ def test_parent_ledger_authority_survives_a_touched_scope_subset(repo):
     ))
 
     assert indexer.plans[-1]["targets"] == [
-        "docs/reference/python/coding.md", "README.md", "artifacts/result.txt",
+        "README.md", "artifacts/result.txt",
     ]
     assert second["task_contract"]["intent_ledger"]["allowed_paths"] == [
         "docs/reference/python/coding.md",
@@ -584,6 +582,56 @@ def test_audited_prior_scope_outside_parent_ledger_is_amendment_authority(repo):
     ))
     assert second["task_contract"]["intent_ledger"]["allowed_paths"] == [
         "docs/reference/python/coding.md", "README.md", "artifacts/result.txt",
+    ]
+
+
+def test_large_parent_scope_is_not_redeclared_as_one_amendment(repo):
+    """The per-amendment 32-target bound is not a cumulative-scope bound."""
+
+    many = repo / "many"
+    many.mkdir()
+    paths = []
+    for index in range(41):
+        path = "many/f{:02d}.py".format(index)
+        (repo / path).write_text("x\n", encoding="utf-8")
+        paths.append(path)
+    indexer = FakeIndexer()
+    route = _orchestrator(indexer)
+    _, first = asyncio.run(route._indexer_pre(CodingTaskRequest(
+        message="edit exactly these files: " + " ".join(paths),
+        working_dir=str(repo),
+    )))
+    _, second = asyncio.run(route._indexer_pre(
+        CodingTaskRequest(
+            message="rework: update many/f00.py to add the regression",
+            working_dir=str(repo),
+        ),
+        first["task_contract"],
+        tuple(paths),
+    ))
+
+    assert indexer.plans[-1]["targets"] == ["many/f00.py"]
+    assert second["task_contract"]["intent_ledger"]["allowed_paths"] == paths
+
+
+def test_same_scope_rework_redeclares_one_authenticated_parent_target(repo):
+    indexer = FakeIndexer()
+    route = _orchestrator(indexer)
+    _, first = asyncio.run(route._indexer_pre(CodingTaskRequest(
+        message="edit docs/reference/python/coding.md",
+        working_dir=str(repo),
+    )))
+    _, second = asyncio.run(route._indexer_pre(
+        CodingTaskRequest(message="rework: add coverage", working_dir=str(repo)),
+        first["task_contract"],
+        ("docs/reference/python/coding.md",),
+    ))
+
+    assert indexer.plans[-1]["targets"] == [
+        "docs/reference/python/coding.md",
+    ]
+    assert second["task_contract"]["intent_ledger"]["allowed_paths"] == [
+        "docs/reference/python/coding.md",
     ]
 
 
@@ -1113,7 +1161,7 @@ def test_rework_without_a_mutation_target_retains_prior_scope_exactly(repo):
     prior = ("README.md", "docs/reference/python/coding.md")
     asyncio.run(route._indexer_pre(rework, first["task_contract"], prior))
 
-    assert indexer.plans[-1]["targets"] == list(prior)
+    assert indexer.plans[-1]["targets"] == ["README.md"]
 
 
 def test_post_validation_receives_exactly_the_supplied_cumulative_set(repo):
@@ -1449,8 +1497,8 @@ def test_three_rounds_stay_one_root_task_with_a_growing_cumulative_scope(story):
         # One root task across all three plans, growing by amendment.
         assert len(indexer.plans) == 3
         assert "task_contract" not in indexer.plans[0]
-        assert indexer.plans[1]["targets"] == ["a.py", "b.py"]
-        assert indexer.plans[2]["targets"] == ["a.py", "b.py", "c.py"]
+        assert indexer.plans[1]["targets"] == ["b.py"]
+        assert indexer.plans[2]["targets"] == ["c.py"]
         for index in (1, 2):
             parent = indexer.plans[index]["task_contract"]
             assert parent["root_task_id"] == FakeIndexer.ROOT

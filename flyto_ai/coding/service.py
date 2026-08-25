@@ -25,9 +25,7 @@ from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Protocol, S
 
 from flyto_ai.coding.checks import read_project_contract
 from flyto_ai.coding.contracts import (
-    ACTION_RESUBMIT_AGAINST_CURRENT_CONTRACT,
     ContractSnapshot,
-    FAILURE_PHASE_VERIFICATION,
     JOB_FAILURE_ACTIONS,
     MAX_AUDIT_ROUNDS,
     TERMINAL_CODING_JOB_STATES,
@@ -67,7 +65,6 @@ from flyto_ai.coding.emergency import (
 from flyto_ai.coding.continuation import (
     CONTINUABLE_STOP_CODES,
     CONTINUATION_BACKEND_MISMATCH,
-    CONTINUATION_CODES,
     CONTINUATION_CONTRACT_CHANGED,
     CONTINUATION_CONTRACT_UNPINNED,
     CONTINUATION_POLICY_CHANGED,
@@ -133,7 +130,6 @@ from flyto_ai.coding.workspace_authority import (
     workspace_digest,
 )
 from flyto_ai.coding.preflight import (
-    FAILURE_PHASE_PREFLIGHT,
     PREFLIGHT_ACTIONS,
     CODE_CAPABILITY_UNAVAILABLE,
     CODE_VERIFICATION_TOOL_MISSING,
@@ -276,7 +272,7 @@ _RESUME_ENVELOPE_FIELDS = frozenset(_ALLOWED_REQUEST_FIELDS) | {
 # `from flyto_ai.coding.service import <Error>` working, which is most of
 # the callers and the whole test suite. Explicit names rather than a star
 # import so the closed vocabulary stays readable from this file.
-from flyto_ai.coding.errors import (  # noqa: F401
+from flyto_ai.coding.errors import (  # noqa: E402, F401
     AbandonStateConflict,
     AuditBlockersUnresolved,
     AuditNotEnabled,

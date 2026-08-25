@@ -176,6 +176,20 @@ def test_capability_timeout_keeps_a_bounded_release_load_ceiling():
         CapabilitySpec(name="boundary", argv=("runner",), timeout_seconds=901)
 
 
+def test_check_timeout_allows_cold_compile_headroom_but_stays_bounded():
+    assert CheckSpec(
+        name="cold-compile",
+        argv=("runner",),
+        timeout_seconds=1_800,
+    )
+    with pytest.raises(ValueError, match="between 1 and 1800"):
+        CheckSpec(
+            name="cold-compile",
+            argv=("runner",),
+            timeout_seconds=1_801,
+        )
+
+
 def test_capability_manager_satisfies_generic_agent_tool_executor(tmp_path):
     manager = CapabilityManager(str(tmp_path))
     assert isinstance(manager, ToolExecutor)

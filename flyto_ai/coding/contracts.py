@@ -545,8 +545,8 @@ class CheckSpec:
             self.timeout_seconds, int,
         ):
             raise ValueError("check timeout_seconds must be an integer")
-        if not 1 <= self.timeout_seconds <= 900:
-            raise ValueError("check timeout_seconds must be between 1 and 900")
+        if not 1 <= self.timeout_seconds <= 1_800:
+            raise ValueError("check timeout_seconds must be between 1 and 1800")
         if not isinstance(self.required, bool):
             raise ValueError("check required must be a boolean")
         object.__setattr__(self, "proof_kinds", tuple(self.proof_kinds))

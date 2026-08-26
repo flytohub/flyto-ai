@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Protocol, Sequence, Tuple
 
 from flyto_ai.coding.checks import read_project_contract
+from flyto_ai.coding.abandon_reconciliation import settle_abandoned_mission
 from flyto_ai.coding.contracts import (
     ContractSnapshot,
     JOB_FAILURE_ACTIONS,
@@ -2711,72 +2712,10 @@ class CodingService:
             if not self._acquire_job_lease(job_id):
                 raise CodingServiceBusy("coding job is already being executed")
             try:
-                projection = self._record_projection(record)
-                item = (
-                    CodingMissionRuntime._persisted_work_item(
-                        self.state_root, projection.work_item_id,
-                    )
-                    if projection is not None else None
+                mission_changes = settle_abandoned_mission(
+                    self, record, tenant_ref, job_id, state,
+                    historical_split_brain, _RoundSettlement,
                 )
-                if projection is None or item is None or (
-                    item.mission_id != projection.mission_id
-                    or item.coordinates.project != tenant_ref
-                    or item.coordinates.location != job_id
-                ):
-                    raise AbandonStateConflict(
-                        "the job's exact mission work item cannot be proven",
-                    )
-                mission_changes: Dict[str, Any] = {}
-                if item.status == MISSION_STATUS_DISPATCHED:
-                    transient_mission = self._mission is None
-                    if transient_mission:
-                        self._mission = CodingMissionRuntime(
-                            self.state_root, worker=worker_identity(self.instance_id),
-                        )
-                    try:
-                        with self._mission.reconcile_dispatched(item.work_item_id) as work:
-                            if work is None:
-                                raise CodingServiceBusy(
-                                    "the mission work item is still being executed",
-                                )
-                            mission_changes = _RoundSettlement(
-                                self, work, tenant_ref, job_id,
-                            )(
-                                state=CodingJobState.FAILED.value,
-                                failure_code="job_abandoned",
-                            )
-                    finally:
-                        if transient_mission:
-                            self._mission = None
-                    if not mission_changes:
-                        raise AbandonStateConflict(
-                            "the mission work item could not be settled",
-                        )
-                elif historical_split_brain:
-                    if (
-                        item.status != MISSION_STATUS_CLOSED
-                        or item.disposition not in (
-                            DISPOSITION_BLOCKED, DISPOSITION_DEFERRED,
-                        )
-                    ):
-                        raise AbandonStateConflict(
-                            "only this job's non-landable abandoned mission item can be reconciled",
-                        )
-                    mission_changes = {"mission": CodingMissionRuntime.advance(
-                        record["mission"],
-                        status=MISSION_STATUS_CLOSED,
-                        disposition=str(item.disposition),
-                    )}
-                elif state != CodingJobState.AWAITING_CODEX_AUDIT.value:
-                    if (
-                        item.status != MISSION_STATUS_CLOSED
-                        or item.disposition not in (
-                            DISPOSITION_BLOCKED, DISPOSITION_DEFERRED,
-                        )
-                    ):
-                        raise AbandonStateConflict(
-                            "queued work must be closed blocked or deferred before abandonment",
-                        )
                 self._update_record_locked(
                     path,
                     state=CodingJobState.FAILED.value,

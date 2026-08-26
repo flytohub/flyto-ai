@@ -103,6 +103,10 @@ from flyto_ai.coding.mission_runtime import (
     MissionRouteError,
     worker_identity,
 )
+from flyto_ai.coding.mission_reconciliation import (
+    RoundSettlement as _RoundSettlement,
+    terminal_orphan_ready_projection,
+)
 from flyto_ai.coding.route import (
     CodingRoutePolicy,
     CodingRouteReceipt,
@@ -310,83 +314,6 @@ from flyto_ai.coding.errors import (  # noqa: E402, F401
     WorkspaceClaimUnresolved,
     WorkspaceDenied,
 )
-
-
-
-
-#: States whose persisted route evidence must still hold when read back.
-class _RoundSettlement:
-    """One round's mission closure: performed once, published with its state.
-
-    The invariant this type exists to hold is a publication order, not a lock.
-    A round used to write `failed` or `awaiting_codex_audit` and only then close
-    its work item, which left a real window in which a poller saw a terminal job
-    whose item this process still held dispatched - and, worse, in which an
-    auditor could accept that job and schedule a repair child before the parent
-    item settled, so the late closure would then rewrite the record's projection
-    onto the wrong work item.
-
-    So the closure happens *before* the state is published and returns the
-    record change instead of writing it. Every publishing path folds that change
-    into the same `_update_record`, which makes "this job is terminal" and "this
-    round's item is owner-closed" one durable fact rather than two.
-
-    Calling it twice is a no-op that replays the first answer: a backstop in the
-    worker's `finally` can therefore always run without risking a second close
-    or a second projection move.
-    """
-
-    __slots__ = ("_service", "_work", "_tenant_ref", "_job_id", "_settled", "_changes")
-
-    def __init__(
-        self,
-        service: "CodingService",
-        work: Optional["DispatchedWork"],
-        tenant_ref: str,
-        job_id: str,
-    ) -> None:
-        self._service = service
-        self._work = work
-        self._tenant_ref = tenant_ref
-        self._job_id = job_id
-        #: A round with no dispatch handle - a legacy direct call - has nothing
-        #: to settle and is born settled, so every call site stays uniform.
-        self._settled = work is None
-        self._changes: Dict[str, Any] = {}
-
-    @property
-    def settled(self) -> bool:
-        return self._settled
-
-    @property
-    def work_item_id(self) -> str:
-        return "" if self._work is None else self._work.work_item_id
-
-    def __call__(
-        self,
-        *,
-        revision: str = "",
-        files: Sequence[str] = (),
-        state: str = "",
-        failure_code: str = "",
-    ) -> Dict[str, Any]:
-        if self._settled:
-            return dict(self._changes)
-        self._settled = True
-        work = self._work
-        assert work is not None  # `_settled` is True from birth when it is None
-        self._changes = self._service._close_round_item(
-            work,
-            self._tenant_ref,
-            self._job_id,
-            revision=revision,
-            files=files,
-            state=state,
-            failure_code=failure_code,
-        )
-        return dict(self._changes)
-
-
 
 
 #: How long a pump waits for work the store is holding behind a resource
@@ -2594,6 +2521,7 @@ class CodingService:
             raise CodingJobNotFound("coding job does not exist")
         tenant_ref = self._tenant_ref(tenant_id)
         path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        reconcile = False
         with self._state_guard():
             try:
                 record = self._read_json(path)
@@ -2607,7 +2535,23 @@ class CodingService:
                 or record.get("landable") is True
             ):
                 self._require_execution_authority(record)
-            return self._public_receipt(tenant_ref, record)
+            ready = terminal_orphan_ready_projection(
+                self._mission, record, tenant_ref=tenant_ref,
+            )
+            reconcile = ready is not None
+            if ready is not None:
+                self._update_record_locked(path, mission=ready)
+                record = self._read_json(path)
+            receipt = self._public_receipt(tenant_ref, record)
+        if reconcile:
+            # Reclaimed work goes through the ordinary store-ordered dispatcher.
+            # That dispatcher observes the terminal owner and closes the item
+            # deferred with full accounting; it never executes the old round.
+            self._dispatch_once()
+            with self._state_guard():
+                record = self._read_json(path)
+                receipt = self._public_receipt(tenant_ref, record)
+        return receipt
 
     def audit(
         self,
@@ -3398,7 +3342,14 @@ class CodingService:
             if state in _TERMINAL_STATE_VALUES or state not in (
                 CodingJobState.QUEUED.value, CodingJobState.REWORK_QUEUED.value,
             ):
-                self._account_unrunnable(work, "job_not_runnable")
+                accounted = self._account_unrunnable(work, "job_not_runnable")
+                if state in _TERMINAL_STATE_VALUES and accounted:
+                    changes = self._projection_change(
+                        work, status=MISSION_STATUS_CLOSED,
+                        disposition=DISPOSITION_DEFERRED,
+                    )
+                    if changes:
+                        self._update_record(path, **changes)
                 return _DISPATCH_RAN
             if not isinstance(record.get("execution_authority"), Mapping):
                 # A record with no provable executing authority. `_bind_startup_
@@ -4360,7 +4311,7 @@ class CodingService:
         except (ValueError, TypeError):
             return None
 
-    def _account_unrunnable(self, work: "DispatchedWork", reason: str) -> None:
+    def _account_unrunnable(self, work: "DispatchedWork", reason: str) -> bool:
         """Close one work item nobody can run, with the whole accounting.
 
         Accounted rather than silently dropped, and never fixed: work that never
@@ -4396,7 +4347,8 @@ class CodingService:
                 evidence_refs=("reason-{}".format(reason), "job-{}".format(work.job_id)),
             )
         except MissionRouteError:
-            return
+            return False
+        return True
 
     def _close_round_item(
         self,
@@ -7519,6 +7471,15 @@ class CodingService:
             for path in tenants.glob("*/jobs/job_*.json"):
                 try:
                     record = self._read_json(path)
+                    if str(record.get("state") or "") in _TERMINAL_STATE_VALUES:
+                        ready = terminal_orphan_ready_projection(
+                            self._mission, record,
+                            tenant_ref=path.parent.parent.name,
+                        )
+                        if ready is not None:
+                            self._update_record_locked(path, mission=ready)
+                            self._reclaimed += 1
+                        continue
                     # An awaiting-audit job survives a restart; in-flight work
                     # does not, but another live MCP process may still own its
                     # job lease.

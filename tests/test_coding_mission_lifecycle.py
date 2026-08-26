@@ -1216,6 +1216,95 @@ def test_queued_job_reclaims_a_dispatch_lost_before_the_record_advanced(
         worker.close()
 
 
+@needs_host
+def test_terminal_dispatched_orphan_is_accounted_and_workspace_reopens(
+    tmp_path: Path,
+) -> None:
+    """An old terminal publication cannot pin its mission resource forever."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _declare(workspace)
+    state = tmp_path / "state"
+    with _resource_held(state, workspace):
+        submitter = _service(
+            state, workspace, provider=_Provider(tag="never"),
+            require_codex_audit=True,
+        )
+        try:
+            receipt = submitter.submit(_TENANT, "terminal-orphan", _request(workspace))
+        finally:
+            submitter.close()
+
+    # Reproduce the persisted split from an older publisher, including a real
+    # process exit that leaves both the store and projection dispatched.
+    path = (
+        state / "tenants" / CodingService._tenant_ref(_TENANT)
+        / "jobs" / (receipt.job_id + ".json")
+    )
+    script = (
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "from flyto_ai.coding.mission_runtime import CodingMissionRuntime\n"
+        "runtime = CodingMissionRuntime({!r}, worker='w-crashed-terminal')\n"
+        "with runtime.dispatch() as work:\n"
+        "    assert work is not None and work.job_id == {!r}\n"
+        "    path = Path({!r})\n"
+        "    record = json.loads(path.read_text(encoding='utf-8'))\n"
+        "    record.update(state='failed', failure_code='route_validation_failed', "
+        "landable=False, mission=dict(record['mission'], status='dispatched', "
+        "disposition=''))\n"
+        "    path.write_text(json.dumps(record), encoding='utf-8')\n"
+        "    os._exit(0)\n"
+    ).format(str(state), receipt.job_id, str(path))
+    subprocess.run([sys.executable, "-c", script], check=True)
+    stranded = _store(state).get_work_item(
+        CodingMissionProjection.from_mapping(receipt.mission or {}).work_item_id,
+    )
+    assert stranded.status == STATUS_DISPATCHED
+
+    worker = _service(
+        state, workspace, provider=_Provider(tag="successor"),
+        require_codex_audit=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while True:
+            failed = worker.get(_TENANT, receipt.job_id)
+            observed = CodingMissionProjection.from_mapping(failed.mission or {})
+            if observed.status == MISSION_STATUS_CLOSED:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("terminal mission orphan was not accounted")
+            time.sleep(0.02)
+        projection = CodingMissionProjection.from_mapping(failed.mission or {})
+        item = _store(state).get_work_item(projection.work_item_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "route_validation_failed"
+        assert failed.landable is False
+        assert projection.status == MISSION_STATUS_CLOSED
+        assert projection.disposition == DISPOSITION_DEFERRED
+        assert item.status == STATUS_CLOSED
+        assert item.disposition == DISPOSITION_DEFERRED
+        assert item.closure is not None
+        assert item.closure.rationale and item.closure.risk
+        assert item.closure.evidence_refs
+        assert _store(state).get_mission(item.mission_id).status == MISSION_OPEN
+
+        successor = worker.submit(
+            _TENANT, "after-terminal-orphan", _request(workspace),
+        )
+        admitted = worker.get(_TENANT, successor.job_id)
+        assert admitted.job_id != receipt.job_id
+        assert admitted.state in {
+            CodingJobState.QUEUED,
+            CodingJobState.RUNNING,
+            CodingJobState.AWAITING_CODEX_AUDIT,
+        }
+    finally:
+        worker.close()
+
+
 def _stranger(state: Path, workspace: Path, **overrides: Any) -> CodingService:
     fields: Dict[str, Any] = {
         "state_root": str(state),

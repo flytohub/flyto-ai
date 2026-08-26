@@ -113,9 +113,11 @@ def test_real_paths_and_typed_new_filenames_still_resolve(repo):
     assert _targets("update docs/reference/python/coding.md", repo) == [
         "docs/reference/python/coding.md",
     ]
-    # A new file under an existing parent, spelled like a file.
-    assert _targets("add tests/test_new_thing.py", repo) == []  # parent absent
-    (repo / "tests").mkdir()
+    # Exact file authority survives two missing parent levels without granting
+    # either directory as a target.
+    assert _targets("add tests/contracts/test_new_thing.py", repo) == [
+        "tests/contracts/test_new_thing.py",
+    ]
     assert _targets("add tests/test_new_thing.py", repo) == ["tests/test_new_thing.py"]
     assert _targets("create artifacts/archive.7z", repo) == [
         "artifacts/archive.7z",

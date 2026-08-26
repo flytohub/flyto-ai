@@ -1854,12 +1854,10 @@ class CodingRouteOrchestrator:
         """Return a bounded set of exact repo file paths named by the task.
 
         Existing files and explicitly named new files are accepted.  A new file
-        is evidence-backed only when its parent already exists and resolves
-        inside the workspace; missing parents, symlink final components and
-        every non-canonical spelling are refused.  This lets the Indexer intent
-        ledger authorize a requested new test or script without widening the
-        plan to a directory.  Fuzzy search discovery remains single-target; it
-        cannot broaden edit authority.
+        is evidence-backed when its nearest existing ancestor is a real in-root
+        directory and every existing component is non-symlink. Missing parents
+        do not widen authority beyond the exact file. Unsafe spellings and
+        symlinks are refused; fuzzy discovery cannot broaden edit authority.
 
         A path named by a *prohibiting* clause is not a target at all.  The
         polarity test runs before the existing/new split, because both halves
@@ -1894,12 +1892,21 @@ class CodingRouteOrchestrator:
                     continue
                 if len(value) > 200 or cls._relative_path({"path": value}) != value:
                     continue
-                spelled = root / PurePosixPath(value)
+                relative = PurePosixPath(value)
+                spelled = root / relative
                 try:
+                    cursor = root
+                    for component in relative.parts:
+                        next_path = cursor / component
+                        if next_path.is_symlink():
+                            raise ValueError("symlinked request target")
+                        if not next_path.exists():
+                            break
+                        cursor = next_path
+                        if cursor != spelled and not cursor.is_dir():
+                            raise ValueError("non-directory request ancestor")
                     if spelled.exists():
-                        candidate = spelled.resolve(strict=True)
-                        candidate.relative_to(root)
-                        admissible = candidate.is_file()
+                        admissible = spelled.is_file()
                     else:
                         # When sentence punctuation followed the path, try the
                         # punctuation-free spelling before treating the raw
@@ -1928,14 +1935,7 @@ class CodingRouteOrchestrator:
                             # Named, but not requested. An identifier that
                             # appears in audit feedback is context, not scope.
                             continue
-                        # ``exists`` is false for a broken final symlink too;
-                        # never mistake that for authority to replace it.
-                        if spelled.is_symlink():
-                            continue
-                        parent = spelled.parent.resolve(strict=True)
-                        parent.relative_to(root)
-                        candidate = parent / spelled.name
-                        admissible = parent.is_dir() and not candidate.exists()
+                        admissible = True
                 except (OSError, RuntimeError, ValueError):
                     continue
                 if admissible and value not in targets:

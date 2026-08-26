@@ -4378,11 +4378,8 @@ def test_path_list_prose_without_exact_numbered_positive_authority_is_not_scope(
     ) == []
 
 
-@pytest.mark.parametrize("target", [
-    "missing-parent/new.py",
-    "nested/missing/new.py",
-])
-def test_explicit_new_file_requires_an_existing_parent(tmp_path, target):
+def test_explicit_new_file_with_two_missing_parent_levels_enters_the_ledger(tmp_path):
+    target = "internal/campaigndisruption/domain.go"
     indexer = IndexerDouble(search_results=[
         {"path": "safe.py", "name": "safe"},
     ])
@@ -4393,7 +4390,19 @@ def test_explicit_new_file_requires_an_existing_parent(tmp_path, target):
     )
 
     assert result.ok is True and receipt.ok is True
-    assert _plan_targets(indexer) == ["safe.py"]
+    assert _plan_targets(indexer) == [target]
+
+
+@pytest.mark.parametrize("destination", ["real-parent", "../outside"])
+def test_explicit_new_file_refuses_a_symlinked_existing_ancestor(
+    tmp_path, destination,
+):
+    (tmp_path / "real-parent").mkdir()
+    (tmp_path / "linked").symlink_to(destination, target_is_directory=True)
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Create linked/missing/domain.go.", str(tmp_path),
+    ) == []
 
 
 def test_explicit_new_file_refuses_a_broken_final_symlink(tmp_path):
@@ -4663,7 +4672,6 @@ def test_polarity_keeps_the_finite_explicit_target_bound(tmp_path):
     "C:/scripts/verify.sh",
     "scripts\\verify.sh",
     "//host/share/verify.sh",
-    "missing/verify.sh",
 ])
 def test_a_positive_clause_never_relaxes_a_path_safety_bound(tmp_path, spelling):
     """Polarity narrows authority; it can never widen it."""
@@ -4717,9 +4725,8 @@ def test_an_entirely_negative_message_falls_back_to_search_discovery(tmp_path):
     "../scripts/verify.sh",
     "C:/scripts/verify.sh",
     "scripts\\verify.sh",
-    "missing/verify.sh",
 ])
-def test_an_unsafe_or_missing_explicit_request_path_is_not_authority(
+def test_an_unsafe_explicit_request_path_is_not_authority(
     tmp_path, spelling,
 ):
     script = tmp_path / "scripts" / "verify.sh"

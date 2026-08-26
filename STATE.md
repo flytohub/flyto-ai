@@ -1,6 +1,15 @@
 # State
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
+
+## Exact new-file authority crosses missing parents (2026-08-26)
+
+- The intent ledger now retains an explicitly authorized repository-relative
+  file even when multiple parent directories still need creation, provided its
+  nearest existing ancestor is a real in-workspace directory and every
+  existing component is non-symlink. Only the exact file is authorized;
+  directories, unsafe spellings, symlink paths, and prose identifiers remain
+  outside scope.
 
 ## Rework target scope is amendment-local (2026-08-25)
 

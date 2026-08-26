@@ -13,6 +13,10 @@
 
 ## Unreleased
 
+- Allow explicitly authorized exact new-file targets beneath missing parent
+  directories when their nearest existing ancestor is a real in-workspace
+  directory. Authority remains file-exact and refuses every existing symlink
+  component, unsafe spelling, non-file suffix, and non-authoritative mention.
 - Fixed strict-route intent-ledger projection for an explicitly declared,
   numbered exact path list whose new-file item carries a description longer
   than the local mutation-verb window. Generic inclusion prose remains

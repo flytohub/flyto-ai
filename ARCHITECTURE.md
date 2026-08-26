@@ -1014,6 +1014,21 @@ evidence prose remain context only. Every item still passes the same polarity,
 canonical-path, typed-suffix, existing-parent, final-symlink and 64-target
 bounds. Audit rework retains its stricter same-clause mutation projection.
 
+Separately, an affirmative `add`, `create`, `write`, `generate`, `regenerate`,
+`emit`, `produce`, `introduce`, or `implement` heading ending in a colon may
+govern comma- or semicolon-delimited whole paths only when the heading explicitly
+declares exact new files or paths, until the next sentence or newline. Generic
+report/evidence headings are masked context and grant no authority.
+`flyto_ai.coding.request_paths` treats an admitted headed statement as one
+ordered authority group. Negative or mixed polarity, command/evidence prose,
+an unsafe or non-file item, symlink ancestry or final symlink, per-statement
+overflow, or insufficient remaining capacity in the global 64-target ledger
+rejects all still-new members; its full span is masked so ordinary parsing
+cannot salvage a prefix. Canonical spelling, typed new-file suffixes, containment
+through missing parents, numbered exact lists, and ordinary request behavior
+retain their existing contracts. This parser boundary changes no route lane,
+product role, ownership, topology edge, or integration arrow.
+
 Audit-target parsing also distinguishes dotted milestone labels from typed new
 files. A numeric-only suffix such as `M1.1` cannot grant new-file authority, while
 a typed suffix that contains a letter, including `.7z`, remains eligible when an

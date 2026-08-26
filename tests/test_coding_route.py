@@ -4359,6 +4359,136 @@ def test_exact_numbered_path_allowlist_authorizes_a_described_new_test(tmp_path)
     assert _plan_targets(indexer) == requested
 
 
+@pytest.mark.parametrize("verb", [
+    "Add", "Create", "Write", "Generate", "Regenerate", "Emit", "Produce",
+    "Introduce", "Implement",
+])
+@pytest.mark.parametrize("separator", [", ", "; "])
+def test_affirmative_colon_heading_authorizes_whole_path_items(
+    tmp_path, verb, separator,
+):
+    _seed_files(tmp_path, "pkg/existing.py")
+    (tmp_path / "tests").mkdir()
+    message = "{} only these exact new files: pkg/existing.py{}tests/test_new.py.".format(
+        verb, separator,
+    )
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == ["pkg/existing.py", "tests/test_new.py"]
+
+
+def test_headed_list_ends_at_sentence_or_newline_and_ordinary_parsing_continues(tmp_path):
+    _seed_files(tmp_path, "pkg/a.py", "pkg/b.py", "pkg/c.py", "pkg/d.py")
+    message = (
+        "Add exact new files: pkg/a.py, pkg/b.py. Update pkg/c.py.\n"
+        "Create these exact new paths: pkg/d.py"
+    )
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == ["pkg/a.py", "pkg/b.py", "pkg/c.py", "pkg/d.py"]
+
+
+@pytest.mark.parametrize("body", [
+    "pkg/good.py, do not edit pkg/bad.py",
+    "pkg/good.py, never pkg/bad.py",
+    "pkg/good.py, run scripts/check.py",
+    "pkg/good.py, evidence reports/proof.json",
+    "pkg/good.py, descriptive prose pkg/bad.py",
+    "pkg/good.py, ../outside.py",
+    "pkg/good.py, C:/outside.py",
+    "pkg/good.py, pkg\\bad.py",
+    "pkg/good.py, pkg/no_suffix",
+    "pkg/good.py, pkg/name.version_ledger",
+    "pkg/good.py, ",
+])
+def test_rejected_headed_statement_is_atomic_and_never_salvages_a_prefix(tmp_path, body):
+    _seed_files(
+        tmp_path, "pkg/good.py", "pkg/bad.py", "scripts/check.py",
+        "reports/proof.json",
+    )
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Add exact new files: {}. Do not edit pkg/bad.py".format(body), str(tmp_path),
+    ) == []
+
+
+@pytest.mark.parametrize("message", [
+    "Do not add exact new files: pkg/good.py, pkg/bad.py",
+    "Never create these exact new paths: pkg/good.py; pkg/bad.py",
+    "You must not generate exact new files: pkg/good.py, pkg/bad.py",
+])
+def test_negative_polarity_before_a_headed_verb_rejects_the_whole_statement(
+    tmp_path, message,
+):
+    _seed_files(tmp_path, "pkg/good.py", "pkg/bad.py")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == []
+
+
+def test_headed_statement_refuses_symlink_ancestors_and_final_symlinks_atomically(tmp_path):
+    _seed_files(tmp_path, "pkg/good.py")
+    (tmp_path / "real").mkdir()
+    (tmp_path / "linked").symlink_to("real", target_is_directory=True)
+    (tmp_path / "pkg" / "final.py").symlink_to("missing.py")
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Create exact new files: pkg/good.py, linked/new.py", str(tmp_path),
+    ) == []
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Create exact new files: pkg/good.py, pkg/final.py", str(tmp_path),
+    ) == []
+
+
+def test_headed_statement_overflow_fails_closed_instead_of_truncating(tmp_path):
+    paths = ["tests/test_{:02d}.py".format(index) for index in range(65)]
+    (tmp_path / "tests").mkdir()
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Generate exact new files: {}".format(", ".join(paths)), str(tmp_path),
+    ) == []
+
+
+def test_rejected_heading_does_not_change_numbered_or_ordinary_authority(tmp_path):
+    _seed_files(tmp_path, "pkg/ordinary.py")
+    (tmp_path / "tests").mkdir()
+    message = (
+        "Add exact new files: pkg/no_suffix, pkg/hidden.py.\n"
+        "Update pkg/ordinary.py.\n"
+        "The target/intent ledger explicitly includes each of these exact "
+        "repo-relative paths: (1) a new test at tests/test_numbered.py"
+    )
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == ["pkg/ordinary.py", "tests/test_numbered.py"]
+
+
+def test_headed_group_is_rejected_when_prior_authority_leaves_too_little_capacity(tmp_path):
+    ordinary = ["pkg/existing_{:02d}.py".format(index) for index in range(63)]
+    _seed_files(tmp_path, *ordinary)
+    (tmp_path / "tests").mkdir()
+    message = (
+        "Update {}. ADD only these exact new files: "
+        "tests/new_a.py; tests/new_b.py."
+    ).format(", ".join(ordinary))
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == ordinary
+
+
+def test_evidence_heading_is_masked_without_granting_or_salvaging_authority(tmp_path):
+    (tmp_path / "internal").mkdir()
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        "Write report evidence: internal/a.go; internal/b.go.", str(tmp_path),
+    ) == []
+
+
 @pytest.mark.parametrize("message", [
     "Review these repo-relative paths: (1) tests/new_contract.py",
     "The report includes each of these repo-relative paths: tests/new_contract.py",

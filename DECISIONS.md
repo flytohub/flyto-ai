@@ -1,5 +1,30 @@
 # Decisions
 
+## 2026-08-26 — A colon-headed path list is one atomic authority statement
+
+Decision: an affirmative heading using `add`, `create`, `write`, `generate`,
+`regenerate`, `emit`, `produce`, `introduce`, or `implement` may govern a
+comma- or semicolon-delimited list only when it explicitly declares exact new
+files or paths, up to the next sentence or newline. Generic evidence/report
+headings are masked but grant no authority. The complete admitted statement is
+one ordered group and fails closed if any item or prose violates polarity,
+path, file-type, symlink, containment, per-statement count, or the remaining
+global 64-target capacity. Its span is unavailable to ordinary parsing.
+
+Why: the ordinary 48-character mutation window cannot express a concise exact
+new-file closure, while accepting a valid prefix from a malformed list turns a
+rejected statement into partial authority. Atomic recognition preserves the
+human statement's boundary and makes rejection non-recoverable.
+
+Consequence: the first-round policy is isolated in
+`flyto_ai/coding/request_paths.py`; route complexity debt does not rise.
+Duplicated first-round suffix, mutation-window, and polarity vocabularies were
+removed from `route.py`; amendment-specific rules remain there unchanged.
+Canonical paths, typed suffixes, missing-parent containment, final-symlink and
+64-target limits are retained exactly. Numbered exact lists, ordinary requests,
+and the stricter amendment parser keep their prior behavior. No product
+topology or ownership decision changes.
+
 ## 2026-08-25 — Amendment limits apply to the delta, not the root ledger
 
 Decision: an audit rework plan sends Indexer only exact prior-attributable paths

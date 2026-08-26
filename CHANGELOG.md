@@ -13,6 +13,15 @@
 
 ## Unreleased
 
+- Repair first-round projection for `add`/`create`/`write`/generation/
+  production/`introduce`/`implement` headings that explicitly declare exact
+  new files or paths before a colon. Generic report/evidence headings are
+  masked context, not mutation authority. An admitted headed statement is an
+  ordered atomic group: negative or mixed polarity,
+  command/evidence prose, unsafe or non-file spellings, symlink ancestry, and
+  statement or remaining global-capacity overflow reject the complete group
+  without ordinary-parser prefix recovery. Numbered exact lists and ordinary
+  request parsing are unchanged.
 - Allow explicitly authorized exact new-file targets beneath missing parent
   directories when their nearest existing ancestor is a real in-workspace
   directory. Authority remains file-exact and refuses every existing symlink

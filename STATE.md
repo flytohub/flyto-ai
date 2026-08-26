@@ -2,6 +2,25 @@
 
 Last updated: 2026-08-26
 
+## Atomic colon-headed new-file authority (2026-08-26)
+
+- First-round authority now recognizes one affirmative mutation heading that
+  explicitly declares exact new files or paths, ending in a colon and a comma-
+  or semicolon-delimited body of whole repository paths, through the next
+  sentence or newline. Generic report/evidence headings remain masked context.
+  The bounded policy lives in
+  `flyto_ai/coding/request_paths.py`, keeping `route.py` below its immutable
+  registered complexity ceiling.
+- The statement is one ordered authority unit: mixed/negative polarity, command or
+  evidence prose, unsafe/non-file spelling, symlink ancestry or final link, and
+  item or remaining global-capacity overflow reject all its still-new items.
+  Its span is masked from ordinary parsing after rejection, so a safe-looking
+  prefix cannot be salvaged.
+- Canonical spelling, typed new-file suffixes, containment through missing
+  parents, and existing numbered-list and ordinary request behavior remain
+  unchanged. This changes no product role, ownership, topology edge, or route
+  lane.
+
 ## Exact new-file authority crosses missing parents (2026-08-26)
 
 - The intent ledger now retains an explicitly authorized repository-relative

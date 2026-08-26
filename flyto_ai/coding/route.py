@@ -58,7 +58,11 @@ from flyto_ai.coding.contracts import (
     CodingTaskResult,
     safe_blockers,
 )
-from flyto_ai.coding.path_authority import amendment_delta_targets, is_numbered_exact_path_item
+from flyto_ai.coding.path_authority import amendment_delta_targets
+from flyto_ai.coding.request_paths import (
+    explicit_request_targets,
+    prohibited_spans,
+)
 
 
 ROUTE_CONTRACT_VERSION = "flyto.coding-route.v1"
@@ -166,15 +170,6 @@ _EXPLICIT_PATH_RE = re.compile(
 _MAX_EXPLICIT_REQUEST_TARGETS = 64
 #: Indexer bounds each amendment delta, not the cumulative root-task scope.
 _MAX_INDEXER_AMENDMENT_TARGETS = 32
-#: What a *new* file's extension may look like. Audit codes, gate names and
-#: evidence refs share the conservative path grammar - `check.generated_reference`,
-#: `human.approval`, `module.identifier`, `pkg/check.some_capability` all parse as
-#: "a name with a suffix" - and the previous rule accepted any non-empty suffix.
-#: A file the task is asking to *create* therefore has to carry an extension that
-#: looks like one: short, alphanumeric, no underscores. Existing paths are
-#: unaffected; they are proven by the filesystem, not by their spelling.
-_NEW_FILE_SUFFIX_RE = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
-_VERSION_LABEL_SUFFIX_RE = re.compile(r"^\.[0-9]+$")
 #: A cumulative amendment may contain the already-executed parent plan plus a
 #: bounded delta.  The execution bound still applies to the delta; this second
 #: ceiling only lets the host validate the complete successor before deriving
@@ -182,23 +177,6 @@ _VERSION_LABEL_SUFFIX_RE = re.compile(r"^\.[0-9]+$")
 #: Public Indexer ``task-amendment.v1`` chain bound.  A generation-N
 #: successor may restate each earlier bounded plan plus one new bounded delta,
 #: while the executable delta below remains capped by ``max_plan_steps``.
-#: A file that does not exist yet is only a target when the task actually asks
-#: for it. `human.approval` and `pkg/check.some_capability` are perfectly
-#: well-formed filenames; what distinguishes them from `add tests/test_x.py` is
-#: not their spelling but that nobody asked for them to be written.
-#:
-#: Deliberately a generic mutation vocabulary rather than a list of audit words:
-#: blacklisting `check.` or `approval` would be a product-specific rule that the
-#: next unfamiliar identifier walks straight past. Existing paths are unaffected
-#: - the filesystem already proved those.
-_MUTATION_VERB_RE = re.compile(
-    r"\b(add|create|new|write|generate|regenerate|emit|produce|introduce|implement|"
-    r"update|edit|modify|change|rewrite|replace|amend|patch|fix|repair|"
-    r"rename|move|delete|remove|drop|touch|append|extend)\b[^A-Za-z0-9]*$",
-    re.IGNORECASE,
-)
-#: Bounded local reach for a mutation verb governing a candidate path.
-_MUTATION_VERB_WINDOW = 48
 #: Amendment prose contains commands and evidence as well as edit requests.
 #: Only a mutation cue in the same local clause may turn an existing path into
 #: new authority during rework; first-round parsing remains filesystem-backed.
@@ -234,56 +212,6 @@ _AMENDMENT_INTENT_WINDOW = 160
 #: reader would split it. A semicolon or a newline always closes a clause, which
 #: is how bullet lists and `positive; negative` prose stay separable.
 _CLAUSE_BOUNDARY_RE = re.compile(r"[;\n\r\x0b\x0c]|[.!?](?=\s|$)")
-#: Negative polarity, read in the direction the prohibition actually points.
-#:
-#: "do not modify X", "never edit X", "without changing X" and "you must not
-#: create X" all *name* a real repository file, and the previous rule handed
-#: every one of them to the intent ledger as an edit target - existing paths
-#: because the filesystem proved them, new paths because `must not create`
-#: satisfies the mutation-verb rule on the strength of the word `create` inside
-#: the prohibition itself.
-#:
-#: A prohibition governs what follows it: everything from the cue to the end of
-#: the clause. This is deliberately a generic vocabulary rather than a list of
-#: phrases - enumerating "do not modify" alone lets the next spelling walk past
-#: - but it is directional, because a cue *after* the path usually belongs to a
-#: positive instruction that merely bounds its own scope. "Fix app/map.tsx
-#: without widening the change" is a request to edit `app/map.tsx`; refusing it
-#: because the sentence later contains "without" would read the qualifier as if
-#: it were the verb.
-_NEGATIVE_LEADING_RE = re.compile(
-    r"\b(?:"
-    r"do(?:es)?\s+not|do(?:es)?n[’']?t|did\s+not|didn[’']?t|"
-    r"must\s+not|mustn[’']?t|must\s+never|may\s+not|might\s+not|"
-    r"shall\s+not|should\s+not|shouldn[’']?t|will\s+not|won[’']?t|"
-    r"would\s+not|wouldn[’']?t|cannot|can\s+not|can[’']?t|"
-    r"could\s+not|couldn[’']?t|never|without|"
-    r"avoid(?:s|ed|ing)?|refrain|leave\s+alone|hands\s+off|"
-    r"no\s+changes?\s+to|no\s+edits?\s+to|exclude|excluding|"
-    r"not\s+allowed|forbidden|prohibited|off[\s-]limits|out\s+of\s+scope"
-    r")\b",
-    re.IGNORECASE,
-)
-#: The mirror case: the path is the *subject* being fenced off, so the cue
-#: trails it. "tests/test_x.py must not be created", "leave docs/README.md
-#: unchanged", "scripts/run.sh is read-only" are prohibitions with the same
-#: force as the leading forms, and a rule that only looked leftward could be
-#: re-worded around by moving the verb. Only cues that genuinely make the
-#: preceding path their subject belong here: `without` and `avoid` do not,
-#: because in trailing position they qualify an earlier positive verb.
-_NEGATIVE_TRAILING_RE = re.compile(
-    r"\b(?:"
-    r"must\s+not|mustn[’']?t|must\s+never|may\s+not|might\s+not|"
-    r"shall\s+not|should\s+not|shouldn[’']?t|will\s+not|won[’']?t|"
-    r"would\s+not|wouldn[’']?t|cannot|can\s+not|can[’']?t|"
-    r"is\s+not|are\s+not|isn[’']?t|aren[’']?t|"
-    r"unchanged|untouched|unmodified|unaltered|stays?\s+the\s+same|"
-    r"read[\s-]only|off[\s-]limits|out\s+of\s+scope|as[\s-]is|"
-    r"not\s+allowed|forbidden|prohibited"
-    r")\b",
-    re.IGNORECASE,
-)
-
 #: The real public Indexer surface. These names and their argument schemas come
 #: from the installed sibling server; nothing here invents a tool.
 INDEXER_ALLOWED_TOOLS = ("search", "impact", "call_hierarchy", "structure", "task", "verify")
@@ -1827,27 +1755,7 @@ class CodingRouteOrchestrator:
         of the clause up to itself. Neither reaches past the clause.
         """
 
-        clauses: list = []
-        start = 0
-        for boundary in _CLAUSE_BOUNDARY_RE.finditer(text):
-            clauses.append((start, boundary.start()))
-            start = boundary.end()
-        clauses.append((start, len(text)))
-
-        spans: list = []
-        for begin, end in clauses:
-            clause = text[begin:end]
-            leading = _NEGATIVE_LEADING_RE.search(clause)
-            if leading is not None:
-                spans.append((begin + leading.start(), end))
-            # The *last* trailing cue, so a clause naming several fenced paths
-            # covers all of them rather than only the first.
-            last_trailing = 0
-            for trailing in _NEGATIVE_TRAILING_RE.finditer(clause):
-                last_trailing = trailing.end()
-            if last_trailing:
-                spans.append((begin, begin + last_trailing))
-        return tuple(spans)
+        return prohibited_spans(text)
 
     @classmethod
     def _explicit_request_targets(cls, message: str, working_dir: str) -> list:
@@ -1869,81 +1777,7 @@ class CodingRouteOrchestrator:
         still authorizes `b.py`.
         """
 
-        try:
-            root = Path(working_dir).resolve(strict=True)
-        except (OSError, RuntimeError):
-            return []
-        text = str(message or "")
-        forbidden = cls._prohibited_spans(text)
-        targets = []
-        for match in _EXPLICIT_PATH_RE.finditer(text):
-            if any(begin <= match.start(1) < end for begin, end in forbidden):
-                # Named, and named precisely - but named in order to be left
-                # alone. A prohibition is never authority to edit its own
-                # subject.
-                continue
-            raw = match.group(1)
-            # A period is legal in a POSIX filename and is also ordinary
-            # sentence punctuation.  Prefer the exact spelling when it exists;
-            # only then try the punctuation-free spelling through the same
-            # canonical-path and filesystem boundary checks.
-            for value in dict.fromkeys((raw, raw.rstrip("."))):
-                if not value:
-                    continue
-                if len(value) > 200 or cls._relative_path({"path": value}) != value:
-                    continue
-                relative = PurePosixPath(value)
-                spelled = root / relative
-                try:
-                    cursor = root
-                    for component in relative.parts:
-                        next_path = cursor / component
-                        if next_path.is_symlink():
-                            raise ValueError("symlinked request target")
-                        if not next_path.exists():
-                            break
-                        cursor = next_path
-                        if cursor != spelled and not cursor.is_dir():
-                            raise ValueError("non-directory request ancestor")
-                    if spelled.exists():
-                        admissible = spelled.is_file()
-                    else:
-                        # When sentence punctuation followed the path, try the
-                        # punctuation-free spelling before treating the raw
-                        # token as authority to create a different new file.
-                        if value == raw and raw.rstrip(".") != raw:
-                            continue
-                        # Ordinary prose tokens also match the conservative
-                        # path grammar, and so do machine identifiers. A file
-                        # this task wants *created* has to be spelled like a
-                        # file: a real extension, not a dotted namespace. This
-                        # is checked whether or not the token has a directory
-                        # component, because `pkg/check.some_capability` is a
-                        # qualified identifier rather than a path.
-                        suffix = PurePosixPath(value).suffix
-                        if (
-                            not _NEW_FILE_SUFFIX_RE.fullmatch(suffix)
-                            or _VERSION_LABEL_SUFFIX_RE.fullmatch(suffix)
-                        ):
-                            continue
-                        if (
-                            not _MUTATION_VERB_RE.search(text[
-                                max(0, match.start(1) - _MUTATION_VERB_WINDOW):match.start(1)
-                            ])
-                            and not is_numbered_exact_path_item(text, match.start(1))
-                        ):
-                            # Named, but not requested. An identifier that
-                            # appears in audit feedback is context, not scope.
-                            continue
-                        admissible = True
-                except (OSError, RuntimeError, ValueError):
-                    continue
-                if admissible and value not in targets:
-                    targets.append(value)
-                    break
-            if len(targets) >= _MAX_EXPLICIT_REQUEST_TARGETS:
-                break
-        return targets
+        return explicit_request_targets(message, working_dir)
 
     @classmethod
     def _explicit_amendment_targets(cls, message: str, working_dir: str) -> list:

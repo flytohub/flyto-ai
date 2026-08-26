@@ -8,17 +8,30 @@ does and what it must never be able to do.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from flyto_ai.coding.contracts import CodingJobState
-from flyto_ai.coding.mcp_server import CodingMCPServer
-from flyto_ai.coding.service import AbandonStateConflict
 
+from flyto_ai.coding.contracts import (
+    CodingAuditVerdict,
+    CodingJobState,
+    CodingMissionProjection,
+)
+from flyto_ai.coding.mcp_server import CodingMCPServer
+from flyto_ai.coding.mission_runtime import CodingMissionRuntime
+from flyto_ai.coding.service import AbandonStateConflict
+from flyto_ai.orchestration.mission_control import (
+    DISPOSITION_BLOCKED,
+    STATUS_CLOSED,
+    STATUS_DISPATCHED,
+)
 from tests.test_coding_service import (
     ReworkingProvider,
     _audited_service,
     _awaiting,
+    _blocker,
     _request,
 )
 from tests.test_coding_workspace_ownership import _claim_path
@@ -87,6 +100,120 @@ def test_abandon_reports_failed_and_non_landable_json(
         ).state is CodingJobState.QUEUED
     finally:
         service.close()
+
+
+def test_abandon_reconciles_an_orphaned_audit_dispatch_and_is_idempotent(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """The historical failed-job/open-item split releases the repository."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    owner = _awaiting(service, "tenant-audit", "stale-audit", workspace)
+    for future in tuple(service._pending):
+        future.result(timeout=5)
+    monkeypatch.setattr(service, "_schedule_pump", lambda: None)
+    repair = service.audit(
+        "tenant-audit", owner.job_id, owner.implementation_revision_sha256,
+        CodingAuditVerdict.REWORK, (_blocker(),),
+    )
+    projection = CodingMissionProjection.from_mapping(repair.mission or {})
+    assert projection.lane == "repair"
+
+    # Stand in for the process dying after the repair item was dispatched but
+    # before its audit-ready settlement closed the item.
+    script = (
+        "import os\n"
+        "from flyto_ai.coding.mission_runtime import CodingMissionRuntime\n"
+        f"runtime = CodingMissionRuntime({str(service.state_root)!r}, "
+        "worker='crashed-auditor')\n"
+        f"item = runtime.store.get_work_item({projection.work_item_id!r})\n"
+        "with runtime.store.dispatch_expected(\n"
+        "    operation='cmd-crashed-audit', worker=runtime.worker,\n"
+        f"    work_item_id={projection.work_item_id!r},\n"
+        "    expected_attempt=item.attempts + 1,\n"
+        ") as work:\n"
+        f"    assert work is not None and work.work_item_id == "
+        f"{projection.work_item_id!r}\n"
+        "    os._exit(0)\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+    item = CodingMissionRuntime._persisted_work_item(
+        service.state_root, projection.work_item_id,
+    )
+    assert item is not None and item.status == STATUS_DISPATCHED
+    record_path = (
+        service.state_root / "tenants" / service._tenant_ref("tenant-audit")
+        / "jobs" / (owner.job_id + ".json")
+    )
+    service._advance_projection(record_path, status=STATUS_DISPATCHED)
+    service._update_record(
+        record_path,
+        state=CodingJobState.AWAITING_CODEX_AUDIT.value,
+        landable=False,
+    )
+    service.close()
+
+    args = (
+        "--tenant", "tenant-audit",
+        "--workspace-root", str(workspace),
+        "--state-dir", str(tmp_path / "service-state"),
+        "--abandon-job", owner.job_id,
+        "--json",
+    )
+    code, _out, err = _run(monkeypatch, capsys, *args)
+    assert code == 0, err
+    settled_item = CodingMissionRuntime._persisted_work_item(
+        tmp_path / "service-state", projection.work_item_id,
+    )
+    assert settled_item is not None
+    assert settled_item.status == STATUS_CLOSED
+    assert settled_item.disposition == DISPOSITION_BLOCKED
+
+    # The exact historical terminal shape is a safe no-op on a retry.
+    code, _out, err = _run(monkeypatch, capsys, *args)
+    assert code == 0, err
+
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    try:
+        receipt = service.get("tenant-audit", owner.job_id)
+        assert receipt.state is CodingJobState.FAILED
+        assert receipt.failure_code == "job_abandoned"
+        assert receipt.landable is False
+        assert receipt.mission is not None
+        assert receipt.mission["status"] == STATUS_CLOSED
+        assert receipt.mission["disposition"] == DISPOSITION_BLOCKED
+        assert not _claim_path(service, workspace).exists()
+        fresh = service.submit("tenant-audit", "after-stale-audit", _request(workspace))
+        assert fresh.job_id != owner.job_id
+    finally:
+        service.close()
+
+
+def test_abandon_does_not_reconcile_an_unrelated_failed_job(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    owner, workspace, state_dir = _orphaned(tmp_path)
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    try:
+        path = (
+            service.state_root / "tenants" / service._tenant_ref("tenant-audit")
+            / "jobs" / (owner.job_id + ".json")
+        )
+        service._update_record(
+            path, state=CodingJobState.FAILED.value,
+            failure_code="service_execution_failed", landable=False,
+        )
+    finally:
+        service.close()
+    code, _out, err = _run(
+        monkeypatch, capsys,
+        "--tenant", "tenant-audit", "--workspace-root", str(workspace),
+        "--state-dir", state_dir, "--abandon-job", owner.job_id, "--json",
+    )
+    assert code == 2
+    assert "abandon_state_conflict" in err
 
 
 def test_abandon_retires_only_kernel_accounted_queued_work(

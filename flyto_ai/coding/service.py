@@ -2691,7 +2691,12 @@ class CodingService:
             except FileNotFoundError as exc:
                 raise CodingJobNotFound("coding job does not exist") from exc
             state = str(record.get("state") or "")
-            if state not in (
+            historical_split_brain = (
+                state == CodingJobState.FAILED.value
+                and str(record.get("failure_code") or "") == "job_abandoned"
+                and record.get("landable") is False
+            )
+            if not historical_split_brain and state not in (
                 CodingJobState.AWAITING_CODEX_AUDIT.value,
                 CodingJobState.QUEUED.value,
                 CodingJobState.REWORK_QUEUED.value,
@@ -2706,17 +2711,65 @@ class CodingService:
             if not self._acquire_job_lease(job_id):
                 raise CodingServiceBusy("coding job is already being executed")
             try:
-                if state != CodingJobState.AWAITING_CODEX_AUDIT.value:
-                    projection = self._record_projection(record)
-                    item = (
-                        CodingMissionRuntime._persisted_work_item(
-                            self.state_root, projection.work_item_id,
-                        )
-                        if projection is not None else None
+                projection = self._record_projection(record)
+                item = (
+                    CodingMissionRuntime._persisted_work_item(
+                        self.state_root, projection.work_item_id,
                     )
+                    if projection is not None else None
+                )
+                if projection is None or item is None or (
+                    item.mission_id != projection.mission_id
+                    or item.coordinates.project != tenant_ref
+                    or item.coordinates.location != job_id
+                ):
+                    raise AbandonStateConflict(
+                        "the job's exact mission work item cannot be proven",
+                    )
+                mission_changes: Dict[str, Any] = {}
+                if item.status == MISSION_STATUS_DISPATCHED:
+                    transient_mission = self._mission is None
+                    if transient_mission:
+                        self._mission = CodingMissionRuntime(
+                            self.state_root, worker=worker_identity(self.instance_id),
+                        )
+                    try:
+                        with self._mission.reconcile_dispatched(item.work_item_id) as work:
+                            if work is None:
+                                raise CodingServiceBusy(
+                                    "the mission work item is still being executed",
+                                )
+                            mission_changes = _RoundSettlement(
+                                self, work, tenant_ref, job_id,
+                            )(
+                                state=CodingJobState.FAILED.value,
+                                failure_code="job_abandoned",
+                            )
+                    finally:
+                        if transient_mission:
+                            self._mission = None
+                    if not mission_changes:
+                        raise AbandonStateConflict(
+                            "the mission work item could not be settled",
+                        )
+                elif historical_split_brain:
                     if (
-                        item is None
-                        or item.status != MISSION_STATUS_CLOSED
+                        item.status != MISSION_STATUS_CLOSED
+                        or item.disposition not in (
+                            DISPOSITION_BLOCKED, DISPOSITION_DEFERRED,
+                        )
+                    ):
+                        raise AbandonStateConflict(
+                            "only this job's non-landable abandoned mission item can be reconciled",
+                        )
+                    mission_changes = {"mission": CodingMissionRuntime.advance(
+                        record["mission"],
+                        status=MISSION_STATUS_CLOSED,
+                        disposition=str(item.disposition),
+                    )}
+                elif state != CodingJobState.AWAITING_CODEX_AUDIT.value:
+                    if (
+                        item.status != MISSION_STATUS_CLOSED
                         or item.disposition not in (
                             DISPOSITION_BLOCKED, DISPOSITION_DEFERRED,
                         )
@@ -2729,6 +2782,7 @@ class CodingService:
                     state=CodingJobState.FAILED.value,
                     failure_code="job_abandoned",
                     landable=False,
+                    **mission_changes,
                 )
             finally:
                 self._release_job_lease(job_id)

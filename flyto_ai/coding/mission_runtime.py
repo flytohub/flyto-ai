@@ -902,6 +902,41 @@ class CodingMissionRuntime:
         finally:
             self._forget(key)
 
+    @contextmanager
+    def reconcile_dispatched(
+        self, work_item_id: str,
+    ) -> Iterator[Optional[DispatchedWork]]:
+        """Reacquire one orphaned dispatch, without selecting other work.
+
+        Reclaim is evidence-based: it refuses while the original execution
+        lease is live.  The subsequent targeted dispatch names both the exact
+        item and its next attempt, so a peer winning the gap makes this call
+        return no authority rather than letting reconciliation take unrelated
+        queued work.
+        """
+
+        self.require_supported()
+        if not self.reclaim(work_item_id):
+            yield None
+            return
+        item = self.work_item(work_item_id)
+        if item is None or item.status != MISSION_STATUS_READY:
+            yield None
+            return
+        key = self._key("reconcile-dispatch", work_item_id, uuid.uuid4().hex[:16])
+        try:
+            with _translated():
+                dispatcher = self._store.dispatch_expected(
+                    operation=key,
+                    worker=self.worker,
+                    work_item_id=work_item_id,
+                    expected_attempt=item.attempts + 1,
+                )
+                with dispatcher as handle:
+                    yield None if handle is None else self._resolve(handle)
+        finally:
+            self._forget(key)
+
     def _resolve(self, handle: DispatchHandle) -> DispatchedWork:
         coordinates = handle.coordinates
         return DispatchedWork(

@@ -3363,14 +3363,15 @@ def test_an_interrupted_mutation_reconciles_to_its_original_effect(tmp_path, mon
         )
         _run_one(store)
         _run_one(store, _deferred())
+        blocked = _blocked()
         _indeterminate(monkeypatch)
         with pytest.raises(MissionIndeterminate):
             store.abandon_unrunnable_work_item(
-                dependent.work_item_id, _blocked(), operation="op-1"
+                dependent.work_item_id, blocked, operation="op-1"
             )
         monkeypatch.undo()
         MissionStore(tmp_path).abandon_unrunnable_work_item(
-            dependent.work_item_id, _blocked(), operation="op-1"
+            dependent.work_item_id, blocked, operation="op-1"
         )
         assert store.metrics().abandoned == 1
         assert store.metrics().closed_blocked == 1

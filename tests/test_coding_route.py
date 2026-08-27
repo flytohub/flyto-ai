@@ -4390,6 +4390,42 @@ def test_headed_list_ends_at_sentence_or_newline_and_ordinary_parsing_continues(
     ) == ["pkg/a.py", "pkg/b.py", "pkg/c.py", "pkg/d.py"]
 
 
+def test_exact_target_heading_authorizes_one_mixed_existing_and_new_atomic_set(tmp_path):
+    existing = tmp_path / "pkg" / "existing.py"
+    existing.parent.mkdir()
+    existing.write_text("seed\n", encoding="utf-8")
+    message = (
+        "Exact targets/authorized changes: CHANGELOG.md; pkg/existing.py; "
+        "pkg/new_test.py; handoffs/2026-08-27-ledger.md. No other path."
+    )
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
+    (tmp_path / "handoffs").mkdir()
+
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == [
+        "CHANGELOG.md",
+        "pkg/existing.py",
+        "pkg/new_test.py",
+        "handoffs/2026-08-27-ledger.md",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Targets: pkg/new.py.",
+        "Do not use exact targets: pkg/new.py.",
+        "Exact targets: pkg/new.py; ../escape.py.",
+    ),
+)
+def test_exact_target_heading_remains_strong_atomic_and_fail_closed(tmp_path, message):
+    (tmp_path / "pkg").mkdir()
+    assert CodingRouteOrchestrator._explicit_request_targets(
+        message, str(tmp_path),
+    ) == []
+
+
 @pytest.mark.parametrize("body", [
     "pkg/good.py, do not edit pkg/bad.py",
     "pkg/good.py, never pkg/bad.py",

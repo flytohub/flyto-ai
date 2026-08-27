@@ -2571,49 +2571,49 @@ Whether a required capability cannot be attached *by the selected backend*.
 ### `_relative_path` (internal)
 
 `_relative_path(value: str) -> bool`
-Source: [`flyto_ai/coding/request_paths.py:67`](../../../flyto_ai/coding/request_paths.py#L67)
+Source: [`flyto_ai/coding/request_paths.py:73`](../../../flyto_ai/coding/request_paths.py#L73)
 
 Internal `_relative_path` implementation on this module; the linked source is authoritative.
 
 ### `_admissible` (internal)
 
 `_admissible(value: str, root: Path, *, new_authority: bool) -> bool`
-Source: [`flyto_ai/coding/request_paths.py:77`](../../../flyto_ai/coding/request_paths.py#L77)
+Source: [`flyto_ai/coding/request_paths.py:83`](../../../flyto_ai/coding/request_paths.py#L83)
 
 Internal `_admissible` implementation on this module; the linked source is authoritative.
 
 ### `prohibited_spans` (public)
 
 `prohibited_spans(text: str) -> Tuple[Tuple[int, int], ...]`
-Source: [`flyto_ai/coding/request_paths.py:105`](../../../flyto_ai/coding/request_paths.py#L105)
+Source: [`flyto_ai/coding/request_paths.py:111`](../../../flyto_ai/coding/request_paths.py#L111)
 
 Return clause-local spans whose paths are explicitly fenced off.
 
 ### `_statement_end` (internal)
 
 `_statement_end(text: str, start: int) -> int`
-Source: [`flyto_ai/coding/request_paths.py:127`](../../../flyto_ai/coding/request_paths.py#L127)
+Source: [`flyto_ai/coding/request_paths.py:133`](../../../flyto_ai/coding/request_paths.py#L133)
 
 Internal `_statement_end` implementation on this module; the linked source is authoritative.
 
 ### `_statement_start` (internal)
 
 `_statement_start(text: str, end: int) -> int`
-Source: [`flyto_ai/coding/request_paths.py:132`](../../../flyto_ai/coding/request_paths.py#L132)
+Source: [`flyto_ai/coding/request_paths.py:138`](../../../flyto_ai/coding/request_paths.py#L138)
 
 Internal `_statement_start` implementation on this module; the linked source is authoritative.
 
 ### `_headed_lists` (internal)
 
 `_headed_lists(text: str, root: Path) -> tuple[list[tuple[int, tuple[str, ...], bool]], tuple[tuple[int, int], ...]]`
-Source: [`flyto_ai/coding/request_paths.py:137`](../../../flyto_ai/coding/request_paths.py#L137)
+Source: [`flyto_ai/coding/request_paths.py:143`](../../../flyto_ai/coding/request_paths.py#L143)
 
 Project atomic affirmative headed lists and mask every recognized one.
 
 ### `explicit_request_targets` (public)
 
 `explicit_request_targets(message: str, working_dir: str) -> list[str]`
-Source: [`flyto_ai/coding/request_paths.py:165`](../../../flyto_ai/coding/request_paths.py#L165)
+Source: [`flyto_ai/coding/request_paths.py:180`](../../../flyto_ai/coding/request_paths.py#L180)
 
 Return bounded, ordered path authority from one first-round request.
 

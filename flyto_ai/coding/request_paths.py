@@ -57,6 +57,12 @@ _EXACT_NEW_HEADING_RE = re.compile(
     r"\s+(?:(?:only|these)\s+)*exact\s+new\s+(?:files?|paths?)\s*:\s*",
     re.IGNORECASE,
 )
+_EXACT_TARGET_HEADING_RE = re.compile(
+    r"(?:exact\s+(?:targets?|paths?|files?)"
+    r"(?:\s*/\s*authorized\s+(?:changes?|targets?|paths?))?|"
+    r"authorized\s+exact\s+(?:changes?|targets?|paths?|files?))\s*:\s*",
+    re.IGNORECASE,
+)
 _COMMAND_OR_EVIDENCE_RE = re.compile(
     r"\b(?:run|execute|invoke|call|command|check|proof|evidence|receipt|passed|"
     r"verified|via|through|using)\b",
@@ -140,14 +146,23 @@ def _headed_lists(
     """Project atomic affirmative headed lists and mask every recognized one."""
     projected = []
     spans = []
-    for heading in _MUTATION_HEADING_RE.finditer(text):
+    headings = [
+        (heading, _EXACT_NEW_HEADING_RE.fullmatch(heading.group()) is not None)
+        for heading in _MUTATION_HEADING_RE.finditer(text)
+    ]
+    headings.extend(
+        (heading, True) for heading in _EXACT_TARGET_HEADING_RE.finditer(text)
+    )
+    for heading, grants_new_authority in sorted(
+        headings, key=lambda item: item[0].start(),
+    ):
         begin = _statement_start(text, heading.start())
         end = _statement_end(text, heading.end())
         spans.append((begin, end))
         body = text[heading.end():end].strip()
         items = [item.strip() for item in re.split(r"[,;]", body)]
         invalid = (
-            _EXACT_NEW_HEADING_RE.fullmatch(heading.group()) is None
+            not grants_new_authority
             or not body
             or not items
             or len(items) > MAX_EXPLICIT_REQUEST_TARGETS

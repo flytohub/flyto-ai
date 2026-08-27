@@ -1,5 +1,23 @@
 # Decisions
 
+## 2026-08-27 — An exact target heading governs its complete mixed file set
+
+Decision: first-round target projection treats `Exact targets:` and
+`Exact targets/authorized changes:` as authority for one bounded atomic list
+containing existing and explicitly named new files.
+
+Why: two live jobs named their full exact change sets before implementation and
+passed every configured project check, yet post-validation rejected them
+because the new test/source/handoff paths had no nearby mutation verb. Requiring
+prompt choreography beside every already enumerated path weakened the contract
+without adding safety evidence.
+
+Consequence: only the strong exact heading is added. Generic target prose,
+negative or mixed-polarity statements, command/evidence bodies, unsafe or
+non-file spellings, symlink ancestry, malformed groups, and any set beyond the
+existing 64-target ceiling still reject the entire group without prefix
+recovery.
+
 ## 2026-08-26 — A colon-headed path list is one atomic authority statement
 
 Decision: an affirmative heading using `add`, `create`, `write`, `generate`,

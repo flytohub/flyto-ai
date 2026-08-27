@@ -2,6 +2,18 @@
 
 Last updated: 2026-08-26
 
+## Exact mixed target-set authority (2026-08-27)
+
+- A first-round request may now declare `Exact targets:` or
+  `Exact targets/authorized changes:` followed by one comma- or
+  semicolon-delimited atomic set of existing and new repository files. This
+  repairs live Admin and Indexer jobs where every configured check passed but
+  the two explicitly named new support files were absent from the pre-work
+  intent ledger and therefore rejected at post-validation.
+- The stronger syntax does not make generic `Targets:` prose authoritative.
+  Existing canonical path, typed new-file suffix, in-root ancestry, symlink,
+  polarity, command/evidence, atomicity, and 64-target bounds remain in force.
+
 ## Atomic colon-headed new-file authority (2026-08-26)
 
 - First-round authority now recognizes one affirmative mutation heading that

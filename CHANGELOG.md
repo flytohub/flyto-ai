@@ -46,6 +46,20 @@
 
 ## Unreleased
 
+- Stabilize the cross-process execution-session test under loaded CI runners,
+  and make the interrupted-abandon recovery test replay the same time-bearing
+  closure payload instead of accidentally minting a second payload at a
+  wall-clock boundary.
+- Prepare package version `0.18.1`; `0.18.0` is already published and cannot
+  truthfully identify a wheel containing the coding-route repair below.
+- Accept a strongly declared `Exact targets:` or
+  `Exact targets/authorized changes:` atomic list as first-round path
+  authority for its exact mixture of existing and new files. This closes the
+  governance loop for generated references, focused tests, and handoff files
+  that were explicitly listed but previously omitted solely because they did
+  not yet exist. Generic `Targets:` prose, negative clauses, unsafe paths,
+  symlinks, malformed or oversized groups, and partial-prefix recovery remain
+  fail-closed.
 - Repair first-round projection for `add`/`create`/`write`/generation/
   production/`introduce`/`implement` headings that explicitly declare exact
   new files or paths before a colon. Generic report/evidence headings are

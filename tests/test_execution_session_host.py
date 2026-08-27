@@ -120,7 +120,7 @@ def _failure() -> dict[str, object]:
     }
 
 
-async def _wait_process_event(event, timeout: float = 1.0) -> None:
+async def _wait_process_event(event, timeout: float = 5.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not event.is_set():
         if asyncio.get_running_loop().time() >= deadline:

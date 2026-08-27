@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.18.0
+
+### Changed
+
+- Raised the sibling floors to `flyto-core[browser]>=2.31.1` and
+  `flyto-blueprint>=0.3.1`.
+
+  The Core floor was `>=2.31.0`, chosen for the three deterministic
+  domain-solver capabilities that release added. 2.31.0 is also the one release
+  affected by GHSA-wmwj-g59x-c8px (critical): `verify.spec` reached past the
+  module allowlist and the dangerous-permission gate to execute arbitrary host
+  commands. A capability floor and a security floor were being satisfied by the
+  same number, and the number was the vulnerable one. `tests/test_stack_security_floor.py`
+  named it without being told — it derives the minimum from Core's own
+  `security/advisories.json` rather than restating it, which is why a floor set
+  for one reason could be checked against the other.
+
+  Floors rather than notes, for the reason this package already states about
+  every other floor: nothing in `flyto_ai` checks a sibling version at runtime,
+  so an environment already holding 2.31.0 satisfies a weaker declaration and
+  keeps running.
+
+### Released
+
+- This is the release that makes the module-availability gate reachable.
+  `tools/blueprint_tools.py` decides whether to pass host-derived
+  `available_module_ids` by inspecting the Blueprint engine signature, and an
+  engine without the parameter is called exactly as before — unfiltered. Every
+  published `flyto-ai` up to 0.17.0 declared `flyto-blueprint>=0.1.0` and so
+  resolved to 0.2.2, which has no such parameter: the gate existed only in a
+  source checkout. The floor is what makes a signature-probed feature reach an
+  install.
+
 ## 2026-08-25
 
 - Fail closed on public multi-repository coding jobs whose sibling edits were

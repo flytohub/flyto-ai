@@ -41,9 +41,14 @@ serve = ["aiohttp>=3.8"]
 #
 # The two sibling floors are exact, not nominal:
 #
-# `flyto-core[browser]>=2.31.0` — the first Core release containing the three
-# declared deterministic domain-solver capabilities. The independent security
-# minimum is not maintained by hand:
+# `flyto-core[browser]>=2.31.1` — two independent reasons land on the same
+# number, and both have to hold. 2.31.0 is the first Core release containing
+# the three declared deterministic domain-solver capabilities; 2.31.1 is the
+# first that clears every published advisory, because 2.31.0 is affected by
+# GHSA-wmwj-g59x-c8px (critical: `verify.spec` reached past the module
+# allowlist and the dangerous-permission gate to execute arbitrary host
+# commands). The capability reason alone would have left this at 2.31.0 — the
+# single vulnerable release. The security minimum is not maintained by hand:
 # tests/test_stack_security_floor.py derives it from Core's own
 # security/advisories.json. It moved from 2.28.1 the day after it was set,
 # because Core published five more advisories — one critical — affecting
@@ -51,21 +56,23 @@ serve = ["aiohttp>=3.8"]
 # for. Nothing in flyto_ai checks a Core version at runtime, so an environment
 # already holding an old Core would otherwise satisfy this and run anyway.
 #
-# `flyto-blueprint>=0.3.0` — `tools/blueprint_tools.py` decides whether to pass
+# `flyto-blueprint>=0.3.1` — 0.3.0 is the release that carries the parameter;
+# 0.3.1 is the one whose own `core` extra will not pull the vulnerable Core
+# back in underneath this floor. `tools/blueprint_tools.py` decides whether to pass
 # host-derived `available_module_ids` by inspecting the engine signature, and an
 # engine without it is called exactly as before, i.e. unfiltered. Blueprint
 # 0.2.2 has no such parameter, so with the old `>=0.1.0` floor the module
 # availability gate was silently off for every install resolved from PyPI. A
 # floor is the only thing that makes a signature-probed feature reachable.
 anthropic = ["anthropic>=0.20.0"]
-browser = ["flyto-core[browser]>=2.31.0"]
+browser = ["flyto-core[browser]>=2.31.1"]
 pro = ["flyto-pro-core>=0.1.0"]
-blueprint = ["flyto-blueprint>=0.3.0"]
+blueprint = ["flyto-blueprint>=0.3.1"]
 full = [
     "anthropic>=0.20.0",
-    "flyto-core[browser]>=2.31.0",
+    "flyto-core[browser]>=2.31.1",
     "flyto-pro-core>=0.1.0",
-    "flyto-blueprint>=0.3.0",
+    "flyto-blueprint>=0.3.1",
 ]
 # The native coding control plane uses the normal Flyto provider stack.  The
 # Claude SDK remains an explicitly detachable compatibility backend.
@@ -85,9 +92,9 @@ dev = [
     "pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.8.0",
     "claude-agent-sdk>=0.1.0",
     "anthropic>=0.20.0",
-    "flyto-core[browser,api]>=2.31.0",
+    "flyto-core[browser,api]>=2.31.1",
     "flyto-pro-core>=0.1.0",
-    "flyto-blueprint>=0.3.0",
+    "flyto-blueprint>=0.3.1",
 ]
 
 [project.scripts]

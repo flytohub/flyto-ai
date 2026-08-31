@@ -1,6 +1,33 @@
 # State
 
-Last updated: 2026-08-26
+Last updated: 2026-09-01
+
+## Bounded high-cardinality coding-worker startup (2026-09-01)
+
+- `code-mcp-supervisor` now distinguishes construction of a fresh worker from
+  ordinary tool handling. The first response may take at most 120 seconds while
+  `CodingService` validates the complete durable state root; after that first
+  valid response, submit/get/audit and handshake reads remain capped at 30
+  seconds.
+- State-bearing calls are refused until one worker initialize response passes
+  exact JSON-RPC/protocol/server/capability validation. Hot reload replays that
+  handshake and requires both the initialize result and validated deterministic
+  tool catalog to match the client-visible originals before forwarding the
+  waiting call. Valid initialize errors pass through without poisoning replay.
+- Coding and compatible top-level exports resolve lazily while the public agent
+  factory retains its runtime type contract. Terminal mission candidates are
+  read from one fully validated MissionStore snapshot instead of reopening and
+  revalidating the whole store once for every candidate.
+- No authority, claim, recovery, fencing, or lease scan is skipped. A missed
+  startup or steady-state deadline still returns JSON-RPC `-32603` and
+  terminates the worker. Initialization is non-mutating; after initialization,
+  a steady timeout remains delivery-uncertain and is never retried.
+- Existing long-lived supervisors gain the batched/lazy worker startup through
+  their normal source-digest child reload. The new 120-second outer bound and
+  stricter handshake validation apply when that supervisor process is next
+  reopened; no fleet-wide process kill is part of this rollout.
+- Durable job and MissionStore formats, MCP inventory, coding route, and product
+  repositories are unchanged.
 
 ## Exact mixed target-set authority (2026-08-27)
 
@@ -1056,11 +1083,12 @@ eligibility evidence for the caller, not an action the service performs.
   Startup authority is never persisted and is re-imposed from the running
   process. A missing or mis-bound envelope still fails closed with
   `rework_not_resumable`, consuming no audit round.
-- Bounded supervisor recovery. Every `code-mcp-supervisor` request and
-  handshake read is deadlined at 30 seconds using a portable reader
-  thread/queue. A missed deadline returns JSON-RPC `-32603`, terminates the
-  wedged worker so its state-root locks are released, and never retries the
-  request; recovery is the caller replaying the same idempotency key.
+- Bounded supervisor recovery. A fresh `code-mcp` worker gets one 120-second
+  first-response bound for complete durable startup validation. Once it has
+  answered, every request and handshake read is deadlined at 30 seconds using a
+  portable reader thread/queue. A missed deadline returns JSON-RPC `-32603`,
+  terminates the wedged worker so its state-root locks are released, and never
+  retries the request; recovery is the caller replaying the same idempotency key.
 - Self-healing hot-reload tracking. Active-job state is reconciled from durable
   per-job records for every tracked job id, not from a process-local set or a
   latest-writer status index, so a client that stops polling cannot pin

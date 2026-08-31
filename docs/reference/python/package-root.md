@@ -8,24 +8,24 @@ Inventory: **367 declared symbols** and **298 class methods**.
 
 ## `flyto_ai.__init__`
 
-### `_lazy_claude_code_agent` (internal)
-
-`_lazy_claude_code_agent()`
-Source: [`flyto_ai/__init__.py:23`](../../../flyto_ai/__init__.py#L23)
-
-Internal `_lazy_claude_code_agent` implementation on this module; the linked source is authoritative.
-
 ### `__getattr__` (internal)
 
-`__getattr__(name)`
-Source: [`flyto_ai/__init__.py:28`](../../../flyto_ai/__init__.py#L28)
+`__getattr__(name: str) -> Any`
+Source: [`flyto_ai/__init__.py:32`](../../../flyto_ai/__init__.py#L32)
 
 Internal `__getattr__` implementation on this module; the linked source is authoritative.
+
+### `__dir__` (internal)
+
+`__dir__() -> list[str]`
+Source: [`flyto_ai/__init__.py:41`](../../../flyto_ai/__init__.py#L41)
+
+Internal `__dir__` implementation on this module; the linked source is authoritative.
 
 ### `create_agent` (public)
 
 `create_agent(provider: str = '', api_key: str = '', model: str = '', **kwargs) -> Agent`
-Source: [`flyto_ai/__init__.py:34`](../../../flyto_ai/__init__.py#L34)
+Source: [`flyto_ai/__init__.py:45`](../../../flyto_ai/__init__.py#L45)
 
 Convenience factory for creating an Agent.
 

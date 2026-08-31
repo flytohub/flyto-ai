@@ -13,6 +13,7 @@ from flyto_ai.coding.contracts import (
     CodingMissionProjection,
 )
 from flyto_ai.coding.mission_runtime import CodingMissionRuntime, MissionRouteError
+from flyto_ai.orchestration.mission_control import WorkItem
 
 _JOB_ID = re.compile(r"job_[0-9a-f]{24}")
 _TERMINAL_STATES = frozenset(state.value for state in TERMINAL_CODING_JOB_STATES)
@@ -77,32 +78,38 @@ def terminal_orphan_ready_projection(
     owner-bound deferred accounting.
     """
 
-    if str(record.get("state") or "") not in _TERMINAL_STATES:
+    validated = _terminal_projection(record)
+    if validated is None:
         return None
-    try:
-        projection = CodingMissionProjection.from_mapping(record.get("mission"))
-    except (TypeError, ValueError):
-        return None
-    if projection.status not in {MISSION_STATUS_READY, MISSION_STATUS_DISPATCHED}:
-        return None
-    job_id = str(record.get("job_id") or "")
-    if not _JOB_ID.fullmatch(job_id):
-        return None
+    projection, _job_id = validated
     item = runtime.work_item(projection.work_item_id)
-    if item is None or item.mission_id != projection.mission_id:
+    return terminal_orphan_ready_projection_from_item(
+        runtime,
+        record,
+        item=item,
+        tenant_ref=tenant_ref,
+        projection=projection,
+    )
+
+
+def terminal_orphan_ready_projection_from_item(
+    runtime: CodingMissionRuntime,
+    record: Mapping[str, Any],
+    *,
+    item: Optional[WorkItem],
+    tenant_ref: str,
+    projection: Optional[CodingMissionProjection] = None,
+) -> Optional[dict[str, Any]]:
+    """Project one terminal orphan from an already validated store snapshot."""
+
+    validated = _terminal_projection(record, projection)
+    if validated is None:
         return None
-    if (
-        item.coordinates.project != tenant_ref
-        or item.coordinates.location != job_id
-    ):
+    projection, job_id = validated
+    if not _item_matches(item, projection, tenant_ref, job_id):
         return None
-    if item.status == MISSION_STATUS_DISPATCHED:
-        try:
-            if not runtime.reclaim(projection.work_item_id):
-                return None
-        except MissionRouteError:
-            return None
-    elif item.status != MISSION_STATUS_READY:
+    assert item is not None
+    if not _reclaim_ready_item(runtime, item, projection.work_item_id):
         return None
     stored = dict(record.get("mission") or {})
     stored.update({"status": MISSION_STATUS_READY, "disposition": ""})
@@ -110,3 +117,53 @@ def terminal_orphan_ready_projection(
         return CodingMissionProjection.from_mapping(stored).to_mapping()
     except (TypeError, ValueError):
         return None
+
+
+def _terminal_projection(
+    record: Mapping[str, Any],
+    projection: Optional[CodingMissionProjection] = None,
+) -> Optional[tuple[CodingMissionProjection, str]]:
+    """Validate the immutable job/projection coordinates shared by both paths."""
+
+    if str(record.get("state") or "") not in _TERMINAL_STATES:
+        return None
+    if projection is None:
+        try:
+            projection = CodingMissionProjection.from_mapping(record.get("mission"))
+        except (TypeError, ValueError):
+            return None
+    if projection.status not in {MISSION_STATUS_READY, MISSION_STATUS_DISPATCHED}:
+        return None
+    job_id = str(record.get("job_id") or "")
+    return (projection, job_id) if _JOB_ID.fullmatch(job_id) else None
+
+
+def _item_matches(
+    item: Optional[WorkItem],
+    projection: CodingMissionProjection,
+    tenant_ref: str,
+    job_id: str,
+) -> bool:
+    """Bind the validated store row to this exact tenant job projection."""
+
+    return bool(
+        item is not None
+        and item.mission_id == projection.mission_id
+        and item.coordinates.project == tenant_ref
+        and item.coordinates.location == job_id
+    )
+
+
+def _reclaim_ready_item(
+    runtime: CodingMissionRuntime,
+    item: WorkItem,
+    work_item_id: str,
+) -> bool:
+    """Keep dispatched reclaim live and accept an already-ready exact row."""
+
+    if item.status != MISSION_STATUS_DISPATCHED:
+        return item.status == MISSION_STATUS_READY
+    try:
+        return bool(runtime.reclaim(work_item_id))
+    except MissionRouteError:
+        return False

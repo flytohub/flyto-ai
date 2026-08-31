@@ -1,5 +1,33 @@
 # Decisions
 
+## 2026-09-01 — Cold startup is bounded and history is read once
+
+Decision: the supervisor allows only the first response from each newly spawned
+`code-mcp` worker up to 120 seconds, rejects state-bearing calls before a valid
+initialize response, and requires hot-reload handshake replay to exactly match
+the first validated initialize result and deterministic tool catalog. Valid
+initialize errors pass through without replacing that replay contract. After
+startup, all ordinary requests retain the existing 30-second ceiling. Worker
+construction resolves coding and compatible top-level exports lazily without
+changing the agent factory's runtime type contract, and reads all terminal
+Mission work items from one validated snapshot.
+
+Why: `CodingService` constructs before the worker reads stdin and deliberately
+scans the complete durable state root for startup authority, open work,
+workspace claims, recovery, fencing, and leases. The old path additionally
+reopened and fully validated the MissionStore once for each terminal candidate;
+the bounded batch validates the same snapshot once. Skipping those checks would
+trade availability for incorrect authority, while repeating them adds no
+evidence.
+
+Consequence: startup remains finite and steady-state delivery uncertainty is
+unchanged. Batch lookup grants no execution authority: dispatched reclaim still
+proves the live lease/fence and every candidate still matches exact Mission and
+tenant/job coordinates. Existing supervisor processes pick up the faster inner
+worker through normal source reload; the outer 120-second bound itself applies
+after the supervisor is reopened. The three-tool MCP surface, job/store schema,
+route, implementer, and repository authority do not change.
+
 ## 2026-08-27 — An exact target heading governs its complete mixed file set
 
 Decision: first-round target projection treats `Exact targets:` and
@@ -1017,14 +1045,16 @@ that topology and are closed here.
   process, so a stored request cannot outlive or widen its policy. This
   preserves the original intent of the process-local cache ("a restart must not
   silently start a new session") while removing its process affinity.
-- **A missed supervisor deadline terminates rather than retries.** Thirty
-  seconds is the bound because submit, get, and audit only schedule or inspect
-  background work; a longer wait is a wedged worker, not a slow one, and that
-  worker still holds shared state-root locks. The request is never resent: its
-  delivery is uncertain and the job may already exist, so recovery belongs to
-  the caller replaying an idempotency key. A reader thread and queue were chosen
-  over pipe selectors so the deadline behaves identically on every supported
-  platform.
+- **A missed supervisor deadline terminates rather than retries.** A newly
+  spawned worker may use one 120-second first-response bound while its durable
+  service construction validates the full state root. Once it answers, 30
+  seconds remains the bound because submit, get, and audit only schedule or
+  inspect background work; a longer wait is a wedged worker, not a slow one,
+  and that worker still holds shared state-root locks. The request is never
+  resent: its delivery is uncertain and the job may already exist, so recovery
+  belongs to the caller replaying an idempotency key. A reader thread and queue
+  were chosen over pipe selectors so the deadline behaves identically on every
+  supported platform.
 - **Active-job tracking reads durable records.** A process-local set could not
   distinguish "the client stopped polling" from "the job is still running", so
   one abandoned entry pinned `service_reload_pending` for the life of a

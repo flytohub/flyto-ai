@@ -4,6 +4,23 @@
 
 ### Changed
 
+- `code-mcp-supervisor` now gives only a newly spawned worker's first response a
+  separate 120-second deadline so complete fail-closed durable-state validation
+  can finish on a high-cardinality state root. State-bearing calls are refused
+  before initialization, initialize responses are structurally validated, and
+  a hot-reloaded worker must replay the exact client-visible initialize and tool
+  catalog contracts. Valid initialize errors pass through without replacing
+  the last successful replay contract. After startup, submit/get/audit remain
+  capped at 30 seconds and an uncertain request is never retried.
+- Cold worker startup no longer loads the complete `flyto_ai.coding` facade or
+  reopens the MissionStore once per terminal candidate. Coding and compatible
+  top-level exports resolve lazily, while `Agent`/`AgentConfig` remain eager to
+  preserve the factory's runtime typing contract. Terminal reconciliation
+  resolves all known work-item rows from one fully validated bounded snapshot
+  while retaining exact coordinate, lease, fence, claim, and recovery checks.
+  Durable formats, the three-tool MCP surface, route, and product repositories
+  are unchanged.
+
 - Raised the sibling floors to `flyto-core[browser]>=2.31.1` and
   `flyto-blueprint>=0.3.1`.
 

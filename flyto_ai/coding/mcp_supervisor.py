@@ -16,12 +16,14 @@ exact-session job reaches a terminal state. Jobs merely observed through the
 tenant-visible ``flyto_coding_get`` tool or a non-rework audit belong to other
 supervisors and never hold this worker back.
 
-Every read from the worker is deadlined. This service only schedules or
-inspects background work, so a call that has not answered within seconds is a
-wedged worker, not a slow one. Waiting forever would hang the Codex frontend
-and leave the shared state-root locks held by a process that will never write
-again, so the deadline ends with a bounded protocol error and a terminated
-worker rather than with silence.
+Every read from the worker is deadlined. A fresh worker gets one larger finite
+bound because it validates the complete durable state root before reading its
+first frame; after its first response, this service only schedules or inspects
+background work, so a call that has not answered within seconds is a wedged
+worker, not a slow one. Waiting forever would hang the Codex frontend and leave
+the shared state-root locks held by a process that will never write again, so
+the deadline ends with a bounded protocol error and a terminated worker rather
+than with silence.
 """
 from __future__ import annotations
 
@@ -35,6 +37,15 @@ import threading
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Dict, Mapping, Optional, Sequence
 
+from flyto_ai.coding.mcp_contract import (
+    CodingMCPWorkerUnavailable,
+    json_contract_equal,
+    protocol_error,
+    tool_error,
+    validated_initialize_result,
+    validated_response,
+    validated_tools_list_result,
+)
 from flyto_ai.coding.route_status import current_service_build_id
 
 
@@ -44,8 +55,16 @@ WORKER_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 #: durable decision; none of them waits for an implementation round. A read
 #: that misses this bound describes a worker that is not going to answer.
 WORKER_RESPONSE_TIMEOUT_SECONDS = 30.0
-#: The handshake is a pure in-process reply, so it is held to the same bound.
+#: Once construction is complete, a handshake is a pure in-process reply and
+#: is held to the same bound as every ordinary request.
 WORKER_HANDSHAKE_TIMEOUT_SECONDS = 30.0
+#: A newly spawned worker constructs the durable service before it can read its
+#: first stdio request.  That construction deliberately revalidates startup
+#: authority, open work, workspace claims, recovery, fencing and leases across
+#: the complete state root.  It is bounded separately from ordinary request
+#: handling so a large valid history is not mistaken for a wedged worker, while
+#: every already-started submit/get/audit call keeps the strict 30-second bound.
+WORKER_STARTUP_RESPONSE_TIMEOUT_SECONDS = 120.0
 TERMINAL_JOB_STATES = frozenset({"completed", "failed", "codex_accepted"})
 REWORK_JOB_STATES = frozenset({"rework_queued", "rework_running"})
 OBSERVABLE_JOB_TOOLS = frozenset({
@@ -102,10 +121,6 @@ WORKER_WORKSPACE_REGISTRY_REASON = (
     "the host workspace authority registry is unavailable or damaged; "
     "run flyto-ai code-workspace-status to inspect it"
 )
-
-
-class CodingMCPWorkerUnavailable(RuntimeError):
-    """The replaceable worker could not serve a request deterministically."""
 
 
 class CodingMCPWorkerTimeout(CodingMCPWorkerUnavailable):
@@ -300,10 +315,14 @@ class CodingMCPWorkerSupervisor:
         self._job_state_reader = job_state_reader
         self.response_timeout = float(response_timeout)
         self.handshake_timeout = float(handshake_timeout)
+        self.startup_response_timeout = WORKER_STARTUP_RESPONSE_TIMEOUT_SECONDS
         self._channel: Optional[_WorkerChannel] = None
+        self._worker_starting = False
         self._worker_build_id = ""
         self._initialize_request: Optional[Dict[str, Any]] = None
+        self._initialize_result: Optional[Dict[str, Any]] = None
         self._initialized_notification: Optional[Dict[str, Any]] = None
+        self._tools_list_result: Optional[Dict[str, Any]] = None
         self._initialized = False
         self._active_jobs: Dict[str, str] = {}
         self._last_worker_exit: Optional[int] = None
@@ -330,23 +349,26 @@ class CodingMCPWorkerSupervisor:
         """Handle one client message; exposed separately for deterministic tests."""
 
         if len(raw) > MAX_SUPERVISOR_MESSAGE_BYTES:
-            return self._protocol_error(None, -32600, "request exceeds message limit")
+            return protocol_error(None, -32600, "request exceeds message limit")
         try:
             request = json.loads(raw)
             if not isinstance(request, dict):
                 raise ValueError
         except (UnicodeError, json.JSONDecodeError, ValueError):
-            return self._protocol_error(None, -32700, "parse error")
+            return protocol_error(None, -32700, "parse error")
 
         method = request.get("method")
-        if method == "initialize" and request.get("id") is not None:
-            self._initialize_request = dict(request)
+        if method == "tools/call" and not self._initialized:
+            if request.get("id") is None:
+                return None
+            return protocol_error(
+                request.get("id"), -32600, "coding MCP is not initialized",
+            )
+        if method == "notifications/initialized" and not self._initialized:
+            return None
 
         try:
-            source_changed = self._ensure_worker()
-            if source_changed and self._active_jobs and self._is_submit(request):
-                return self._tool_error(request.get("id"), "service_reload_pending")
-            response = self._exchange(raw, expect_response=request.get("id") is not None)
+            return self._forward_request(raw, request)
         except CodingMCPWorkerTimeout:
             # The worker owes a response it will never send. Terminating it
             # releases the state-root locks it still holds and lets the next
@@ -354,10 +376,17 @@ class CodingMCPWorkerSupervisor:
             # truthfully. This request is not retried: its delivery is
             # uncertain, and a caller recovers a submitted job by replaying the
             # same idempotency key, which the supervisor must never do for them.
+            startup_timeout = self._worker_starting
             self.timeout_count += 1
             self._stop_worker(graceful=False)
-            return self._protocol_error(
-                request.get("id"), -32603, "coding worker exceeded its deadline",
+            return protocol_error(
+                request.get("id"),
+                -32603,
+                (
+                    "coding worker startup exceeded its deadline"
+                    if startup_timeout
+                    else "coding worker exceeded its deadline"
+                ),
             )
         except (OSError, CodingMCPWorkerUnavailable):
             # A broken pipe, a malformed frame, or an oversized response all
@@ -366,20 +395,62 @@ class CodingMCPWorkerSupervisor:
             # Release it for the same reason a timeout does, and for the same
             # reason do not resend — delivery of this request is uncertain.
             self._stop_worker(graceful=False)
-            return self._protocol_error(
+            return protocol_error(
                 request.get("id"), -32603, self._unavailable_reason(),
             )
 
+    def _forward_request(
+        self,
+        raw: bytes,
+        request: Mapping[str, Any],
+    ) -> Optional[bytes]:
+        """Forward one parsed request and atomically retain valid contracts."""
+
+        method = request.get("method")
+        source_changed = self._ensure_worker()
+        if source_changed and self._active_jobs and self._is_submit(request):
+            return tool_error(request.get("id"), "service_reload_pending")
+        if method == "tools/call" and self._tools_list_result is None:
+            self._tools_list_result = self._probe_tool_schema()
+        response = self._exchange(
+            raw,
+            expect_response=request.get("id") is not None,
+            timeout=self.startup_response_timeout if self._worker_starting else None,
+        )
         if response is not None:
+            self._record_contract_response(response, request)
+            self._worker_starting = False
             self._observe_job(response, request)
-            if method == "initialize":
-                self._initialized = True
         if method == "notifications/initialized":
             # Cache only after forwarding it. If source changed between the
             # initialize response and this notification, _ensure_worker replays
             # initialize and this request completes that new handshake once.
             self._initialized_notification = dict(request)
         return response
+
+    def _record_contract_response(
+        self,
+        response: bytes,
+        request: Mapping[str, Any],
+    ) -> None:
+        """Retain only successfully validated initialize and tool contracts."""
+
+        method = request.get("method")
+        if method == "initialize":
+            result = validated_initialize_result(response, request)
+            if result is not None:
+                self._initialize_request = dict(request)
+                self._initialize_result = result
+                self._initialized = True
+        elif method == "tools/list":
+            result = validated_tools_list_result(response, request)
+            if result is not None:
+                if (
+                    self._tools_list_result is not None
+                    and not json_contract_equal(self._tools_list_result, result)
+                ):
+                    raise CodingMCPWorkerUnavailable("worker tool contract changed")
+                self._tools_list_result = result
 
     def close(self) -> None:
         """Close the current worker without touching any other MCP instance."""
@@ -422,6 +493,7 @@ class CodingMCPWorkerSupervisor:
         self._last_worker_exit = None
         self._channel = _WorkerChannel(self.worker_argv)
         self._worker_build_id = build_id
+        self._worker_starting = True
         if replay:
             self._replay_handshake()
 
@@ -434,6 +506,7 @@ class CodingMCPWorkerSupervisor:
         channel = self._channel
         self._channel = None
         self._worker_build_id = ""
+        self._worker_starting = False
         if channel is not None:
             channel.stop(graceful=graceful)
             # Read the status only after `stop` has reaped the process, so a
@@ -468,22 +541,26 @@ class CodingMCPWorkerSupervisor:
         return "coding worker unavailable"
 
     def _replay_handshake(self) -> None:
-        if self._initialize_request is None:
+        if self._initialize_request is None or self._initialize_result is None:
             return
         replay = dict(self._initialize_request)
         replay["id"] = "flyto-supervisor-initialize"
         encoded = json.dumps(replay, ensure_ascii=False, separators=(",", ":")).encode()
         response = self._exchange(
-            encoded + b"\n", expect_response=True, timeout=self.handshake_timeout,
+            encoded + b"\n",
+            expect_response=True,
+            timeout=(
+                self.startup_response_timeout
+                if self._worker_starting else self.handshake_timeout
+            ),
         )
         if response is None:
             raise CodingMCPWorkerUnavailable("worker initialization returned no response")
-        try:
-            value = json.loads(response)
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise CodingMCPWorkerUnavailable("worker initialization was malformed") from exc
-        if not isinstance(value, Mapping) or "error" in value:
-            raise CodingMCPWorkerUnavailable("worker initialization failed")
+        replay_request = dict(replay)
+        result = validated_initialize_result(response, replay_request)
+        if result is None or not json_contract_equal(result, self._initialize_result):
+            raise CodingMCPWorkerUnavailable("worker initialization contract changed")
+        self._worker_starting = False
         if self._initialized_notification is not None:
             notification = json.dumps(
                 self._initialized_notification,
@@ -491,6 +568,39 @@ class CodingMCPWorkerSupervisor:
                 separators=(",", ":"),
             ).encode() + b"\n"
             self._exchange(notification, expect_response=False)
+        if self._tools_list_result is not None:
+            self._probe_tool_schema(expected=self._tools_list_result)
+
+    def _probe_tool_schema(
+        self,
+        *,
+        expected: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Read and optionally compare the worker's deterministic tool schema."""
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": "flyto-supervisor-tools-list",
+            "method": "tools/list",
+            "params": {},
+        }
+        encoded = json.dumps(request, separators=(",", ":")).encode() + b"\n"
+        response = self._exchange(
+            encoded,
+            expect_response=True,
+            timeout=(
+                self.startup_response_timeout
+                if self._worker_starting else self.handshake_timeout
+            ),
+        )
+        if response is None:
+            raise CodingMCPWorkerUnavailable("worker tool contract returned no response")
+        result = validated_tools_list_result(response, request)
+        if result is None or (
+            expected is not None and not json_contract_equal(result, expected)
+        ):
+            raise CodingMCPWorkerUnavailable("worker tool contract changed")
+        return result
 
     def _exchange(
         self,
@@ -563,23 +673,8 @@ class CodingMCPWorkerSupervisor:
         tool_name = CodingMCPWorkerSupervisor._tool_name(request)
         if tool_name not in OBSERVABLE_JOB_TOOLS:
             return None
-
-        try:
-            response = json.loads(raw)
-        except (UnicodeError, json.JSONDecodeError, ValueError):
-            return None
-        if not isinstance(response, Mapping) or "error" in response:
-            return None
-        if response.get("id") != request.get("id"):
-            return None
-        result = response.get("result")
-        if not isinstance(result, Mapping) or result.get("isError"):
-            return None
-        structured = result.get("structuredContent")
-        if not isinstance(structured, Mapping) or structured.get("ok") is not True:
-            return None
-        job = structured.get("job")
-        if not isinstance(job, Mapping):
+        job = CodingMCPWorkerSupervisor._structured_job(raw, request)
+        if job is None:
             return None
         job_id = job.get("job_id")
         state = job.get("state")
@@ -588,14 +683,39 @@ class CodingMCPWorkerSupervisor:
         if not _JOB_ID_RE.fullmatch(job_id):
             return None
         if tool_name in {"flyto_coding_get", "flyto_coding_audit"}:
-            params = request.get("params")
-            arguments = params.get("arguments") if isinstance(params, Mapping) else None
-            requested_job_id = (
-                arguments.get("job_id") if isinstance(arguments, Mapping) else None
-            )
-            if requested_job_id != job_id:
+            if CodingMCPWorkerSupervisor._requested_job_id(request) != job_id:
                 return None
         return job_id, state
+
+    @staticmethod
+    def _structured_job(
+        raw: bytes,
+        request: Mapping[str, Any],
+    ) -> Optional[Mapping[str, Any]]:
+        """Return only a successful, correctly addressed structured job."""
+
+        try:
+            response = validated_response(raw, request, "tool response")
+        except CodingMCPWorkerUnavailable:
+            return None
+        if "error" in response:
+            return None
+        result = response.get("result")
+        if not isinstance(result, Mapping) or result.get("isError"):
+            return None
+        structured = result.get("structuredContent")
+        if not isinstance(structured, Mapping) or structured.get("ok") is not True:
+            return None
+        job = structured.get("job")
+        return job if isinstance(job, Mapping) else None
+
+    @staticmethod
+    def _requested_job_id(request: Mapping[str, Any]) -> Any:
+        """Return the explicit job id argument without trusting its shape."""
+
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        return arguments.get("job_id") if isinstance(arguments, Mapping) else None
 
     @staticmethod
     def _tool_name(request: Mapping[str, Any]) -> str:
@@ -618,28 +738,6 @@ class CodingMCPWorkerSupervisor:
         params = request.get("params")
         arguments = params.get("arguments") if isinstance(params, Mapping) else None
         return isinstance(arguments, Mapping) and arguments.get("verdict") == "rework"
-
-    @staticmethod
-    def _protocol_error(request_id: Any, code: int, message: str) -> bytes:
-        return json.dumps({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {"code": code, "message": message},
-        }, separators=(",", ":")).encode() + b"\n"
-
-    @staticmethod
-    def _tool_error(request_id: Any, code: str) -> bytes:
-        payload = {"ok": False, "error": code}
-        return json.dumps({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "content": [{"type": "text", "text": json.dumps(payload)}],
-                "isError": True,
-                "structuredContent": payload,
-            },
-        }, separators=(",", ":")).encode() + b"\n"
-
 
 def worker_argv_from_process(argv: Sequence[str]) -> tuple[str, ...]:
     """Replace the supervisor subcommand with an isolated worker command."""

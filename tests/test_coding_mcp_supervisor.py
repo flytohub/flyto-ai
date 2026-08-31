@@ -1,18 +1,24 @@
 import hashlib
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
-import subprocess
 
+from flyto_ai.coding.mcp_contract import (
+    validated_initialize_result,
+    validated_tools_list_result,
+)
 from flyto_ai.coding.mcp_supervisor import (
     DEFAULT_CODING_STATE_DIR,
-    WORKER_SHUTDOWN_TIMEOUT_SECONDS,
     WORKER_HANDSHAKE_TIMEOUT_SECONDS,
     WORKER_RESPONSE_TIMEOUT_SECONDS,
+    WORKER_SHUTDOWN_TIMEOUT_SECONDS,
+    WORKER_STARTUP_RESPONSE_TIMEOUT_SECONDS,
     CodingMCPWorkerSupervisor,
+    CodingMCPWorkerUnavailable,
     _option_value,
     durable_job_state_reader,
     supervisor_from_argv,
@@ -33,13 +39,26 @@ for raw in sys.stdin.buffer:
         continue
     method = request.get("method")
     if method == "initialize":
+        if request.get("params", {}).get("protocolVersion") != "2025-06-18":
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": "unsupported MCP protocol version"},
+            }
+            sys.stdout.buffer.write(json.dumps(response).encode() + b"\n")
+            sys.stdout.buffer.flush()
+            continue
         result = {
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "fake", "version": version},
+            "serverInfo": {"name": "fake", "version": "2"},
+            "instructions": "test coding worker",
         }
     elif method == "tools/list":
-        result = {"tools": [{"name": version}]}
+        result = {"tools": [{
+            "name": "flyto_coding_submit",
+            "inputSchema": {"type": "object"},
+        }]}
     elif method == "tools/call":
         params = request.get("params", {})
         name = params.get("name")
@@ -75,6 +94,74 @@ import time
 
 for raw in sys.stdin.buffer:
     time.sleep(600)
+"""
+
+
+#: Construction happens before a real code-mcp worker reads stdin.  This
+#: fixture models that delay, then deliberately wedges its second request so
+#: startup and steady-state deadlines can be proven independently.
+_SLOW_START_WORKER = r"""
+import json
+import sys
+import time
+
+time.sleep(float(sys.argv[1]))
+handled = 0
+for raw in sys.stdin.buffer:
+    handled += 1
+    if handled > 1:
+        time.sleep(600)
+    request = json.loads(raw)
+    response = {
+        "jsonrpc": "2.0",
+        "id": request.get("id"),
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "fake", "version": "2"},
+            "instructions": "test coding worker",
+        },
+    }
+    sys.stdout.buffer.write(json.dumps(response).encode() + b"\n")
+    sys.stdout.buffer.flush()
+"""
+
+
+_SLOW_RECORDING_WORKER = r"""
+import json
+import pathlib
+import sys
+import time
+
+time.sleep(float(sys.argv[1]))
+marker = pathlib.Path(sys.argv[2])
+for raw in sys.stdin.buffer:
+    request = json.loads(raw)
+    with marker.open("a", encoding="utf-8") as handle:
+        handle.write(str(request.get("method")) + "\n")
+    if request.get("id") is None:
+        continue
+    if request.get("method") == "initialize":
+        result = {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "fake", "version": "2"},
+            "instructions": "test coding worker",
+        }
+    elif request.get("method") == "tools/list":
+        result = {"tools": [{
+            "name": "flyto_coding_get",
+            "inputSchema": {"type": "object"},
+        }]}
+    else:
+        result = {
+            "content": [],
+            "isError": False,
+            "structuredContent": {"ok": True},
+        }
+    response = {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
+    sys.stdout.buffer.write(json.dumps(response).encode() + b"\n")
+    sys.stdout.buffer.flush()
 """
 
 
@@ -133,15 +220,117 @@ def test_a_safe_source_change_reloads_only_the_worker_and_replays_handshake(tmp_
         first = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
         })))
-        assert first["result"]["tools"][0]["name"] == "build-one"
+        assert first["result"]["tools"][0]["name"] == "flyto_coding_submit"
 
         marker.write_text("build-two", encoding="utf-8")
         build[0] = "build-two"
         second = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {},
         })))
-        assert second["result"]["tools"][0]["name"] == "build-two"
+        assert second["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert supervisor.worker_pid != first_pid
+        assert supervisor.reload_count == 1
+    finally:
+        supervisor.close()
+
+
+def test_a_tool_schema_change_is_rejected_inside_the_existing_session(tmp_path):
+    build = ["build-one"]
+    script = tmp_path / "worker.py"
+    marker = tmp_path / "version.txt"
+    script.write_text(
+        _WORKER.replace('"name": "flyto_coding_submit"', '"name": version'),
+        encoding="utf-8",
+    )
+    marker.write_text(build[0], encoding="utf-8")
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, "-u", str(script), str(marker)),
+        build_id_provider=lambda: build[0],
+    )
+    try:
+        _initialize(supervisor)
+        first = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+        })))
+        assert first["result"]["tools"][0]["name"] == "build-one"
+
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+        rejected = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {},
+        })))
+        assert rejected["error"] == {
+            "code": -32603,
+            "message": "coding worker unavailable",
+        }
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+def test_bool_and_number_schema_drift_is_not_equal_during_reload(tmp_path):
+    build = ["build-one"]
+    script = tmp_path / "worker.py"
+    marker = tmp_path / "version.txt"
+    script.write_text(
+        _WORKER.replace(
+            '"inputSchema": {"type": "object"}',
+            '"inputSchema": {"type": "object", "properties": '
+            '{"mode": {"const": True if version == "build-one" else 1}}}',
+        ),
+        encoding="utf-8",
+    )
+    marker.write_text(build[0], encoding="utf-8")
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, "-u", str(script), str(marker)),
+        build_id_provider=lambda: build[0],
+    )
+    try:
+        _initialize(supervisor)
+        first = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+        })))
+        assert first["result"]["tools"][0]["inputSchema"]["properties"][
+            "mode"
+        ]["const"] is True
+
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+        rejected = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {},
+        })))
+        assert rejected["error"]["code"] == -32603
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+def test_an_initialize_error_is_relayed_without_poisoning_replay_state(tmp_path):
+    build = ["build-one"]
+    supervisor, marker = _supervisor(tmp_path, build)
+    try:
+        _initialize(supervisor)
+        original_request = dict(supervisor._initialize_request or {})
+        original_result = dict(supervisor._initialize_result or {})
+        error = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "initialize",
+            "params": {"protocolVersion": "unsupported"},
+        })))
+        assert error["error"] == {
+            "code": -32602,
+            "message": "unsupported MCP protocol version",
+        }
+        assert supervisor._initialize_request == original_request
+        assert supervisor._initialize_result == original_result
+
+        marker.write_text("build-two", encoding="utf-8")
+        build[0] = "build-two"
+        listed = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {},
+        })))
+        assert listed["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert supervisor.reload_count == 1
     finally:
         supervisor.close()
@@ -188,7 +377,7 @@ def test_source_change_preserves_active_job_and_blocks_only_new_submissions(tmp_
         listed = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {},
         })))
-        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert listed["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert supervisor.worker_pid != original_pid
         assert supervisor.reload_count == 1
     finally:
@@ -207,14 +396,52 @@ def _job_record(state_dir: Path, tenant: str, job_id: str, state: str) -> Path:
 
 
 def test_read_deadlines_are_bounded_to_thirty_seconds() -> None:
-    """Submit, get, and audit all return promptly; a longer wait is a wedge."""
+    """Steady requests stay short; only verified worker startup gets longer."""
 
     assert WORKER_RESPONSE_TIMEOUT_SECONDS <= 30.0
     assert WORKER_HANDSHAKE_TIMEOUT_SECONDS <= 30.0
+    assert WORKER_STARTUP_RESPONSE_TIMEOUT_SECONDS <= 120.0
     with pytest.raises(ValueError):
         CodingMCPWorkerSupervisor(("true",), response_timeout=31.0)
     with pytest.raises(ValueError):
         CodingMCPWorkerSupervisor(("true",), handshake_timeout=0)
+
+
+def test_startup_reconciliation_has_its_own_bound_then_requests_stay_short(
+    tmp_path,
+) -> None:
+    """Large valid history may delay construction, never ordinary tool calls."""
+
+    script = tmp_path / "slow-start.py"
+    script.write_text(_SLOW_START_WORKER, encoding="utf-8")
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, "-u", str(script), "0.15"),
+        build_id_provider=lambda: "build-one",
+        response_timeout=0.05,
+        handshake_timeout=0.05,
+    )
+    supervisor.startup_response_timeout = 5.0
+    try:
+        first = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        })))
+        assert first["result"]["serverInfo"]["name"] == "fake"
+
+        second = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "flyto_coding_get", "arguments": {
+                "job_id": "job_" + "b" * 24,
+            }},
+        })))
+        assert second["error"]["code"] == -32603
+        assert "deadline" in second["error"]["message"]
+        assert supervisor.timeout_count == 1
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
 
 
 def test_the_supervisor_state_dir_default_matches_the_cli() -> None:
@@ -236,14 +463,16 @@ def test_a_wedged_worker_is_terminated_and_the_request_is_not_retried(
     """
 
     script = tmp_path / "wedged.py"
-    script.write_text(_WEDGED_WORKER, encoding="utf-8")
+    script.write_text(_SLOW_START_WORKER, encoding="utf-8")
     supervisor = CodingMCPWorkerSupervisor(
-        (sys.executable, "-u", str(script)),
+        (sys.executable, "-u", str(script), "0"),
         build_id_provider=lambda: "build-one",
         response_timeout=0.4,
         handshake_timeout=0.4,
     )
+    supervisor.startup_response_timeout = 0.4
     try:
+        _initialize(supervisor)
         started = time.monotonic()
         response = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0",
@@ -275,6 +504,7 @@ def test_a_later_request_starts_a_fresh_worker_after_a_timeout(tmp_path) -> None
         response_timeout=0.4,
         handshake_timeout=0.4,
     )
+    supervisor.startup_response_timeout = 0.4
     try:
         first = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
@@ -334,7 +564,7 @@ def test_a_stale_active_job_reloads_once_durable_state_is_terminal(
         listed = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {},
         })))
-        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert listed["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert supervisor.worker_pid != original_pid
         assert supervisor.reload_count == 1
         assert supervisor._active_jobs == {}
@@ -452,6 +682,7 @@ def test_a_timeout_releases_the_wedged_worker(tmp_path) -> None:
         response_timeout=0.4,
         handshake_timeout=0.4,
     )
+    supervisor.startup_response_timeout = 0.4
     try:
         supervisor._ensure_worker()
         channel = supervisor._channel
@@ -523,6 +754,7 @@ def test_the_post_kill_reap_is_bounded(tmp_path) -> None:
         response_timeout=0.3,
         handshake_timeout=0.3,
     )
+    supervisor.startup_response_timeout = 0.3
     supervisor._ensure_worker()
     channel = supervisor._channel
     waits = []
@@ -636,10 +868,14 @@ for raw in sys.stdin.buffer:
         result = {
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "fake", "version": version},
+            "serverInfo": {"name": "fake", "version": "2"},
+            "instructions": "test coding worker",
         }
     elif method == "tools/list":
-        result = {"tools": [{"name": version}]}
+        result = {"tools": [{
+            "name": "flyto_coding_submit",
+            "inputSchema": {"type": "object"},
+        }]}
     elif method == "tools/call":
         arguments = request.get("params", {}).get("arguments", {})
         job = {
@@ -798,7 +1034,7 @@ def test_a_locally_submitted_live_job_still_blocks_until_it_is_terminal(
         listed = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": {},
         })))
-        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert listed["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert supervisor.worker_pid != original_pid
         assert supervisor.reload_count == 1
     finally:
@@ -895,7 +1131,7 @@ def test_unknown_tool_terminal_receipt_cannot_clear_a_local_pin(tmp_path) -> Non
         listed = _value(supervisor.handle_line(_line({
             "jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {},
         })))
-        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert listed["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert supervisor.worker_pid != original_pid
         assert supervisor.reload_count == 1
     finally:
@@ -951,7 +1187,7 @@ def test_cross_connection_rework_pins_until_terminal_then_reloads(tmp_path) -> N
         listed = _value(auditor.handle_line(_line({
             "jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {},
         })))
-        assert listed["result"]["tools"][0]["name"] == "build-two"
+        assert listed["result"]["tools"][0]["name"] == "flyto_coding_submit"
         assert auditor.worker_pid != original_pid
         assert auditor.reload_count == 1
         assert auditor._active_jobs == {}
@@ -1018,8 +1254,26 @@ def test_wrong_job_rework_response_and_observer_exception_fail_closed(tmp_path) 
         }
         supervisor._observe_job(_line(response), request)
         assert supervisor._active_jobs == {}
-        supervisor._observe_job(b"{malformed\n", request)
-        assert supervisor._active_jobs == {}
+        matching = {
+            "jsonrpc": "2.0", "id": 2, "result": {"isError": False,
+                "structuredContent": {"ok": True, "job": {
+                    "job_id": _FOREIGN_JOB, "state": "rework_running",
+                }}},
+        }
+        wrong_type_id = dict(matching, id=True)
+        missing_jsonrpc = dict(matching)
+        missing_jsonrpc.pop("jsonrpc")
+        ambiguous = dict(matching, error={"code": -32603, "message": "bad"})
+        duplicate_id = _line(matching).replace(b'"id":2,', b'"id":2,"id":2,')
+        for malformed in (
+            b"{malformed\n",
+            _line(wrong_type_id),
+            _line(missing_jsonrpc),
+            _line(ambiguous),
+            duplicate_id,
+        ):
+            supervisor._observe_job(malformed, request)
+            assert supervisor._active_jobs == {}
     finally:
         supervisor.close()
 
@@ -1107,3 +1361,158 @@ def test_option_values_are_read_from_either_flag_spelling() -> None:
     assert _option_value(argv, "--tenant") == "local-codex"
     assert _option_value(argv, "--state-dir") == "/srv/state"
     assert _option_value(argv, "--missing") == ""
+
+
+def test_state_bearing_call_before_initialize_fails_without_a_worker(tmp_path) -> None:
+    """An out-of-order client cannot make startup timeout mean delivery."""
+
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, str(tmp_path / "must-not-start.py")),
+        build_id_provider=lambda: "build-one",
+    )
+    try:
+        response = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "flyto_coding_submit", "arguments": {}},
+        })))
+        assert response["error"] == {
+            "code": -32600, "message": "coding MCP is not initialized",
+        }
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+def test_public_supervisor_starts_before_delivering_the_first_tool_call(
+    tmp_path,
+) -> None:
+    """Slow construction completes, then the original call is delivered once."""
+
+    script = tmp_path / "slow-recording.py"
+    marker = tmp_path / "requests.txt"
+    script.write_text(_SLOW_RECORDING_WORKER, encoding="utf-8")
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, "-u", str(script), "0.15", str(marker)),
+        build_id_provider=lambda: "build-one",
+        response_timeout=0.05,
+        handshake_timeout=0.05,
+    )
+    supervisor.startup_response_timeout = 5.0
+    try:
+        initialized = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        })))
+        assert initialized["result"]["serverInfo"]["name"] == "fake"
+        assert supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
+        })) is None
+        assert supervisor.worker_pid > 0
+
+        called = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "flyto_coding_get", "arguments": {
+                "job_id": "job_" + "a" * 24,
+            }},
+        })))
+        assert called["result"]["structuredContent"]["ok"] is True
+        assert marker.read_text(encoding="utf-8").splitlines() == [
+            "initialize", "notifications/initialized", "tools/list", "tools/call",
+        ]
+    finally:
+        supervisor.close()
+
+
+def test_public_supervisor_startup_timeout_never_delivers_the_tool_call(
+    tmp_path,
+) -> None:
+    """A startup timeout is distinguishable and safe for caller retry."""
+
+    script = tmp_path / "slow-recording.py"
+    marker = tmp_path / "requests.txt"
+    script.write_text(_SLOW_RECORDING_WORKER, encoding="utf-8")
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, "-u", str(script), "0.5", str(marker)),
+        build_id_provider=lambda: "build-one",
+        response_timeout=0.05,
+        handshake_timeout=0.05,
+    )
+    supervisor.startup_response_timeout = 0.1
+    try:
+        response = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        })))
+        assert response["error"] == {
+            "code": -32603,
+            "message": "coding worker startup exceeded its deadline",
+        }
+        assert not marker.exists()
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+def test_initialize_response_validation_is_exact_and_fail_closed() -> None:
+    request = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18"},
+    }
+    result = {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {"tools": {"listChanged": False}},
+        "serverInfo": {"name": "flyto-coding", "version": "2"},
+        "instructions": "test",
+    }
+    valid = _line({"jsonrpc": "2.0", "id": 1, "result": result})
+    assert validated_initialize_result(valid, request) == result
+    canonical_error = _line({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32602, "message": "unsupported MCP protocol version"},
+    })
+    assert validated_initialize_result(canonical_error, request) is None
+
+    invalid = (
+        _line({"jsonrpc": "2.0", "id": 2, "result": result}),
+        _line({"jsonrpc": "2.0", "id": True, "result": result}),
+        _line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        _line({"jsonrpc": "2.0", "id": 1, "error": {"code": -32603}}),
+        _line({
+            "jsonrpc": "2.0", "id": 1, "result": result,
+            "error": {"code": -32602, "message": "ambiguous"},
+        }),
+        b'{"jsonrpc":',
+    )
+    for response in invalid:
+        with pytest.raises(CodingMCPWorkerUnavailable):
+            validated_initialize_result(response, request)
+
+
+def test_tool_list_response_validation_requires_a_complete_schema() -> None:
+    request = {
+        "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+    }
+    result = {"tools": [{
+        "name": "flyto_coding_submit",
+        "inputSchema": {"type": "object"},
+    }]}
+    valid = _line({"jsonrpc": "2.0", "id": 2, "result": result})
+    assert validated_tools_list_result(valid, request) == result
+
+    incomplete = _line({
+        "jsonrpc": "2.0", "id": 2,
+        "result": {"tools": [{"name": "flyto_coding_submit"}]},
+    })
+    paginated = _line({
+        "jsonrpc": "2.0", "id": 2,
+        "result": {"tools": result["tools"], "nextCursor": "more"},
+    })
+    nonfinite = (
+        b'{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"x",'
+        b'"inputSchema":{"maximum":1e10000}}]}}\n'
+    )
+    duplicate = valid.replace(b'"id":2,', b'"id":2,"id":2,')
+    for response in (incomplete, paginated, nonfinite, duplicate):
+        with pytest.raises(CodingMCPWorkerUnavailable):
+            validated_tools_list_result(response, request)

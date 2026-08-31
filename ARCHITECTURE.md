@@ -403,16 +403,37 @@ outright rather than acting on an unprovable claim.
 For a long-lived local MCP host, `code-mcp-supervisor` owns the stable stdio
 edge shown above. It compares the current coding-source digest at request
 boundaries, replaces only a terminal/idle worker, and replays initialization.
+A newly spawned worker gets one 120-second response bound because
+`CodingService` must validate state-root authority, workspace claims, recovery,
+fencing, and leases before it can read its first stdio frame. The supervisor
+rejects `tools/call` before a successful initialize response, validates that
+response's JSON-RPC id, protocol, capabilities, server metadata and
+instructions, and requires both its exact result and the validated deterministic
+`tools/list` result when replaying after a hot reload. Valid initialize errors
+pass through without replacing the replay contract. Every later call retains
+the 30-second bound.
+
+Cold startup itself is kept below that outer safety bound without weakening
+durable validation. `flyto_ai.coding` and compatible top-level exports resolve
+lazily, while `Agent`/`AgentConfig` remain eager so the `create_agent` factory
+retains its runtime type contract. This removes the coding facade's full
+service/stack import fanout; it does not claim that the top-level agent import is
+lazy. Terminal-orphan reconciliation parses every job record as before but
+resolves all known mission work-item rows from one fully validated MissionStore
+snapshot instead of reopening and revalidating the whole database once per
+candidate. Lease-based reclaim, exact coordinates, claims, fencing, recovery,
+and record mutation are unchanged.
 A known non-terminal job keeps its worker and exact implementation session;
 only a competing new submission is denied until that job terminates. A direct
 worker also compares its immutable startup build with disk before accepting a
 new job, so source drift cannot silently run stale implementation logic.
-A worker that refuses at the state-root authority exits `78`, and the
-supervisor turns that one exit code into a bounded fixed reason naming
-`code-status` and `code-release`. Every other fault keeps the generic
-`coding worker unavailable`. The reason is selected by exit code alone; worker
-stderr is never captured or forwarded, so this path cannot carry a path,
-prompt, secret, raw error, or job content.
+A worker that refuses at the state-root authority exits `78`; workspace
+ownership, registry-busy, and registry-damaged refusals use `79`, `75`, and
+`77`. The supervisor maps only those closed exit codes to bounded fixed
+operator reasons. Every other fault keeps the generic `coding worker
+unavailable`. The reason is selected by exit code alone; worker stderr is never
+captured or forwarded, so this path cannot carry a path, prompt, secret, raw
+error, or job content.
 
 The lanes are host-owned, not a prompt convention. `flyto_ai.coding.route`
 owns the typed policy, the allowlists, the bounded loops, and the evidence.

@@ -1,132 +1,72 @@
 # Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
-"""Provider-neutral, detachable coding-agent control plane."""
+"""Provider-neutral coding control plane with lazy public exports."""
+from __future__ import annotations
 
 from importlib import import_module
-
-from flyto_ai.coding.agent import FlytoCodingAgent
-from flyto_ai.coding.capabilities import CapabilityManager, McpStdioSession
-from flyto_ai.coding.checks import CheckRunner, load_project_config
-from flyto_ai.coding.conformance import (
-    AdapterConformanceCase,
-    AdapterConformanceReport,
-    run_adapter_conformance,
-)
-from flyto_ai.coding.contracts import (
-    AUDIT_BOUND_CODING_JOB_STATES,
-    AUDITED_CODING_JOB_STATES,
-    CONFIG_VERSION,
-    CONTRACT_VERSION,
-    MAX_AUDIT_EVIDENCE_REF_CHARS,
-    MAX_AUDIT_FINDINGS,
-    MAX_AUDIT_MESSAGE_CHARS,
-    MAX_AUDIT_ROUNDS,
-    MISSION_COMPLETED,
-    MISSION_DISPOSITION_FIXED,
-    MISSION_DISPOSITIONS,
-    MISSION_ID_PATTERN,
-    MISSION_OPEN,
-    MISSION_STATUS_CLOSED,
-    MISSION_STATUS_DISPATCHED,
-    MISSION_STATUS_READY,
-    MISSION_LANE_PRIMARY,
-    MISSION_LANES,
-    MISSION_MAX_ACCEPTANCE_CRITERIA,
-    MISSION_MAX_DEPENDENCIES,
-    MISSION_MAX_FIELD_CHARS,
-    MISSION_MAX_PRIORITY,
-    MISSION_MAX_TEXT_CHARS,
-    MISSION_PROJECTION_FIELDS,
-    MISSION_STATUSES,
-    MISSION_WORK_STATUSES,
-    SERVICE_CONTRACT_VERSION,
-    SUPPORTED_SERVICE_CONTRACT_VERSIONS,
-    TERMINAL_CODING_JOB_STATES,
-    TOOL_PERMISSION_LEVELS,
-    ApprovalPolicy,
-    CapabilitySpec,
-    CapabilityStatus,
-    CheckResult,
-    CheckSpec,
-    CodingAuditFinding,
-    CodingAuditSeverity,
-    CodingAuditVerdict,
-    CodingJobReceipt,
-    CodingJobState,
-    CodingMissionEnvelope,
-    CodingMissionProjection,
-    CodingTaskRequest,
-    CodingTaskResult,
-    SandboxMode,
-    WORK_ITEM_ID_PATTERN,
-    audit_findings_sha256,
-    mission_axis_sha256,
-    require_revision_sha256,
-    validate_audit_submission,
-)
-# Audit callers must be able to handle every fail-closed decision by type.
-# `CodingJobNotFound` and `WorkspaceDenied` are included because `audit()`
-# itself raises them; job submission internals stay unexported.
-from flyto_ai.coding.service import (
-    AbandonStateConflict,
-    AuditBlockersUnresolved,
-    AuditNotEnabled,
-    AuditStateConflict,
-    CodingAuthorityConflict,
-    CodingAuthorityUnavailable,
-    CodingJobNotFound,
-    CodingServiceError,
-    CodingServiceReloadRequired,
-    RevisionMismatch,
-    RevisionUnavailable,
-    ReworkLimitReached,
-    ReworkNotResumable,
-    SessionBindingFailed,
-    WorkspaceBusy,
-    WorkspaceClaimUnresolved,
-    WorkspaceDenied,
-    receipt_to_mapping,
-)
-from flyto_ai.coding.store import ThreadStore
-from flyto_ai.coding.execution_policy import (
-    ApprovalDecision,
-    ApprovalRequest,
-    ExecutionLimits,
-    ExecutionPolicy,
-    ExecutionPolicyController,
-)
-from flyto_ai.coding.execution_trace import (
-    ExecutionReplayReport,
-    ExecutionTraceLedger,
-    OutcomeFeedbackReceipt,
-)
-from flyto_ai.coding.scenario_matrix import (
-    AdapterScenario,
-    ScenarioMatrixReport,
-    run_scenario_matrix,
-)
-from flyto_ai.coding.workspace import WorkspaceTools, WorkspaceViolation
-
-_STACK_EXPORTS = frozenset({
-    "AGENT_STACK_CONTRACT_VERSION",
-    "AGENT_STACK_POLICY_VERSION",
-    "AgentStackManifest",
-    "DEFAULT_COMPONENTS",
-    "SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS",
-    "build_agent_stack_capabilities",
-    "compose_capability_stack",
-    "load_agent_stack_manifest",
-    "probe_capability_stack",
-    "probe_agent_stack",
-})
+from typing import Any
 
 
-def __getattr__(name: str):
-    """Load stack helpers lazily so the stack module remains warning-free as a CLI."""
-    if name in _STACK_EXPORTS:
-        return getattr(import_module("flyto_ai.coding.stack"), name)
-    raise AttributeError("module {!r} has no attribute {!r}".format(__name__, name))
-
+_GROUPS = {
+    "flyto_ai.coding.agent": ("FlytoCodingAgent",),
+    "flyto_ai.coding.capabilities": ("CapabilityManager", "McpStdioSession"),
+    "flyto_ai.coding.checks": ("CheckRunner", "load_project_config"),
+    "flyto_ai.coding.conformance": (
+        "AdapterConformanceCase", "AdapterConformanceReport", "run_adapter_conformance",
+    ),
+    "flyto_ai.coding.contracts": (
+        "AUDIT_BOUND_CODING_JOB_STATES", "AUDITED_CODING_JOB_STATES",
+        "CONFIG_VERSION", "CONTRACT_VERSION", "MAX_AUDIT_EVIDENCE_REF_CHARS",
+        "MAX_AUDIT_FINDINGS", "MAX_AUDIT_MESSAGE_CHARS", "MAX_AUDIT_ROUNDS",
+        "MISSION_COMPLETED", "MISSION_DISPOSITION_FIXED", "MISSION_DISPOSITIONS",
+        "MISSION_ID_PATTERN", "MISSION_OPEN", "MISSION_STATUS_CLOSED",
+        "MISSION_STATUS_DISPATCHED", "MISSION_STATUS_READY", "MISSION_LANE_PRIMARY",
+        "MISSION_LANES", "MISSION_MAX_ACCEPTANCE_CRITERIA",
+        "MISSION_MAX_DEPENDENCIES", "MISSION_MAX_FIELD_CHARS", "MISSION_MAX_PRIORITY",
+        "MISSION_MAX_TEXT_CHARS", "MISSION_PROJECTION_FIELDS", "MISSION_STATUSES",
+        "MISSION_WORK_STATUSES", "SERVICE_CONTRACT_VERSION",
+        "SUPPORTED_SERVICE_CONTRACT_VERSIONS", "TERMINAL_CODING_JOB_STATES",
+        "TOOL_PERMISSION_LEVELS", "ApprovalPolicy", "CapabilitySpec",
+        "CapabilityStatus", "CheckResult", "CheckSpec", "CodingAuditFinding",
+        "CodingAuditSeverity", "CodingAuditVerdict", "CodingJobReceipt",
+        "CodingJobState", "CodingMissionEnvelope", "CodingMissionProjection",
+        "CodingTaskRequest", "CodingTaskResult", "SandboxMode", "WORK_ITEM_ID_PATTERN",
+        "audit_findings_sha256", "mission_axis_sha256", "require_revision_sha256",
+        "validate_audit_submission",
+    ),
+    "flyto_ai.coding.service": (
+        "AbandonStateConflict", "AuditBlockersUnresolved", "AuditNotEnabled",
+        "AuditStateConflict", "CodingAuthorityConflict", "CodingAuthorityUnavailable",
+        "CodingJobNotFound", "CodingServiceError", "CodingServiceReloadRequired",
+        "RevisionMismatch", "RevisionUnavailable", "ReworkLimitReached",
+        "ReworkNotResumable", "SessionBindingFailed", "WorkspaceBusy",
+        "WorkspaceClaimUnresolved", "WorkspaceDenied", "receipt_to_mapping",
+    ),
+    "flyto_ai.coding.store": ("ThreadStore",),
+    "flyto_ai.coding.execution_policy": (
+        "ApprovalDecision", "ApprovalRequest", "ExecutionLimits", "ExecutionPolicy",
+        "ExecutionPolicyController",
+    ),
+    "flyto_ai.coding.execution_trace": (
+        "ExecutionReplayReport", "ExecutionTraceLedger", "OutcomeFeedbackReceipt",
+    ),
+    "flyto_ai.coding.scenario_matrix": (
+        "AdapterScenario", "ScenarioMatrixReport", "run_scenario_matrix",
+    ),
+    "flyto_ai.coding.workspace": ("WorkspaceTools", "WorkspaceViolation"),
+    "flyto_ai.coding.stack": (
+        "AGENT_STACK_CONTRACT_VERSION", "AGENT_STACK_POLICY_VERSION",
+        "AgentStackManifest", "DEFAULT_COMPONENTS",
+        "SUPPORTED_AGENT_STACK_MANIFEST_VERSIONS", "build_agent_stack_capabilities",
+        "compose_capability_stack", "load_agent_stack_manifest",
+        "probe_capability_stack", "probe_agent_stack",
+    ),
+}
+_EXPORTS = {
+    name: module
+    for module, names in _GROUPS.items()
+    for name in names
+}
 __all__ = [
     "AdapterConformanceCase",
     "AdapterConformanceReport",
@@ -156,8 +96,6 @@ __all__ = [
     "CodingAuditVerdict",
     "CodingJobNotFound",
     "CodingJobReceipt",
-    # Mission adapter contract. Exported at package level so a caller binds to
-    # the public surface rather than to an internal module path.
     "CodingMissionEnvelope",
     "CodingMissionProjection",
     "mission_axis_sha256",
@@ -231,3 +169,16 @@ __all__ = [
     "run_scenario_matrix",
     "validate_audit_submission",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError("module {!r} has no attribute {!r}".format(__name__, name))
+    value = getattr(import_module(module), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

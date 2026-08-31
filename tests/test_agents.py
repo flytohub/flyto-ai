@@ -780,6 +780,16 @@ class TestPackageExports:
         cls = flyto_ai.ClaudeCodeAgent
         assert cls.__name__ == "ClaudeCodeAgent"
 
+    def test_create_agent_keeps_its_runtime_typing_contract(self):
+        import inspect
+        from typing import get_type_hints
+
+        import flyto_ai
+
+        signature = inspect.signature(flyto_ai.create_agent)
+        assert signature.parameters["kwargs"].annotation is inspect.Signature.empty
+        assert get_type_hints(flyto_ai.create_agent)["return"] is flyto_ai.Agent
+
     def test_stream_event_types(self):
         from flyto_ai.models import StreamEventType
         assert StreamEventType.PHASE_START.value == "phase_start"

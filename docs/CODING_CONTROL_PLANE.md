@@ -864,15 +864,42 @@ implementer, or adds an MCP tool.
 
 ### Bounded supervisor reads
 
-`code-mcp-supervisor` deadlines every worker read at 30 seconds, for both
-requests and the replayed handshake. Submit, get, and audit only schedule or
-inspect background work, so a longer wait is a wedged worker, not a slow one. A
-missed deadline returns a bounded JSON-RPC `-32603` and terminates the worker
-so the state-root locks it held are released; the request is never retried,
-because its delivery is uncertain and the job may already exist. A caller
-recovers by replaying the same idempotency key, which the supervisor must never
-do on their behalf. The next request starts a fresh worker, whose startup
-reconciliation reports any interrupted job truthfully.
+`code-mcp-supervisor` gives the first response from a newly spawned worker a
+120-second bound. `CodingService` constructs before stdin is read and must
+validate startup authority, open work, workspace claims, recovery, fencing, and
+leases across the complete durable state root. The supervisor refuses
+`tools/call` until initialization succeeds; it validates the JSON-RPC id,
+requested protocol, server metadata, capabilities and instructions, then caches
+that result. The first client catalog or state-bearing call also caches a
+validated deterministic `tools/list` result. A hot-reloaded worker must replay
+the exact initialize result and tool catalog before any waiting request is
+delivered, so a new schema cannot hide behind an old client session. A valid
+initialize error is relayed unchanged and cannot replace a previously validated
+replay contract.
+
+Construction remains complete but avoids repeated work. The `flyto_ai.coding`
+facade no longer eagerly imports its full service/capability/stack graph;
+top-level `Agent` and `AgentConfig` remain eager to preserve the runtime typing
+contract of `create_agent`.
+Terminal reconciliation parses every durable job record, then resolves its
+bounded set of known work-item ids from one fully validated MissionStore
+snapshot. Missing, duplicate, invalid, oversized, or unreadable candidate sets
+produce no reconciliation authority. A dispatched row still goes through live
+lease-based reclaim, and exact mission and tenant/job coordinates are checked
+before any projection is updated.
+
+Once the worker answers, every request uses the ordinary 30-second bound.
+Submit, get, and audit only schedule or inspect background work, so a longer
+steady wait is a wedged worker, not a slow one. A missed deadline returns a
+bounded JSON-RPC `-32603`, terminates the worker, and never replays a request
+whose delivery may be uncertain. The next request starts a fresh worker, whose
+startup reconciliation reports interrupted work truthfully.
+
+An already-running old supervisor does not import a new outer timeout constant.
+It does, however, source-reload the new faster inner worker at its ordinary safe
+boundary. The 120-second outer bound and stricter handshake validator apply
+when that supervisor process is next reopened; rollout never kills unrelated
+MCP sessions as a shortcut.
 
 Hot-reload tracking is self-healing from durable job records rather than from a
 process-local set alone: a client that stops polling cannot pin

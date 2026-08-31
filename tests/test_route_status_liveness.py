@@ -29,11 +29,11 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from flyto_ai.coding import route_status
-
 from flyto_ai.coding.mcp_supervisor import (
     WORKER_AUTHORITY_EXIT_CODE,
     WORKER_AUTHORITY_REASON,
@@ -47,6 +47,16 @@ from flyto_ai.coding.route_status import (
     lease_alive,
     service_build_id,
 )
+
+
+def test_service_source_inventory_covers_batched_startup_reconciliation() -> None:
+    relative_paths = {
+        path.relative_to(Path(route_status.__file__).resolve().parents[1]).as_posix()
+        for path in route_status._service_source_paths()
+    }
+
+    assert "coding/startup_reconciliation.py" in relative_paths
+    assert "orchestration/mission_batch.py" in relative_paths
 
 
 fcntl = pytest.importorskip("fcntl")

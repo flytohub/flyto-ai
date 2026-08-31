@@ -108,6 +108,9 @@ from flyto_ai.coding.mission_reconciliation import (
     RoundSettlement as _RoundSettlement,
     terminal_orphan_ready_projection,
 )
+from flyto_ai.coding.startup_reconciliation import (
+    reconcile_interrupted_jobs as _reconcile_startup_jobs,
+)
 from flyto_ai.coding.route import (
     CodingRoutePolicy,
     CodingRouteReceipt,
@@ -7459,75 +7462,7 @@ class CodingService:
         )
 
     def _reconcile_interrupted_jobs(self) -> None:
-        tenants = self.state_root / "tenants"
-        if tenants.is_dir():
-            for path in tenants.glob("*/jobs/job_*.json"):
-                try:
-                    record = self._read_json(path)
-                    if str(record.get("state") or "") in _TERMINAL_STATE_VALUES:
-                        ready = terminal_orphan_ready_projection(
-                            self._mission, record,
-                            tenant_ref=path.parent.parent.name,
-                        )
-                        if ready is not None:
-                            self._update_record_locked(path, mission=ready)
-                            self._reclaimed += 1
-                        continue
-                    # An awaiting-audit job survives a restart; in-flight work
-                    # does not, but another live MCP process may still own its
-                    # job lease.
-                    if record.get("state") in _PUMPABLE_JOB_STATES:
-                        # Queued work is not interrupted work. Everything a
-                        # round needs - the record, the resume envelope, the
-                        # round envelope, the placed work item - is durable, so
-                        # a start-up finds a job waiting for a worker, not a
-                        # casualty. Failing it here is what made "the submitter
-                        # exited" indistinguishable from "the round died", and
-                        # it threw away work nobody had begun.
-                        if self._may_execute(record):
-                            self._reconcile_queued_job(path, record)
-                        continue
-                    if record.get("state") in _EXECUTING_JOB_STATES:
-                        job_id = str(record.get("job_id") or "")
-                        if not self._acquire_job_lease(job_id):
-                            continue
-                        try:
-                            record.update({
-                                "state": CodingJobState.FAILED.value,
-                                "updated_at": time.time(),
-                                "landable": False,
-                                "failure_code": "service_restarted",
-                            })
-                            self._write_json(path, record)
-                            self._publish_status(record)
-                            # `.../tenants/<tenant_ref>/jobs/<job_id>.json`
-                            self._discard_resume(path.parent.parent.name, job_id)
-                            self._reclaim_mission_item(path, record)
-                        finally:
-                            self._release_job_lease(job_id)
-                except (OSError, ValueError, json.JSONDecodeError):
-                    continue
-        # Claims outlive the process that took them on purpose, so a crash
-        # cannot expose a worktree whose audit has not happened yet. Sweeping
-        # afterwards keeps that from becoming a permanent pin, but only for
-        # ownership this pass can actually evaluate: a claim is dropped only
-        # when it is well formed, bound to its own worktree, and its owning
-        # record binds back and proves the job settled — including the records
-        # this pass just failed closed. A missing, unreadable, unbound, or
-        # otherwise unresolved claim is deliberately preserved for a host
-        # operator, because discarding it would reopen a worktree whose audit
-        # may still be pending.
-        self._sweep_workspace_claims()
-        self._reconcile_continuation_claims()
-        # One pump per item this pass left runnable: work it returned to the
-        # queue by proving a lease free, and work that was simply still queued
-        # when its submitter exited. Both go back through the ordinary
-        # store-ordered route rather than through a second, privileged path -
-        # the restart's accounting and the survivor's execution are the same
-        # mechanism, so neither can close work the scheduler believes is live.
-        for _ in range(self._reclaimed):
-            self._prime_pump()
-        self._reclaimed = 0
+        _reconcile_startup_jobs(self)
 
     def _reconcile_queued_job(
         self, path: Path, observed: Mapping[str, Any],

@@ -4,6 +4,13 @@
 
 ### Changed
 
+- Initialized `code-mcp-supervisor` sessions now serve an exact
+  `flyto_coding_get` from one authenticated tenant/job record without starting
+  the whole-history coding worker. The bounded no-follow read reuses canonical
+  receipt, continuation, route, and emergency validation and writes no state.
+  Terminal Mission reconciliation, unsafe storage, future argument shapes,
+  incompatible backend/emergency startup selection, and source drift still use
+  the canonical worker.
 - `code-mcp-supervisor` now gives only a newly spawned worker's first response a
   separate 120-second deadline so complete fail-closed durable-state validation
   can finish on a high-cardinality state root. State-bearing calls are refused

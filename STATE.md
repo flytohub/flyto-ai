@@ -2,6 +2,26 @@
 
 Last updated: 2026-09-01
 
+## Cardinality-independent coding receipt reads (2026-09-01)
+
+- An initialized `code-mcp-supervisor` can answer an exact
+  `flyto_coding_get` from the authenticated tenant's one durable job record
+  without starting or scanning through `CodingService`. The read is descriptor-
+  relative, no-follow, owner/private-mode checked, limited to 1 MiB, strict
+  about duplicate/non-finite JSON, and requires the stored job id to match the
+  requested id.
+- The projection reuses the canonical public receipt, continuation lookup, and
+  strict route/emergency authority validator. It writes no state, exposes no
+  private record field, and cannot accept, rework, dispatch, or widen a job.
+- A terminal Mission projection still marked ready/dispatched, an unsafe record
+  or platform, unknown arguments, incompatible backend/emergency startup
+  selection, or any coding-source change falls back to the canonical worker.
+  Once source drift is seen, that supervisor never re-enables its imported
+  validator.
+- The MCP inventory, get input schema, receipt schema, durable job format,
+  tenant partition, implementation backend, audit/rework authority, and product
+  topology are unchanged.
+
 ## Bounded high-cardinality coding-worker startup (2026-09-01)
 
 - `code-mcp-supervisor` now distinguishes construction of a fresh worker from

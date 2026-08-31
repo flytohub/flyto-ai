@@ -895,6 +895,18 @@ bounded JSON-RPC `-32603`, terminates the worker, and never replays a request
 whose delivery may be uncertain. The next request starts a fresh worker, whose
 startup reconciliation reports interrupted work truthfully.
 
+An initialized supervisor does not need whole-history construction for one
+exact `flyto_coding_get`. It opens only the authenticated tenant/job record by
+descriptor, refusing symlinks, non-private/non-regular files, identity changes,
+duplicate/non-finite JSON, records above 1 MiB, and a stored job id different
+from the request. The successful projection is the service's canonical public
+receipt plus the same exact continuation and strict route/emergency authority
+validation. It performs no write and cannot accept, rework, dispatch, recover,
+or land a job. A terminal Mission projection still ready/dispatched, unsafe
+storage, a future argument shape, incompatible backend/emergency startup
+selection, or source drift falls back to the canonical worker. Source drift
+latches the imported validator off until the supervisor process is replaced.
+
 An already-running old supervisor does not import a new outer timeout constant.
 It does, however, source-reload the new faster inner worker at its ordinary safe
 boundary. The 120-second outer bound and stricter handshake validator apply

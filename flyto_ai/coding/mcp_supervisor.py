@@ -37,6 +37,7 @@ import threading
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Dict, Mapping, Optional, Sequence
 
+from flyto_ai.coding import fast_get
 from flyto_ai.coding.mcp_contract import (
     CodingMCPWorkerUnavailable,
     json_contract_equal,
@@ -48,7 +49,7 @@ from flyto_ai.coding.mcp_contract import (
 )
 from flyto_ai.coding.route_status import current_service_build_id
 
-
+_option_value = fast_get._last_option_value
 MAX_SUPERVISOR_MESSAGE_BYTES = 256 * 1024
 WORKER_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 #: Submit, get, and audit all return as soon as the service has recorded a
@@ -313,6 +314,7 @@ class CodingMCPWorkerSupervisor:
         self.stdout = stdout or sys.stdout.buffer
         self._build_id_provider = build_id_provider
         self._job_state_reader = job_state_reader
+        self._job_receipt_responder: Optional[fast_get.DurableJobReceiptResponder] = None
         self.response_timeout = float(response_timeout)
         self.handshake_timeout = float(handshake_timeout)
         self.startup_response_timeout = WORKER_STARTUP_RESPONSE_TIMEOUT_SECONDS
@@ -332,6 +334,12 @@ class CodingMCPWorkerSupervisor:
     @property
     def worker_pid(self) -> int:
         return int(self._channel.process.pid) if self._channel is not None else 0
+
+    def enable_durable_get(self, reader: fast_get.DurableJobReceiptReader) -> None:
+        """Attach the source-bound exact receipt responder before serving."""
+        self._job_receipt_responder = fast_get.DurableJobReceiptResponder(
+            reader, self._build_id_provider, MAX_SUPERVISOR_MESSAGE_BYTES,
+        )
 
     def serve(self) -> None:
         """Serve bounded newline-delimited MCP messages until client EOF."""
@@ -368,6 +376,11 @@ class CodingMCPWorkerSupervisor:
             return None
 
         try:
+            responder = self._job_receipt_responder
+            direct = responder.respond(request) if responder is not None else None
+            if direct is not None:
+                self._observe_job(direct, request)
+                return direct
             return self._forward_request(raw, request)
         except CodingMCPWorkerTimeout:
             # The worker owes a response it will never send. Terminating it
@@ -755,23 +768,6 @@ def worker_argv_from_process(argv: Sequence[str]) -> tuple[str, ...]:
     )
 
 
-def _option_value(argv: Sequence[str], name: str) -> str:
-    """Read one `--flag value` or `--flag=value` pair without argparse.
-
-    The supervisor deliberately does not re-parse the worker's full command
-    line: it needs two values to locate durable job records, and inventing a
-    second parser would be a second place for authority to drift.
-    """
-
-    items = tuple(argv)
-    for index, item in enumerate(items):
-        if item == name and index + 1 < len(items):
-            return items[index + 1]
-        if item.startswith(name + "="):
-            return item[len(name) + 1 :]
-    return ""
-
-
 def supervisor_from_argv(argv: Sequence[str]) -> CodingMCPWorkerSupervisor:
     """Build the supervisor one CLI invocation implies.
 
@@ -781,13 +777,21 @@ def supervisor_from_argv(argv: Sequence[str]) -> CodingMCPWorkerSupervisor:
     stops a client which stopped polling from pinning reloads forever.
     """
 
-    return CodingMCPWorkerSupervisor(
+    state_dir = _option_value(argv, "--state-dir") or DEFAULT_CODING_STATE_DIR
+    tenant_id = _option_value(argv, "--tenant")
+    supervisor = CodingMCPWorkerSupervisor(
         worker_argv_from_process(argv),
         job_state_reader=durable_job_state_reader(
-            _option_value(argv, "--state-dir") or DEFAULT_CODING_STATE_DIR,
-            _option_value(argv, "--tenant"),
+            state_dir,
+            tenant_id,
         ),
     )
+    receipt_reader = fast_get.durable_job_receipt_reader_from_argv(
+        argv, default_state_dir=DEFAULT_CODING_STATE_DIR,
+    )
+    if receipt_reader is not None:
+        supervisor.enable_durable_get(receipt_reader)
+    return supervisor
 
 
 def serve_supervised_stdio(argv: Sequence[str]) -> None:

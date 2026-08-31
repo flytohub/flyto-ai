@@ -469,6 +469,112 @@ def recorded_blockers(record: Mapping[str, Any]) -> Tuple[str, ...]:
     )[:MAX_IMPLEMENTATION_BLOCKERS]
 
 
+def require_execution_authority_record(
+    record: Mapping[str, Any],
+    *,
+    strict_route: bool,
+    emergency_enabled: bool,
+    implementation_backend: str,
+) -> None:
+    """Validate a persisted round without constructing a mutable service.
+
+    An audit-ready or landable read has to prove the same startup-bound route
+    authority as the audit path.  The stable MCP supervisor uses this function
+    when it serves one exact durable record without starting the worker, so its
+    cardinality-independent fast path cannot grow a weaker evidence validator.
+
+    Only the supplied mapping is inspected.  This function opens no workspace,
+    changes no record, grants no rework, and accepts no audit.
+    """
+
+    if not strict_route:
+        return
+    route_stored = record.get("route_receipt")
+    emergency_stored = record.get("emergency_authority")
+    has_route = isinstance(route_stored, dict)
+    has_emergency = isinstance(emergency_stored, dict)
+    if has_route and has_emergency:
+        raise RouteEvidenceMissing(
+            "this round claims both route and emergency authority",
+        )
+    if has_emergency:
+        if not emergency_enabled:
+            raise EmergencyAuthorityMissing(
+                "this service does not carry emergency overflow authority",
+            )
+        try:
+            authority = EmergencyAuthorityReceipt.from_mapping(emergency_stored)
+        except EmergencyAuthorityError as exc:
+            raise EmergencyAuthorityMissing("emergency authority is invalid") from exc
+        if not authority.sealed:
+            raise EmergencyAuthorityMissing("emergency authority is not bound to a round")
+        if authority.implementer_backend != implementation_backend:
+            raise EmergencyAuthorityMissing(
+                "emergency authority names a different implementer",
+            )
+        if not authority.checks_enforced or not authority.implementer_started:
+            raise EmergencyAuthorityMissing(
+                "emergency authority lacks a completed checked implementation",
+            )
+        for field_name, recorded in (
+            ("job_id", str(record.get("job_id") or "")),
+            ("request_sha256", str(record.get("request_sha256") or "")),
+            ("session_id", str(record.get("implementation_session_id") or "")),
+            (
+                "revision_sha256",
+                str(record.get("implementation_revision_sha256") or ""),
+            ),
+        ):
+            if getattr(authority, field_name) != recorded:
+                raise EmergencyAuthorityMissing(
+                    "emergency authority does not bind this round",
+                )
+        if record.get("implementer_started") is not True:
+            raise EmergencyAuthorityMissing("this round never started an implementer")
+        return
+    if not has_route:
+        raise RouteEvidenceMissing("this round has no coding route evidence")
+    try:
+        route = CodingRouteReceipt.from_mapping(route_stored)
+    except ValueError as exc:
+        raise RouteEvidenceMissing("coding route evidence is invalid") from exc
+    if not route.strict:
+        raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
+    state = str(record.get("state") or "")
+    route_retry_pending = (
+        state in {
+            CodingJobState.REWORK_QUEUED.value,
+            CodingJobState.REWORK_RUNNING.value,
+        }
+        and int(record.get("route_retry_count", 0) or 0) == 1
+    )
+    if state == CodingJobState.REWORK_ROUTE_BLOCKED.value or route_retry_pending:
+        lane, _action, _code = route_failure_point(route)
+        result = record.get("result")
+        if (
+            route.ok
+            or lane not in {"indexer_pre", "blueprint"}
+            or not isinstance(result, Mapping)
+            or result.get("attempts") != 0
+            or bool(result.get("files_changed"))
+            or record.get("landable") is True
+            or record.get("implementer_started") is not True
+        ):
+            raise RouteEvidenceMissing(
+                "blocked repair route evidence is not pre-provider exact",
+            )
+        return
+    if not route.ok and not (
+        route_blocks_implementation(route)
+        and recorded_blockers(record)
+        and record.get("landable") is not True
+        and state != CodingJobState.CODEX_ACCEPTED.value
+    ):
+        raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
+    if record.get("implementer_started") is not True:
+        raise RouteEvidenceMissing("this round never started an implementer")
+
+
 class _RoundProgress:
     """What one execution round actually did, tracked by the host itself.
 
@@ -6320,109 +6426,12 @@ class CodingService:
         failed-check, and ordinary failed-route evidence all fail closed. A
         failed strict route is never rewritten as a passed one.
         """
-        policy = self.route_policy
-        if policy is None or not policy.strict:
-            return
-        route_stored = record.get("route_receipt")
-        emergency_stored = record.get("emergency_authority")
-        has_route = isinstance(route_stored, dict)
-        has_emergency = isinstance(emergency_stored, dict)
-        if has_route and has_emergency:
-            # Two authorities are never additive. One of them must be a
-            # fabrication, so neither is trusted.
-            raise RouteEvidenceMissing(
-                "this round claims both route and emergency authority",
-            )
-        if has_emergency:
-            self._require_emergency_authority(record, emergency_stored)
-            return
-        if not has_route:
-            raise RouteEvidenceMissing("this round has no coding route evidence")
-        try:
-            route = CodingRouteReceipt.from_mapping(route_stored)
-        except ValueError as exc:
-            raise RouteEvidenceMissing("coding route evidence is invalid") from exc
-        if not route.strict:
-            raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
-        state = str(record.get("state") or "")
-        route_retry_pending = (
-            state in {
-                CodingJobState.REWORK_QUEUED.value,
-                CodingJobState.REWORK_RUNNING.value,
-            }
-            and int(record.get("route_retry_count", 0) or 0) == 1
+        require_execution_authority_record(
+            record,
+            strict_route=bool(self.route_policy and self.route_policy.strict),
+            emergency_enabled=self.emergency_policy.enabled,
+            implementation_backend=self.implementation_backend,
         )
-        if state == CodingJobState.REWORK_ROUTE_BLOCKED.value or route_retry_pending:
-            lane, _action, _code = route_failure_point(route)
-            result = record.get("result")
-            if (
-                route.ok
-                or lane not in {"indexer_pre", "blueprint"}
-                or not isinstance(result, Mapping)
-                or result.get("attempts") != 0
-                or bool(result.get("files_changed"))
-                or record.get("landable") is True
-                or record.get("implementer_started") is not True
-            ):
-                raise RouteEvidenceMissing(
-                    "blocked repair route evidence is not pre-provider exact",
-                )
-            return
-        if not route.ok and not (
-            # The single exception, and it grants strictly less than a pass: a
-            # strict route whose every lane ran and was trusted, which stopped
-            # only because the implementation it wrapped did not close its own
-            # required checks, and whose record still says so. Such a job may
-            # be read and reworked. It may never be landable or accepted, and
-            # the accept path refuses it independently of this check.
-            route_blocks_implementation(route)
-            and recorded_blockers(record)
-            and record.get("landable") is not True
-            and str(record.get("state")) != CodingJobState.CODEX_ACCEPTED.value
-        ):
-            raise RouteEvidenceMissing("coding route evidence is not a passed strict route")
-        if record.get("implementer_started") is not True:
-            raise RouteEvidenceMissing("this round never started an implementer")
-
-    def _require_emergency_authority(
-        self, record: Mapping[str, Any], stored: Mapping[str, Any],
-    ) -> None:
-        """Validate one emergency authority against this service and this job."""
-
-        if not self.emergency_policy.enabled:
-            # Only startup grants this authority. A record that names it on a
-            # service without it is evidence of tampering, not permission.
-            raise EmergencyAuthorityMissing(
-                "this service does not carry emergency overflow authority",
-            )
-        try:
-            authority = EmergencyAuthorityReceipt.from_mapping(stored)
-        except EmergencyAuthorityError as exc:
-            raise EmergencyAuthorityMissing("emergency authority is invalid") from exc
-        if not authority.sealed:
-            raise EmergencyAuthorityMissing("emergency authority is not bound to a round")
-        if authority.implementer_backend != self.implementation_backend:
-            raise EmergencyAuthorityMissing(
-                "emergency authority names a different implementer",
-            )
-        if not authority.checks_enforced or not authority.implementer_started:
-            raise EmergencyAuthorityMissing(
-                "emergency authority lacks a completed checked implementation",
-            )
-        # Binding: a receipt lifted from another job's record cannot describe
-        # this job's id, request, session, and revision at the same time.
-        for field_name, recorded in (
-            ("job_id", str(record.get("job_id") or "")),
-            ("request_sha256", str(record.get("request_sha256") or "")),
-            ("session_id", str(record.get("implementation_session_id") or "")),
-            ("revision_sha256", str(record.get("implementation_revision_sha256") or "")),
-        ):
-            if getattr(authority, field_name) != recorded:
-                raise EmergencyAuthorityMissing(
-                    "emergency authority does not bind this round",
-                )
-        if record.get("implementer_started") is not True:
-            raise EmergencyAuthorityMissing("this round never started an implementer")
 
     def _stored_revision(self, record: Mapping[str, Any]) -> str:
         """Recompute the digest of a persisted attributable change set."""

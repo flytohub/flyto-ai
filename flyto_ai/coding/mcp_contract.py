@@ -160,10 +160,16 @@ def protocol_error(request_id: Any, code: int, message: str) -> bytes:
     }, separators=(",", ":")).encode() + b"\n"
 
 
-def tool_error(request_id: Any, code: str) -> bytes:
+def tool_error(
+    request_id: Any,
+    code: str,
+    details: Optional[Mapping[str, Any]] = None,
+) -> bytes:
     """Encode one structured MCP tool-domain refusal."""
 
     payload = {"ok": False, "error": code}
+    if details:
+        payload["details"] = dict(details)
     return json.dumps({
         "jsonrpc": "2.0",
         "id": request_id,
@@ -173,3 +179,21 @@ def tool_error(request_id: Any, code: str) -> bytes:
             "structuredContent": payload,
         },
     }, separators=(",", ":")).encode() + b"\n"
+
+
+def tool_job_result(request_id: Any, job: Mapping[str, Any]) -> bytes:
+    """Encode one successful, already validated public job receipt."""
+
+    payload = {"ok": True, "job": dict(job)}
+    return json.dumps({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "content": [{
+                "type": "text",
+                "text": json.dumps(payload, ensure_ascii=False),
+            }],
+            "isError": False,
+            "structuredContent": payload,
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"

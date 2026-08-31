@@ -423,6 +423,22 @@ resolves all known mission work-item rows from one fully validated MissionStore
 snapshot instead of reopening and revalidating the whole database once per
 candidate. Lease-based reclaim, exact coordinates, claims, fencing, recovery,
 and record mutation are unchanged.
+
+Once MCP initialization has succeeded, an exact-shape `flyto_coding_get` has a
+narrower read-only boundary. The supervisor opens only the authenticated
+tenant's requested job record through descriptor-relative no-follow traversal,
+requires an owner-only regular single-link file no larger than 1 MiB, rejects
+duplicate/non-finite JSON and mismatched job ids, then uses the canonical public
+receipt, continuation projection, and strict route/emergency authority
+validator. It never constructs a service, enumerates history, or writes state.
+Terminal Mission projections still marked ready/dispatched fall through to the
+worker because canonical `get` may reconcile them. Unsafe storage, unknown
+arguments, incompatible backend/emergency startup selection, and source drift
+also fall through. A
+supervisor that observes source drift permanently disables its imported fast-
+path validator until that supervisor is replaced, so a fresh worker can never
+be fronted by stale receipt semantics.
+
 A known non-terminal job keeps its worker and exact implementation session;
 only a competing new submission is denied until that job terminates. A direct
 worker also compares its immutable startup build with disk before accepting a

@@ -1,5 +1,27 @@
 # Decisions
 
+## 2026-09-01 — Exact receipt reads do not require whole-history construction
+
+Decision: after MCP initialization, the stable supervisor may answer only an
+exact-shape `flyto_coding_get(job_id)` by opening the authenticated tenant's one
+durable job record. It uses descriptor-relative no-follow traversal, owner and
+private-mode checks, a 1 MiB bound, strict JSON, exact stored/requested job-id
+equality, canonical receipt/continuation projection, and the same pure strict-
+route or emergency-authority validator used by `CodingService`.
+
+Why: job status is a read, while worker construction intentionally reconciles
+every durable job and Mission row before it may mutate. Making one read depend
+on history cardinality caused cold status calls to exceed their deadline even
+though the requested record was small and already durable.
+
+Consequence: the fast path performs no write and grants no audit, rework,
+dispatch, recovery, or landing authority. Terminal Mission state that may need
+ready/dispatched reconciliation, unsafe or oversized storage, a future argument
+shape, incompatible startup flags, or detected source drift falls back to the
+canonical worker. Source drift latches the imported validator off until the
+supervisor itself is replaced. The public three-tool contract and durable
+formats are unchanged.
+
 ## 2026-09-01 — Cold startup is bounded and history is read once
 
 Decision: the supervisor allows only the first response from each newly spawned

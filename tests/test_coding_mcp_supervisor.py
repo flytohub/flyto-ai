@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from flyto_ai.coding.fast_get import DurableGetFallback, DurableGetUnavailable
 from flyto_ai.coding.mcp_contract import (
     validated_initialize_result,
     validated_tools_list_result,
@@ -24,7 +25,7 @@ from flyto_ai.coding.mcp_supervisor import (
     supervisor_from_argv,
     worker_argv_from_process,
 )
-
+from flyto_ai.coding.service import CodingJobNotFound
 
 _WORKER = r"""
 import json
@@ -199,6 +200,23 @@ def _supervisor(tmp_path, build):
         build_id_provider=lambda: build[0],
     )
     return supervisor, marker
+
+
+class _StaticReceiptReader:
+    def __init__(self, value=None, failure=None):
+        self.value = value or {
+            "job_id": "job_" + "a" * 24,
+            "state": "failed",
+            "job_terminal": True,
+        }
+        self.failure = failure
+        self.calls = []
+
+    def read(self, job_id):
+        self.calls.append(job_id)
+        if self.failure is not None:
+            raise self.failure
+        return dict(self.value)
 
 
 def test_worker_argv_replaces_only_the_supervisor_subcommand():
@@ -1355,7 +1373,8 @@ def test_malformed_and_error_responses_register_nothing(tmp_path) -> None:
 
 def test_option_values_are_read_from_either_flag_spelling() -> None:
     argv = (
-        "flyto-ai", "code-mcp-supervisor", "--tenant", "local-codex",
+        "flyto-ai", "code-mcp-supervisor", "--tenant", "stale-tenant",
+        "--tenant=local-codex", "--state-dir", "/srv/stale",
         "--state-dir=/srv/state", "--workspace-root", "/workspace",
     )
     assert _option_value(argv, "--tenant") == "local-codex"
@@ -1381,6 +1400,172 @@ def test_state_bearing_call_before_initialize_fails_without_a_worker(tmp_path) -
         assert supervisor.worker_pid == 0
     finally:
         supervisor.close()
+
+
+def test_initialized_get_uses_exact_reader_without_starting_worker(tmp_path) -> None:
+    reader = _StaticReceiptReader()
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, str(tmp_path / "must-not-start.py")),
+        build_id_provider=lambda: "build-one",
+    )
+    supervisor.enable_durable_get(reader)
+    supervisor._initialized = True
+    try:
+        response = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "flyto_coding_get", "arguments": {
+                "job_id": "job_" + "a" * 24,
+            }},
+        })))
+        assert response["result"]["structuredContent"] == {
+            "ok": True,
+            "job": reader.value,
+        }
+        assert reader.calls == ["job_" + "a" * 24]
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+def test_missing_exact_job_preserves_job_not_found_without_starting_worker(
+    tmp_path,
+) -> None:
+    reader = _StaticReceiptReader(
+        failure=CodingJobNotFound("coding job does not exist"),
+    )
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, str(tmp_path / "must-not-start.py")),
+        build_id_provider=lambda: "build-one",
+    )
+    supervisor.enable_durable_get(reader)
+    supervisor._initialized = True
+    try:
+        response = _value(supervisor.handle_line(_line({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "flyto_coding_get", "arguments": {
+                "job_id": "job_" + "a" * 24,
+            }},
+        })))
+        assert response["result"]["structuredContent"] == {
+            "ok": False,
+            "error": "job_not_found",
+        }
+        assert response["result"]["isError"] is True
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+@pytest.mark.parametrize("failure", [
+    DurableGetFallback("mission reconciliation required"),
+    DurableGetUnavailable("record is outside the hardened read contract"),
+    ValueError("durable record is invalid"),
+])
+def test_exact_reader_fallbacks_preserve_canonical_worker_behavior(
+    tmp_path,
+    failure,
+) -> None:
+    reader = _StaticReceiptReader(failure=failure)
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, str(tmp_path / "unused-worker.py")),
+        build_id_provider=lambda: "build-one",
+    )
+    supervisor.enable_durable_get(reader)
+    request = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "flyto_coding_get", "arguments": {
+            "job_id": "job_" + "a" * 24,
+        }},
+    }
+    try:
+        assert supervisor._job_receipt_responder.respond(request) is None
+        assert reader.calls == ["job_" + "a" * 24]
+        assert supervisor.worker_pid == 0
+    finally:
+        supervisor.close()
+
+
+def test_source_change_permanently_disables_stale_exact_validator(tmp_path) -> None:
+    build = ["build-one"]
+    reader = _StaticReceiptReader()
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, str(tmp_path / "unused-worker.py")),
+        build_id_provider=lambda: build[0],
+    )
+    supervisor.enable_durable_get(reader)
+    request = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "flyto_coding_get", "arguments": {
+            "job_id": "job_" + "a" * 24,
+        }},
+    }
+    try:
+        assert supervisor._job_receipt_responder.respond(request) is not None
+        build[0] = "build-two"
+        assert supervisor._job_receipt_responder.respond(request) is None
+        build[0] = "build-one"
+        # Returning disk to the old digest must not resurrect an authority
+        # validator after an intervening build may already have run.
+        assert supervisor._job_receipt_responder.respond(request) is None
+        assert len(reader.calls) == 1
+    finally:
+        supervisor.close()
+
+
+def test_exact_reader_never_interprets_unknown_get_arguments(tmp_path) -> None:
+    reader = _StaticReceiptReader()
+    supervisor = CodingMCPWorkerSupervisor(
+        (sys.executable, str(tmp_path / "unused-worker.py")),
+        build_id_provider=lambda: "build-one",
+    )
+    supervisor.enable_durable_get(reader)
+    request = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "flyto_coding_get", "arguments": {
+            "job_id": "job_" + "a" * 24,
+            "future_argument": True,
+        }},
+    }
+    try:
+        assert supervisor._job_receipt_responder.respond(request) is None
+        assert reader.calls == []
+    finally:
+        supervisor.close()
+
+
+def test_supervisor_parses_exact_backend_and_emergency_startup_authority(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    argv = (
+        "flyto-ai", "code-mcp-supervisor", "--tenant", "local-codex",
+        "--workspace-root", str(workspace), "--state-dir", str(state),
+        "--implementation-backend", "native",
+        "--implementation-backend", "codex",
+        "--emergency-overflow-backend", "native",
+        "--emergency-overflow-backend", "codex",
+    )
+    supervisor = supervisor_from_argv(argv)
+    try:
+        reader = supervisor._job_receipt_responder.reader
+        assert reader.implementation_backend == "codex"
+        assert reader.emergency_enabled is True
+    finally:
+        supervisor.close()
+
+    monkeypatch.setenv("FLYTO_AI_CODING_BACKEND", "claude")
+    from_environment = supervisor_from_argv((
+        "flyto-ai", "code-mcp-supervisor", "--tenant", "local-codex",
+        "--workspace-root", str(workspace), "--state-dir", str(state),
+    ))
+    try:
+        reader = from_environment._job_receipt_responder.reader
+        assert reader.implementation_backend == "claude"
+        assert reader.emergency_enabled is False
+    finally:
+        from_environment.close()
 
 
 def test_public_supervisor_starts_before_delivering_the_first_tool_call(

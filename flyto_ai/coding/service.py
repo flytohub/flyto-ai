@@ -2663,6 +2663,39 @@ class CodingService:
                 receipt = self._public_receipt(tenant_ref, record)
         return receipt
 
+    def get_summary(self, tenant_id: str, job_id: str) -> CodingJobReceipt:
+        """Peek at one durable job for the compact MCP polling projection.
+
+        Job records are published by atomic replacement, so one exact-path
+        read is already a consistent snapshot and does not need the global
+        cross-process coordination guard. This matters while another worker is
+        publishing mission or route progress: a polling client must not queue
+        behind unrelated short mutations only to learn that its own job has not
+        changed. Tenant derivation and job-id validation are identical to
+        :meth:`get`, and audit-ready/landable route authority is revalidated
+        before any receipt leaves the service.
+
+        This path is deliberately observation-only. It does not reconcile a
+        terminal mission projection or dispatch reclaimed work; callers use the
+        ordinary full get before audit, while the normal scheduler/restart
+        paths retain mutation and reconciliation authority.
+        """
+
+        if not _JOB_ID.fullmatch(job_id):
+            raise CodingJobNotFound("coding job does not exist")
+        tenant_ref = self._tenant_ref(tenant_id)
+        path = self._tenant_dir(tenant_ref, create=False) / "jobs" / (job_id + ".json")
+        try:
+            record = self._read_json(path)
+        except FileNotFoundError as exc:
+            raise CodingJobNotFound("coding job does not exist") from exc
+        if (
+            str(record.get("state")) in _ROUTE_EVIDENCE_STATES
+            or record.get("landable") is True
+        ):
+            self._require_execution_authority(record)
+        return self._public_receipt(tenant_ref, record)
+
     def audit(
         self,
         tenant_id: str,

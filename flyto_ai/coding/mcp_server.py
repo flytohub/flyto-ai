@@ -3,9 +3,11 @@
 """Detachable JSON-RPC/MCP stdio facade for the Flyto2 coding service."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
+import time
 from typing import Any, Dict, Mapping, Optional
 
 from flyto_ai.coding.contracts import (
@@ -26,7 +28,6 @@ from flyto_ai.coding.contracts import (
     require_revision_sha256,
 )
 from flyto_ai.coding.service import (
-    CodingJobNotFound,
     CodingService,
     CodingServiceError,
     error_details,
@@ -36,28 +37,72 @@ from flyto_ai.coding.service import (
 
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
-#: Advanced from "1" when the audit tool and audit states joined this surface.
-#: The protocol version and every existing tool schema stay compatible.
-CODING_MCP_SERVER_VERSION = "2"
+#: Advanced from "2" when conditional bounded reads and typed next actions
+#: joined ``flyto_coding_get``. The protocol version and public job receipt
+#: remain compatible; an observation sibling appears only when a caller opts
+#: into an explicit detail or conditional-read argument.
+CODING_MCP_SERVER_VERSION = "3"
 MAX_INSTRUCTIONS_CHARS = 512
 #: Self-contained description of the host-owned loop. It states what the
 #: caller must do and what this server will not do; it deliberately does not
 #: claim the server can prove which principal is auditing.
 CODING_MCP_INSTRUCTIONS = (
-    "Coding: use flyto_coding_submit; poll flyto_coding_get to "
-    "awaiting_codex_audit or terminal. failed is terminal/non-landable. At "
-    "awaiting_codex_audit independently inspect/test the workspace, then "
-    "audit exact implementation_revision_sha256 with flyto_coding_audit. "
-    "rework sends typed findings to the same job/session; poll and re-audit. "
-    "Only accept is landable. The verdict is from the host-authenticated "
-    "auditor; server cannot prove caller identity. Never stages, commits, "
-    "pushes, publishes, or deploys."
+    "flyto_coding_submit starts work. flyto_coding_get detail returns "
+    "observation.next_action/change_token; to wait, use detail=summary, resend "
+    "the token, wait_ms<=20000. At awaiting_codex_audit independently inspect/test, "
+    "then use flyto_coding_audit on exact "
+    "implementation_revision_sha256. Rework keeps the same job/session; "
+    "repeat. Only accept is landable; failed is terminal/non-landable. "
+    "Verdicts are host-authenticated; server cannot prove caller identity. "
+    "Never stages, commits, pushes, publishes, or deploys."
 )
 MAX_MESSAGE_BYTES = 256 * 1024
+#: A long-poll stays ten seconds below the supervisor's 30-second response
+#: deadline. That reserve covers the initial/final tenant-bound reads and JSON
+#: serialization on a contended host; it is an invariant in the supervisor
+#: regression suite, not an operator-tunable escape hatch.
+MAX_GET_WAIT_MS = 20_000
+GET_WAIT_POLL_INTERVAL_SECONDS = 0.25
+GET_WAIT_RETRY_AFTER_MS = 250
+MAX_GET_PROGRESS_AGE_MS = 2_147_483_647
+_monotonic = time.monotonic
+_sleep = time.sleep
+_wall_time = time.time
+#: Only the public, already-redacted receipt is hashed. The domain prefix keeps
+#: this cursor distinct from implementation revisions, route receipts, config
+#: digests, evidence digests, and every other 64-character value in the route.
+_GET_CHANGE_TOKEN_DOMAIN = b"flyto.coding-get-change.v1\n"
 _JOB_ID_PATTERN = "^job_[a-f0-9]{24}$"
 _SHA256_PATTERN = "^[a-f0-9]{64}$"
 _AUDIT_CODE_PATTERN = "^[A-Za-z][A-Za-z0-9_.-]{1,63}$"
 _JOB_ID_RE = re.compile(_JOB_ID_PATTERN)
+_SHA256_RE = re.compile(_SHA256_PATTERN)
+_GET_ARGUMENT_FIELDS = frozenset({
+    "job_id", "detail", "after_change_token", "wait_ms",
+})
+_GET_DETAILS = ("summary", "full")
+#: The compact projection is intentionally an allowlist, not "the full receipt
+#: minus large-looking fields". New receipt fields therefore stay out until a
+#: review decides they are safe and useful for polling.
+_GET_SUMMARY_FIELDS = (
+    "service_contract_version",
+    "job_id",
+    "state",
+    "submitted_at",
+    "updated_at",
+    "job_terminal",
+    "landable",
+    "implementer_started",
+    "implementation_revision_sha256",
+    "audit_count",
+    "rework_count",
+    "implementation_blockers",
+    "verification_blockers",
+    "failure_code",
+    "failure_phase",
+    "retryable",
+    "required_actions",
+)
 _AUDIT_ARGUMENT_FIELDS = frozenset({
     "job_id", "implementation_revision_sha256", "verdict", "findings",
 })
@@ -147,6 +192,136 @@ def _reject_unknown_arguments(arguments: Mapping[str, Any], allowed: frozenset) 
         ))
 
 
+def _tool_get_wait_ms(arguments: Mapping[str, Any]) -> int:
+    """Decode the optional get wait without accepting booleans or coercion."""
+
+    value = arguments.get("wait_ms", 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("wait_ms must be an integer")
+    if not 0 <= value <= MAX_GET_WAIT_MS:
+        raise ValueError("wait_ms must be between 0 and {}".format(MAX_GET_WAIT_MS))
+    return value
+
+
+def _tool_change_token(arguments: Mapping[str, Any]) -> str:
+    """Decode one optional lower-case SHA-256 conditional-read cursor."""
+
+    if "after_change_token" not in arguments:
+        return ""
+    value = _tool_string(arguments, "after_change_token")
+    if not _SHA256_RE.fullmatch(value):
+        raise ValueError("after_change_token must be a lower-case SHA-256 token")
+    return value
+
+
+def _tool_get_detail(arguments: Mapping[str, Any]) -> str:
+    """Decode the optional compact/full projection choice without coercion."""
+
+    if "detail" not in arguments:
+        return "full"
+    value = _tool_string(arguments, "detail")
+    if value not in _GET_DETAILS:
+        raise ValueError("detail must be summary or full")
+    return value
+
+
+def _get_job_projection(receipt: Any, detail: str) -> Dict[str, Any]:
+    """Keep the historical full receipt or return the fixed polling subset."""
+
+    if detail == "full":
+        return receipt_to_mapping(receipt)
+    phase, retryable, actions = receipt.failure_semantics
+    # Do not construct and redact the full nested receipt merely to discard it:
+    # an audit-ready result can approach the transport ceiling. Every selected
+    # scalar/list comes from the already-validated receipt contract, and this
+    # explicit mapping makes adding a receipt field fail closed by default.
+    summary: Dict[str, Any] = {
+        "service_contract_version": receipt.service_contract_version,
+        "job_id": receipt.job_id,
+        "state": receipt.state.value,
+        "submitted_at": receipt.submitted_at,
+        "updated_at": receipt.updated_at,
+        "job_terminal": receipt.job_terminal,
+        "landable": receipt.landable,
+        "implementer_started": receipt.implementer_started,
+        "implementation_revision_sha256": receipt.implementation_revision_sha256,
+        "audit_count": receipt.audit_count,
+        "rework_count": receipt.rework_count,
+        "implementation_blockers": list(receipt.implementation_blockers),
+        "verification_blockers": list(receipt.verification_blockers),
+        "failure_code": receipt.failure_code,
+        "failure_phase": phase,
+        "retryable": retryable,
+        "required_actions": list(actions),
+    }
+    return {field: summary[field] for field in _GET_SUMMARY_FIELDS}
+
+
+def _receipt_change_token(job: Mapping[str, Any], detail: str) -> str:
+    """Bind a cursor to exactly one secret-redacted public job projection."""
+
+    encoded = json.dumps(
+        job,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(_GET_CHANGE_TOKEN_DOMAIN)
+    digest.update(detail.encode("ascii") + b"\n")
+    digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _get_next_action(receipt: Any) -> str:
+    """Project one closed action token from the existing receipt state."""
+
+    state = receipt.state
+    if state.value in {"queued", "running", "rework_queued", "rework_running"}:
+        return "wait"
+    if state.value == "awaiting_codex_audit":
+        return "audit_revision"
+    if state.value == "rework_route_blocked":
+        return "retry_rework_route"
+    if state.value == "codex_accepted":
+        return "land_accepted_revision"
+    _phase, retryable, required_actions = receipt.failure_semantics
+    if retryable:
+        return "retry_same_request"
+    if required_actions:
+        return "resolve_required_actions"
+    return "stop_non_landable"
+
+
+def _get_observation(
+    receipt: Any,
+    job: Mapping[str, Any],
+    *,
+    detail: str,
+    after_change_token: str,
+    waited_ms: int,
+    timed_out: bool,
+) -> Dict[str, Any]:
+    """Build the fixed, path-free conditional-read metadata projection."""
+
+    next_action = _get_next_action(receipt)
+    change_token = _receipt_change_token(job, detail)
+    return {
+        "detail": detail,
+        "change_token": change_token,
+        "changed": not after_change_token or change_token != after_change_token,
+        "timed_out": timed_out,
+        "waited_ms": waited_ms,
+        "retry_after_ms": GET_WAIT_RETRY_AFTER_MS if timed_out else 0,
+        "recommended_wait_ms": MAX_GET_WAIT_MS if next_action == "wait" else 0,
+        "progress_age_ms": min(
+            MAX_GET_PROGRESS_AGE_MS,
+            max(0, int((_wall_time() - receipt.updated_at) * 1000)),
+        ),
+        "next_action": next_action,
+    }
+
+
 class CodingMCPServer:
     """Expose submit/status tools for one startup-configured tenant."""
 
@@ -212,10 +387,7 @@ class CodingMCPServer:
                 request_from_mapping(request_value),
             )
         elif name == "flyto_coding_get":
-            try:
-                receipt = self.service.get(self.tenant_id, str(arguments.get("job_id", "")))
-            except CodingJobNotFound:
-                raise
+            return self._call_get(arguments)
         elif name == "flyto_coding_audit":
             _reject_unknown_arguments(arguments, _AUDIT_ARGUMENT_FIELDS)
             findings = arguments.get("findings")
@@ -239,6 +411,90 @@ class CodingMCPServer:
         else:
             raise ValueError("unknown coding tool")
         payload = {"ok": True, "job": receipt_to_mapping(receipt)}
+        return {
+            "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+            "isError": False,
+            "structuredContent": payload,
+        }
+
+    def _call_get(self, arguments: Mapping[str, Any]) -> Dict[str, Any]:
+        """Read once or conditionally wait for one tenant-bound job change.
+
+        A call containing only ``job_id`` remains the exact historical full
+        response. Callers that explicitly choose ``summary`` use the service's
+        lock-free durable peek, avoiding the shared coordination guard and
+        omitting the large result,
+        route, mission, and evidence projections while retaining every field a
+        polling state machine needs. A full read remains mandatory before an
+        independent audit.
+        """
+
+        _reject_unknown_arguments(arguments, _GET_ARGUMENT_FIELDS)
+        job_id = _tool_job_id(arguments)
+        detail = _tool_get_detail(arguments)
+        wait_ms = _tool_get_wait_ms(arguments)
+        after_change_token = _tool_change_token(arguments)
+        if wait_ms and not after_change_token:
+            raise ValueError("after_change_token is required when wait_ms is positive")
+        if wait_ms and detail != "summary":
+            raise ValueError("positive wait_ms requires detail=summary")
+
+        get_receipt = self.service.get
+        if detail == "summary":
+            summary_get = getattr(self.service, "get_summary", None)
+            if callable(summary_get):
+                get_receipt = summary_get
+
+        receipt = get_receipt(self.tenant_id, job_id)
+        job = _get_job_projection(receipt, detail)
+        if set(arguments) == {"job_id"}:
+            payload = {"ok": True, "job": job}
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(payload, ensure_ascii=False),
+                }],
+                "isError": False,
+                "structuredContent": payload,
+            }
+        change_token = _receipt_change_token(job, detail)
+        waited_ms = 0
+        timed_out = False
+        wait_started = _monotonic()
+
+        # Only background-owned states can make progress without a caller
+        # action. Audit-ready, blocked, accepted, and terminal receipts return
+        # immediately even when a stale client asks to wait, preventing a
+        # pointless 20-second delay exactly when the caller should act.
+        if (
+            wait_ms
+            and change_token == after_change_token
+            and _get_next_action(receipt) == "wait"
+        ):
+            deadline = wait_started + wait_ms / 1000.0
+            while change_token == after_change_token:
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                _sleep(min(GET_WAIT_POLL_INTERVAL_SECONDS, remaining))
+                receipt = get_receipt(self.tenant_id, job_id)
+                job = _get_job_projection(receipt, detail)
+                change_token = _receipt_change_token(job, detail)
+            waited_ms = min(
+                wait_ms,
+                max(0, int((_monotonic() - wait_started) * 1000)),
+            )
+
+        observation = _get_observation(
+            receipt,
+            job,
+            detail=detail,
+            after_change_token=after_change_token,
+            waited_ms=waited_ms,
+            timed_out=timed_out,
+        )
+        payload = {"ok": True, "job": job, "observation": observation}
         return {
             "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
             "isError": False,
@@ -294,12 +550,26 @@ class CodingMCPServer:
             },
             {
                 "name": "flyto_coding_get",
-                "description": "Read a coding job owned by the configured Flyto2 tenant.",
+                "description": (
+                    "Read a tenant-owned coding job. Default detail=full preserves the "
+                    "historical receipt for audit. detail=summary is the compact polling "
+                    "projection. Reuse observation.change_token as after_change_token with "
+                    "a wait_ms up to 20000 to wait only while background work can progress."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["job_id"],
-                    "properties": {"job_id": {"type": "string", "pattern": _JOB_ID_PATTERN}},
+                    "properties": {
+                        "job_id": {"type": "string", "pattern": _JOB_ID_PATTERN},
+                        "detail": {"type": "string", "enum": list(_GET_DETAILS)},
+                        "after_change_token": {
+                            "type": "string", "pattern": _SHA256_PATTERN,
+                        },
+                        "wait_ms": {
+                            "type": "integer", "minimum": 0, "maximum": MAX_GET_WAIT_MS,
+                        },
+                    },
                 },
             },
             {

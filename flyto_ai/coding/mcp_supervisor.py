@@ -18,12 +18,13 @@ supervisors and never hold this worker back.
 
 Every read from the worker is deadlined. A fresh worker gets one larger finite
 bound because it validates the complete durable state root before reading its
-first frame; after its first response, this service only schedules or inspects
-background work, so a call that has not answered within seconds is a wedged
-worker, not a slow one. Waiting forever would hang the Codex frontend and leave
-the shared state-root locks held by a process that will never write again, so
-the deadline ends with a bounded protocol error and a terminated worker rather
-than with silence.
+first frame. After that first response, ordinary calls return after one durable
+decision; only compact conditional get may deliberately wait, and its
+20-second maximum stays below the steady 30-second deadline. A call past its
+outer bound is a wedged worker, not a supported slow poll. Waiting forever
+would hang the Codex frontend and leave the shared state-root locks held by a
+process that will never write again, so the deadline ends with a bounded
+protocol error and a terminated worker rather than with silence.
 """
 from __future__ import annotations
 
@@ -52,9 +53,11 @@ from flyto_ai.coding.route_status import current_service_build_id
 _option_value = fast_get._last_option_value
 MAX_SUPERVISOR_MESSAGE_BYTES = 256 * 1024
 WORKER_SHUTDOWN_TIMEOUT_SECONDS = 5.0
-#: Submit, get, and audit all return as soon as the service has recorded a
-#: durable decision; none of them waits for an implementation round. A read
-#: that misses this bound describes a worker that is not going to answer.
+#: Submit, audit, full get, and an immediate summary get return as soon as the
+#: service has recorded or read a durable decision. The sole intentional wait
+#: is summary get's conditional 20-second maximum. Ten seconds remain for its
+#: durable reads and serialization; a read beyond this bound is a worker that
+#: is not going to answer under the public contract.
 WORKER_RESPONSE_TIMEOUT_SECONDS = 30.0
 #: Once construction is complete, a handshake is a pure in-process reply and
 #: is held to the same bound as every ordinary request.
@@ -781,10 +784,7 @@ def supervisor_from_argv(argv: Sequence[str]) -> CodingMCPWorkerSupervisor:
     tenant_id = _option_value(argv, "--tenant")
     supervisor = CodingMCPWorkerSupervisor(
         worker_argv_from_process(argv),
-        job_state_reader=durable_job_state_reader(
-            state_dir,
-            tenant_id,
-        ),
+        job_state_reader=durable_job_state_reader(state_dir, tenant_id),
     )
     receipt_reader = fast_get.durable_job_receipt_reader_from_argv(
         argv, default_state_dir=DEFAULT_CODING_STATE_DIR,
@@ -796,5 +796,4 @@ def supervisor_from_argv(argv: Sequence[str]) -> CodingMCPWorkerSupervisor:
 
 def serve_supervised_stdio(argv: Sequence[str]) -> None:
     """Run the stable supervisor for the current CLI invocation."""
-
     supervisor_from_argv(argv).serve()

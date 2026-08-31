@@ -303,6 +303,10 @@ loopback HTTP (bearer + idempotency) / MCP stdio (configured tenant)
   -> awaiting_codex_audit bound to an exact implementation_revision_sha256
   -> authenticated host/auditor verdict
   -> durable CodingJobReceipt + secret-free CodingRouteReceipt
+  -> flyto_coding_get
+       job_id only (exact historical ok + full audit receipt)
+       full (explicit; audit receipt + typed observation)
+       summary (explicit compact polling projection + conditional wait)
 ```
 
 Every host-owned Indexer plan analysis in this chain is scoped to the workspace
@@ -450,6 +454,27 @@ operator reasons. Every other fault keeps the generic `coding worker
 unavailable`. The reason is selected by exit code alone; worker stderr is never
 captured or forwarded, so this path cannot carry a path, prompt, secret, raw
 error, or job content.
+
+`flyto_coding_get` separates polling from audit detail without changing the
+three-tool inventory or the public `CodingJobReceipt`. A call containing only
+`job_id` remains the exact historical `ok` plus full `job` response. An explicit
+detail opts into typed observation metadata; `summary` is a fixed allowlist of
+state/timing, terminal/landable,
+revision, blocker, audit-count and failure-semantics fields; result, route,
+mission, evidence, session, paths, files, checks and prose stay out. The summary
+comes from one tenant-derived exact-path atomic record read and never takes the
+shared state guard, reconciles a mission, or dispatches work. Audit-ready and
+landable authority is still validated before projection.
+
+The MCP layer hashes only the selected already-redacted projection under a
+separate change-token domain. A token is a detail-scoped cursor, not revision or
+authority. A positive conditional wait is permitted only for `summary`, only
+with a prior token, and only while the job is in a background-progress state.
+It is capped at 20 seconds, leaving ten seconds inside the supervisor's fixed
+30-second response deadline for reads and serialization. Audit-ready, blocked,
+accepted and terminal jobs return immediately with a closed next-action token.
+This removes global-lock and payload costs from normal polling while preserving
+the full fail-closed audit read.
 
 The lanes are host-owned, not a prompt convention. `flyto_ai.coding.route`
 owns the typed policy, the allowlists, the bounded loops, and the evidence.

@@ -728,6 +728,57 @@ unknown job, 400 for an invalid shape, 409 for a stale revision / wrong state /
 exhausted rework, 429 when busy, 403 for a policy denial. Receipts stay
 secret-redacted and never expose an evidence path or raw check output.
 
+#### Compact conditional MCP reads
+
+`flyto_coding_get` remains additive and receipt-compatible. A call containing
+only `job_id` returns the exact historical `ok` plus full `job` response, with
+no new sibling. An explicit detail or conditional-read argument opts into the
+fixed `observation` object. The closed input schema is:
+
+```json
+{
+  "job_id": "job_0123456789abcdef01234567",
+  "detail": "summary",
+  "after_change_token": "<lower-case sha256 from the previous observation>",
+  "wait_ms": 20000
+}
+```
+
+`detail=summary` is an explicit compact polling projection. It retains service
+contract, job/state/timestamps, terminal and landable truth, implementer-start,
+exact implementation revision, audit/rework counts, implementation and
+verification blockers, failure code/phase/retryability/actions, while omitting
+the potentially large result, route receipt, emergency authority, mission,
+thread/session, evidence digest, backend, files, checks, and messages. The
+ordinary full projection remains available and is required before independent
+audit.
+
+The observation is a fixed path-free object:
+
+| Field | Meaning |
+| --- | --- |
+| `detail` | `summary` or `full`; change tokens are scoped to this projection. |
+| `change_token` / `changed` | Domain-separated SHA-256 of the selected redacted job projection, and whether it differs from `after_change_token`. It is a cursor, never a revision or authority. |
+| `timed_out` / `waited_ms` | Whether an unchanged conditional wait exhausted its bound and how long that wait ran. |
+| `retry_after_ms` / `recommended_wait_ms` | Bounded retry pacing and the maximum useful next conditional wait. |
+| `progress_age_ms` | Age of the job record's existing `updated_at`, capped at 2,147,483,647 ms; observational only, not a wedge verdict. |
+| `next_action` | One of `wait`, `audit_revision`, `retry_rework_route`, `land_accepted_revision`, `retry_same_request`, `resolve_required_actions`, or `stop_non_landable`. |
+
+A positive wait requires both `detail=summary` and `after_change_token`. It is
+capped at 20 seconds, ten seconds below the supervisor's fixed 30-second worker
+deadline. Only queued/running/rework-running states wait; any state requiring a
+caller action returns immediately. Summary reads use one tenant-derived exact
+job path and an atomic durable snapshot without taking the cross-process state
+coordination guard. They never reconcile or dispatch work. Full reads keep the
+existing reconciliation and route-evidence behavior. This separation removes
+polling contention and response bloat without weakening the audit read.
+
+Unknown fields, Boolean-as-integer waits, invalid detail/token values, a wait
+without a token, a full-detail wait, and values outside 0..20,000 are rejected
+before any service read. The public inventory is still exactly submit/get/audit,
+and neither projection adds a prompt, workspace path, secret, raw check output,
+worker identity, or provider session beyond the existing full public receipt.
+
 Verdicts come from the principal the host authenticates. The transport
 validates shape and forwards; it cannot itself prove which principal is
 calling, and it never makes the acceptance decision.

@@ -50,6 +50,32 @@ worker through normal source reload; the outer 120-second bound itself applies
 after the supervisor is reopened. The three-tool MCP surface, job/store schema,
 route, implementer, and repository authority do not change.
 
+## 2026-09-01 — Poll compact durable state; audit the full receipt
+
+Decision: keep a `flyto_coding_get` call containing only `job_id` byte-shape
+compatible with the historical `ok` plus full `job` response. Observation
+metadata appears only when a caller opts in with an explicit detail or
+conditional-read argument. Normal polling uses an explicit `detail=summary`
+conditional read. Summary is a fixed field allowlist read from one
+tenant-derived atomic job record without the shared coordination guard.
+Positive waits require the prior summary change token, never apply to full
+detail or caller-action states, and stop at 20 seconds under the supervisor's
+30-second deadline.
+
+Why: live warm reads were taking roughly 7.7 seconds for running jobs and 10
+seconds for missing jobs, while audit-ready full receipts can be large. Repeating
+full reads creates payload and global-lock contention exactly when a caller only
+needs state, revision, blockers, failure semantics and the next action. Raising
+the supervisor deadline would hide that coupling and make a true wedge slower
+to recover.
+
+Consequence: polling becomes small, conditional and action-directed; legacy
+reads and full audit evidence remain available and unchanged. Change tokens hash
+only the selected redacted projection and grant no revision or authority.
+Summary cannot reconcile or dispatch work, and route authority is still checked
+for audit-ready/landable states. The public tool inventory remains exactly
+submit/get/audit.
+
 ## 2026-08-27 — An exact target heading governs its complete mixed file set
 
 Decision: first-round target projection treats `Exact targets:` and
@@ -1346,8 +1372,10 @@ implementers behind the same audited service contract.
   audit tool is not in its catalog, so an implementer cannot approve itself.
 - `code-mcp` and `code-serve` are audit-required unconditionally. No flag or
   environment variable disables that requirement. The MCP `initialize` result
-  now advertises server version `2` and bounded instructions describing this
-  loop, without claiming the transport can prove the auditing principal.
+  advertised server version `2` at this decision and bounded instructions
+  describing the loop, without claiming the transport can prove the auditing
+  principal. Version `3` later added only the backward-compatible conditional
+  get projection recorded in the 2026-09-01 decision above.
 
 Rollback is configuration, not code, and it never leaves the audited route.
 Select `--implementation-backend native` to detach either external adapter, or lower

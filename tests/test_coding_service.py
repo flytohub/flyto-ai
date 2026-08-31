@@ -666,8 +666,8 @@ def test_initialize_declares_the_host_owned_audit_loop() -> None:
         "params": {"protocolVersion": MCP_PROTOCOL_VERSION},
     })["result"]
     assert result["protocolVersion"] == MCP_PROTOCOL_VERSION
-    assert result["serverInfo"] == {"name": "flyto-coding", "version": "2"}
-    assert CODING_MCP_SERVER_VERSION == "2"
+    assert result["serverInfo"] == {"name": "flyto-coding", "version": "3"}
+    assert CODING_MCP_SERVER_VERSION == "3"
 
     instructions = result["instructions"]
     assert isinstance(instructions, str)
@@ -678,13 +678,15 @@ def test_initialize_declares_the_host_owned_audit_loop() -> None:
     for tool in ("flyto_coding_submit", "flyto_coding_get", "flyto_coding_audit"):
         assert tool in instructions
     for phrase in (
-        "awaiting_codex_audit or terminal",
+        "observation.next_action/change_token",
+        "detail=summary",
+        "wait_ms<=20000",
         "failed is terminal/non-landable",
-        "At awaiting_codex_audit independently inspect/test the workspace",
-        "audit exact implementation_revision_sha256",
-        "rework sends typed findings to the same job/session",
-        "poll and re-audit", "Only accept is landable",
-        "host-authenticated auditor", "cannot prove caller identity",
+        "At awaiting_codex_audit independently inspect/test",
+        "flyto_coding_audit on exact implementation_revision_sha256",
+        "Rework keeps the same job/session",
+        "repeat", "Only accept is landable",
+        "Verdicts are host-authenticated", "cannot prove caller identity",
         "Never stages, commits, pushes, publishes, or deploys",
     ):
         assert phrase in instructions

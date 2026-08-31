@@ -414,11 +414,14 @@ def _job_record(state_dir: Path, tenant: str, job_id: str, state: str) -> Path:
 
 
 def test_read_deadlines_are_bounded_to_thirty_seconds() -> None:
-    """Steady requests stay short; only verified worker startup gets longer."""
+    """Steady conditional get leaves headroom; only startup gets longer."""
+
+    from flyto_ai.coding.mcp_server import MAX_GET_WAIT_MS
 
     assert WORKER_RESPONSE_TIMEOUT_SECONDS <= 30.0
     assert WORKER_HANDSHAKE_TIMEOUT_SECONDS <= 30.0
     assert WORKER_STARTUP_RESPONSE_TIMEOUT_SECONDS <= 120.0
+    assert MAX_GET_WAIT_MS / 1000 <= WORKER_RESPONSE_TIMEOUT_SECONDS - 10
     with pytest.raises(ValueError):
         CodingMCPWorkerSupervisor(("true",), response_timeout=31.0)
     with pytest.raises(ValueError):

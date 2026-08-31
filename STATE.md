@@ -49,6 +49,23 @@ Last updated: 2026-09-01
 - Durable job and MissionStore formats, MCP inventory, coding route, and product
   repositories are unchanged.
 
+## Conditional compact coding reads (2026-09-01)
+
+- Coding MCP server version 3 keeps exactly `submit/get/audit`. A legacy
+  `flyto_coding_get` call containing only `job_id` retains the exact historical
+  `ok` plus full `job` response shape. An explicit detail or conditional-read
+  argument adds a sibling fixed observation with a detail-scoped change token,
+  wait/timeout/retry timing, progress age, and a closed next-action token.
+- Explicit `detail=summary` retains polling decisions, exact revision, blockers,
+  audit counts and failure semantics while omitting result, route, mission,
+  evidence, session, paths, files, checks and prose. It uses a tenant-bound
+  atomic exact-path read outside the shared state guard; full remains required
+  before independent audit.
+- Conditional wait requires summary plus a prior token, is capped at 20 seconds
+  beneath the 30-second supervisor deadline, and applies only to background
+  progress states. Audit-ready, blocked, accepted and terminal receipts return
+  immediately. Strict runtime validation mirrors the closed input schema.
+
 ## Exact mixed target-set authority (2026-08-27)
 
 - A first-round request may now declare `Exact targets:` or
@@ -1059,7 +1076,7 @@ eligibility evidence for the caller, not an action the service performs.
 - Public audit surface on both transports: `flyto_coding_submit`,
   `flyto_coding_get`, `flyto_coding_audit`, and authenticated
   `POST /v1/coding/jobs/{job_id}/audit`.
-- Coding MCP `initialize` advertises server version `2` and bounded
+- Coding MCP `initialize` advertises server version `3` and bounded
   instructions describing the host-owned loop; it negotiates only `2025-06-18`.
 - Shared-state multi-process MCP startup: more than one `code-mcp` process can
   attach to the same durable state root and complete `initialize`. Cross-process

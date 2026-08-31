@@ -80,17 +80,27 @@ Surfaces:
 | Transport | Operation |
 | --- | --- |
 | MCP tool | `flyto_coding_submit` |
-| MCP tool | `flyto_coding_get` |
+| MCP tool | `flyto_coding_get` (legacy `job_id`-only full receipt; optional compact conditional polling) |
 | MCP tool | `flyto_coding_audit` |
 | HTTP | `POST /v1/coding/jobs` (bearer + `Idempotency-Key`) |
 | HTTP | `GET /v1/coding/jobs/{job_id}` |
 | HTTP | `POST /v1/coding/jobs/{job_id}/audit` (bearer) |
 
 Neither surface accepts a model, provider, backend, or audit-authority field.
-The MCP `initialize` result advertises server version `2` and bounded
+The MCP `initialize` result advertises server version `3` and bounded
 instructions describing this loop. Details, the state machine, and a
 project-scoped Codex `.codex/config.toml` example are in
 [the coding control plane guide](CODING_CONTROL_PLANE.md).
+
+For polling, first call `flyto_coding_get` with `detail: "summary"`. Its
+`observation.change_token` can be sent back as `after_change_token` with
+`wait_ms` from 0 through 20,000. The call then waits only while background work
+can advance and the compact projection is unchanged. Audit-ready, blocked,
+accepted, and terminal jobs return immediately with a typed `next_action`.
+Sending only `job_id` still returns the exact historical `ok` plus full `job`
+response without an observation sibling. Fetch that full receipt before
+independently auditing its exact implementation revision. An observation is
+added only after opting in with an explicit detail or conditional-read argument.
 
 ## MCP Protocol
 

@@ -70,6 +70,13 @@
 
 ## Unreleased
 
+- Strengthen `flyto_coding_get` without adding a fourth tool: a `job_id`-only
+  read retains the exact historical `ok` plus full `job` shape, while explicit
+  compact summary reads add detail-scoped change tokens, bounded 20-second
+  conditional wait, retry/freshness metadata, and closed next actions. Summary
+  reads bypass shared coordination contention through one tenant-bound atomic
+  durable snapshot and omit the large audit-only
+  result/route/mission/evidence/session projections.
 - Stabilize the cross-process execution-session test under loaded CI runners,
   and make the interrupted-abandon recovery test replay the same time-bearing
   closure payload instead of accidentally minting a second payload at a

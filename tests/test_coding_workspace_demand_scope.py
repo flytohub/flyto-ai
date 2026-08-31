@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import flyto_ai.coding.service as coding_service_module
 
 from flyto_ai.coding.contracts import CodingAuditVerdict, CodingJobState
 from flyto_ai.coding.contracts import CodingTaskRequest
@@ -298,6 +299,67 @@ def test_same_state_root_peers_never_open_a_release_gap(tmp_path: Path) -> None:
     finally:
         first.close()
         second.close()
+
+
+def test_workspace_demand_cache_scans_large_history_once_per_inventory_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Idle monitors do not turn terminal history into a global lock convoy."""
+
+    workspace = _workspace(tmp_path, "workspace")
+    _declare_verification(workspace)
+    service = _audited_service(tmp_path, workspace, provider=ReworkingProvider())
+    try:
+        owner = _awaiting(service, "tenant-audit", "cache-001", workspace)
+
+        # Make the test deterministic: synchronous transitions still exercise
+        # the exact guarded release path; the background observer cannot race
+        # the scan counter while the fixture is being expanded.
+        service._workspace_authority_monitor_stop.set()
+        monitor = service._workspace_authority_monitor
+        if monitor is not None:
+            monitor.join(timeout=1.0)
+
+        tenant_ref = service._tenant_ref("tenant-audit")
+        jobs = service.state_root / "tenants" / tenant_ref / "jobs"
+        for index in range(512):
+            job_id = "job_{:024x}".format(index)
+            service._write_json(jobs / (job_id + ".json"), {
+                "job_id": job_id,
+                "state": CodingJobState.FAILED.value,
+                "working_dir": str(workspace),
+            })
+        service._discard_path(service._workspace_demand_cache_path())
+
+        authoritative = coding_service_module.state_root_open_workspace_roots
+        scans = 0
+
+        def counted_scan(state_root):
+            nonlocal scans
+            scans += 1
+            return authoritative(state_root)
+
+        monkeypatch.setattr(
+            coding_service_module, "state_root_open_workspace_roots", counted_scan,
+        )
+
+        with service._state_guard():
+            service._release_workspace_authority_if_idle_locked()
+        assert scans == 1
+        assert service._workspace_demand_cache_path().is_file()
+        assert _owns(service) is True
+
+        for _ in range(8):
+            with service._state_guard():
+                service._release_workspace_authority_if_idle_locked()
+        assert scans == 1
+
+        accepted = _accept(service, "tenant-audit", owner)
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert scans == 2
+        assert _owns(service) is False
+    finally:
+        service.close()
 
 
 def test_abandon_of_rework_running_is_refused_and_keeps_ownership(

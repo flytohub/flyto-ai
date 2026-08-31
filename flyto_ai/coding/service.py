@@ -145,6 +145,8 @@ from flyto_ai.coding.preflight import (
     preflight_repository,
 )
 from flyto_ai.coding.store import ThreadStore, redact_evidence
+from flyto_ai.coding.validation_scope import planned_validation_scope
+from flyto_ai.coding.workspace_demand_cache import WorkspaceDemandCache
 
 
 try:  # pragma: no cover - Windows fallback is exercised by static review.
@@ -343,7 +345,7 @@ _PUMP_MAX_IDLE = 2
 #: host-global workspace lease.  This bounded monitor observes the shared
 #: durable state under the same cross-process guard as admission and gives an
 #: idle state root back even when a peer performed the final write.
-_WORKSPACE_AUTHORITY_IDLE_POLL_SECONDS = 0.2
+_WORKSPACE_AUTHORITY_IDLE_POLL_SECONDS = 1.0
 _WORKSPACE_AUTHORITY_MONITOR_JOIN_SECONDS = 1.0
 
 #: What one dispatch attempt did. A pump treats all three differently, so they
@@ -3874,6 +3876,11 @@ class CodingService:
                 # normal status and operator commands remain available.
                 continue
 
+    def _workspace_demand_cache_path(self) -> Path:
+        return WorkspaceDemandCache(
+            self.state_root, audit_required=self.require_codex_audit,
+        ).path
+
     def _release_workspace_authority_if_idle_locked(self) -> None:
         """Retain exactly the repo leases durable open work still needs.
 
@@ -3894,18 +3901,29 @@ class CodingService:
             return
         if self._workspace_root_authority is None:
             return
-        required = state_root_open_workspace_roots(self.state_root)
-        if required is None:
-            # An ambiguous record can never authorize release.
+        cache = WorkspaceDemandCache(
+            self.state_root, audit_required=self.require_codex_audit,
+        )
+        inventory = cache.inventory_sha256()
+        if inventory is None:
             return
-        try:
-            for repository in required:
-                self._assert_workspace(str(repository))
-        except WorkspaceDenied:
-            # A record outside startup authority is corruption, never release
-            # authority on its strength.
-            return
-        self._workspace_root_authority.retain(required)
+        desired = cache.load(inventory)
+        if desired is None:
+            required = state_root_open_workspace_roots(self.state_root)
+            if required is None:
+                # An ambiguous record can never authorize release.
+                return
+            try:
+                for repository in required:
+                    self._assert_workspace(str(repository))
+            except WorkspaceDenied:
+                # A record outside startup authority is corruption, never
+                # release authority on its strength.
+                return
+            desired = cache.store(inventory, required)
+        self._workspace_root_authority.release_digests(
+            set(self._workspace_root_authority.held_digests) - desired,
+        )
         if not self._workspace_root_authority.held_digests:
             self._workspace_root_authority = None
 
@@ -5096,6 +5114,9 @@ class CodingService:
         session_bound: str,
         result: CodingTaskResult,
         request: CodingTaskRequest,
+        *,
+        validation_scope: Sequence[str] = (),
+        validation_revision: str = "",
     ) -> Tuple[str, ...]:
         """Union the proven prior scope with this round's host snapshot.
 
@@ -5116,9 +5137,27 @@ class CodingService:
             session = str(getattr(result, "thread_id", "") or "")
             if not session or session != session_bound:
                 raise refuse("cumulative_session_unproven")
+        validated = tuple(sorted({str(item) for item in validation_scope}))
+        if validated:
+            if request.require_changes is not False:
+                raise refuse("cumulative_scope_unproven")
+            if not _SHA256_RE.fullmatch(validation_revision):
+                raise refuse("cumulative_scope_unproven")
+            # A validation-only job may legitimately leave an explicitly
+            # planned dirty candidate byte-identical.  Re-prove that candidate
+            # here, after the provider and required checks, so a concurrent
+            # rewrite cannot be adopted merely because the adapter reported no
+            # attributable mutation for this round.
+            if not (getattr(result, "files_changed", ()) or ()):
+                try:
+                    current = self._revision_digest(request.working_dir, validated)
+                except CodingServiceError:
+                    raise refuse("cumulative_revision_mismatch") from None
+                if current != validation_revision:
+                    raise refuse("cumulative_revision_mismatch")
         union = sorted({
             str(item) for item in (getattr(result, "files_changed", ()) or ())
-        } | {str(item) for item in prior})
+        } | {str(item) for item in prior} | set(validated))
         if not union or len(union) > MAX_ATTRIBUTABLE_FILES:
             raise refuse("cumulative_scope_unbounded")
         root = Path(request.working_dir).resolve()
@@ -5398,6 +5437,8 @@ class CodingService:
                 # Indexer request is unchanged from what it has always been.
                 prior_scope: Tuple[str, ...] = ()
                 session_bound = ""
+                validation_scope: Tuple[str, ...] = ()
+                validation_revision = ""
                 if rework_binding is not None:
                     parent_contract = self._load_plan_authority(bound_record)
                     if parent_contract is None:
@@ -5412,15 +5453,28 @@ class CodingService:
                     )
 
                 def on_pre_contract(contract, _path=job_path):
+                    nonlocal validation_scope, validation_revision
                     self._persist_plan_authority(
                         _path, self._read_json(_path), contract,
                     )
+                    if not prior_scope and request.require_changes is False:
+                        validation_scope, validation_revision = (
+                            planned_validation_scope(
+                                contract,
+                                request,
+                                max_files=MAX_ATTRIBUTABLE_FILES,
+                                revision_target=self._revision_target,
+                                revision_digest=self._revision_digest,
+                            )
+                        )
 
                 def cumulative_scope(
                     round_result, _prior=prior_scope, _session=session_bound,
                 ):
                     scope = self._cumulative_route_scope(
                         _prior, _session, round_result, request,
+                        validation_scope=validation_scope,
+                        validation_revision=validation_revision,
                     )
                     if progress is not None:
                         progress.route_scope = scope
@@ -5724,6 +5778,13 @@ class CodingService:
                 "a blocked round has no resumable implementation session",
             )
         files = {str(item) for item in result.files_changed}
+        validated_scope = tuple(getattr(progress, "route_scope", ()) or ())
+        if validated_scope and request.require_changes is False:
+            # A strict validation-only round intentionally distinguishes
+            # "provider rewrote these files" (the adapter's empty list) from
+            # "the host proved these planned dirty bytes" (the route scope).
+            # The latter is the exact set Codex audits and the revision binds.
+            files |= set(validated_scope)
         if rework:
             record = self._read_json(path)
             recorded = str(record.get("implementation_session_id") or "")
@@ -5734,7 +5795,6 @@ class CodingService:
             # untouched earlier file could change without invalidating it.
             files |= {str(item) for item in (record.get("implementation_files") or [])}
         files = sorted(files)
-        validated_scope = tuple(getattr(progress, "route_scope", ()) or ())
         if validated_scope and tuple(files) != validated_scope:
             # Equality, not inclusion. The whole point of validating a
             # cumulative scope is that it is the scope an auditor is later

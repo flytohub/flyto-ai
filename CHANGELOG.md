@@ -70,6 +70,14 @@
 
 ## Unreleased
 
+- Allow an explicit strict validation-only job to audit an existing dirty
+  candidate without manufacturing a rewrite. The sealed Indexer intent ledger
+  must name every adopted path, every path must already be a Git working-tree
+  change, and the host binds and re-proves the exact revision around the
+  provider and required checks. Clean, unplanned, unsafe, oversized, non-Git,
+  or concurrently moving candidates remain non-landable. Refresh the stack
+  lock to the verified clean Blueprint, Core, and Indexer main revisions used
+  by this route repair.
 - Strengthen `flyto_coding_get` without adding a fourth tool: a `job_id`-only
   read retains the exact historical `ok` plus full `job` shape, while explicit
   compact summary reads add detail-scoped change tokens, bounded 20-second

@@ -1759,6 +1759,33 @@ class ServiceImplementer:
         )
 
 
+class ValidationOnlyImplementer(ServiceImplementer):
+    """Inspects and verifies an existing candidate without rewriting it."""
+
+    async def run(self, request):
+        self.rounds += 1
+        self.messages.append(request.message)
+        try:
+            self.store.load(self.session, request.working_dir)
+        except FileNotFoundError:
+            self.store.create(request.working_dir, self.session)
+        self.store.append(self.session, "coding.validation", {"round": self.rounds})
+        return CodingTaskResult(
+            ok=True, message="validated", thread_id=self.session, attempts=1,
+            status="completed", files_changed=[], checks=[_green_check()],
+        )
+
+
+class DriftingValidationOnlyImplementer(ValidationOnlyImplementer):
+    """Models bytes moving after the validation baseline was sealed."""
+
+    async def run(self, request):
+        (Path(request.working_dir) / "app.py").write_text(
+            "candidate moved during validation\n", encoding="utf-8",
+        )
+        return await super().run(request)
+
+
 class BudgetThenSuccessImplementer(ServiceImplementer):
     """First emergency segment stops boundedly; later strict rounds succeed."""
 
@@ -1881,6 +1908,122 @@ def test_service_route_completes_rework_and_audit_with_real_processes(tmp_path):
         )
         assert accepted.state is CodingJobState.CODEX_ACCEPTED
         assert accepted.landable is True
+    finally:
+        service.close()
+
+
+def test_validation_only_route_adopts_exact_planned_dirty_revision(tmp_path):
+    """A byte-identical recovery is auditable without manufacturing churn."""
+
+    from flyto_ai.coding.contracts import CodingAuditVerdict
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    candidate = workspace / "app.py"
+    candidate.write_text("accepted base\n", encoding="utf-8")
+    _commit_workspace(workspace)
+    candidate.write_text("candidate to validate\n", encoding="utf-8")
+
+    box = {"agent": ValidationOnlyImplementer(None)}
+    service = _route_service(
+        tmp_path, workspace, box, state_dir="validation-only-route",
+    )
+    request = CodingTaskRequest(
+        message=(
+            "Validate the existing candidate in `app.py` exactly as-is; "
+            "do not rewrite correct bytes."
+        ),
+        working_dir=str(workspace),
+        require_changes=False,
+    )
+    try:
+        queued = service.submit("tenant-route", "validation-only-001", request)
+        awaiting = _wait_route(service, "tenant-route", queued.job_id)
+        assert awaiting.state is CodingJobState.AWAITING_CODEX_AUDIT
+        assert awaiting.route_receipt["ok"] is True
+        assert box["agent"].rounds == 1
+
+        tenant_ref = service._tenant_ref("tenant-route")
+        path = service._tenant_dir(tenant_ref) / "jobs" / (queued.job_id + ".json")
+        record = service._read_json(path)
+        assert record["implementation_files"] == ["app.py"]
+        assert record["implementation_revision_sha256"] == service._revision_digest(
+            str(workspace), ["app.py"],
+        )
+        allowed = record["indexer_plan_authority"]["contract"]["intent_ledger"][
+            "allowed_paths"
+        ]
+        assert allowed == ["app.py"]
+
+        accepted = service.audit(
+            "tenant-route", queued.job_id,
+            awaiting.implementation_revision_sha256,
+            CodingAuditVerdict.ACCEPT, (),
+        )
+        assert accepted.state is CodingJobState.CODEX_ACCEPTED
+        assert accepted.landable is True
+    finally:
+        service.close()
+
+
+def test_validation_only_route_refuses_a_clean_planned_path(tmp_path):
+    """Inspection-only work cannot mint an attributable revision from HEAD."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    (workspace / "app.py").write_text("clean base\n", encoding="utf-8")
+    _commit_workspace(workspace)
+
+    box = {"agent": ValidationOnlyImplementer(None)}
+    service = _route_service(
+        tmp_path, workspace, box, state_dir="validation-only-clean",
+    )
+    request = CodingTaskRequest(
+        message="Validate the existing candidate in `app.py` exactly as-is.",
+        working_dir=str(workspace), require_changes=False,
+    )
+    try:
+        queued = service.submit("tenant-route", "validation-only-clean", request)
+        failed = _wait_route(service, "tenant-route", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "cumulative_scope_unproven"
+        assert failed.landable is False
+        assert failed.implementation_revision_sha256 == ""
+        assert box["agent"].rounds == 0
+    finally:
+        service.close()
+
+
+def test_validation_only_route_refuses_candidate_drift_after_plan(tmp_path):
+    """A no-change adapter result cannot hide a moving candidate revision."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _declare_verification(workspace)
+    candidate = workspace / "app.py"
+    candidate.write_text("clean base\n", encoding="utf-8")
+    _commit_workspace(workspace)
+    candidate.write_text("candidate before validation\n", encoding="utf-8")
+
+    box = {"agent": DriftingValidationOnlyImplementer(None)}
+    service = _route_service(
+        tmp_path, workspace, box, state_dir="validation-only-drift",
+    )
+    request = CodingTaskRequest(
+        message="Validate the existing candidate in `app.py` exactly as-is.",
+        working_dir=str(workspace), require_changes=False,
+    )
+    try:
+        queued = service.submit("tenant-route", "validation-only-drift", request)
+        failed = _wait_route(service, "tenant-route", queued.job_id)
+        assert failed.state is CodingJobState.FAILED
+        assert failed.failure_code == "route_cumulative_revision_mismatch"
+        assert failed.landable is False
+        assert failed.implementation_revision_sha256 == ""
+        assert failed.route_receipt["failure_code"] == "cumulative_revision_mismatch"
+        assert box["agent"].rounds == 1
     finally:
         service.close()
 

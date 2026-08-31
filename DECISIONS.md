@@ -1,5 +1,27 @@
 # Decisions
 
+## 2026-09-01 — Validation-only recovery binds planned dirty bytes without churn
+
+Decision: a strict fresh job with `require_changes=false` may carry an existing
+candidate into Indexer post-work and the exact-revision audit only when the
+sealed plan's complete non-empty `intent_ledger.allowed_paths` are all current
+Git working-tree changes. The host captures that bounded path set and revision
+before the implementer, unions it with any attributable round edits, and
+re-proves byte equality after required checks when the round reports no change.
+
+Why: an implementation can be semantically correct while its first post-lane
+fails for a recoverable plan-ledger defect. Requiring a fresh recovery agent to
+rewrite correct bytes manufactured churn; accepting an empty attributable set
+or all pre-existing dirty state would instead let unrelated work acquire false
+authority.
+
+Consequence: a byte-identical recovery still runs the provider, source-owned
+checks, strict Indexer pre/post lanes, and independent Codex audit. Clean,
+ignored, unplanned, malformed, oversized, unsafe, non-Git, or moving candidates
+fail closed. The adapter truth remains explicit: its `files_changed` may be
+empty while the separately persisted implementation scope names the exact
+host-validated dirty revision. No new public tool or landing authority is added.
+
 ## 2026-09-01 — Exact receipt reads do not require whole-history construction
 
 Decision: after MCP initialization, the stable supervisor may answer only an

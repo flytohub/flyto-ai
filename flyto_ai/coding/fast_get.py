@@ -53,6 +53,7 @@ from flyto_ai.coding.service import (
 )
 
 MAX_DURABLE_JOB_RECORD_BYTES = 1024 * 1024
+_MAX_DURABLE_JOB_RECORD_DEPTH = 128
 _READ_CHUNK_BYTES = 64 * 1024
 _JOB_ID_RE = re.compile(r"^job_[a-f0-9]{24}$")
 _SAFE_TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -216,6 +217,7 @@ class DurableJobReceiptReader:
                 parse_float=_finite_float,
                 object_pairs_hook=_unique_object,
             )
+            _validate_json_depth(value)
         except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
             raise ValueError("coding service record is invalid") from exc
         if not isinstance(value, dict):
@@ -402,3 +404,17 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("duplicate JSON object key")
         value[key] = item
     return value
+
+
+def _validate_json_depth(value: Any) -> None:
+    """Apply one stable nesting bound across supported Python decoders."""
+
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > _MAX_DURABLE_JOB_RECORD_DEPTH:
+            raise ValueError("coding service record exceeds its nesting bound")
+        if isinstance(item, dict):
+            stack.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in item)

@@ -203,6 +203,29 @@ def test_exact_reader_rejects_ambiguous_json(tmp_path, raw) -> None:
         _reader(state).read(JOB_ID)
 
 
+@pytest.mark.parametrize(
+    ("nesting", "accepted"),
+    [
+        (fast_get._MAX_DURABLE_JOB_RECORD_DEPTH - 1, True),
+        (fast_get._MAX_DURABLE_JOB_RECORD_DEPTH, False),
+    ],
+)
+def test_exact_reader_applies_stable_depth_bound(tmp_path, nesting, accepted) -> None:
+    state = tmp_path / "state"
+    record = _record()
+    nested = 0
+    for _ in range(nesting):
+        nested = [nested]
+    record["nested"] = nested
+    _write_record(state, record)
+
+    if accepted:
+        assert _reader(state).read(JOB_ID)["job_id"] == JOB_ID
+    else:
+        with pytest.raises(ValueError, match="invalid"):
+            _reader(state).read(JOB_ID)
+
+
 def test_exact_reader_bounds_one_record_without_enumerating_siblings(tmp_path) -> None:
     state = tmp_path / "state"
     path = _jobs(state) / (JOB_ID + ".json")

@@ -51,6 +51,7 @@ class AmendmentBoundary:
 
     original: frozenset[str]
     added: frozenset[str]
+    active: frozenset[str]
     amendment_index: int
 
 
@@ -618,6 +619,7 @@ def validate_amendment_contract(
     )
     return AmendmentBoundary(
         original=frozenset(original), added=frozenset(added),
+        active=frozenset(_bounded_path_list(host_requested_paths, allow_empty=True)),
         amendment_index=amendment_index,
     )
 

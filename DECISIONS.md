@@ -141,6 +141,26 @@ Canonical paths, typed suffixes, missing-parent containment, final-symlink and
 and the stricter amendment parser keep their prior behavior. No product
 topology or ownership decision changes.
 
+## 2026-09-01 — Rework planning covers the exact active set, with rolling compatibility
+
+Decision: preserve the cumulative parent-plus-added ledger as edit and
+post-validation authority, but require a current amendment execution plan to
+cover exactly the host-requested active targets. Accept an exact cumulative
+plan only as a rolling compatibility shape for an older Indexer. Reject every
+partial, extra, or unrelated coverage set. When an audit names multiple
+existing parent files, forward all of them; use the one-parent fallback only
+when no exact target is named.
+
+Why: the accepted 63-path Engine parent compiled 58 successor steps for a small
+same-scope audit and was correctly refused by the unchanged 32-step route bound.
+The cumulative ledger proves authority; replaying its entire analysis is not a
+security property and prevented an authorized repair from starting.
+
+Consequence: root identity, content digests, ancestry, path partition,
+fingerprints, cumulative post-validation, and the 32-step limit remain intact.
+New producers are small and exact; legacy producers remain usable only when
+their complete cumulative coverage is internally consistent.
+
 ## 2026-08-25 — Amendment limits apply to the delta, not the root ledger
 
 Decision: an audit rework plan sends Indexer only exact prior-attributable paths

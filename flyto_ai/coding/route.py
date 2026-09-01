@@ -1897,7 +1897,13 @@ class CodingRouteOrchestrator:
                 )
             except AmendmentContractError as exc:
                 raise CodingRouteError(exc.code, lane) from exc
-            if covered != boundary.original | boundary.added:
+            cumulative = boundary.original | boundary.added
+            # Current Indexers compile only the exact host-requested amendment
+            # targets while retaining cumulative authority in the ledger.
+            # Rolling upgrades may still return the legacy cumulative plan.
+            # Accept exactly either complete representation; every partial,
+            # extra, or unrelated coverage set remains fail-closed.
+            if covered not in (boundary.active, cumulative):
                 raise CodingRouteError("amendment_plan_boundary_incomplete", lane)
             try:
                 ordered = tuple(

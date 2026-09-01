@@ -140,6 +140,12 @@ point-in-time observation, not a continuously enforced check.
 | `flyto-indexer` scans Core and modules | unverified | Inventory confirms the repositories; the two scan inputs were not separately traced in this pass. |
 | `flyto-admin` manages both projects | partial | Cloud admin surfaces exist and `backend/internal/engine/scans.go::codeOrg` touches the Code side; evidence is not strong enough to claim complete two-product project management. |
 
+The coding-route row's amendment detail is further constrained as of 2026-09-01:
+current Indexer successors analyze only the exact host-requested active amendment
+set while retaining cumulative ledger authority. The host accepts either exact
+active coverage or an exact legacy cumulative plan during a rolling upgrade;
+partial and extra coverage fail closed and the 32-step bound is unchanged.
+
 Agents changing any of these edges must re-verify the current repository state
 first, update this table with the new status and evidence, and follow the
 architecture-invariant rule in [`../AGENTS.md`](../AGENTS.md).

@@ -605,14 +605,19 @@ def test_large_parent_scope_is_not_redeclared_as_one_amendment(repo):
     )))
     _, second = asyncio.run(route._indexer_pre(
         CodingTaskRequest(
-            message="rework: update many/f00.py to add the regression",
+            message=(
+                "rework: update many/f00.py, many/f17.py, and many/f40.py "
+                "to add the regression"
+            ),
             working_dir=str(repo),
         ),
         first["task_contract"],
         tuple(paths),
     ))
 
-    assert indexer.plans[-1]["targets"] == ["many/f00.py"]
+    assert indexer.plans[-1]["targets"] == [
+        "many/f00.py", "many/f17.py", "many/f40.py",
+    ]
     assert second["task_contract"]["intent_ledger"]["allowed_paths"] == paths
 
 
@@ -917,6 +922,107 @@ def test_amendment_executes_a_novel_original_path_step_not_proven_by_parent(repo
     assert novel in delta
     assert added in delta
     assert sum(step["tool"] == "task" for step in delta) == 2
+
+
+def test_active_only_successor_plan_keeps_cumulative_authority(repo):
+    """A small rework plan need not replay every parent-owned coordinate."""
+
+    from flyto_ai.coding.route import RouteLane
+
+    route, parent, successor = _digest_bound_amendment_fixture(repo)
+    successor["targets"] = ["add/a.py"]
+    successor["resolved_targets"] = [
+        {"input": "add/a.py", "path": "add/a.py",
+         "symbol_id": "repo:add/a.py:file:a"},
+    ]
+    successor["execution_plan"] = _synthetic_plan_group("active", 0, 1)
+    _bind_successor_amendment(parent, successor)
+
+    groups = route._plan_groups(
+        successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+        host_project=repo.name, host_requested_paths=["add/a.py"],
+    )
+
+    assert successor["intent_ledger"]["allowed_paths"] == [
+        "orig/a.py", "add/a.py",
+    ]
+    assert sum(len(steps) for _scope, steps in groups) == 3
+
+
+def test_large_active_only_successor_keeps_sixty_three_path_authority(repo):
+    """Current producer shape stays bounded without shrinking its ledger."""
+
+    from flyto_ai.coding.route import RouteLane
+
+    paths = ["src/f{:02d}.py".format(index) for index in range(63)]
+    active = [paths[7], paths[41], paths[62]]
+    parent = _contract_section(
+        task_id="task_large_active_boundary", project=repo.name,
+        paths=paths, fingerprint="1" * 64, steps=[],
+    )
+    successor = {
+        "task_profile": {
+            "version": "task-contract.v2",
+            "task_id": "task_large_active_boundary",
+            "intent": "feature",
+            "project": repo.name,
+            "intent_fingerprint": "2" * 64,
+            "instruction_fingerprint": "8" * 64,
+        },
+        "intent_ledger": {
+            "version": "intent-ledger.v1",
+            "fingerprint": "2" * 64,
+            "description": parent["intent_ledger"]["description"],
+            "allowed_paths": paths,
+        },
+        "instruction_context": {
+            "version": "task-context.v1", "fingerprint": "8" * 64,
+        },
+        "task_amendment": {
+            "version": "task-amendment.v1",
+            "status": "amended",
+            "root_task_id": "task_large_active_boundary",
+            "amendment_index": 1,
+            "parent_contract_digest": "",
+            "original_paths": paths,
+            "added_paths": [],
+            "cumulative_paths": paths,
+        },
+        "execution_plan": [
+            _synthetic_plan_step(
+                "active_{:02d}".format(index),
+                purpose="inspect_active_{:02d}".format(index),
+                target="{}:{}:file:f{:02d}".format(repo.name, path, index),
+            )
+            for index, path in zip((7, 41, 62), active)
+        ] + [
+            _synthetic_plan_step("active_g1", purpose="assess", gate=True),
+            _synthetic_plan_step("active_g2", purpose="implement", gate=True),
+        ],
+        "resolved_targets": [
+            {
+                "input": path,
+                "path": path,
+                "symbol_id": "{}:{}:file:f{:02d}".format(
+                    repo.name, path, index,
+                ),
+            }
+            for index, path in zip((7, 41, 62), active)
+        ],
+        "targets": active,
+    }
+    route = _orchestrator(FakeIndexer())
+    _bind_successor_amendment(parent, successor)
+
+    groups = route._plan_groups(
+        successor, RouteLane.INDEXER_PRE, parent_contract=parent,
+        host_project=repo.name, host_requested_paths=active,
+    )
+
+    assert successor["targets"] == active
+    assert successor["intent_ledger"]["allowed_paths"] == paths
+    assert sum(len(steps) for _scope, steps in groups) == 5
+    assert sum(len(steps) for _scope, steps in groups) <= RouteLimits().max_plan_steps
 
 
 def test_redigested_foreign_parent_and_successor_cannot_replace_host_project(repo):

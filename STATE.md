@@ -117,6 +117,22 @@ Last updated: 2026-09-01
   targets; a same-scope repair repeats one authenticated parent path. Indexer
   forms and verifies the ordered cumulative union.
 
+## Active amendment planning closes broad-parent route exhaustion (2026-09-01)
+
+- Exact reproduction of the failed Engine rework compiled 58 successor steps
+  from a 63-path authenticated parent, exceeding the unchanged 32-step route
+  bound before provider start.
+- The host now preserves all explicitly named existing parent targets for a
+  same-scope audit instead of reducing them to one. Indexer analyzes only that
+  exact active amendment set while its successor ledger remains cumulative.
+- The consumer accepts exactly active-plan coverage from the current producer
+  or exactly cumulative-plan coverage from a rolling legacy producer. Partial,
+  extra, malformed, and authority-widening coverage still fail closed; no bound
+  was raised.
+- Focused AI and Indexer amendment regressions pass locally. The previously
+  terminal W1 Engine job remains terminal and non-landable; this repair only
+  enables a newly scoped governed job after paired independent acceptance.
+
 ## Multi-repository audit authority is fail-closed (2026-08-25)
 
 - A live Code + Engine job proved that `repository_roots` granted the Codex
@@ -268,9 +284,10 @@ squash to `main` commit `ee8c95678c9a18931890a096ea7c04f6a7295ad0` only after
 all remote checks were green, including Playwright: 136 total, 113 passed, 23
 existing skips, 0 failed, plus Audit Closure.
 
-The bounded limitation remains: broad cumulative audited rework can exceed the
-route-plan ceiling. Future repairs should bind active scope to current findings
-instead of raising or bypassing the ceiling.
+That historical job remains failed and non-landable. The 2026-09-01
+active-plan repair removes this route-planning limitation for future jobs
+without raising or bypassing the ceiling; it does not retroactively reopen the
+terminal job.
 
 ## Governed Robotics planner entry (2026-08-22)
 

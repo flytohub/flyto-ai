@@ -64,11 +64,17 @@ def amendment_delta_targets(
         item for item in (raw_parent_paths or ()) if isinstance(item, str)
     ]
     parent_paths = set(parent_order)
-    targets = list(dict.fromkeys(
+    novel = list(dict.fromkeys(
         [item for item in prior_scope if item not in parent_paths]
         + [item for item in explicit_targets if item not in parent_paths]
     ))
-    if targets:
-        return targets
     named_parent = [item for item in explicit_targets if item in parent_paths]
-    return named_parent[:1] or parent_order[:1]
+    # An audit can name several existing parent-owned files in one rework.
+    # They are the active analysis set even though they add no new authority.
+    # Keep them all (the caller applies the unchanged per-amendment bound),
+    # while still refusing to replay unnamed cumulative parent scope.
+    # Preserve the existing new-scope priority: when this round genuinely
+    # widens authority, only that novel delta is planned.  A same-scope audit
+    # has no novel path, so all explicitly named parent targets become its
+    # active analysis set instead of the historical single-path fallback.
+    return novel or list(dict.fromkeys(named_parent)) or parent_order[:1]

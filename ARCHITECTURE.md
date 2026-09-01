@@ -995,9 +995,9 @@ the cumulative ledger can narrow authority below files earlier rounds already
 attributed to the job. The authenticated parent contract already carries its
 cumulative scope. The host therefore declares only revision-proven prior paths
 missing from that parent plus explicit targets parsed from the new audit
-finding; Indexer owns the ordered cumulative union. A same-scope repair
-redeclares one authenticated parent path so the amendment is nonempty without
-widening authority. This keeps the per-amendment 32-target bound independent
+finding; Indexer owns the ordered cumulative union. A same-scope repair plans
+every explicitly named authenticated parent path, falling back to one parent
+path only when the finding names none. This keeps the per-amendment 32-target bound independent
 from a valid root task with up to 64 paths; first-round requests remain
 unchanged.
 Because audit prose also carries commands, check output, and evidence
@@ -1046,9 +1046,11 @@ Indexer verifier accepts ancestry lengths below eight, so generation seven is
 the effective compatibility ceiling and generation/length eight fails closed
 until the producer/verifier off-by-one is resolved.
 
-Original paths must equal the parent ledger, added paths must be disjoint, their
-ordered union must equal the successor ledger, and every path must occur in the
-plan groups' exact resolved-target union. Path ownership alone never proves work
+Original paths must equal the parent ledger, added paths must be disjoint, and
+their ordered union must equal the successor ledger. A current producer's plan
+groups must resolve exactly the host-requested active amendment targets; during
+a rolling upgrade the consumer also accepts the legacy exact cumulative union.
+Every partial, extra, or unrelated coverage set fails closed. Path ownership alone never proves work
 was executed: a successor analysis step is reused only by consuming one exact
 parent multiset occurrence with the same host-assigned scope, tool, canonical
 arguments, required flag and purpose. Every novel or changed step executes even

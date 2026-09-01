@@ -70,6 +70,13 @@
 
 ## Unreleased
 
+- Close broad-parent audit rework plan exhaustion without raising a ceiling.
+  Same-scope findings retain all exact named parent targets; current Indexer
+  successors plan only that active set while their ledger stays cumulative.
+  The host accepts either exact active coverage or an exact legacy cumulative
+  plan during rolling upgrades and rejects every partial or extra set. The
+  unchanged executable bound remains 32, and terminal failed jobs are not
+  reopened.
 - Allow an explicit strict validation-only job to audit an existing dirty
   candidate without manufacturing a rewrite. The sealed Indexer intent ledger
   must name every adopted path, every path must already be a Git working-tree

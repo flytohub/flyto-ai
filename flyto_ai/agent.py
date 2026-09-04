@@ -19,7 +19,7 @@ from flyto_ai.closed_loop_v3 import (
     ModelRoute,
 )
 from flyto_ai.config import AgentConfig
-from flyto_ai.intelligence.planner import ToolIntentDecision, classify_tool_intent
+from flyto_ai.intelligence.confirmation import ToolIntentDecision, classify_tool_intent, route_with_confirmation
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
@@ -1057,7 +1057,7 @@ class Agent:
         await self._init_memory()
 
         routing_decision = (
-            classify_tool_intent(message)
+            route_with_confirmation(message, history)
             if mode == "execute"
             else ToolIntentDecision(
                 "action", 1.0, "explicit_non_execute_mode", (mode,),

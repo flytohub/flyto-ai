@@ -16,6 +16,18 @@ import math
 import re
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from flyto_ai.intelligence.action_verbs import (
+    _AR_ACTION_RE,
+    _CJK_ACTION_RE,
+    _DE_ACTION_RE,
+    _EN_ACTION_RE,
+    _ES_ACTION_RE,
+    _FR_ACTION_RE,
+    _JA_ACTION_RE,
+    _KO_ACTION_RE,
+    _PT_IT_ACTION_RE,
+    _RU_ACTION_RE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,75 +129,6 @@ _EXPLANATION_RE = re.compile(
     r"|(?:qué\s+es|por\s+qué|expl[ií]ca)"
     r"|(?:qu['’]est-ce|pourquoi|explique)"
     r"|(?:was\s+ist|warum|erkläre)",
-    re.IGNORECASE,
-)
-_EN_ACTION_RE = re.compile(
-    r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+|"
-    r"help\s+me(?:\s+to)?\s+)?"
-    r"(?:open|visit|go\s+to|search(?:\s+for)?|run|execute|click|download|"
-    r"upload|create|update|delete|remove|fix|repair|push|deploy|send|"
-    r"take\s+(?:a\s+)?screenshot|repeat|rewrite|fetch|find|check|write|"
-    r"install|commit|rerun|build|apply|read|summari[sz]e|analy[sz]e|"
-    r"inspect|list|scrape|extract|save|tell|reuse|convert|import)\b",
-    re.IGNORECASE,
-)
-_CJK_ACTION_RE = re.compile(
-    r"^\s*(?:請|请|麻煩|麻烦|幫我|帮我|替我|可以幫我|可以帮我)?\s*"
-    r"(?:打開|打开|開啟|开启|前往|搜尋|搜索|查詢|查询|執行|执行|運行|运行|"
-    r"點擊|点击|下載|下载|上傳|上传|建立|創建|创建|更新|刪除|删除|修復|修复|"
-    r"部署|推送|上去|截圖|截图|重複|重复|重新執行|重新执行|修改|改寫|改写|"
-    r"重寫|重写|抓取|尋找|查找|找出|檢查|检查|寫入|写入|安裝|安装|提交|"
-    r"讀取|读取|分析|列出|套用|儲存|储存|摘要|截)"
-    r"|^\s*(?:把|將|将).{1,48}?(?:改|修改|改寫|改写|重寫|重写|寫|写|"
-    r"刪除|删除|更新|套用|儲存|储存|提交)"
-    r"|^\s*(?:到|去).{1,32}?(?:找|搜尋|搜索|查詢|查询)",
-    re.IGNORECASE,
-)
-_JA_ACTION_RE = re.compile(
-    r"^\s*.{0,48}(?:開いて|アクセスして|検索して|実行して|クリックして|"
-    r"ダウンロードして|アップロードして|作成して|更新して|削除して|"
-    r"修正して|書き直して|保存して|確認して|分析して|一覧にして)"
-    r"(?:ください|下さい|くれますか|[。.!]?$)"
-)
-_KO_ACTION_RE = re.compile(
-    r"^\s*.{0,48}(?:열어|실행해|작성해|수정해|검색해|저장해|삭제해|"
-    r"다운로드해|업로드해|배포해|확인해|분석해|나열해|스크린샷)"
-    r"(?:\s*주세요|\s*주십시오|\s*줘|세요|[.!]?$)"
-)
-_ES_ACTION_RE = re.compile(
-    r"^\s*[¡¿]?\s*(?:por\s+favor[,:]?\s*)?"
-    r"(?:abre|ejecuta|corrige|busca|escribe|crea|elimina|descarga|sube|"
-    r"despliega|guarda|analiza|lista|inspecciona|instala|toma)\b",
-    re.IGNORECASE,
-)
-_FR_ACTION_RE = re.compile(
-    r"^\s*(?:s['’]il\s+te\s+pla[iî]t[,:]?\s*)?"
-    r"(?:ouvre|ex[eé]cute|corrige|cherche|[eé]cris|cr[eé]e|supprime|"
-    r"t[eé]l[eé]charge|d[eé]ploie|enregistre|analyse|liste|inspecte|installe|prends)\b",
-    re.IGNORECASE,
-)
-_DE_ACTION_RE = re.compile(
-    r"^\s*(?:bitte\s+)?(?:öffne|oeffne|behebe|suche|schreibe|erstelle|"
-    r"lösche|loesche|speichere|analysiere|liste|prüfe|pruefe|installiere)\b"
-    r"|^\s*(?:bitte\s+)?führe\b.{0,36}\baus\b",
-    re.IGNORECASE,
-)
-_PT_IT_ACTION_RE = re.compile(
-    r"^\s*(?:por\s+favor[,:]?\s*)?(?:abra|execute|corrija|procure|escreva|"
-    r"crie|exclua|salve|analise|instale)\b"
-    r"|^\s*(?:per\s+favore[,:]?\s*)?(?:apri|esegui|correggi|cerca|scrivi|"
-    r"crea|elimina|salva|analizza|installa)\b",
-    re.IGNORECASE,
-)
-_RU_ACTION_RE = re.compile(
-    r"^\s*(?:пожалуйста[,:]?\s*)?(?:открой|запусти|выполни|исправь|"
-    r"найди|создай|удали|сохрани|установи|разверни|проверь|прочитай|"
-    r"проанализируй)\b",
-    re.IGNORECASE,
-)
-_AR_ACTION_RE = re.compile(
-    r"^\s*(?:من\s+فضلك[،,:]?\s*)?(?:افتح|شغ[ّ]?ل|نف[ّ]?ذ|أصلح|اصلح|"
-    r"ابحث|أنشئ|انشئ|احذف|احفظ|ثب[ّ]?ت|انشر|افحص|اقرأ|حل[ّ]?ل)\b",
     re.IGNORECASE,
 )
 _STATUS_QUESTION_RE = re.compile(

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.19.0
+
+### Fixed
+
+- Confirming an action now confirms it. `classify_tool_intent` reads one
+  message in isolation, which is right for a safety boundary and wrong for a
+  conversation: the assistant asked whether to run a workflow, the operator
+  replied "確認", and that classified as small talk — no tools were exposed, so
+  the only reply available was to ask again. A bare affirmation is promoted to
+  `action` only when the assistant's previous turn actually asked, read off the
+  transcript rather than held as state, so a resumed or forked session behaves
+  the same. Agreement to a remark stays conversation, and a message that agrees
+  and then asks for something else classifies on its own terms.
+
+- The action-verb tables carried no "登入" and no "log in", so the plainest
+  instruction this product receives classified as `answer_only`: the assistant
+  explained the login instead of performing it, and the caller had to discover
+  by trial that a different wording worked. Access and lifecycle verbs are
+  added in both the English and CJK tables.
+
+### Changed
+
+- The verb tables and the routing decision move into
+  `flyto_ai/intelligence/action_verbs.py` and
+  `flyto_ai/intelligence/confirmation.py`. A verb list over ten languages is an
+  open set, and the safety boundary should not pay for vocabulary it cannot
+  help accumulating — `planner.py` drops from 939 to 868 lines and `agent.py`
+  is unchanged in size. Adding a verb is now a change to a data file.
+
+### Unchanged, deliberately
+
+- The ambiguous-turn guard, which exposes only read-only tools when intent is
+  unclear. It stops a question turning into a click. A caller whose tool names
+  are dynamic should REGISTER them through `ToolExecutor.permission_overrides`,
+  which this package already supports, rather than have the guard relaxed.
+
 ## 0.18.0
 
 ### Changed

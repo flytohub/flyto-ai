@@ -205,14 +205,14 @@ Blueprint guard — intercept the first non-blueprint tool call.
 ### `init_storage` (public)
 
 `init_storage() -> None`
-Source: [`flyto_ai/assistant/router.py:115`](../../../flyto_ai/assistant/router.py#L115)
+Source: [`flyto_ai/assistant/router.py:117`](../../../flyto_ai/assistant/router.py#L117)
 
 Initialize flyto-blueprint with SQLite storage for local persistence.
 
 ### `feedback` (public)
 
 `feedback(tool_calls: List[Dict[str, Any]], execution_results: List[Dict[str, Any]], user_message: str, *, min_steps: int = 3) -> None`
-Source: [`flyto_ai/assistant/router.py:125`](../../../flyto_ai/assistant/router.py#L125)
+Source: [`flyto_ai/assistant/router.py:127`](../../../flyto_ai/assistant/router.py#L127)
 
 Closed-loop blueprint learning.
 

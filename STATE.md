@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-06
 
+## Browser state survives goal repair (2026-09-06)
+
+Trusted continuation reuses the admitted middleware closure, retaining its
+first-call preparation, snapshot observations, retry counters and current URL.
+A fresh ordinary chat starts new preparation. Blueprint guidance is explicitly
+nonexecuted and cannot count as a successful requested module operation.
+Custom host prompts include only the current owned browser scope's live status,
+including how to reuse its sole browser without stale/redacted session IDs.
+
 ## Admitted goal continuation (2026-09-06)
 
 Trusted hosts continue a goal with `Agent.continue_execution(message=repair,

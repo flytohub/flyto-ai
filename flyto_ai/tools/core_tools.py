@@ -114,12 +114,21 @@ def get_browser_status() -> str:
     telling the LLM to reuse the existing browser.
     """
     with _browser_sessions_lock:
-        if not _active_browser_sessions():
+        sessions = _active_browser_sessions()
+        if not sessions:
             return ""
-        return (
+        hint = (
             "BROWSER IS ALREADY RUNNING. Do NOT call browser.launch again. "
-            "Continue using browser.goto / browser.snapshot / browser.click directly."
+            "Preserve its current page and authenticated state while repairing the goal. "
+            "Use browser.snapshot to observe the current page before changing it. "
+            "A redacted value is not a usable browser session ID."
         )
+        if len(sessions) == 1:
+            hint += (
+                " There is exactly one browser in this scope. Omit context.browser_session "
+                "and context.browser so Core selects this existing browser automatically."
+            )
+        return hint
 
 
 def _is_ok(result: Dict[str, Any]) -> bool:

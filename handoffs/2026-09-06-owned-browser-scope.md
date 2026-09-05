@@ -115,3 +115,28 @@ generated-correction turn to migrate.
 Validation: continuation tests use a deterministic provider to inspect admitted
 tools and real SDK dispatch guards, not as live-model acceptance. The separate
 UI acceptance must prove actual Core observations, goal verification and cleanup.
+
+## Prepared middleware and browser state during correction
+
+The live browser registry survived corrections, but each Agent.chat recreated
+middleware and its first-call blueprint redirect. A redirected browser.launch
+was falsely logged as success; the actor then used a redacted session selector
+and relaunched its authenticated browser. Custom system prompts also returned
+before the owned-browser hint was appended.
+
+The same admitted continuation now reuses its original assisted dispatcher.
+Changing the base dispatcher or assistant refuses continuation; an ordinary new
+chat clears the cache. Retry counters, snapshot state, prepared guard and current
+URL stay with the goal. Blueprint redirects now carry ok=false and
+action_executed=false, matching the existing snapshot substitution contract.
+Custom prompts append browser state only when an owned scope exists. A sole
+browser can be selected by omitting session/context handles; no session from
+another scope or legacy global registry is disclosed to the custom prompt.
+
+Regressions prove one browser launch across initial/correction turns, unchanged
+authenticated session observation, one preparation guard per admission, fresh
+preparation for a new goal, isolated hints, and truthful redirect metadata.
+Browser handlers/providers in these unit tests are deterministic doubles. Live
+actor verification remains the separate UI acceptance; no model outcome is
+changed by this patch. Revert this commit to restore the previous middleware
+preparation while retaining the admitted-continuation public API.

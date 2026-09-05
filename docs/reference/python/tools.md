@@ -192,357 +192,357 @@ Get a prompt hint about browser state for the LLM.
 ### `_is_ok` (internal)
 
 `_is_ok(result: Dict[str, Any]) -> bool`
-Source: [`flyto_ai/tools/core_tools.py:125`](../../../flyto_ai/tools/core_tools.py#L125)
+Source: [`flyto_ai/tools/core_tools.py:134`](../../../flyto_ai/tools/core_tools.py#L134)
 
 Check if a module result indicates success.
 
 ### `_get_mcp_handler` (internal)
 
 `_get_mcp_handler()`
-Source: [`flyto_ai/tools/core_tools.py:140`](../../../flyto_ai/tools/core_tools.py#L140)
+Source: [`flyto_ai/tools/core_tools.py:149`](../../../flyto_ai/tools/core_tools.py#L149)
 
 Lazily import mcp_handler to avoid circular imports.
 
 ### `_core_package_version` (internal)
 
 `_core_package_version() -> str`
-Source: [`flyto_ai/tools/core_tools.py:180`](../../../flyto_ai/tools/core_tools.py#L180)
+Source: [`flyto_ai/tools/core_tools.py:189`](../../../flyto_ai/tools/core_tools.py#L189)
 
 Return installed flyto-core package version when available.
 
 ### `_risk_for_tool` (internal)
 
 `_risk_for_tool(name: str) -> str`
-Source: [`flyto_ai/tools/core_tools.py:190`](../../../flyto_ai/tools/core_tools.py#L190)
+Source: [`flyto_ai/tools/core_tools.py:199`](../../../flyto_ai/tools/core_tools.py#L199)
 
 Internal `_risk_for_tool` implementation on this module; the linked source is authoritative.
 
 ### `_approval_policy_for_tool` (internal)
 
 `_approval_policy_for_tool(name: str) -> str`
-Source: [`flyto_ai/tools/core_tools.py:198`](../../../flyto_ai/tools/core_tools.py#L198)
+Source: [`flyto_ai/tools/core_tools.py:207`](../../../flyto_ai/tools/core_tools.py#L207)
 
 Internal `_approval_policy_for_tool` implementation on this module; the linked source is authoritative.
 
 ### `_tool_annotations` (internal)
 
 `_tool_annotations(name: str) -> Dict[str, bool]`
-Source: [`flyto_ai/tools/core_tools.py:206`](../../../flyto_ai/tools/core_tools.py#L206)
+Source: [`flyto_ai/tools/core_tools.py:215`](../../../flyto_ai/tools/core_tools.py#L215)
 
 Internal `_tool_annotations` implementation on this module; the linked source is authoritative.
 
 ### `_enrich_core_tool_def` (internal)
 
 `_enrich_core_tool_def(tool_def: Dict[str, Any]) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:215`](../../../flyto_ai/tools/core_tools.py#L215)
+Source: [`flyto_ai/tools/core_tools.py:224`](../../../flyto_ai/tools/core_tools.py#L224)
 
 Attach agent-facing MCP metadata without changing the callable schema.
 
 ### `_manifest_fingerprint` (internal)
 
 `_manifest_fingerprint(tools: List[Dict[str, Any]]) -> str`
-Source: [`flyto_ai/tools/core_tools.py:240`](../../../flyto_ai/tools/core_tools.py#L240)
+Source: [`flyto_ai/tools/core_tools.py:249`](../../../flyto_ai/tools/core_tools.py#L249)
 
 Internal `_manifest_fingerprint` implementation on this module; the linked source is authoritative.
 
 ### `json_dumps` (public)
 
 `json_dumps(value: Any) -> str`
-Source: [`flyto_ai/tools/core_tools.py:253`](../../../flyto_ai/tools/core_tools.py#L253)
+Source: [`flyto_ai/tools/core_tools.py:262`](../../../flyto_ai/tools/core_tools.py#L262)
 
 Stable JSON helper kept local to avoid importing heavier utilities.
 
 ### `_is_host_only_core_tool` (internal)
 
 `_is_host_only_core_tool(name: Any) -> bool`
-Source: [`flyto_ai/tools/core_tools.py:270`](../../../flyto_ai/tools/core_tools.py#L270)
+Source: [`flyto_ai/tools/core_tools.py:279`](../../../flyto_ai/tools/core_tools.py#L279)
 
 True when a Core tool name may never reach an LLM tool catalog.
 
 ### `_core_tool_defs_from_handler` (internal)
 
 `_core_tool_defs_from_handler(handler: Dict[str, Any]) -> List[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:275`](../../../flyto_ai/tools/core_tools.py#L275)
+Source: [`flyto_ai/tools/core_tools.py:284`](../../../flyto_ai/tools/core_tools.py#L284)
 
 Internal `_core_tool_defs_from_handler` implementation on this module; the linked source is authoritative.
 
 ### `get_core_tool_defs` (public)
 
 `get_core_tool_defs()`
-Source: [`flyto_ai/tools/core_tools.py:287`](../../../flyto_ai/tools/core_tools.py#L287)
+Source: [`flyto_ai/tools/core_tools.py:296`](../../../flyto_ai/tools/core_tools.py#L296)
 
 Return flyto-core MCP tool definitions (empty list if not installed).
 
 ### `_get_core_capability_manifest_contract` (internal)
 
 `_get_core_capability_manifest_contract()`
-Source: [`flyto_ai/tools/core_tools.py:325`](../../../flyto_ai/tools/core_tools.py#L325)
+Source: [`flyto_ai/tools/core_tools.py:334`](../../../flyto_ai/tools/core_tools.py#L334)
 
 Lazily bind Core's manifest reader and its digest function together.
 
 ### `_get_core_capability_manifest_fn` (internal)
 
 `_get_core_capability_manifest_fn()`
-Source: [`flyto_ai/tools/core_tools.py:357`](../../../flyto_ai/tools/core_tools.py#L357)
+Source: [`flyto_ai/tools/core_tools.py:366`](../../../flyto_ai/tools/core_tools.py#L366)
 
 Return Core's manifest reader alone, or None when Core cannot answer.
 
 ### `_get_core_manifest_hash_fn` (internal)
 
 `_get_core_manifest_hash_fn(read: Any = None)`
-Source: [`flyto_ai/tools/core_tools.py:371`](../../../flyto_ai/tools/core_tools.py#L371)
+Source: [`flyto_ai/tools/core_tools.py:380`](../../../flyto_ai/tools/core_tools.py#L380)
 
 Return the digest function paired with the reader that will be used.
 
 ### `_safe_identity` (internal)
 
 `_safe_identity(value: Any) -> Optional[str]`
-Source: [`flyto_ai/tools/core_tools.py:395`](../../../flyto_ai/tools/core_tools.py#L395)
+Source: [`flyto_ai/tools/core_tools.py:404`](../../../flyto_ai/tools/core_tools.py#L404)
 
 Return ``value`` when it is one safe manifest identity, else None.
 
 ### `_declared_identity` (internal)
 
 `_declared_identity(entry: Any, key: str) -> Optional[str]`
-Source: [`flyto_ai/tools/core_tools.py:402`](../../../flyto_ai/tools/core_tools.py#L402)
+Source: [`flyto_ai/tools/core_tools.py:411`](../../../flyto_ai/tools/core_tools.py#L411)
 
 Return the safe identity ``entry[key]`` declares, or None if it is unsafe.
 
 ### `_manifest_module_ids` (internal)
 
 `_manifest_module_ids(entries: Any) -> Optional[List[str]]`
-Source: [`flyto_ai/tools/core_tools.py:413`](../../../flyto_ai/tools/core_tools.py#L413)
+Source: [`flyto_ai/tools/core_tools.py:422`](../../../flyto_ai/tools/core_tools.py#L422)
 
 Validate ``modules``: a bounded list of unique module id **strings**.
 
 ### `_manifest_capability_ids` (internal)
 
 `_manifest_capability_ids(entries: Any, module_ids: frozenset) -> Optional[List[str]]`
-Source: [`flyto_ai/tools/core_tools.py:434`](../../../flyto_ai/tools/core_tools.py#L434)
+Source: [`flyto_ai/tools/core_tools.py:443`](../../../flyto_ai/tools/core_tools.py#L443)
 
 Validate ``capabilities``: unique ``capability`` records with providers.
 
 ### `_manifest_plugin_ids` (internal)
 
 `_manifest_plugin_ids(entries: Any) -> Optional[List[str]]`
-Source: [`flyto_ai/tools/core_tools.py:469`](../../../flyto_ai/tools/core_tools.py#L469)
+Source: [`flyto_ai/tools/core_tools.py:478`](../../../flyto_ai/tools/core_tools.py#L478)
 
 Validate ``plugins``: unique ``id`` records with a version and a count.
 
 ### `_manifest_digest_matches` (internal)
 
 `_manifest_digest_matches(manifest: Dict[str, Any], declared_hash: str, compute_manifest_hash: Any) -> bool`
-Source: [`flyto_ai/tools/core_tools.py:500`](../../../flyto_ai/tools/core_tools.py#L500)
+Source: [`flyto_ai/tools/core_tools.py:509`](../../../flyto_ai/tools/core_tools.py#L509)
 
 Recompute Core's digest over the full body minus the digest itself.
 
 ### `_exact_count` (internal)
 
 `_exact_count(manifest: Dict[str, Any], key: str, actual: int) -> bool`
-Source: [`flyto_ai/tools/core_tools.py:537`](../../../flyto_ai/tools/core_tools.py#L537)
+Source: [`flyto_ai/tools/core_tools.py:546`](../../../flyto_ai/tools/core_tools.py#L546)
 
 A declared count must be present and an exact integer match.
 
 ### `_validate_core_capability_manifest` (internal)
 
 `_validate_core_capability_manifest(manifest: Any, compute_manifest_hash: Any) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:545`](../../../flyto_ai/tools/core_tools.py#L545)
+Source: [`flyto_ai/tools/core_tools.py:554`](../../../flyto_ai/tools/core_tools.py#L554)
 
 Validate schema, real entry shapes, declared counts, and the digest.
 
 ### `_read_core_installed_module_ids` (internal)
 
 `_read_core_installed_module_ids() -> Tuple[Optional[frozenset], Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:598`](../../../flyto_ai/tools/core_tools.py#L598)
+Source: [`flyto_ai/tools/core_tools.py:607`](../../../flyto_ai/tools/core_tools.py#L607)
 
 Read and validate Core's installed-capability manifest once.
 
 ### `get_core_installed_module_ids` (public)
 
 `get_core_installed_module_ids() -> Optional[frozenset]`
-Source: [`flyto_ai/tools/core_tools.py:659`](../../../flyto_ai/tools/core_tools.py#L659)
+Source: [`flyto_ai/tools/core_tools.py:668`](../../../flyto_ai/tools/core_tools.py#L668)
 
 Return the host-derived set of installed Core module identifiers.
 
 ### `get_core_capability_manifest` (public)
 
 `get_core_capability_manifest(include_tools: bool = True, include_categories: bool = True) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:678`](../../../flyto_ai/tools/core_tools.py#L678)
+Source: [`flyto_ai/tools/core_tools.py:687`](../../../flyto_ai/tools/core_tools.py#L687)
 
 Build the flyto-core MCP manifest used by agents and cloud diagnostics.
 
 ### `_relaunch_browser` (internal)
 
 `async _relaunch_browser() -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:761`](../../../flyto_ai/tools/core_tools.py#L761)
+Source: [`flyto_ai/tools/core_tools.py:770`](../../../flyto_ai/tools/core_tools.py#L770)
 
 Attempt to relaunch a fresh browser session.
 
 ### `dispatch_core_tool` (public)
 
 `async dispatch_core_tool(name: str, arguments: Dict[str, Any], *, trusted_outbound_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:775`](../../../flyto_ai/tools/core_tools.py#L775)
+Source: [`flyto_ai/tools/core_tools.py:784`](../../../flyto_ai/tools/core_tools.py#L784)
 
 Dispatch a tool call to the flyto-core MCP handler.
 
 ### `_looks_like_module_query` (internal)
 
 `_looks_like_module_query(query: str) -> bool`
-Source: [`flyto_ai/tools/core_tools.py:850`](../../../flyto_ai/tools/core_tools.py#L850)
+Source: [`flyto_ai/tools/core_tools.py:859`](../../../flyto_ai/tools/core_tools.py#L859)
 
 Check if a query looks like it's searching for an automation module.
 
 ### `set_sandbox_manager` (public)
 
 `set_sandbox_manager(mgr) -> None`
-Source: [`flyto_ai/tools/core_tools.py:872`](../../../flyto_ai/tools/core_tools.py#L872)
+Source: [`flyto_ai/tools/core_tools.py:881`](../../../flyto_ai/tools/core_tools.py#L881)
 
 Set the sandbox manager for sandboxed module execution.
 
 ### `_trusted_outbound_context` (internal)
 
 `_trusted_outbound_context(scope: Optional[Dict[str, Any]])`
-Source: [`flyto_ai/tools/core_tools.py:878`](../../../flyto_ai/tools/core_tools.py#L878)
+Source: [`flyto_ai/tools/core_tools.py:887`](../../../flyto_ai/tools/core_tools.py#L887)
 
 Resolve Core's task-local scope lazily and fail closed when unavailable.
 
 ### `_dispatch_core_tool_inner` (internal)
 
 `async _dispatch_core_tool_inner(name: str, arguments: Dict[str, Any], *, trusted_outbound_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:891`](../../../flyto_ai/tools/core_tools.py#L891)
+Source: [`flyto_ai/tools/core_tools.py:900`](../../../flyto_ai/tools/core_tools.py#L900)
 
 Core dispatch logic (no retry).
 
 ### `_validate_execute_module_args` (internal)
 
 `_validate_execute_module_args(handler: Dict[str, Any], module_id: str, params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1110`](../../../flyto_ai/tools/core_tools.py#L1110)
+Source: [`flyto_ai/tools/core_tools.py:1119`](../../../flyto_ai/tools/core_tools.py#L1119)
 
 Validate module params before execution when flyto-core exposes validation.
 
 ### `_get_core_extension_manager` (internal)
 
 `_get_core_extension_manager()`
-Source: [`flyto_ai/tools/core_tools.py:1294`](../../../flyto_ai/tools/core_tools.py#L1294)
+Source: [`flyto_ai/tools/core_tools.py:1303`](../../../flyto_ai/tools/core_tools.py#L1303)
 
 Lazily bind Core's extension surface from ``core.plugin.loader``.
 
 ### `core_extension_install_enabled` (public)
 
 `core_extension_install_enabled() -> bool`
-Source: [`flyto_ai/tools/core_tools.py:1338`](../../../flyto_ai/tools/core_tools.py#L1338)
+Source: [`flyto_ai/tools/core_tools.py:1347`](../../../flyto_ai/tools/core_tools.py#L1347)
 
 True when the operator opted this host into extension mutation.
 
 ### `_extension_envelope` (internal)
 
 `_extension_envelope(operation: str, *, ok: bool = False, code: str, name: str = '', kind: str = '', version: str = '', previous_version: str = '', install_enabled: bool = False, restart_required: bool = False, rolled_back: bool = False, refresh_failed: bool = False, extensions: Optional[List[Dict[str, Any]]] = None, kinds: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1344`](../../../flyto_ai/tools/core_tools.py#L1344)
+Source: [`flyto_ai/tools/core_tools.py:1353`](../../../flyto_ai/tools/core_tools.py#L1353)
 
 Build the one envelope shape this adapter is allowed to return.
 
 ### `_extension_result_mapping` (internal)
 
 `_extension_result_mapping(result: Any) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1387`](../../../flyto_ai/tools/core_tools.py#L1387)
+Source: [`flyto_ai/tools/core_tools.py:1396`](../../../flyto_ai/tools/core_tools.py#L1396)
 
 Read Core's ``ExtensionResult`` without assuming how it is built.
 
 ### `_safe_extension_prose` (internal)
 
 `_safe_extension_prose(value: Any) -> str`
-Source: [`flyto_ai/tools/core_tools.py:1416`](../../../flyto_ai/tools/core_tools.py#L1416)
+Source: [`flyto_ai/tools/core_tools.py:1425`](../../../flyto_ai/tools/core_tools.py#L1425)
 
 Bound one Core-authored identifier; never installer output.
 
 ### `_safe_extension_token` (internal)
 
 `_safe_extension_token(value: Any, pattern: Any, *, lower: bool = False) -> Optional[str]`
-Source: [`flyto_ai/tools/core_tools.py:1424`](../../../flyto_ai/tools/core_tools.py#L1424)
+Source: [`flyto_ai/tools/core_tools.py:1433`](../../../flyto_ai/tools/core_tools.py#L1433)
 
 Return the bounded token ``value`` carries, or None when it is unsafe.
 
 ### `_core_extension_code` (internal)
 
 `_core_extension_code(result: Dict[str, Any], fallback: str) -> str`
-Source: [`flyto_ai/tools/core_tools.py:1434`](../../../flyto_ai/tools/core_tools.py#L1434)
+Source: [`flyto_ai/tools/core_tools.py:1443`](../../../flyto_ai/tools/core_tools.py#L1443)
 
 Preserve Core's own result/error code, under Core's own key.
 
 ### `_normalize_extension_record` (internal)
 
 `_normalize_extension_record(entry: Any) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1448`](../../../flyto_ai/tools/core_tools.py#L1448)
+Source: [`flyto_ai/tools/core_tools.py:1457`](../../../flyto_ai/tools/core_tools.py#L1457)
 
 Normalize one Core extension record to fixed, bounded fields.
 
 ### `_normalize_extension_records` (internal)
 
 `_normalize_extension_records(entries: Any) -> Optional[List[Dict[str, Any]]]`
-Source: [`flyto_ai/tools/core_tools.py:1493`](../../../flyto_ai/tools/core_tools.py#L1493)
+Source: [`flyto_ai/tools/core_tools.py:1502`](../../../flyto_ai/tools/core_tools.py#L1502)
 
 Validate ``extensions``: a bounded list of unique, well-formed records.
 
 ### `_normalize_extension_kinds` (internal)
 
 `_normalize_extension_kinds(entries: Any) -> Optional[List[Dict[str, Any]]]`
-Source: [`flyto_ai/tools/core_tools.py:1511`](../../../flyto_ai/tools/core_tools.py#L1511)
+Source: [`flyto_ai/tools/core_tools.py:1520`](../../../flyto_ai/tools/core_tools.py#L1520)
 
 Normalize ``EXTENSION_KINDS``: bounded, unique kind **records**.
 
 ### `_call_core_extension` (internal)
 
 `async _call_core_extension(operation: str, manager: Dict[str, Any], **kwargs) -> Any`
-Source: [`flyto_ai/tools/core_tools.py:1544`](../../../flyto_ai/tools/core_tools.py#L1544)
+Source: [`flyto_ai/tools/core_tools.py:1553`](../../../flyto_ai/tools/core_tools.py#L1553)
 
 Resolve Core's plugin loader and run one blocking call off the loop.
 
 ### `_safe_requested_kind` (internal)
 
 `_safe_requested_kind(kind: Any) -> Optional[str]`
-Source: [`flyto_ai/tools/core_tools.py:1586`](../../../flyto_ai/tools/core_tools.py#L1586)
+Source: [`flyto_ai/tools/core_tools.py:1595`](../../../flyto_ai/tools/core_tools.py#L1595)
 
 Resolve an optional caller-supplied kind filter.
 
 ### `_filter_extensions_by_kind` (internal)
 
 `_filter_extensions_by_kind(records: List[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1597`](../../../flyto_ai/tools/core_tools.py#L1597)
+Source: [`flyto_ai/tools/core_tools.py:1606`](../../../flyto_ai/tools/core_tools.py#L1606)
 
 Narrow a listing to one kind, host-side.
 
 ### `list_core_extensions` (public)
 
 `async list_core_extensions(kind: Optional[str] = None) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1612`](../../../flyto_ai/tools/core_tools.py#L1612)
+Source: [`flyto_ai/tools/core_tools.py:1621`](../../../flyto_ai/tools/core_tools.py#L1621)
 
 List the extensions Core reports, optionally narrowed to one kind.
 
 ### `list_core_extension_kinds` (public)
 
 `async list_core_extension_kinds() -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1667`](../../../flyto_ai/tools/core_tools.py#L1667)
+Source: [`flyto_ai/tools/core_tools.py:1676`](../../../flyto_ai/tools/core_tools.py#L1676)
 
 List the extension kinds Core itself declares.
 
 ### `_mutate_core_extension` (internal)
 
 `async _mutate_core_extension(operation: str, name: Any, *, version: Any = None, upgrade: Any = False) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1701`](../../../flyto_ai/tools/core_tools.py#L1701)
+Source: [`flyto_ai/tools/core_tools.py:1710`](../../../flyto_ai/tools/core_tools.py#L1710)
 
 Shared install/uninstall path: opt-in gate, normalize, call, publish.
 
 ### `install_core_extension` (public)
 
 `async install_core_extension(name: str, version: Optional[str] = None, upgrade: bool = False) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1828`](../../../flyto_ai/tools/core_tools.py#L1828)
+Source: [`flyto_ai/tools/core_tools.py:1837`](../../../flyto_ai/tools/core_tools.py#L1837)
 
 Install one Core extension.
 
 ### `uninstall_core_extension` (public)
 
 `async uninstall_core_extension(name: str) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1843`](../../../flyto_ai/tools/core_tools.py#L1843)
+Source: [`flyto_ai/tools/core_tools.py:1852`](../../../flyto_ai/tools/core_tools.py#L1852)
 
 Uninstall one Core extension.
 

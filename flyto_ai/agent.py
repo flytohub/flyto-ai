@@ -832,7 +832,9 @@ class Agent:
 
         # Wrap with assistant middleware (blueprint guard + selector healing)
         if self._assistant and base_dispatch:
-            assisted_dispatch = self._assistant.wrap(base_dispatch, user_message)
+            from flyto_ai.intelligence.execution_continuation import assisted_dispatch as prepare_dispatch
+
+            assisted_dispatch = prepare_dispatch(self, base_dispatch, user_message)
         else:
             assisted_dispatch = base_dispatch
 
@@ -1409,7 +1411,13 @@ class Agent:
             (system_prompt, has_blueprint_match)
         """
         if self._system_prompt:
-            return self._system_prompt, False
+            from flyto_ai.tools.browser_scope import current_browser_scope
+            from flyto_ai.tools.core_tools import get_browser_status
+
+            # Custom host prompts must still receive this goal's live state.
+            # Legacy/global sessions are not authority for a scoped host prompt.
+            browser_hint = get_browser_status() if current_browser_scope() is not None else ""
+            return "\n\n".join(part for part in (self._system_prompt, browser_hint) if part), False
 
         reply_language = self._resolve_reply_language(message, history)
 

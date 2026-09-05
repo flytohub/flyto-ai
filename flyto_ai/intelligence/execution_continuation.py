@@ -49,7 +49,26 @@ def route_chat(agent, message, history, mode):
             hashlib.sha256(message.encode()).hexdigest(), decision, deepcopy(_policy(agent)),
         ) if mode == "execute" and decision.tool_eligible else None
     )
+    agent._execution_assisted_dispatch = None
     return decision
+
+
+def assisted_dispatch(agent, base_dispatch, user_message):
+    """Keep preparation, observations and retry state within one admitted goal."""
+    active = _ACTIVE.get()
+    if active is not None and active[0] is agent:
+        cached = getattr(agent, "_execution_assisted_dispatch", None)
+        if (
+            cached is None or cached[0] is not active[1]
+            or cached[1] is not base_dispatch or cached[2] is not agent._assistant
+        ):
+            raise PermissionError("The admitted execution dispatcher is no longer available")
+        return cached[3]
+    wrapped = agent._assistant.wrap(base_dispatch, user_message)
+    admission = getattr(agent, "_execution_admission", None)
+    if admission is not None:
+        agent._execution_assisted_dispatch = (admission, base_dispatch, agent._assistant, wrapped)
+    return wrapped
 
 
 @contextmanager

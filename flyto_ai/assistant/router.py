@@ -94,7 +94,9 @@ async def guard(
         if not blueprint_is_trusted(top, min_score=80, min_samples=2):
             return None
         return {
-            "ok": True,
+            "ok": False,
+            "status": "guidance_required",
+            "action_executed": False,
             "_blueprint_redirect": True,
             "message": (
                 "STOP. A matching blueprint was found. "

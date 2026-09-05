@@ -4,6 +4,35 @@ Owner: Codex ai_space_runtime
 Branch: codex/ai-browser-owned-scope
 Status: Ready for integrated acceptance after local verification
 
+## Workspace file permission classification
+
+The actual admitted file goal still could not run: the SDK required DANGER_FULL
+for every file module before Core received the call. The enforcer now captures
+its host working directory and allows only exact file.read/file.write calls
+whose literal path resolves inside it under WORKSPACE_WRITE. The captured root
+is also part of trusted continuation admission. A changed cwd cannot rebase a
+relative path to a different workspace. No per-turn override or blanket tier
+elevation is introduced. Unknown file operations and env/path/shell access keep
+the original danger requirement; READ_ONLY remains discovery-only.
+
+The SDK classification does not replace Core's schema/path validation or its
+environment sandbox. Real Core tests prove a narrower sandbox still refuses a
+write, and a symlink changed between admission and Core validation cannot escape.
+This is not a claim of atomic filesystem protection against a concurrent swap
+after Core's own final path check; that existing Core limitation is unchanged.
+
+The independent cases fail 9 times on the previous SDK and all 26 pass after
+repair. The neighboring permission, routing and continuation cohort passes 343
+tests. One deterministic provider fixture calls the actual Agent dispatcher and
+real Core to read, write and reread isolated temporary files; READ_ONLY leaves
+the output absent. The provider fixture is not live-model acceptance, which is
+performed separately through the authenticated product UI. The CI Core MCP smoke
+adds 109 passing tests. Compileall, CI Ruff, generated reference, release drift,
+strict verification (18/18) and task validation (Ruff plus 26 tests) pass.
+Exact results are retained in /tmp/flyto-browser-scope-evidence under
+the file-permission prefix. Reverting this change restores the earlier blanket
+file restriction without altering Core configuration or the agent's tier.
+
 ## Natural Chinese local file action admission
 
 The real file goal started with a request to use this computer's tools before

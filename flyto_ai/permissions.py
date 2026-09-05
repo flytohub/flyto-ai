@@ -17,7 +17,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum, IntEnum
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+from flyto_ai.workspace_permissions import is_workspace_file_call
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,7 @@ class PermissionLevel(IntEnum):
     """Permission tiers — higher value grants more access."""
     READ_ONLY = 0           # list/search/get (discovery only)
     WORKSPACE_WRITE = 1     # execute safe modules, use blueprints
-    DANGER_FULL = 2         # shell, docker, k8s, file write, unconstrained
+    DANGER_FULL = 2         # shell, docker, k8s, unbounded filesystem access
 
 
 class PermissionOutcome(str, Enum):
@@ -77,8 +80,15 @@ DANGER_MODULE_CATEGORIES = frozenset({
 })
 
 
-def _required_level_for_module(module_id: str) -> PermissionLevel:
+def _required_level_for_module(
+    module_id: str, arguments: Optional[Dict[str, Any]] = None,
+    workspace_root: Optional[Path] = None,
+) -> PermissionLevel:
     """Determine the permission level required for a specific module."""
+    if workspace_root is not None and is_workspace_file_call(
+        module_id, arguments or {}, workspace_root,
+    ):
+        return PermissionLevel.WORKSPACE_WRITE
     category = module_id.split(".")[0] if "." in module_id else module_id
     if category in DANGER_MODULE_CATEGORIES:
         return PermissionLevel.DANGER_FULL
@@ -106,10 +116,16 @@ class PermissionEnforcer:
     ) -> None:
         self._level = level
         self._overrides = overrides or {}
+        self._workspace_root = Path.cwd().resolve()
 
     @property
     def level(self) -> PermissionLevel:
         return self._level
+
+    @property
+    def workspace_root(self) -> Path:
+        """Host working directory captured when the session policy is created."""
+        return self._workspace_root
 
     def required_level(
         self,
@@ -127,6 +143,7 @@ class PermissionEnforcer:
         if tool_name == "execute_module":
             module_level = _required_level_for_module(
                 str(arguments.get("module_id", "")),
+                arguments, self._workspace_root,
             )
             if module_level > required:
                 required = module_level

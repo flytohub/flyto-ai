@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-06
 
+## Workspace file operation permissions (2026-09-06)
+
+Exact file.read/file.write calls with literal paths contained in the session's
+captured working directory use WORKSPACE_WRITE. READ_ONLY still exposes only
+discovery. Other file operations, environment/shell access, unresolved paths and
+canonical paths outside that root retain their existing danger requirement.
+The root is part of continuation admission. Core's schema and environment path
+sandbox remain authoritative and can impose a narrower bound at execution.
+
 ## Natural Chinese local action admission (2026-09-06)
 
 A recognized polite, computer-location or local-tool preface is normalized

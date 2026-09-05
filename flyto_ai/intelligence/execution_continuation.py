@@ -23,7 +23,10 @@ class ExecutionAdmission:
 
 def _policy(agent):
     enforcer = agent._permission_enforcer
-    return (enforcer.level, enforcer._overrides, agent._policies, agent._tools)
+    return (
+        enforcer.level, enforcer._overrides, enforcer.workspace_root,
+        agent._policies, agent._tools,
+    )
 
 
 def route_chat(agent, message, history, mode):

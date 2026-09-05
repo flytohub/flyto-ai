@@ -58,21 +58,21 @@ Internal `_policy` implementation on this module; the linked source is authorita
 ### `route_chat` (public)
 
 `route_chat(agent, message, history, mode)`
-Source: [`flyto_ai/intelligence/execution_continuation.py:29`](../../../flyto_ai/intelligence/execution_continuation.py#L29)
+Source: [`flyto_ai/intelligence/execution_continuation.py:32`](../../../flyto_ai/intelligence/execution_continuation.py#L32)
 
 Classify ordinary input; only a validated host scope inherits admission.
 
 ### `assisted_dispatch` (public)
 
 `assisted_dispatch(agent, base_dispatch, user_message)`
-Source: [`flyto_ai/intelligence/execution_continuation.py:56`](../../../flyto_ai/intelligence/execution_continuation.py#L56)
+Source: [`flyto_ai/intelligence/execution_continuation.py:59`](../../../flyto_ai/intelligence/execution_continuation.py#L59)
 
 Keep preparation, observations and retry state within one admitted goal.
 
 ### `continuation_scope` (public)
 
 `continuation_scope(agent, goal)`
-Source: [`flyto_ai/intelligence/execution_continuation.py:75`](../../../flyto_ai/intelligence/execution_continuation.py#L75)
+Source: [`flyto_ai/intelligence/execution_continuation.py:78`](../../../flyto_ai/intelligence/execution_continuation.py#L78)
 
 Grant one host call the existing goal admission, never a text-based bypass.
 

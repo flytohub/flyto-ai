@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-09-06 — Browser ownership follows a complete goal turn
+
+Use an async context to isolate Core browser registries and retry state. The
+host owns the scope; a model cannot select another caller's registry. Leave
+verified observations in the response, but confirm actual `browser.close`
+operations before reporting resource cleanup. Never clear a global registry as
+a substitute for closing resources. Preserve the legacy unscoped API during
+Cloud adoption. Revert the Cloud adoption together with this SDK change.
+
 ## 2026-09-01 — Validation-only recovery binds planned dirty bytes without churn
 
 Decision: a strict fresh job with `require_changes=false` may carry an existing

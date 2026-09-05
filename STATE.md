@@ -1,6 +1,17 @@
 # State
 
-Last updated: 2026-09-01
+Last updated: 2026-09-06
+
+## Owned browser execution scopes (2026-09-06)
+
+- Cloud can enclose a complete goal turn in an async browser scope. Each scope
+  has isolated session and retry state and closes only its owned Core sessions.
+- Terminal cleanup is bounded, cancellation-resistant, and reports acknowledged
+  session IDs. A failed close is an explicit failure; inherited background work
+  cannot launch a browser after closing starts.
+- Unscoped SDK callers retain their existing adapter contract. Coding lanes,
+  outbound permissions, module validation, and product topology are unchanged.
+- Validation and limitations: see `handoffs/2026-09-06-owned-browser-scope.md`.
 
 ## Cardinality-independent coding receipt reads (2026-09-01)
 

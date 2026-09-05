@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-06
+
+- Added caller-owned browser scopes with concurrent isolation and acknowledged,
+  bounded cleanup on success, failure, and cancellation.
+
 ## 0.20.0
 
 ### Fixed

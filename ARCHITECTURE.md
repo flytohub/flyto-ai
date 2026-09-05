@@ -1,5 +1,17 @@
 # Architecture
 
+## Owned browser execution scopes
+
+Callers serving concurrent computer tasks enter
+`flyto_ai.tools.browser_scope.browser_session_scope(owner_id)` around the
+complete actor/reviewer turn. A ContextVar selects that caller's browser
+registry and retry state inside the canonical Core adapter. The model cannot
+select another scope. Browser relaunch and recipes receive only this registry;
+scope exit closes its owned sessions through the adapter on success, error,
+or cancellation. Cleanup is bounded and failure is explicit. Unscoped callers
+retain the legacy SDK API. This does not change product ownership or coding
+route authority.
+
 ## Canonical Flytohub product topology
 
 This is the durable product and ownership map for the whole Flytohub line. It

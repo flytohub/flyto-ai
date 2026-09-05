@@ -76,14 +76,35 @@ CORE_CAPABILITY_MANIFEST_TOOL = {
 }
 
 
+def _active_browser_sessions() -> Dict[str, Any]:
+    from flyto_ai.tools.browser_scope import current_browser_scope
+    scope = current_browser_scope()
+    return scope.sessions if scope is not None else _browser_sessions
+
+
+def _browser_retry_state():
+    from flyto_ai.tools.browser_scope import current_browser_scope
+    scope = current_browser_scope()
+    if scope is not None:
+        return scope.launch_failed, scope.launch_error, scope.goto_failures
+    return _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
+
+
+def _set_browser_retry_state(launch_failed, launch_error, goto_failures):
+    from flyto_ai.tools.browser_scope import current_browser_scope
+    global _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
+    scope = current_browser_scope()
+    if scope is not None:
+        scope.launch_failed, scope.launch_error, scope.goto_failures = launch_failed, launch_error, goto_failures
+    else:
+        _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails = launch_failed, launch_error, goto_failures
+
+
 def clear_browser_sessions() -> None:
     """Clear the shared browser session store (call between independent chats)."""
-    global _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
     with _browser_sessions_lock:
-        _browser_sessions.clear()
-    _browser_launch_failed = False
-    _browser_launch_error = ""
-    _goto_consecutive_fails = 0
+        _active_browser_sessions().clear()
+    _set_browser_retry_state(False, "", 0)
 
 
 def get_browser_status() -> str:
@@ -93,7 +114,7 @@ def get_browser_status() -> str:
     telling the LLM to reuse the existing browser.
     """
     with _browser_sessions_lock:
-        if not _browser_sessions:
+        if not _active_browser_sessions():
             return ""
         return (
             "BROWSER IS ALREADY RUNNING. Do NOT call browser.launch again. "
@@ -743,12 +764,9 @@ async def _relaunch_browser() -> Dict[str, Any]:
     if handler is None:
         return {"ok": False, "error": "flyto-core not installed"}
     try:
-        result = await handler["execute_module"](
-            module_id="browser.launch",
-            params={},
-            context=None,
-            browser_sessions=_browser_sessions,
-        )
+        result = await _dispatch_core_tool_inner("execute_module", {
+            "module_id": "browser.launch", "params": {},
+        })
         return result
     except Exception as e:
         return {"ok": False, "error": "Relaunch failed: {}".format(e)}
@@ -877,6 +895,14 @@ async def _dispatch_core_tool_inner(
     trusted_outbound_scope: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Core dispatch logic (no retry)."""
+    from flyto_ai.tools.browser_scope import current_browser_scope
+    browser_scope = current_browser_scope()
+    if browser_scope is not None and browser_scope.closed and name in _EXECUTION_CORE_TOOLS:
+        return {"ok": False, "error": "The owned browser execution scope is closed"}
+    if browser_scope is not None and browser_scope.closing and name in _EXECUTION_CORE_TOOLS:
+        if name != "execute_module" or arguments.get("module_id") != "browser.close":
+            return {"ok": False, "error": "The owned browser execution scope is closing"}
+    browser_sessions = _active_browser_sessions()
     # Withheld from the catalog *and* refused here. A name that never appears in
     # `get_core_tool_defs` can still be typed into a tool call by a model or a
     # forwarding client, so the catalog filter alone is not the boundary.
@@ -928,21 +954,21 @@ async def _dispatch_core_tool_inner(
         return handler["get_module_examples"](module_id=arguments.get("module_id", ""))
 
     elif name == "execute_module":
-        global _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
+        launch_failed, launch_error, goto_failures = _browser_retry_state()
         module_id = arguments.get("module_id", "")
 
         # Browser cascade breaker: if browser.launch already failed,
         # skip all subsequent browser.* calls immediately.
-        if module_id.startswith("browser.") and module_id != "browser.launch" and _browser_launch_failed:
+        if module_id.startswith("browser.") and module_id not in {"browser.launch", "browser.close"} and launch_failed:
             return {
                 "ok": False,
                 "error": "Skipped: browser.launch failed earlier ({}). Fix browser.launch first.".format(
-                    _browser_launch_error[:100],
+                    launch_error[:100],
                 ),
             }
 
         # Goto circuit breaker: stop retrying after N consecutive failures
-        if module_id == "browser.goto" and _goto_consecutive_fails >= _GOTO_MAX_FAILS:
+        if module_id == "browser.goto" and goto_failures >= _GOTO_MAX_FAILS:
             return {
                 "ok": False,
                 "error": (
@@ -950,28 +976,34 @@ async def _dispatch_core_tool_inner(
                     "Do NOT call browser.goto again. "
                     "Try browser.goto with a Google search URL instead: "
                     "https://www.google.com/search?q=YOUR+QUERY"
-                ).format(_goto_consecutive_fails),
+                ).format(goto_failures),
             }
 
         # On new browser.launch: close existing sessions to avoid
         # "Multiple browser sessions active" errors.
         if module_id == "browser.launch":
-            _browser_launch_failed = False
-            _browser_launch_error = ""
-            _goto_consecutive_fails = 0
-            if _browser_sessions:
-                for sid in list(_browser_sessions.keys()):
+            _set_browser_retry_state(False, "", 0)
+            if browser_sessions:
+                for sid in list(browser_sessions.keys()):
                     try:
-                        await handler["execute_module"](
+                        closed_result = await handler["execute_module"](
                             module_id="browser.close",
                             params={},
                             context={"browser_session": sid},
-                            browser_sessions=_browser_sessions,
+                            browser_sessions=browser_sessions,
                         )
+                        if browser_scope is not None:
+                            confirmed = closed_result.get("ok") if isinstance(closed_result.get("ok"), bool) else closed_result.get("status") == "success"
+                            if not confirmed:
+                                return {"ok": False, "error": "An owned browser could not be closed before relaunch"}
+                            browser_sessions.pop(sid, None)
+                            browser_scope.closed_session_ids.append(sid)
                     except Exception:
-                        pass
+                        if browser_scope is not None:
+                            return {"ok": False, "error": "An owned browser could not be closed before relaunch"}
                 with _browser_sessions_lock:
-                    _browser_sessions.clear()
+                    if browser_scope is None:
+                        browser_sessions.clear()
 
         validation = _validate_execute_module_args(handler, module_id, arguments.get("params", {}))
         if validation is not None:
@@ -1002,25 +1034,35 @@ async def _dispatch_core_tool_inner(
                     "scope: {}"
                 ).format(exc),
             }
+        previous_sessions = set(browser_sessions)
         with scope_context:
             result = await handler["execute_module"](
                 module_id=module_id,
                 params=arguments.get("params", {}),
                 context=arguments.get("context"),
-                browser_sessions=_browser_sessions,
+                browser_sessions=browser_sessions,
             )
+        if browser_scope is not None:
+            browser_scope.owned_session_ids.update(previous_sessions)
+            browser_scope.owned_session_ids.update(browser_sessions)
+            if module_id == "browser.close" and isinstance(result, dict):
+                confirmed = result.get("ok") if isinstance(result.get("ok"), bool) else result.get("status") == "success"
+                if confirmed:
+                    for sid in previous_sessions - set(browser_sessions):
+                        if sid not in browser_scope.closed_session_ids:
+                            browser_scope.closed_session_ids.append(sid)
 
         # Track browser.launch failure for cascade breaker
         if module_id == "browser.launch" and isinstance(result, dict) and not _is_ok(result):
-            _browser_launch_failed = True
-            _browser_launch_error = str(result.get("error", "unknown error"))
+            _set_browser_retry_state(True, str(result.get("error", "unknown error")), goto_failures)
 
         # Track goto failures for circuit breaker
         if module_id == "browser.goto":
             if isinstance(result, dict) and _is_ok(result):
-                _goto_consecutive_fails = 0  # reset on success
+                goto_failures = 0
             else:
-                _goto_consecutive_fails += 1
+                goto_failures += 1
+            _set_browser_retry_state(launch_failed, launch_error, goto_failures)
 
         return result
 
@@ -1043,7 +1085,7 @@ async def _dispatch_core_tool_inner(
         return await fn(
             recipe_name=arguments.get("recipe_name", ""),
             args=arguments.get("args", {}),
-            browser_sessions=_browser_sessions,
+            browser_sessions=browser_sessions,
         )
 
     return {"ok": False, "error": "Unknown core tool: {}".format(name)}

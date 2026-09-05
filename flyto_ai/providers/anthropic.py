@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude provider with tool use loop."""
 
+    supports_forced_tool_choice = True
+
     def __init__(
         self,
         api_key: str,
@@ -41,6 +43,7 @@ class AnthropicProvider(LLMProvider):
         dispatch_fn: DispatchFn,
         max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
+        tool_choice: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         if self._client is None:
             import anthropic
@@ -89,7 +92,10 @@ class AnthropicProvider(LLMProvider):
             }
             if anthropic_tools:
                 create_kwargs["tools"] = anthropic_tools
-                if round_num == 0 and _looks_like_browser_task(messages):
+                # Same rule as the OpenAI provider: the agent forces the first
+                # round when it retries a turn the model only narrated.
+                forced = tool_choice == "required" or _looks_like_browser_task(messages)
+                if round_num == 0 and forced:
                     create_kwargs["tool_choice"] = {"type": "any"}
                 else:
                     create_kwargs["tool_choice"] = {"type": "auto"}

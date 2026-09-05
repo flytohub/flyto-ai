@@ -143,6 +143,12 @@ async def dispatch_and_log_tool(
 class LLMProvider(ABC):
     """Abstract base class for LLM providers (OpenAI, Anthropic, etc.)."""
 
+    #: Whether ``chat(tool_choice="required")`` can make the model call a tool
+    #: on its first round. The agent asks before retrying a turn where the
+    #: model narrated an execution instead of calling anything; a provider
+    #: that cannot force the call is not retried, the user is told nothing ran.
+    supports_forced_tool_choice: bool = False
+
     @abstractmethod
     async def chat(
         self,
@@ -152,6 +158,7 @@ class LLMProvider(ABC):
         dispatch_fn: DispatchFn,
         max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
+        tool_choice: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         """Run a chat loop with function calling.
 
@@ -161,6 +168,9 @@ class LLMProvider(ABC):
             ``on_stream(StreamEvent)`` — called for each streaming event.
             When set, providers should enable streaming for LLM responses.
             When None, behaviour is unchanged (non-streaming).
+        tool_choice : str, optional
+            ``"required"`` makes the first round call a tool instead of
+            answering in prose. None keeps each provider's own default.
 
         Returns (final_message, tool_call_log, rounds_used, usage_dict).
         """

@@ -199,6 +199,8 @@ async def _collect_stream_response(stream: Any, total_usage: Dict[str, int], on_
 class OpenAIProvider(LLMProvider):
     """OpenAI provider with function calling loop."""
 
+    supports_forced_tool_choice = True
+
     def __init__(
         self,
         api_key: str,
@@ -315,6 +317,7 @@ class OpenAIProvider(LLMProvider):
         openai_tools: List[Dict[str, Any]],
         source_messages: List[Dict[str, Any]],
         round_num: int,
+        tool_choice: Optional[str] = None,
     ) -> Dict[str, Any]:
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
@@ -324,7 +327,13 @@ class OpenAIProvider(LLMProvider):
         }
         if openai_tools:
             create_kwargs["tools"] = openai_tools
-            if round_num == 0 and _looks_like_browser_task(source_messages):
+            # The browser-intent list only knows web words; a Space's own
+            # workflow (幫我登入kintone) is not on it, so the agent passes
+            # tool_choice="required" itself when it retries a narrated turn.
+            # Forced on the first round only -- later rounds must be free to
+            # answer in prose once the tool result is in.
+            forced = tool_choice == "required" or _looks_like_browser_task(source_messages)
+            if round_num == 0 and forced:
                 create_kwargs["tool_choice"] = "required"
             else:
                 create_kwargs["tool_choice"] = "auto"
@@ -409,6 +418,7 @@ class OpenAIProvider(LLMProvider):
         dispatch_fn: DispatchFn,
         max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
+        tool_choice: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         client = self._make_client()
 
@@ -420,7 +430,9 @@ class OpenAIProvider(LLMProvider):
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for round_num in range(max_rounds):
-            create_kwargs = self._create_kwargs(full_messages, openai_tools, messages, round_num)
+            create_kwargs = self._create_kwargs(
+                full_messages, openai_tools, messages, round_num, tool_choice,
+            )
 
             # ── Streaming path ──────────────────────────────────
             if on_stream is not None:

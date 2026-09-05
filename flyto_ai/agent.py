@@ -19,6 +19,7 @@ from flyto_ai.closed_loop_v3 import (
     ModelRoute,
 )
 from flyto_ai.config import AgentConfig
+from flyto_ai.execute_mode_honesty import guard_narrated_execution, nudge_discovery_only_reply, runnable_tool_names
 from flyto_ai.intelligence.confirmation import ToolIntentDecision, classify_tool_intent, route_with_confirmation
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
@@ -460,7 +461,18 @@ class Agent:
                 from flyto_ai.memory.search import MemorySearch
 
                 db = self._memory_store._db
-                emb = EmbeddingStore(db, model=self._config.embedding_model)
+                # Embeddings go over the OpenAI wire protocol, so hand them the
+                # same key and base_url the chat provider was built with (same
+                # branching as _make_provider). An Anthropic key is no use to
+                # /v1/embeddings, so that provider keeps the environment fallback.
+                cfg = self._config
+                embed_kwargs = {}
+                if cfg.provider == "ollama":
+                    embed_kwargs["base_url"] = cfg.base_url or "http://localhost:11434/v1"
+                elif cfg.provider != "anthropic":
+                    embed_kwargs["api_key"] = cfg.api_key
+                    embed_kwargs["base_url"] = cfg.base_url
+                emb = EmbeddingStore(db, model=cfg.embedding_model, **embed_kwargs)
                 await emb.init()
                 bm25 = BM25Index(db)
                 await bm25.init()
@@ -1142,50 +1154,30 @@ class Agent:
                 session_id=self._session_id, error="provider_call_failed",
             )
 
-        # System safety net: if LLM only used discovery tools (search/list)
-        # but never executed anything, nudge once. Only accept if retry
-        # results in actual execution.
-        _action_tools = {
-            "execute_module", "use_blueprint", "navigate_website", "ask_user",
-        }
-        _has_action = any(tc.get("function") in _action_tools for tc in tool_calls)
-        if (mode == "execute"
-                and self._assistant
-                and not _has_action
-                and response_content
-                and has_tools
-                and routing_decision.tool_eligible
-                and total_rounds <= 1
-                and self._config.provider != "ollama"):
-            try:
-                nudge_messages = messages + [
-                    {"role": "assistant", "content": response_content},
-                    {"role": "user", "content": (
-                        "If this task requires you to actually DO something (go to a website, "
-                        "execute a module, automate an action), use the tools available. "
-                        "If this is just a knowledge question, answer as you did."
-                    )},
-                ]
-                retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(
-                    nudge_messages, system_prompt, dispatch_fn, on_stream=on_stream,
-                    tools=active_tools,
+        # Execute-mode honesty (flyto_ai/execute_mode_honesty.py): first the
+        # request -- a reply that only searched or listed is nudged once to
+        # act -- then the rule: no reply presents a run this turn never called.
+        if mode == "execute" and has_tools and routing_decision.tool_eligible:
+            runnable_names, workflow_names = runnable_tool_names(
+                active_tools, self._permission_enforcer, self._tool_name,
+            )
+            completion = (response_content, tool_calls, total_rounds, total_usage)
+            if self._assistant and self._config.provider != "ollama":
+                completion = await nudge_discovery_only_reply(
+                    completion, workflow_names, messages,
+                    lambda nudged: self._call_llm(
+                        nudged, system_prompt, dispatch_fn, on_stream=on_stream, tools=active_tools,
+                    ),
                 )
-                # Only accept if LLM actually EXECUTED something (not just searched)
-                has_execution = any(
-                    tc.get("function") in {
-                        "execute_module", "use_blueprint", "ask_user",
-                    }
-                    for tc in retry_tc
-                )
-                if has_execution:
-                    logger.info("Nudge accepted: LLM used execution tools")
-                    response_content = retry_content
-                    tool_calls = retry_tc
-                    total_rounds += retry_rounds
-                    for k in total_usage:
-                        total_usage[k] += retry_usage.get(k, 0)
-            except Exception:
-                pass
+            response_content, tool_calls, total_rounds, total_usage = await guard_narrated_execution(
+                completion, runnable_names, workflow_names,
+                can_force=getattr(self._provider, "supports_forced_tool_choice", False),
+                force_completion=lambda: self._call_llm(
+                    messages, system_prompt, dispatch_fn, on_stream=on_stream,
+                    tools=active_tools, tool_choice="required",
+                ),
+                language=lambda: detect_language(message, preferred_language=self._preferred_language),
+            )
 
         # YAML mode: nudge + validation
         if mode == "yaml":
@@ -1675,13 +1667,19 @@ class Agent:
         dispatch_fn,
         on_stream=None,
         tools=None,
+        tool_choice=None,
     ):
         try:
             active_tools = self._tools if tools is None else tools
+            kwargs = {"on_stream": on_stream}
+            # Passed only when set, so a client written before the argument
+            # existed keeps working on every ordinary call.
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
             return await self._provider.chat(
                 messages, system_prompt, active_tools,
                 dispatch_fn, self._config.max_tool_rounds,
-                on_stream=on_stream,
+                **kwargs,
             )
         except Exception as e:
             logger.warning("LLM call failed: %s", e)

@@ -82,6 +82,15 @@ class ProviderChain(LLMProvider):
         """Number of providers in the chain."""
         return len(self._providers)
 
+    @property
+    def supports_forced_tool_choice(self) -> bool:
+        """True when any link in the chain can force a call; the request is
+        forwarded as-is and a link that cannot force simply answers in prose,
+        which the agent then reports honestly."""
+        return any(
+            getattr(p, "supports_forced_tool_choice", False) for p in self._providers
+        )
+
     def prefer_provider(self, provider_name: str) -> bool:
         """Prefer a configured provider for the next call.
 
@@ -133,6 +142,7 @@ class ProviderChain(LLMProvider):
         dispatch_fn: DispatchFn,
         max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
+        tool_choice: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         """Run chat with automatic failover across providers."""
         try_order = self._build_try_order()
@@ -153,9 +163,13 @@ class ProviderChain(LLMProvider):
                     await asyncio.sleep(delay)
 
                 try:
+                    # Forwarded only when set, so a link written before the
+                    # argument existed keeps working on ordinary calls.
+                    extra = {"tool_choice": tool_choice} if tool_choice is not None else {}
                     result = await provider.chat(
                         messages, system_prompt, tools,
                         dispatch_fn, max_rounds, on_stream,
+                        **extra,
                     )
                     # Success — pin this provider for future calls
                     self._pinned_index = provider_idx

@@ -65,13 +65,13 @@ Dispatch a tool call, log it, truncate result.
 
 `class LLMProvider(ABC)`
 
-Source: [`flyto_ai/providers/base.py:143`](../../../flyto_ai/providers/base.py#L143)
+Source: [`flyto_ai/providers/base.py:140`](../../../flyto_ai/providers/base.py#L140)
 
 Abstract base class for LLM providers (OpenAI, Anthropic, etc.).
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `async chat(messages: List[Dict[str, Any]], system_prompt: str, tools: List[Dict], dispatch_fn: DispatchFn, max_rounds: int = 30, on_stream: Optional[StreamCallback] = None, tool_choice: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]` | public | Run a chat loop with function calling. | [`flyto_ai/providers/base.py:153`](../../../flyto_ai/providers/base.py#L153) |
+| `async chat(messages: List[Dict[str, Any]], system_prompt: str, tools: List[Dict], dispatch_fn: DispatchFn, max_rounds: int = 30, on_stream: Optional[StreamCallback] = None, tool_choice: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]` | public | Run a chat loop with function calling. | [`flyto_ai/providers/base.py:150`](../../../flyto_ai/providers/base.py#L150) |
 
 ## `flyto_ai.providers.failover`
 

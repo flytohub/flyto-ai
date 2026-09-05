@@ -2,6 +2,14 @@
 
 Last updated: 2026-09-06
 
+## Private application audit metadata (2026-09-06)
+
+Default chat audit logs, audit JSONL and in-memory audit history store the full
+goal's digest and length, usage, counts and operation status without task text,
+tool arguments, result previews or exception messages. Provider application
+logs identify the called tool and round without input values. Authorized owner
+chat evidence and the actual model/tool dispatch remain separate and unchanged.
+
 ## Recoverable module validation (2026-09-06)
 
 Invalid arguments do not count as executed failures. The retry breaker limits

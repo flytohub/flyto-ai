@@ -1648,7 +1648,7 @@ class Agent:
                 else self._config.resolved_model
             )
             ChatAuditEntry(
-                user_message=user_message[:200], provider=self._config.provider or "openai",
+                user_message=user_message, provider=self._config.provider or "openai",
                 model=routed_model, mode=mode,
                 tool_calls_count=len(tool_calls), execution_count=len(execution_results),
                 duration_ms=duration_ms, prompt_tokens=usage.get("prompt_tokens", 0),

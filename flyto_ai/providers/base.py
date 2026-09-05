@@ -48,12 +48,9 @@ async def dispatch_and_log_tool(
     ``images`` is a list of ``{"base64": ..., "media_type": ...}`` dicts
     extracted from the ``_images`` sideband before JSON serialization.
     """
-    from flyto_ai.redaction import redact_args
-
     logger.info(
-        "Tool call [%d]: %s(%s)",
+        "Tool call [%d]: %s",
         round_num + 1, func_name,
-        json.dumps(redact_args(func_args))[:200],
     )
 
     fire_stream(on_stream, StreamEvent(

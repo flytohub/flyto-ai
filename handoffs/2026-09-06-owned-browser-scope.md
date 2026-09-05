@@ -75,3 +75,19 @@ repeated status-only successes, true execution failure/empty-result limits, and
 observation-before-interaction. Active SDK prompts contain no stale concrete
 selector-only type/click examples; the rule to follow each module's schema stays
 in force. The public signatures add optional params arguments compatibly.
+
+## Default application audit privacy
+
+Real local acceptance exposed credentials copied from user goals and browser
+input arguments into INFO logs. Audit emit now projects metadata before any
+logger, memory or JSONL sink: goal SHA256/length, usage/counts and operation
+identity/status. It excludes arguments, previews, result bodies, runtime handles
+and exception messages. Only a closed set of stable error codes is retained.
+Provider Tool call logging omits arguments entirely. The authenticated owner
+transcript and tool dispatch/stream result are unchanged; this does not erase
+pre-existing logs or modify the observed tool result.
+
+Tests verify all three audit sinks, a goal longer than 200 characters, opaque
+runtime handles, stable error codes, and unchanged dispatch/owner evidence.
+Evidence: audit-* files in /tmp/flyto-browser-scope-evidence. Live goal acceptance
+is still tracked separately; these privacy tests do not claim goal completion.

@@ -5,6 +5,7 @@
 Writes to both Python logger AND ~/.flyto/audit/ JSONL files
 so the Console dashboard can read execution history.
 """
+import hashlib
 import json
 import logging
 import time
@@ -18,6 +19,31 @@ logger = logging.getLogger("flyto_ai.audit")
 # Persistent audit store — survives across requests
 _AUDIT_DIR = Path.home() / ".flyto" / "audit"
 _entries: List[Dict[str, Any]] = []
+
+# Preserve stable diagnostics without writing exception messages or task input.
+_ERROR_CODES = frozenset({
+    "timeout", "provider_call_failed", "no_provider_available", "no_api_key",
+    "invalid_base_url", "cancelled", "goal_unverified", "browser_cleanup_failed",
+})
+
+
+def _operation_metadata(operation: Dict[str, Any]) -> Dict[str, Any]:
+    """Project operation status without inspecting arguments or runtime objects."""
+    metadata: Dict[str, Any] = {}
+    for key in ("function", "module_id"):
+        value = operation.get(key)
+        if isinstance(value, str):
+            metadata[key] = value[:128]
+    for key in ("ok",):
+        value = operation.get(key)
+        if isinstance(value, bool):
+            metadata[key] = value
+    duration = operation.get("duration_ms")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        metadata["duration_ms"] = duration
+    if operation.get("error"):
+        metadata["has_error"] = True
+    return metadata
 
 
 def _ensure_dir():
@@ -51,12 +77,15 @@ class ChatAuditEntry:
     cost_usd: float = 0.0
 
     def emit(self) -> None:
-        """Emit this entry to logger + JSONL file + in-memory store."""
+        """Emit metadata to logger, JSONL and memory; omit task/operation content."""
         record = {
             "event": "chat_audit",
             "timestamp": self.timestamp,
             "ts": self.timestamp,
-            "user_message": self.user_message[:200],
+            "user_message_sha256": hashlib.sha256(
+                self.user_message.encode("utf-8"),
+            ).hexdigest(),
+            "user_message_length": len(self.user_message),
             "provider": self.provider,
             "model": self.model,
             "mode": self.mode,
@@ -70,18 +99,16 @@ class ChatAuditEntry:
             "cost_usd": self.cost_usd,
         }
         if self.error:
-            record["error"] = self.error
+            record["error"] = self.error if self.error in _ERROR_CODES else "error"
         if self.tool_calls:
-            record["tool_calls"] = self.tool_calls[:20]  # cap for storage
+            record["tool_calls"] = [
+                _operation_metadata(call)
+                for call in self.tool_calls[:20] if isinstance(call, dict)
+            ]
         if self.execution_results:
             record["execution_results"] = [
-                {
-                    "module_id": er.get("module_id", ""),
-                    "ok": er.get("ok", False),
-                    "error": er.get("error", ""),
-                    "duration_ms": er.get("duration_ms", 0),
-                }
-                for er in self.execution_results[:20]
+                _operation_metadata(result)
+                for result in self.execution_results[:20] if isinstance(result, dict)
             ]
 
         # 1. Python logger
@@ -98,7 +125,7 @@ class ChatAuditEntry:
             with open(_today_file(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as e:
-            logger.debug("Failed to write audit file: %s", e)
+            logger.debug("Failed to write audit file (%s)", type(e).__name__)
 
 
 def get_recent_entries(limit: int = 50) -> List[Dict[str, Any]]:

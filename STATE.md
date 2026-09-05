@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-06
 
+## Recoverable module validation (2026-09-06)
+
+Invalid arguments do not count as executed failures. The retry breaker limits
+repetition of the same parameter fingerprint while corrected calls stay usable.
+Core status=success without an ok or data field is no longer counted as failed
+or empty. Explicit failed actions and empty data retain their bounded breaker.
+Validation errors carry the actual module params_schema for correction, and a
+successful Core snapshot is observed before interaction.
+
 ## Ad-hoc parameter references (2026-09-06)
 
 Direct module execution resolves references with Core only when an explicit JSON

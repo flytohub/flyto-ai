@@ -423,126 +423,126 @@ Validate module params before execution when flyto-core exposes validation.
 ### `_get_core_extension_manager` (internal)
 
 `_get_core_extension_manager()`
-Source: [`flyto_ai/tools/core_tools.py:1279`](../../../flyto_ai/tools/core_tools.py#L1279)
+Source: [`flyto_ai/tools/core_tools.py:1294`](../../../flyto_ai/tools/core_tools.py#L1294)
 
 Lazily bind Core's extension surface from ``core.plugin.loader``.
 
 ### `core_extension_install_enabled` (public)
 
 `core_extension_install_enabled() -> bool`
-Source: [`flyto_ai/tools/core_tools.py:1323`](../../../flyto_ai/tools/core_tools.py#L1323)
+Source: [`flyto_ai/tools/core_tools.py:1338`](../../../flyto_ai/tools/core_tools.py#L1338)
 
 True when the operator opted this host into extension mutation.
 
 ### `_extension_envelope` (internal)
 
 `_extension_envelope(operation: str, *, ok: bool = False, code: str, name: str = '', kind: str = '', version: str = '', previous_version: str = '', install_enabled: bool = False, restart_required: bool = False, rolled_back: bool = False, refresh_failed: bool = False, extensions: Optional[List[Dict[str, Any]]] = None, kinds: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1329`](../../../flyto_ai/tools/core_tools.py#L1329)
+Source: [`flyto_ai/tools/core_tools.py:1344`](../../../flyto_ai/tools/core_tools.py#L1344)
 
 Build the one envelope shape this adapter is allowed to return.
 
 ### `_extension_result_mapping` (internal)
 
 `_extension_result_mapping(result: Any) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1372`](../../../flyto_ai/tools/core_tools.py#L1372)
+Source: [`flyto_ai/tools/core_tools.py:1387`](../../../flyto_ai/tools/core_tools.py#L1387)
 
 Read Core's ``ExtensionResult`` without assuming how it is built.
 
 ### `_safe_extension_prose` (internal)
 
 `_safe_extension_prose(value: Any) -> str`
-Source: [`flyto_ai/tools/core_tools.py:1401`](../../../flyto_ai/tools/core_tools.py#L1401)
+Source: [`flyto_ai/tools/core_tools.py:1416`](../../../flyto_ai/tools/core_tools.py#L1416)
 
 Bound one Core-authored identifier; never installer output.
 
 ### `_safe_extension_token` (internal)
 
 `_safe_extension_token(value: Any, pattern: Any, *, lower: bool = False) -> Optional[str]`
-Source: [`flyto_ai/tools/core_tools.py:1409`](../../../flyto_ai/tools/core_tools.py#L1409)
+Source: [`flyto_ai/tools/core_tools.py:1424`](../../../flyto_ai/tools/core_tools.py#L1424)
 
 Return the bounded token ``value`` carries, or None when it is unsafe.
 
 ### `_core_extension_code` (internal)
 
 `_core_extension_code(result: Dict[str, Any], fallback: str) -> str`
-Source: [`flyto_ai/tools/core_tools.py:1419`](../../../flyto_ai/tools/core_tools.py#L1419)
+Source: [`flyto_ai/tools/core_tools.py:1434`](../../../flyto_ai/tools/core_tools.py#L1434)
 
 Preserve Core's own result/error code, under Core's own key.
 
 ### `_normalize_extension_record` (internal)
 
 `_normalize_extension_record(entry: Any) -> Optional[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1433`](../../../flyto_ai/tools/core_tools.py#L1433)
+Source: [`flyto_ai/tools/core_tools.py:1448`](../../../flyto_ai/tools/core_tools.py#L1448)
 
 Normalize one Core extension record to fixed, bounded fields.
 
 ### `_normalize_extension_records` (internal)
 
 `_normalize_extension_records(entries: Any) -> Optional[List[Dict[str, Any]]]`
-Source: [`flyto_ai/tools/core_tools.py:1478`](../../../flyto_ai/tools/core_tools.py#L1478)
+Source: [`flyto_ai/tools/core_tools.py:1493`](../../../flyto_ai/tools/core_tools.py#L1493)
 
 Validate ``extensions``: a bounded list of unique, well-formed records.
 
 ### `_normalize_extension_kinds` (internal)
 
 `_normalize_extension_kinds(entries: Any) -> Optional[List[Dict[str, Any]]]`
-Source: [`flyto_ai/tools/core_tools.py:1496`](../../../flyto_ai/tools/core_tools.py#L1496)
+Source: [`flyto_ai/tools/core_tools.py:1511`](../../../flyto_ai/tools/core_tools.py#L1511)
 
 Normalize ``EXTENSION_KINDS``: bounded, unique kind **records**.
 
 ### `_call_core_extension` (internal)
 
 `async _call_core_extension(operation: str, manager: Dict[str, Any], **kwargs) -> Any`
-Source: [`flyto_ai/tools/core_tools.py:1529`](../../../flyto_ai/tools/core_tools.py#L1529)
+Source: [`flyto_ai/tools/core_tools.py:1544`](../../../flyto_ai/tools/core_tools.py#L1544)
 
 Resolve Core's plugin loader and run one blocking call off the loop.
 
 ### `_safe_requested_kind` (internal)
 
 `_safe_requested_kind(kind: Any) -> Optional[str]`
-Source: [`flyto_ai/tools/core_tools.py:1571`](../../../flyto_ai/tools/core_tools.py#L1571)
+Source: [`flyto_ai/tools/core_tools.py:1586`](../../../flyto_ai/tools/core_tools.py#L1586)
 
 Resolve an optional caller-supplied kind filter.
 
 ### `_filter_extensions_by_kind` (internal)
 
 `_filter_extensions_by_kind(records: List[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]`
-Source: [`flyto_ai/tools/core_tools.py:1582`](../../../flyto_ai/tools/core_tools.py#L1582)
+Source: [`flyto_ai/tools/core_tools.py:1597`](../../../flyto_ai/tools/core_tools.py#L1597)
 
 Narrow a listing to one kind, host-side.
 
 ### `list_core_extensions` (public)
 
 `async list_core_extensions(kind: Optional[str] = None) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1597`](../../../flyto_ai/tools/core_tools.py#L1597)
+Source: [`flyto_ai/tools/core_tools.py:1612`](../../../flyto_ai/tools/core_tools.py#L1612)
 
 List the extensions Core reports, optionally narrowed to one kind.
 
 ### `list_core_extension_kinds` (public)
 
 `async list_core_extension_kinds() -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1652`](../../../flyto_ai/tools/core_tools.py#L1652)
+Source: [`flyto_ai/tools/core_tools.py:1667`](../../../flyto_ai/tools/core_tools.py#L1667)
 
 List the extension kinds Core itself declares.
 
 ### `_mutate_core_extension` (internal)
 
 `async _mutate_core_extension(operation: str, name: Any, *, version: Any = None, upgrade: Any = False) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1686`](../../../flyto_ai/tools/core_tools.py#L1686)
+Source: [`flyto_ai/tools/core_tools.py:1701`](../../../flyto_ai/tools/core_tools.py#L1701)
 
 Shared install/uninstall path: opt-in gate, normalize, call, publish.
 
 ### `install_core_extension` (public)
 
 `async install_core_extension(name: str, version: Optional[str] = None, upgrade: bool = False) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1813`](../../../flyto_ai/tools/core_tools.py#L1813)
+Source: [`flyto_ai/tools/core_tools.py:1828`](../../../flyto_ai/tools/core_tools.py#L1828)
 
 Install one Core extension.
 
 ### `uninstall_core_extension` (public)
 
 `async uninstall_core_extension(name: str) -> Dict[str, Any]`
-Source: [`flyto_ai/tools/core_tools.py:1828`](../../../flyto_ai/tools/core_tools.py#L1828)
+Source: [`flyto_ai/tools/core_tools.py:1843`](../../../flyto_ai/tools/core_tools.py#L1843)
 
 Uninstall one Core extension.
 

@@ -5,6 +5,8 @@
 System-level protections that don't rely on LLM behavior.
 """
 import logging
+import hashlib
+import json
 import re
 from typing import Any, Dict, List
 
@@ -65,16 +67,26 @@ class CircuitBreaker:
         self._max_empty = max_empty
         self._failures: Dict[str, int] = {}
         self._empty: Dict[str, int] = {}  # track empty results per module
+        self._invalid: Dict[str, int] = {}
 
-    def record_result(self, module_id: str, ok: bool, result: Any = None) -> None:
+    @staticmethod
+    def _parameter_key(module_id, params):
+        encoded = json.dumps(params, sort_keys=True, default=lambda value: type(value).__name__)
+        return module_id + ":" + hashlib.sha256(encoded.encode()).hexdigest()
+
+    def record_result(self, module_id: str, ok: bool, result: Any = None, params=None) -> None:
         """Record a module execution result."""
+        if isinstance(result, dict) and result.get("params_valid") is False:
+            key = self._parameter_key(module_id, params)
+            self._invalid[key] = self._invalid.get(key, 0) + 1
+            return
         if ok:
             self._failures.pop(module_id, None)
         else:
             self._failures[module_id] = self._failures.get(module_id, 0) + 1
 
         # Track empty results (ok=true but data is []/{}/""/null)
-        if ok and isinstance(result, dict):
+        if ok and isinstance(result, dict) and ("data" in result or "result" in result):
             data = result.get("data", result.get("result"))
             is_empty = (
                 data is None
@@ -90,16 +102,25 @@ class CircuitBreaker:
                 self._empty[module_id] = self._empty.get(module_id, 0) + 1
             else:
                 self._empty.pop(module_id, None)
+        elif ok:
+            self._empty.pop(module_id, None)
 
-    def is_tripped(self, module_id: str) -> bool:
+    def is_tripped(self, module_id: str, params=None) -> bool:
         """Check if a module has exceeded max consecutive failures OR empty results."""
         return (
             self._failures.get(module_id, 0) >= self._max
             or self._empty.get(module_id, 0) >= self._max_empty
+            or self._invalid.get(self._parameter_key(module_id, params), 0) >= self._max
         )
 
-    def get_message(self, module_id: str) -> str:
+    def get_message(self, module_id: str, params=None) -> str:
         """Return a message explaining why the module is blocked."""
+        if self._invalid.get(self._parameter_key(module_id, params), 0) >= self._max:
+            return (
+                "These exact parameters repeatedly failed validation; no action was executed. "
+                "Inspect the module's canonical params_schema and change the invalid arguments. "
+                "A corrected call to this module remains available."
+            )
         fail_count = self._failures.get(module_id, 0)
         empty_count = self._empty.get(module_id, 0)
         if empty_count >= self._max_empty:

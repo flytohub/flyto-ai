@@ -58,3 +58,20 @@ Validation covers actual Core binding semantics, all three placeholder forms,
 no-call rejection, successful literal correction, unchanged original parameters,
 missing binding, environment-secret isolation, runtime handles, list indexes,
 and preservation of an existing browser after invalid launch arguments.
+
+## Parameter recovery breaker
+
+The middleware treated Core status=success without ok as failure and considered
+missing data/result fields empty; valid browser operations could trip the
+breaker. Both interpretations are corrected. Invalid params now have a separate
+parameter-fingerprint repetition budget, so three failed validations cannot
+ban a corrected invocation. No side-effect-free validation is reported as an
+executed operation. The actual Core params_schema accompanies a validation
+error. This does not guess selector aliases or override Core's schema.
+
+Regressions use the real Core validator/schema with a counted no-effects handler
+to prove three bad arguments, bounded identical repetition, corrected execution,
+repeated status-only successes, true execution failure/empty-result limits, and
+observation-before-interaction. Active SDK prompts contain no stale concrete
+selector-only type/click examples; the rule to follow each module's schema stays
+in force. The public signatures add optional params arguments compatibly.

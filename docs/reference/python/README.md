@@ -10,7 +10,7 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [coding](coding.md): 45 modules, 456 top-level symbols, 644 methods
 - [evolution](evolution.md): 6 modules, 57 top-level symbols, 15 methods
 - [extensions](extensions.md): 4 modules, 8 top-level symbols, 36 methods
-- [intelligence](intelligence.md): 5 modules, 25 top-level symbols, 22 methods
+- [intelligence](intelligence.md): 5 modules, 26 top-level symbols, 22 methods
 - [memory](memory.md): 6 modules, 14 top-level symbols, 43 methods
 - [orchestration](orchestration.md): 6 modules, 105 top-level symbols, 160 methods
 - [package-root](package-root.md): 38 modules, 374 top-level symbols, 299 methods

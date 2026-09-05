@@ -4,6 +4,32 @@ Owner: Codex ai_space_runtime
 Branch: codex/ai-browser-owned-scope
 Status: Ready for integrated acceptance after local verification
 
+## Natural Chinese local file action admission
+
+The real file goal started with a request to use this computer's tools before
+the actual read/replace/write/reread instruction. The anchored verb matcher
+missed that imperative, and a status word in the file content incorrectly
+selected read-only discovery. A bounded Chinese preface grammar now preserves
+the operative clause for all existing intent checks. It does not search later
+arbitrary prose for verbs or add a force-action option. File save/replacement
+verbs and non-executing questions about file actions are recognized as well.
+
+The independent regression starts with 13 failures and 14 passes on the prior
+SDK. It covers natural phrasing variants, quotations, hypothetical examples,
+negation and explanation, plus actual Agent tool exposure with normal and
+read-only permissions. All 27 pass after repair, together with the surrounding
+multilingual routing and admitted-continuation tests (215 total). These tests
+use a deterministic provider only to inspect tool policy; they do not stand in
+for live model or real filesystem goal acceptance. Four confirmation regressions
+and 109 CI Core MCP smoke tests also pass. Compileall, CI Ruff, generated
+reference, release drift, strict verification (18/18) and the complete task
+validation (Ruff plus 27 tests) pass. Core catalog discovery is checked separately
+without executing a file operation: search and exact info expose file.read/write,
+but their atomic category differs from the file category used by file.copy.
+Exact logs are under /tmp/flyto-browser-scope-evidence with the chinese-action
+prefix. Revert this SDK change to roll back admission;
+permissions, Core contracts and host continuation APIs are unchanged.
+
 ## Behavior
 
 The host encloses a complete goal in `browser_session_scope(owner_id)`. Core

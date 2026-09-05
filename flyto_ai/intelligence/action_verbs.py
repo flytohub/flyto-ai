@@ -17,6 +17,29 @@ count.
 
 import re
 
+# A local tool/location preface names how to act, but is not itself an action.
+# Strip only this bounded grammar so the planner still checks the actual clause
+# for negation, explanation and an imperative verb. Never search arbitrary later
+# prose for a verb: it could be a quotation or an instruction not to act.
+_CJK_COMPUTER = r"(?:這台電腦|这台电脑|目前的電腦|当前电脑|本機|本机|本地)"
+_CJK_REQUEST_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:請|请)\s*)?"
+    r"(?:(?:麻煩|麻烦)(?:你)?|(?:可以|能否|能不能|可不可以)"
+    r"(?:幫我|帮我|你)?|幫我|帮我|替我)?\s*"
+    r"(?:在" + _CJK_COMPUTER + r"(?:上)?\s*[,，]?\s*)?"
+    r"(?:(?:使用|用|透過|透过|通過|通过)\s*"
+    r"(?:" + _CJK_COMPUTER + r"(?:上)?(?:的)?\s*)?"
+    r"(?:檔案|文件|可用的|已提供的|flyto-core\s*)?"
+    r"(?:工具|能力|工作流程|MCP)\s*[,，]?\s*(?:來|来)?\s*)?",
+    re.IGNORECASE,
+)
+
+
+def strip_cjk_request_prefix(message: str) -> str:
+    """Keep the operative clause after a recognized polite/local-tool preface."""
+    return _CJK_REQUEST_PREFIX_RE.sub("", message, count=1)
+
+
 _EN_ACTION_RE = re.compile(
     r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+|"
     r"help\s+me(?:\s+to)?\s+)?"
@@ -41,7 +64,7 @@ _CJK_ACTION_RE = re.compile(
     r"點擊|点击|下載|下载|上傳|上传|建立|創建|创建|更新|刪除|删除|修復|修复|"
     r"部署|推送|上去|截圖|截图|重複|重复|重新執行|重新执行|修改|改寫|改写|"
     r"重寫|重写|抓取|尋找|查找|找出|檢查|检查|寫入|写入|安裝|安装|提交|"
-    r"讀取|读取|分析|列出|套用|儲存|储存|摘要|截|"
+    r"讀取|读取|分析|列出|套用|儲存|储存|存成|另存|替換|替换|摘要|截|"
     # Access verbs. "登入kintone" is as plain an instruction as this product
     # receives, and it classified as answer_only because none of these were
     # here -- so the assistant explained the login rather than running it.

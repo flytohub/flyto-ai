@@ -2,6 +2,16 @@
 
 Last updated: 2026-09-06
 
+## Natural Chinese local action admission (2026-09-06)
+
+A recognized polite, computer-location or local-tool preface is normalized
+before the existing intent checks. The remaining clause still needs an action
+verb; a preface alone never authorizes execution. File read/replace/save goals
+no longer become discovery-only because an embedded data value contains status.
+Negation, explanation, quotation and the current tool permission policy remain
+authoritative, including after normalization. Real UI acceptance remains a
+separate check from the deterministic routing regression suite.
+
 ## Browser state survives goal repair (2026-09-06)
 
 Trusted continuation reuses the admitted middleware closure, retaining its

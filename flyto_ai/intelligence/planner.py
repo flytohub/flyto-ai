@@ -27,6 +27,7 @@ from flyto_ai.intelligence.action_verbs import (
     _KO_ACTION_RE,
     _PT_IT_ACTION_RE,
     _RU_ACTION_RE,
+    strip_cjk_request_prefix,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,9 +114,10 @@ _DECLARATIVE_OR_ACTION_QUESTION_RE = re.compile(
     r"build\s+systems?|list\s+comprehensions?|read\s+consistency|"
     r"write\s+amplification|commit\s+history|installation\s+process)\s+"
     r"(?:is|are|was|were|means?|refers?)\b"
-    r"|^\s*(?:建立|创建|刪除|删除|執行|执行|修改|分析|搜尋|搜索).{0,48}"
+    r"|^\s*(?:建立|创建|刪除|删除|執行|执行|修改|分析|搜尋|搜索|"
+    r"讀取|读取|寫入|写入|儲存|储存|存成|另存|替換|替换).{0,48}"
     r"(?:有什麼|有什么|會發生什麼|会发生什么|會怎樣|会怎样|"
-    r"是否|安全嗎|安全吗|優缺點|优缺点|風險|风险|後果|后果).{0,16}[？?]?$",
+    r"是否|會不會|会不会|安全嗎|安全吗|優缺點|优缺点|風險|风险|後果|后果).{0,16}[？?]?$",
     re.IGNORECASE,
 )
 _EXPLANATION_RE = re.compile(
@@ -189,7 +191,7 @@ def classify_tool_intent(message: str) -> ToolIntentDecision:
     msg = (message or "").strip()
     if not msg:
         return ToolIntentDecision("answer_only", 1.0, "empty_message", ("empty",))
-    semantic_msg = _LEADING_EMOJI_RE.sub("", msg).strip()
+    semantic_msg = strip_cjk_request_prefix(_LEADING_EMOJI_RE.sub("", msg).strip())
     if not semantic_msg:
         return ToolIntentDecision("answer_only", 1.0, "empty_message", ("empty",))
 

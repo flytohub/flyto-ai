@@ -91,3 +91,27 @@ Tests verify all three audit sinks, a goal longer than 200 characters, opaque
 runtime handles, stable error codes, and unchanged dispatch/owner evidence.
 Evidence: audit-* files in /tmp/flyto-browser-scope-evidence. Live goal acceptance
 is still tracked separately; these privacy tests do not claim goal completion.
+
+## Trusted continuation of admitted execution
+
+Real review corrections were classified as ambiguous discovery requests, hiding
+execute_module while the owned browser remained available. The host now calls
+`continue_execution(message=repair, goal=original_goal, history=history,
+template_context=context)` after the first ordinary action chat. The SDK checks
+the same Agent, exact goal digest, unchanged tools/policy, and a current host
+async call. It preserves action routing through the existing guards without
+classifying generated recovery prose. It is not a model tool. A new ordinary
+chat invalidates prior admission; missing/mismatched admission fails closed.
+
+Policy changes require a new action admission rather than silently widening or
+reusing old authority. Cancellation revokes the call scope, and inherited
+background context cannot use it. The original goal is not retained as raw text
+in the admission. Existing default chat routing and explicit no-action requests
+remain unchanged. Cloud must use this entry for corrections, never fall back to
+an ordinary fresh chat if it is missing. Revert Cloud adoption with this SDK API.
+TASK currently runs one actor chat with tool-loop repair, so it has no outer
+generated-correction turn to migrate.
+
+Validation: continuation tests use a deterministic provider to inspect admitted
+tools and real SDK dispatch guards, not as live-model acceptance. The separate
+UI acceptance must prove actual Core observations, goal verification and cleanup.

@@ -1039,6 +1039,29 @@ class Agent:
 
     # ── Chat ──────────────────────────────────────────────────────
 
+    async def continue_execution(
+        self, message: str, *, goal: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        template_context: Optional[Dict[str, Any]] = None,
+        on_tool_call=None, on_stream: Optional[StreamCallback] = None,
+        dispatch_wrapper=None,
+    ) -> ChatResponse:
+        """Let the trusted host repair this Agent's previously admitted goal.
+
+        The original goal must match exactly and execution policy must remain
+        unchanged. This is not exposed as a model tool or inferred from prose.
+        An ordinary new chat replaces the admission. Current permission and
+        module guards still run for every continuation call.
+        """
+        from flyto_ai.intelligence.execution_continuation import continuation_scope
+
+        with continuation_scope(self, goal):
+            return await self.chat(
+                message=message, history=history, template_context=template_context,
+                mode="execute", on_tool_call=on_tool_call, on_stream=on_stream,
+                dispatch_wrapper=dispatch_wrapper,
+            )
+
     async def chat(
         self,
         message: str,
@@ -1068,13 +1091,9 @@ class Agent:
 
         await self._init_memory()
 
-        routing_decision = (
-            route_with_confirmation(message, history)
-            if mode == "execute"
-            else ToolIntentDecision(
-                "action", 1.0, "explicit_non_execute_mode", (mode,),
-            )
-        )
+        from flyto_ai.intelligence.execution_continuation import route_chat
+
+        routing_decision = route_chat(self, message, history, mode)
         self._record_routing_decision(routing_decision)
 
         # ── Deterministic pipeline (try before LLM) ──

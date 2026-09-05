@@ -2,6 +2,15 @@
 
 Last updated: 2026-09-06
 
+## Admitted goal continuation (2026-09-06)
+
+Trusted hosts continue a goal with `Agent.continue_execution(message=repair,
+goal=original_goal)`. This preserves the same Agent's admitted action routing
+instead of classifying generated review data as a new discovery-only request.
+An exact original-goal digest and unchanged tool/permission policy are required.
+Ordinary chat replaces the admission; cross-Agent, cancelled-context background
+work and missing admissions cannot acquire execution authority from prose.
+
 ## Private application audit metadata (2026-09-06)
 
 Default chat audit logs, audit JSONL and in-memory audit history store the full

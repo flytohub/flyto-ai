@@ -37,3 +37,9 @@ scope and retain observations before exit.
 Revert Cloud scope adoption together with this SDK commit. Do not deploy Cloud
 scope adoption against an SDK missing browser_session_scope. Legacy unscoped
 callers otherwise keep the same public tool contract and behavior.
+
+## Unreleased version correction
+
+The release-drift script compares HEAD, so its pre-commit 0.20.0 pass did not
+cover the new code commit. The follow-up declares unreleased 0.20.1 and reruns
+that gate after commit. No distribution is published or installed globally.

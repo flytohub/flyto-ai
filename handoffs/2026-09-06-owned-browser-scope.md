@@ -43,3 +43,18 @@ callers otherwise keep the same public tool contract and behavior.
 The release-drift script compares HEAD, so its pre-commit 0.20.0 pass did not
 cover the new code commit. The follow-up declares unreleased 0.20.1 and reruns
 that gate after commit. No distribution is published or installed globally.
+
+## Unresolved module parameters
+
+Real UI execution typed an unresolved sensitive_text template into the login
+form. Ad-hoc execute_module now rejects unresolved references before side
+effects (including before relaunch closes an existing browser). Explicit JSON
+context bindings resolve through Core VariableResolver; ambient env.* lookups
+are refused, and runtime handles cannot be variable data. Supported ${...},
+${{...}}, and {{...}} references are normalized for Core resolution. Diagnostics
+contain no input value and tell the actor to repair the current call.
+
+Validation covers actual Core binding semantics, all three placeholder forms,
+no-call rejection, successful literal correction, unchanged original parameters,
+missing binding, environment-secret isolation, runtime handles, list indexes,
+and preservation of an existing browser after invalid launch arguments.

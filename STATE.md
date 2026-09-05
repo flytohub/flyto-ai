@@ -2,6 +2,14 @@
 
 Last updated: 2026-09-06
 
+## Ad-hoc parameter references (2026-09-06)
+
+Direct module execution resolves references with Core only when an explicit JSON
+context supplies their roots. Unresolved bindings return a recoverable error
+before any action, including before browser relaunch cleanup. No ambient env
+secret lookup is granted to the model. Literal authorized values and runtime
+handles retain their existing path; no credential is inferred from user prose.
+
 ## Owned browser execution scopes (2026-09-06)
 
 - Cloud can enclose a complete goal turn in an async browser scope. Each scope

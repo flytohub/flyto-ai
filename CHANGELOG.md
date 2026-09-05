@@ -2,6 +2,9 @@
 
 ## 2026-09-06
 
+- Refuse unresolved workflow references before direct module side effects;
+  resolve explicit data bindings through Core and keep diagnostics secret-free.
+
 - Added caller-owned browser scopes with concurrent isolation and acknowledged,
   bounded cleanup on success, failure, and cancellation.
 

@@ -956,6 +956,22 @@ async def _dispatch_core_tool_inner(
     elif name == "execute_module":
         launch_failed, launch_error, goto_failures = _browser_retry_state()
         module_id = arguments.get("module_id", "")
+        from flyto_ai.tools.parameter_references import resolve_module_params, UnresolvedParameterReference
+        try:
+            arguments = {**arguments, "params": resolve_module_params(
+                arguments.get("params", {}), arguments.get("context"),
+            )}
+        except UnresolvedParameterReference:
+            return {
+                "ok": False, "error_code": "unresolved_parameter_reference",
+                "params_valid": False, "retryable": True, "module_id": module_id,
+                "error": "Module parameters contain an unresolved workflow reference; no action was executed.",
+                "suggestion": (
+                    "Use the actual authorized input value or an explicitly supplied workflow binding. "
+                    "Schema examples are templates, not live credentials. Keep the current browser "
+                    "and correct this call without repeating successful mutations."
+                ),
+            }
 
         # Browser cascade breaker: if browser.launch already failed,
         # skip all subsequent browser.* calls immediately.

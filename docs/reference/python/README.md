@@ -20,4 +20,4 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [scheduler](scheduler.md): 3 modules, 16 top-level symbols, 59 methods
 - [security](security.md): 16 modules, 49 top-level symbols, 0 methods
 - [telegram](telegram.md): 6 modules, 14 top-level symbols, 54 methods
-- [tools](tools.md): 7 modules, 82 top-level symbols, 8 methods
+- [tools](tools.md): 8 modules, 87 top-level symbols, 8 methods

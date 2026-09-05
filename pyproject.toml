@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flyto-ai"
-version = "0.19.0"
+version = "0.20.0"
 description = "Open-source AI agent layer for natural-language workflow automation with runtime-discovered modules and reusable YAML recipes."
 readme = "README.md"
 license = "Apache-2.0"

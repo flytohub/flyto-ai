@@ -80,6 +80,7 @@ class MockApiClient:
         dispatch_fn,
         max_rounds: int = 30,
         on_stream=None,
+        tool_choice=None,
     ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         """Simulate a chat turn with canned responses."""
         self._call_count += 1

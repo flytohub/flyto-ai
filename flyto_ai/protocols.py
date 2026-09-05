@@ -35,8 +35,13 @@ class ApiClient(Protocol):
         dispatch_fn: DispatchFn,
         max_rounds: int = 30,
         on_stream: Optional[StreamCallback] = None,
+        tool_choice: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]], int, Dict[str, int]]:
         """Run a chat loop with function calling.
+
+        ``tool_choice="required"`` is only ever passed when the client says
+        ``supports_forced_tool_choice`` is true; clients that leave it false
+        are never asked to force a call.
 
         Returns ``(final_message, tool_call_log, rounds_used, usage_dict)``.
         """

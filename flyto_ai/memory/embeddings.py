@@ -25,6 +25,16 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_session ON embeddings(session_id);
 # Default dimension for text-embedding-3-small
 _DEFAULT_DIM = 1536
 
+# Embeddings are optional: memory falls back to keyword search without them.
+# The owner's desktop had no usable OPENAI_API_KEY and saw a 401 logged after
+# every single chat turn, so the "embeddings are off" warning is said once per
+# process, not once per turn.
+_unavailable_warned = False
+
+
+class EmbeddingsUnavailable(RuntimeError):
+    """Raised on every embed call after the store has given up for this process."""
+
 
 def _pack_vector(vec: List[float]) -> bytes:
     """Pack a float vector into bytes."""
@@ -50,10 +60,25 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
 class EmbeddingStore:
     """Store and search embeddings using SQLite + cosine similarity."""
 
-    def __init__(self, db: aiosqlite.Connection, model: str = "text-embedding-3-small") -> None:
+    def __init__(
+        self,
+        db: aiosqlite.Connection,
+        model: str = "text-embedding-3-small",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> None:
         self._db = db
         self._model = model
+        # The key and base_url the chat itself is configured with. The client
+        # used to be built bare and read OPENAI_API_KEY from the process
+        # environment, which on the owner's desktop was absent while the chat
+        # ran happily on the operator's configured key — every turn then ended
+        # in a 401 from /v1/embeddings. The environment is now only the
+        # fallback for an unconfigured key.
+        self._api_key = api_key
+        self._base_url = base_url
         self._client = None
+        self._disabled_reason: Optional[str] = None
 
     async def init(self) -> None:
         """Create embeddings table."""
@@ -61,19 +86,50 @@ class EmbeddingStore:
         await self._db.commit()
 
     def _get_client(self):
-        """Lazily create OpenAI client."""
+        """Lazily create OpenAI client from the configured provider settings."""
         if self._client is None:
             import openai
-            self._client = openai.AsyncOpenAI()
+            kwargs = {}
+            if self._api_key:
+                kwargs["api_key"] = self._api_key
+            if self._base_url:
+                kwargs["base_url"] = self._base_url
+            self._client = openai.AsyncOpenAI(**kwargs)
         return self._client
+
+    def _mark_unavailable(self, exc: Exception) -> None:
+        """Degrade to keyword-only memory: warn once per process, stop retrying
+        failures that cannot fix themselves (no key at all, key rejected)."""
+        global _unavailable_warned
+        import openai
+        permanent = isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)) or (
+            # openai raises the plain base error when no key was found anywhere.
+            isinstance(exc, openai.OpenAIError) and not isinstance(exc, openai.APIError)
+        )
+        if permanent:
+            self._disabled_reason = str(exc)
+        if not _unavailable_warned:
+            _unavailable_warned = True
+            logger.warning(
+                "Memory embeddings unavailable (%s); memory continues with keyword search only",
+                exc,
+            )
+        else:
+            logger.debug("Memory embeddings unavailable: %s", exc)
 
     async def embed_text(self, text: str) -> List[float]:
         """Get embedding vector for text via OpenAI API."""
-        client = self._get_client()
-        response = await client.embeddings.create(
-            model=self._model,
-            input=text,
-        )
+        if self._disabled_reason:
+            raise EmbeddingsUnavailable(self._disabled_reason)
+        try:
+            client = self._get_client()
+            response = await client.embeddings.create(
+                model=self._model,
+                input=text,
+            )
+        except Exception as e:
+            self._mark_unavailable(e)
+            raise
         return response.data[0].embedding
 
     async def add(self, session_id: str, content: str, embedding: Optional[List[float]] = None) -> None:

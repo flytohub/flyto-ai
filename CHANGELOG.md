@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.20.0
+
+### Fixed
+
+- In execute mode the assistant no longer says it is running a workflow
+  without calling the tool. The forced tool choice fired only for messages
+  that looked like a web task by a word list; 「幫我登入kintone」 did not, the
+  model replied 「我將執行 "kintone" 工作流程…請稍候。執行中...」 and nothing
+  ran, and the polite nudge that followed would have discarded a `kintone`
+  call even if it had come. An honesty guard now stands after the nudge:
+  runnable tools on the turn, no call made, a reply that reads as a
+  commitment — one retry with the tool choice forced where the provider can
+  (OpenAI `required`, Anthropic `any`; providers declare
+  `supports_forced_tool_choice`), and otherwise, or on a second narration,
+  an honest sentence in the operator's language that nothing ran and what
+  could. 執行中 / 請稍候 never reach the user without a call.
+- Memory embeddings authenticate with the provider the operator configured,
+  not with whatever `OPENAI_API_KEY` the process happened to carry. On the
+  owner's desktop that was a 401 from `/v1/embeddings` after every turn,
+  swallowed at debug level and retried on the next. `EmbeddingStore` takes
+  the configured key and base URL; when embeddings are unavailable it says
+  so once per process and steps aside, and keyword memory and the chat
+  itself are unchanged.
+
 ## 0.19.0
 
 ### Fixed

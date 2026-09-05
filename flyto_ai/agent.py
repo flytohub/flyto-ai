@@ -21,7 +21,7 @@ from flyto_ai.closed_loop_v3 import (
 from flyto_ai.config import AgentConfig
 from flyto_ai.intelligence.confirmation import ToolIntentDecision, classify_tool_intent, route_with_confirmation
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
-from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
+from flyto_ai.permissions import TOOL_PERMISSION_MAP, PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
 from flyto_ai.prompt.system_prompt import build_system_prompt, detect_language
 from flyto_ai.protocols import ApiClient, ToolExecutor
@@ -44,6 +44,60 @@ def _merge_usage(accumulated: Dict[str, int], new: UsageStats) -> None:
     accumulated["total_tokens"] += new.total_tokens
     accumulated["cache_creation_input_tokens"] += new.cache_creation_input_tokens
     accumulated["cache_read_input_tokens"] += new.cache_read_input_tokens
+
+
+# Phrases a model uses when it presents a run as under way or about to start.
+# Checked only in execute mode, only against a reply that called nothing that
+# runs. The owner's turn read 「我將執行 "kintone" 工作流程來幫助您登入。請稍候。
+# 執行中...」 with tool_calls_count=0; the chat showed progress for a run that
+# never began until the user typed 執行啊.
+_COMMITMENT_PHRASES = (
+    "執行中", "执行中", "處理中", "处理中", "請稍候", "请稍候", "請稍等", "请稍等",
+    "稍等", "我將", "我将", "我會執行", "我会执行", "為您執行", "为您执行",
+    "正在執行", "正在执行", "正在為", "正在为", "馬上", "马上", "立即執行",
+    "立即执行", "開始執行", "开始执行",
+    "実行します", "実行中", "お待ちください",
+    "실행하겠습니다", "실행 중", "잠시만",
+    "i will ", "i'll ", "i am going to", "i'm going to", "let me ", "executing",
+    "is running", "now running", "running the", "please wait", "one moment",
+    "hold on", "in progress", "kicking off", "starting the",
+)
+
+
+def _reads_as_commitment(text: str) -> bool:
+    lower = text.lower()
+    return any(phrase in lower for phrase in _COMMITMENT_PHRASES)
+
+
+def _nothing_ran_message(language: str, workflow_names: List[str]) -> str:
+    """The reply for a turn that promised a run and made no call.
+
+    Must not itself contain any of the phrases above -- the whole point is
+    that no fake progress word reaches the user.
+    """
+    if language.startswith("Traditional Chinese"):
+        if workflow_names:
+            return "我沒有執行任何工作流程。這裡可以執行的工作流程：{}。要我現在執行它嗎？".format(
+                "、".join(workflow_names),
+            )
+        return "我沒有執行任何操作，也沒有任何工作流程在跑。請告訴我要執行哪一個。"
+    if language.startswith("Simplified Chinese"):
+        if workflow_names:
+            return "我没有执行任何工作流程。这里可以执行的工作流程：{}。要我现在执行它吗？".format(
+                "、".join(workflow_names),
+            )
+        return "我没有执行任何操作，也没有任何工作流程在跑。请告诉我要执行哪一个。"
+    if language.startswith("Japanese"):
+        if workflow_names:
+            return "ワークフローはまだ実行していません。ここで実行できるワークフロー：{}。今すぐ実行しますか？".format(
+                "、".join(workflow_names),
+            )
+        return "まだ何も実行していません。どのワークフローを実行するか教えてください。"
+    if workflow_names:
+        return "Nothing was run. The workflow available here is {}. Ask me to run it and it gets called as a tool.".format(
+            ", ".join(workflow_names),
+        )
+    return "Nothing was run: no module or workflow was executed this turn. Tell me exactly what to run."
 
 
 def _bind_tool_executor(
@@ -460,7 +514,18 @@ class Agent:
                 from flyto_ai.memory.search import MemorySearch
 
                 db = self._memory_store._db
-                emb = EmbeddingStore(db, model=self._config.embedding_model)
+                # Embeddings go over the OpenAI wire protocol, so hand them the
+                # same key and base_url the chat provider was built with (same
+                # branching as _make_provider). An Anthropic key is no use to
+                # /v1/embeddings, so that provider keeps the environment fallback.
+                cfg = self._config
+                embed_kwargs = {}
+                if cfg.provider == "ollama":
+                    embed_kwargs["base_url"] = cfg.base_url or "http://localhost:11434/v1"
+                elif cfg.provider != "anthropic":
+                    embed_kwargs["api_key"] = cfg.api_key
+                    embed_kwargs["base_url"] = cfg.base_url
+                emb = EmbeddingStore(db, model=cfg.embedding_model, **embed_kwargs)
                 await emb.init()
                 bm25 = BM25Index(db)
                 await bm25.init()
@@ -1145,9 +1210,13 @@ class Agent:
         # System safety net: if LLM only used discovery tools (search/list)
         # but never executed anything, nudge once. Only accept if retry
         # results in actual execution.
+        # A Space's own workflows arrive under their own names (kintone), so
+        # "did the model do anything" has to count them; otherwise a nudge
+        # that made the model run one would be thrown away after it ran.
+        runnable_names, workflow_names = self._runnable_tool_names(active_tools)
         _action_tools = {
             "execute_module", "use_blueprint", "navigate_website", "ask_user",
-        }
+        } | set(workflow_names)
         _has_action = any(tc.get("function") in _action_tools for tc in tool_calls)
         if (mode == "execute"
                 and self._assistant
@@ -1172,9 +1241,10 @@ class Agent:
                 )
                 # Only accept if LLM actually EXECUTED something (not just searched)
                 has_execution = any(
-                    tc.get("function") in {
-                        "execute_module", "use_blueprint", "ask_user",
-                    }
+                    tc.get("function") in (
+                        {"execute_module", "use_blueprint", "ask_user"}
+                        | set(workflow_names)
+                    )
                     for tc in retry_tc
                 )
                 if has_execution:
@@ -1186,6 +1256,16 @@ class Agent:
                         total_usage[k] += retry_usage.get(k, 0)
             except Exception:
                 pass
+
+        # The nudge above is a request the model may ignore; this is the rule.
+        if mode == "execute" and has_tools and routing_decision.tool_eligible:
+            response_content, tool_calls, total_rounds, total_usage = (
+                await self._guard_narrated_execution(
+                    message, response_content, tool_calls, messages,
+                    system_prompt, dispatch_fn, on_stream, active_tools,
+                    runnable_names, workflow_names, total_rounds, total_usage,
+                )
+            )
 
         # YAML mode: nudge + validation
         if mode == "yaml":
@@ -1239,6 +1319,82 @@ class Agent:
         )
 
     # ── Chat phase helpers ────────────────────────────────────────
+
+    def _runnable_tool_names(
+        self, active_tools: Optional[List[Dict]],
+    ) -> Tuple[set, List[str]]:
+        """Names this turn could actually run, and which of them are the
+        Space's own workflows (registered by the caller, unknown to the static
+        permission map). Read-only tools only look things up."""
+        enforcer = self._permission_enforcer
+        runnable: set = set()
+        workflows: List[str] = []
+        for tool in active_tools or []:
+            name = self._tool_name(tool)
+            if not name:
+                continue
+            if enforcer.required_level(name, {}) <= PermissionLevel.READ_ONLY:
+                continue
+            runnable.add(name)
+            if name not in TOOL_PERMISSION_MAP:
+                workflows.append(name)
+        return runnable, workflows
+
+    async def _guard_narrated_execution(
+        self, message, response_content, tool_calls, messages, system_prompt,
+        dispatch_fn, on_stream, active_tools, runnable_names, workflow_names,
+        total_rounds, total_usage,
+    ):
+        """Never let a reply present a run that this turn did not call.
+
+        The user said 幫我登入kintone. The model answered 「我將執行 "kintone"
+        工作流程來幫助您登入。請稍候。執行中...」 and called nothing; the audit
+        for that turn shows tool_calls_count=0 and the workflow only ran after
+        the user typed 執行啊. tool_choice was "auto" because the provider's
+        browser-task heuristic does not know a Space's workflow names, and the
+        discovery nudge is a polite request the model is free to ignore. So:
+        when the turn has something it can run and the reply reads as a
+        commitment without a call, retry once with the call forced; if the
+        model still narrates -- or the provider cannot force -- replace the
+        reply with a plain statement that nothing ran and what could be run.
+        """
+        if not runnable_names or not response_content:
+            return response_content, tool_calls, total_rounds, total_usage
+        if any(tc.get("function") in runnable_names for tc in tool_calls):
+            return response_content, tool_calls, total_rounds, total_usage
+        if not _reads_as_commitment(response_content):
+            return response_content, tool_calls, total_rounds, total_usage
+
+        if getattr(self._provider, "supports_forced_tool_choice", False):
+            retry_content, retry_tc, retry_rounds, retry_usage = await self._call_llm(
+                messages, system_prompt, dispatch_fn, on_stream=on_stream,
+                tools=active_tools, tool_choice="required",
+            )
+            total_rounds += retry_rounds
+            for k in total_usage:
+                total_usage[k] += retry_usage.get(k, 0)
+            if any(tc.get("function") in runnable_names for tc in retry_tc):
+                logger.info(
+                    "Forced tool choice accepted: model called %s after narrating",
+                    [tc.get("function") for tc in retry_tc],
+                )
+                return retry_content or "", retry_tc, total_rounds, total_usage
+            if retry_tc:
+                # Lookups the forced round did make really happened; keep
+                # them in the log even though nothing ran.
+                tool_calls = retry_tc
+
+        self._ensure_routing_state()
+        language = detect_language(message, preferred_language=self._preferred_language)
+        logger.warning(
+            "Execute-mode reply narrated a run without calling a tool; "
+            "replaced with a statement that nothing ran (runnable: %s)",
+            sorted(runnable_names),
+        )
+        return (
+            _nothing_ran_message(language, workflow_names),
+            tool_calls, total_rounds, total_usage,
+        )
 
     def _ensure_routing_state(self) -> None:
         """Support lightweight test agents created without ``__init__``."""
@@ -1675,13 +1831,19 @@ class Agent:
         dispatch_fn,
         on_stream=None,
         tools=None,
+        tool_choice=None,
     ):
         try:
             active_tools = self._tools if tools is None else tools
+            kwargs = {"on_stream": on_stream}
+            # Passed only when set, so a client written before the argument
+            # existed keeps working on every ordinary call.
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
             return await self._provider.chat(
                 messages, system_prompt, active_tools,
                 dispatch_fn, self._config.max_tool_rounds,
-                on_stream=on_stream,
+                **kwargs,
             )
         except Exception as e:
             logger.warning("LLM call failed: %s", e)

@@ -11,11 +11,11 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [evolution](evolution.md): 6 modules, 57 top-level symbols, 15 methods
 - [extensions](extensions.md): 4 modules, 8 top-level symbols, 36 methods
 - [intelligence](intelligence.md): 4 modules, 20 top-level symbols, 22 methods
-- [memory](memory.md): 6 modules, 13 top-level symbols, 42 methods
+- [memory](memory.md): 6 modules, 14 top-level symbols, 43 methods
 - [orchestration](orchestration.md): 6 modules, 105 top-level symbols, 160 methods
-- [package-root](package-root.md): 37 modules, 367 top-level symbols, 298 methods
+- [package-root](package-root.md): 37 modules, 369 top-level symbols, 300 methods
 - [prompt](prompt.md): 3 modules, 13 top-level symbols, 0 methods
-- [providers](providers.md): 6 modules, 26 top-level symbols, 33 methods
+- [providers](providers.md): 6 modules, 26 top-level symbols, 34 methods
 - [sandbox](sandbox.md): 2 modules, 2 top-level symbols, 3 methods
 - [scheduler](scheduler.md): 3 modules, 16 top-level symbols, 59 methods
 - [security](security.md): 16 modules, 49 top-level symbols, 0 methods

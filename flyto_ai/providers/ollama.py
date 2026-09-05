@@ -31,6 +31,10 @@ class OllamaStructuredOutputError(RuntimeError):
 class OllamaProvider(OpenAIProvider):
     """Ollama provider using the native bounded chat endpoint."""
 
+    # The native /api/chat payload has no tool_choice; a forced retry would
+    # just be a second chance to narrate, so the agent skips it here.
+    supports_forced_tool_choice = False
+
     def __init__(
         self,
         model: str = "llama3.2",
@@ -111,8 +115,13 @@ class OllamaProvider(OpenAIProvider):
         dispatch_fn: DispatchFn,
         max_rounds: int = 30,
         on_stream: StreamCallback | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, list[dict[str, Any]], int, dict[str, int]]:
-        """Run Ollama's native tool loop with explicit thinking control."""
+        """Run Ollama's native tool loop with explicit thinking control.
+
+        ``tool_choice`` is accepted for signature parity and ignored: see
+        ``supports_forced_tool_choice`` above.
+        """
 
         full_messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt}

@@ -11,6 +11,13 @@ Schema, model, timeout and cancellation failures remain explicit. Delegated
 reasoning creates no local HTTP client in Cloud. Local protocol fixtures do not
 claim production acceptance with a downloaded or real local model.
 
+Runtime source `2b3abdf84c207ed69202af08a5e2f0379261d3e7` passed the complete
+SDK suite in an isolated installed environment: 4476 passed, 17 skipped in
+323.25 seconds with deprecation/thread warnings treated as errors. Integrated
+focused checks passed 326 cases, the CI Core MCP cohort passed 109, strict
+Indexer passed 18/18, and distribution builds passed. Official Codex model/list
+returned seven current models without starting a thread or a model turn.
+
 ## Explicit local-computer requests (2026-09-07)
 
 The bounded English preface "Use this computer to" now reaches the existing
@@ -41,7 +48,7 @@ supply a trusted delegated completion function for reasoning on another
 computer; delegated inference never probes or launches a CLI in Cloud.
 See [the runtime contract](docs/local-cli-runtime.md) for limits and verification.
 
-Last updated: 2026-09-06
+Last updated: 2026-09-07
 
 ## Workspace file operation permissions (2026-09-06)
 

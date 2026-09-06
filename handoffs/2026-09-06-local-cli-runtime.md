@@ -29,7 +29,7 @@ that fallback. Five regressions cover these selection boundaries.
 - Owner: codex
 - Branch: codex/local-cli-agent-runtime
 - Base: 6759bf80dac2b02c8ed2fbd2eb35ffd49e0ed011
-- Status: Base CLI full suite passed; selected-model/local extension focused gates passed, full rerun pending
+- Status: Selected-model/local extension complete SDK suite and integrated gates passed; runtime frozen for Cloud acceptance
 
 ## Contract and scope
 
@@ -48,6 +48,23 @@ Windows and delegated image input are explicitly unavailable, not implied
 supported. No remote branch, PR, package release or live service was changed.
 
 ## Verification
+
+Latest immutable runtime: `2b3abdf84c207ed69202af08a5e2f0379261d3e7`.
+The complete SDK suite passed 4476 tests and skipped 17 in 323.25 seconds,
+with DeprecationWarning and PytestUnhandledThreadExceptionWarning treated as
+errors. It used an isolated SDK editable installation and the existing exact
+Core/Blueprint/Indexer stack. The canonical result is
+`/tmp/flyto-sdk-model-runtime-installed-full.log`.
+
+Integrated admission/CLI/model/local checks: 326 passed. Model/local task
+validation: Ruff and 94 tests passed. CI Core MCP smoke: 109 passed. Strict
+Indexer: 18/18. Compile, generated reference, release drift, Ruff and both
+distribution builds passed. Codex model/list returned seven current models
+using metadata RPCs only. No local model download, live local-model inference,
+remote write or user-service modification occurred in this SDK phase.
+
+Earlier base-CLI evidence follows; those counts are historical, not the latest
+complete-suite count:
 
 - Focused Agent, Core MCP and CLI protocol cohort: 159 passed.
 - Native CLI tiny transport: Codex 5.32 seconds; Claude 6.14 seconds.

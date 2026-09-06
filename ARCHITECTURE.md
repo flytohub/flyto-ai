@@ -1,5 +1,19 @@
 # Architecture
 
+## Explicit computer-local inference (2026-09-07)
+
+`local_runtime.LocalModelAgent` shares the existing native Agent and guarded
+JSON-intent transport with `cli_runtime.CliAgent`. The selected local model
+supplies decisions through bounded asynchronous loopback HTTP; it does not own
+tools, workflows, receipts or goal verification. Actual image attachments stay
+with observed host results. Native provider tool calls are rejected. Delegated
+reasoning callbacks create neither a CLI process nor a local HTTP connection
+in Cloud. Cloud remains responsible for authenticated source/computer binding.
+
+Codex model metadata is read through official model/list without a model turn.
+Other CLI sources support manual model IDs without a hardcoded model catalog.
+This changes an opt-in inference boundary, not the canonical product topology.
+
 ## Host-controlled CLI inference (2026-09-06)
 
 `flyto_ai.cli_runtime.CliAgent` substitutes official local CLI inference inside

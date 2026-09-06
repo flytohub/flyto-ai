@@ -6,6 +6,7 @@ import json
 import os
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +24,28 @@ from flyto_ai.cli_runtime import (
 from flyto_ai.cli_runtime.contracts import checked_intent
 from flyto_ai.cli_runtime.events import EventReader
 from flyto_ai.cli_runtime.process import ProcessRunner
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["Z", "S"])
+async def test_first_terminal_group_signal_distinguishes_zombies_from_live_children(monkeypatch, state):
+    from flyto_ai.cli_runtime.process import _stop
+    def denied(*args):
+        raise PermissionError("Fixture group signal denied")
+    async def wait():
+        return 0
+    async def communicate():
+        return f"777 {state}\n".encode(), b""
+    async def probe(*args, **kwargs):
+        return SimpleNamespace(returncode=0, communicate=communicate)
+    monkeypatch.setattr("flyto_ai.cli_runtime.process.os.killpg", denied)
+    monkeypatch.setattr("flyto_ai.cli_runtime.process.asyncio.create_subprocess_exec", probe)
+    process = SimpleNamespace(pid=777, returncode=0, wait=wait)
+    if state == "Z":
+        await _stop(process)
+    else:
+        with pytest.raises(CliRuntimeError, match="cli_cleanup_failed"):
+            await _stop(process)
 
 
 def binary(tmp_path, program):

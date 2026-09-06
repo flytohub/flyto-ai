@@ -15,6 +15,13 @@ MAX_IMAGE_BYTES = 5_000_000
 MAX_CALLS = 8
 
 
+def valid_model_id(value, *, allow_empty=True):
+    """Pass official IDs/aliases verbatim; never interpret them as CLI flags."""
+    return isinstance(value, str) and ((allow_empty and value == "") or bool(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,255}", value)
+    ))
+
+
 class CliRuntimeError(RuntimeError):
     """A public classification, never raw provider output or credentials."""
 
@@ -35,7 +42,7 @@ class CliRuntimeConfig:
     def __post_init__(self):
         if self.source not in {"codex_cli", "claude_cli"}:
             raise ValueError("Unsupported local CLI source")
-        if not isinstance(self.model, str) or (self.model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", self.model)):
+        if not valid_model_id(self.model):
             raise ValueError("CLI model must be a bounded identifier")
         if self.command is not None and (not isinstance(self.command, str) or not self.command or "\x00" in self.command):
             raise ValueError("CLI command must be one executable path")

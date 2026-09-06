@@ -1,5 +1,20 @@
 # Decisions
 
+## 2026-09-07 — Selected local models supply inference, never action authority
+
+Reuse the CLI runtime's guarded JSON-intent loop for explicitly selected local
+Ollama or OpenAI-compatible models. The host retains Agent admission, Core
+permissions, observations, continuation, browser ownership and independent goal
+verification. The HTTP adapter accepts literal loopback only, ignores ambient
+credentials/proxies and closes requests on cancellation. Native provider tool
+calls, output/schema errors and model changes cannot count as completion.
+
+Do not hardcode a current CLI model list: read Codex's official model/list RPC
+without starting inference and offer manual model entry where no official
+catalog exists. Empty external model metadata stays unknown/provider-default,
+never an OpenAI model fallback. Rollback removes opt-in adapter selection;
+product ownership and existing native API authentication remain unchanged.
+
 ## 2026-09-06 — Local CLI supplies inference while Agent retains authority
 
 Reuse the existing Agent rather than a second CLI-owned action loop. Official

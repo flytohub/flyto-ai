@@ -1,5 +1,16 @@
 # State
 
+## Selected CLI models and computer-local inference (2026-09-07)
+
+CLI model selection is passed verbatim, with Codex's official dynamic metadata
+catalog and manual entry when no official catalog is available. External
+default model metadata no longer inherits GPT-4o. The new LocalModelAgent keeps
+native Agent permissions and observations while using explicit loopback-only
+Ollama/compatible async HTTP, exact model selection and actual image bytes.
+Schema, model, timeout and cancellation failures remain explicit. Delegated
+reasoning creates no local HTTP client in Cloud. Local protocol fixtures do not
+claim production acceptance with a downloaded or real local model.
+
 ## Reproducible SDK lint (2026-09-07)
 
 The project now explicitly selects the existing CI Ruff rules E9,F63,F7,F82.

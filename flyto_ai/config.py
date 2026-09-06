@@ -388,6 +388,8 @@ class AgentConfig:
         """Return model with sensible defaults per provider."""
         if self.model:
             return self.model
+        if self.provider in {"codex_cli", "claude_cli", "local_ai"}:
+            return ""  # External runtime default is not an OpenAI model choice.
         if self.provider == "anthropic":
             return "claude-sonnet-4-5-20250929"
         if self.provider == "ollama":

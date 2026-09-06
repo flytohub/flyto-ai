@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-07
+
+- Added dynamic official Codex model discovery and manual CLI model selection
+  without hardcoded catalogs or false GPT-4o metadata for external defaults.
+- Added explicit loopback Ollama/OpenAI-compatible inference with host-only
+  actions, actual image attachments, schema validation and cancellable HTTP.
+- Treat an already-dead macOS process group consistently on every cleanup
+  signal; a live child still prevents successful cleanup.
+
 ## 2026-09-06
 
 - Added opt-in official Codex and Claude CLI inference for the existing Agent,

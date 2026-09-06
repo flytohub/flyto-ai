@@ -13,6 +13,7 @@ from .process import (
     resolve_cli_executable,
 )
 from .transport import CliTransport
+from .catalog import discover_cli_models
 
 __all__ = [
     "CliAgent",
@@ -23,6 +24,7 @@ __all__ = [
     "inspect_cli_runtime",
     "required_cli_flags",
     "resolve_cli_executable",
+    "discover_cli_models",
 ]
 
 
@@ -63,11 +65,11 @@ class CliAgent(Agent):
         result = await super().chat(*args, **kwargs)
         runner = self.cli_runtime.runner
         updates = {"provider": self.cli_runtime.cli.source,
-                   "model": (runner.last_model if runner else '') or self.cli_runtime.cli.model or "cli-default"}
+                   "model": (runner.last_model if runner else '') or self.cli_runtime.cli.model}
         if self.cli_runtime.last_error:
             code = self.cli_runtime.last_error
             observed = self.cli_runtime.tool_calls
-            updates.update(ok=False, error=code, message="Local CLI inference stopped: " + code,
+            updates.update(ok=False, error=code, message="Selected inference stopped: " + code,
                            tool_calls=observed,
                            execution_results=[item for item in observed if item.get("function") == "execute_module"],
                            rounds_used=self.cli_runtime.rounds,

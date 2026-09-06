@@ -54,6 +54,29 @@ fall back to the executable bundled at
 `/Applications/ChatGPT.app/Contents/Resources/codex`. An explicit missing command
 never falls back; the discovered binary must still pass protocol checks.
 
+## Model selection
+
+`CliRuntimeConfig.model` is passed verbatim to the selected official CLI. Empty
+means that CLI's own default; it never becomes a hardcoded API model in Agent
+metadata. Official aliases such as bracketed context variants are accepted as
+bounded identifiers. Leading option markers, whitespace and control characters
+are rejected. Invalid/unavailable selected models report `cli_model_unavailable`
+without retrying another model.
+
+`await discover_cli_models(cli)` uses Codex's official app-server `model/list`
+metadata RPC with bounded pagination. It starts no thread or model turn and
+does not expose inherited MCP settings. It returns `source`, `models`,
+`manual_entry`, `catalog_available` and a safe `reason_code`; each model has
+`id`, `label`, `description`, `is_default`, and input modalities when supplied
+by the official catalog. There is no baked-in model list. Claude has no
+supported noninteractive catalog protocol, so it returns an empty list and
+`manual_catalog_unavailable` while preserving manual model-ID entry.
+
+Protocol references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
+and [Claude model configuration](https://code.claude.com/docs/en/model-config).
+
+## Official runtime requirements
+
 Codex 0.153.4 or newer must support the app-server protocol and strict config.
 The runtime disables native integrations, hooks, plugins, notifications and
 hosted web search. It reads configuration only in memory, rejects custom

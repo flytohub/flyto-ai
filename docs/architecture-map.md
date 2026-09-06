@@ -1,5 +1,15 @@
 # Architecture Map
 
+## Selected local inference boundary (2026-09-07)
+
+Native Agent authority -> validated JSON intent -> guarded host Core dispatch
+remains the execution path for API, official CLI and explicit local models.
+`local_runtime` only connects to the selected loopback Ollama/compatible service
+and supplies actual observed image bytes with inference. It owns cancellable
+HTTP and JSON-schema validation, not receipts or task completion. Delegated
+reasoning in Cloud opens no local endpoint. Source/computer ownership and final
+goal review remain in Cloud; the product topology below is unchanged.
+
 ## Host-controlled CLI inference (2026-09-06)
 
 `flyto_ai.cli_runtime.CliAgent` substitutes official local CLI inference inside

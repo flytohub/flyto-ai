@@ -44,6 +44,7 @@ class CliTransport:
         self.cli = cli
         self.runner = ProcessRunner(cli) if completion_fn is None else None
         self.completion_fn = completion_fn
+        self.image_completion_fn = None
         self._closed = False
         self._pending = None
         self.continuation = False
@@ -144,6 +145,10 @@ class CliTransport:
     async def _infer(self, prompt):
         if self.completion_fn is None:
             return await self.runner.infer(prompt, INTENT_SCHEMA, self.images)
+        if self.image_completion_fn:
+            text = await self.image_completion_fn(prompt=prompt, schema=INTENT_SCHEMA,
+                                                   system_prompt=_INSTRUCTIONS, images=self.images)
+            return decode_json(text), {}
         if self.images:
             raise CliRuntimeError("cli_delegated_images_unsupported")
         # The trusted host routes inference only. It cannot supply observations

@@ -53,14 +53,31 @@ def required_cli_flags(source: str) -> tuple[str, ...]:
     raise ValueError("Unsupported local CLI source")
 
 
+async def _signal_group(pid, action):
+    try:
+        os.killpg(pid, action)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS can retain dead orphan groups until init reaps their zombies.
+        # The same check is needed on the first signal, not only the final one.
+        probe = await asyncio.create_subprocess_exec(
+            "ps", "-axo", "pgid=,stat=", stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        output, _ = await asyncio.wait_for(probe.communicate(), 2)
+        if probe.returncode or any(
+            len(parts := line.split()) == 2 and parts[0] == str(pid).encode()
+            and not parts[1].startswith(b"Z") for line in output.splitlines()
+        ):
+            raise CliRuntimeError("cli_cleanup_failed")
+
+
 async def _stop(process):
     # A CLI may exit while its children remain alive. The process group belongs
     # to this one invocation, so terminal success must release it as well.
     if os.name != "nt":
-        try:
-            os.killpg(process.pid, signal.SIGKILL if process.returncode is not None else signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        await _signal_group(process.pid, signal.SIGKILL if process.returncode is not None else signal.SIGTERM)
     elif process.returncode is None:
         killer = await asyncio.create_subprocess_exec(
             "taskkill", "/PID", str(process.pid), "/T", "/F",
@@ -71,31 +88,12 @@ async def _stop(process):
         await asyncio.wait_for(process.wait(), 0.75)
     except TimeoutError:
         if os.name != "nt":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            await _signal_group(process.pid, signal.SIGKILL)
         else:
             process.kill()
         await asyncio.wait_for(process.wait(), 2)
     if os.name != "nt":
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            # macOS may retain an already dead orphan group until init reaps
-            # its zombies. Refuse cleanup success if any live member remains.
-            probe = await asyncio.create_subprocess_exec(
-                "ps", "-axo", "pgid=,stat=", stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            output, _ = await asyncio.wait_for(probe.communicate(), 2)
-            if probe.returncode or any(
-                len(parts := line.split()) == 2 and parts[0] == str(process.pid).encode()
-                and not parts[1].startswith(b"Z") for line in output.splitlines()
-            ):
-                raise CliRuntimeError("cli_cleanup_failed")
+        await _signal_group(process.pid, signal.SIGKILL)
 
 
 async def _finish_cleanup(process):

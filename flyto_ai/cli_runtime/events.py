@@ -6,7 +6,10 @@ from .contracts import MAX_EVENT_BYTES, CliRuntimeError, decode_json
 def failure_code(value) -> str:
     """Inspect transient error bytes in memory; retain only a fixed code."""
     text = str(value)[:8000].lower()
+    if "model" in text and any(phrase in text for phrase in ("does not exist", "not found", "not supported", "do not have access")):
+        return "cli_model_unavailable"
     for words, code in (
+        (("model not found", "model_not_found", "invalid model", "unsupported model", "model is not supported", "model does not exist", "not have access to model"), "cli_model_unavailable"),
         (("not logged in", "unauthorized", "authentication", "login required"), "cli_auth_required"),
         (("quota", "usage limit", "credit balance", "insufficient_quota"), "cli_quota_exhausted"),
         (("rate limit", "overloaded"), "cli_capacity_unavailable"),

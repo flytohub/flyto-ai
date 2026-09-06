@@ -1,5 +1,19 @@
 # Local CLI inference runtime
 
+## Follow-up: selected models and local inference (2026-09-07)
+
+The same branch adds official Codex model/list metadata, safe manual CLI IDs,
+honest external-default metadata and `flyto_ai.local_runtime` for explicitly
+selected loopback Ollama/compatible services. Native local inference supports
+actual host images; delegated callbacks intentionally refuse unsupported image
+sidebands. Host Agent/Core authority and independent goal verification remain
+unchanged. See `docs/local-model-runtime.md` for API, errors, limits and rollback.
+
+Verification uses actual child processes and actual loopback HTTP fixtures.
+No local model was downloaded, no live model was called in this phase, and no
+running user service was changed. Full real-model product acceptance is owned
+by Cloud and must not be inferred from these protocol tests.
+
 Follow-up: executable discovery is shared publicly with status checks. PATH
 remains authoritative; only macOS may fall back to the executable in the known
 official ChatGPT app bundle. Explicit commands and non-macOS hosts never use

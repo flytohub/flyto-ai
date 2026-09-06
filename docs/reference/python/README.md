@@ -7,11 +7,12 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [agents](agents-package.md): 8 modules, 40 top-level symbols, 55 methods
 - [assistant](assistant.md): 7 modules, 28 top-level symbols, 30 methods
 - [channels](channels.md): 7 modules, 9 top-level symbols, 39 methods
-- [cli_runtime](cli_runtime.md): 6 modules, 21 top-level symbols, 36 methods
+- [cli_runtime](cli_runtime.md): 7 modules, 25 top-level symbols, 39 methods
 - [coding](coding.md): 45 modules, 456 top-level symbols, 644 methods
 - [evolution](evolution.md): 6 modules, 57 top-level symbols, 15 methods
 - [extensions](extensions.md): 4 modules, 8 top-level symbols, 36 methods
 - [intelligence](intelligence.md): 5 modules, 29 top-level symbols, 22 methods
+- [local_runtime](local_runtime.md): 3 modules, 9 top-level symbols, 3 methods
 - [memory](memory.md): 6 modules, 14 top-level symbols, 43 methods
 - [orchestration](orchestration.md): 6 modules, 105 top-level symbols, 160 methods
 - [package-root](package-root.md): 39 modules, 375 top-level symbols, 301 methods

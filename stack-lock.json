@@ -9,7 +9,7 @@
     "flyto-core": {
       "repository": "flytohub/flyto-core",
       "path": "flyto-core",
-      "revision": "92b23d8dd0aeeabcc40d879213779389cee314e1"
+      "revision": "6ed8938c3df36df661200ebaf295bb9266728c9d"
     },
     "flyto-indexer": {
       "repository": "flytohub/flyto-indexer",

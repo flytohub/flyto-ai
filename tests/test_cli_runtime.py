@@ -18,6 +18,7 @@ from flyto_ai.cli_runtime import (
     complete_json,
     inspect_cli_runtime,
     required_cli_flags,
+    resolve_cli_executable,
 )
 from flyto_ai.cli_runtime.contracts import checked_intent
 from flyto_ai.cli_runtime.events import EventReader
@@ -254,6 +255,31 @@ async def test_missing_binary_fails_without_api_fallback(tmp_path):
     assert not status["installed"] and status["reason_code"] == "cli_not_found"
     with pytest.raises(CliRuntimeError, match="cli_not_found"):
         await complete_json(CliRuntimeConfig("claude_cli", command=str(tmp_path / "absent")), prompt="Return JSON.", schema={"type": "object"})
+
+
+@pytest.mark.parametrize("system,source,executable,expected", [
+    ("Darwin", "codex_cli", True, "/Applications/ChatGPT.app/Contents/Resources/codex"),
+    ("Linux", "codex_cli", True, None),
+    ("Darwin", "claude_cli", True, None),
+    ("Darwin", "codex_cli", False, None),
+])
+def test_official_bundle_discovery_is_mac_only_and_requires_executable(monkeypatch, system, source, executable, expected):
+    from flyto_ai.cli_runtime import process
+    monkeypatch.setattr(process.shutil, "which", lambda _: None)
+    monkeypatch.setattr(process.platform, "system", lambda: system)
+    monkeypatch.setattr(process.Path, "is_file", lambda path: str(path) == "/Applications/ChatGPT.app/Contents/Resources/codex")
+    monkeypatch.setattr(process.os, "access", lambda _path, _mode: executable)
+    assert resolve_cli_executable(source) == expected
+    assert ProcessRunner(CliRuntimeConfig(source)).executable == expected
+
+
+def test_path_selection_and_explicit_missing_command_never_fall_back(monkeypatch):
+    from flyto_ai.cli_runtime import process
+    monkeypatch.setattr(process.shutil, "which", lambda name: "/trusted/bin/codex" if name == "codex" else None)
+    monkeypatch.setattr(process.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(process.Path, "is_file", lambda _path: (_ for _ in ()).throw(AssertionError("No bundle lookup permitted")))
+    assert resolve_cli_executable("codex_cli") == "/trusted/bin/codex"
+    assert resolve_cli_executable("codex_cli", "/missing/explicit-codex") is None
 
 
 @pytest.mark.asyncio

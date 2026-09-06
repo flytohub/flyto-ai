@@ -6,7 +6,12 @@ from flyto_ai.agent import Agent
 from flyto_ai.models import UsageStats
 
 from .contracts import CliRuntimeConfig, CliRuntimeError, cli_environment, encode_json
-from .process import ProcessRunner, inspect_cli_runtime, required_cli_flags
+from .process import (
+    ProcessRunner,
+    inspect_cli_runtime,
+    required_cli_flags,
+    resolve_cli_executable,
+)
 from .transport import CliTransport
 
 __all__ = [
@@ -17,6 +22,7 @@ __all__ = [
     "complete_json",
     "inspect_cli_runtime",
     "required_cli_flags",
+    "resolve_cli_executable",
 ]
 
 

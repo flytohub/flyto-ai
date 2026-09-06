@@ -4,6 +4,7 @@ import asyncio
 import base64
 import inspect
 import os
+import platform
 import re
 import shutil
 import signal
@@ -28,6 +29,20 @@ _CLAUDE_FLAGS = (
     "--no-session-persistence", "--json-schema", "--input-format",
     "--disable-slash-commands", "--setting-sources", "--no-chrome",
 )
+
+
+def resolve_cli_executable(source: str, command: str | None = None) -> str | None:
+    """Resolve trusted host selection; never search arbitrary app directories."""
+    if source not in {"codex_cli", "claude_cli"}:
+        raise ValueError("Unsupported local CLI source")
+    selected = shutil.which(command or ("codex" if source == "codex_cli" else "claude"))
+    if selected or command is not None:
+        return selected
+    if source == "codex_cli" and platform.system() == "Darwin":
+        bundle = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+        if bundle.is_file() and os.access(bundle, os.X_OK):
+            return str(bundle)
+    return None
 
 
 def required_cli_flags(source: str) -> tuple[str, ...]:
@@ -124,7 +139,7 @@ class ProcessRunner:
 
     def __init__(self, cli: CliRuntimeConfig):
         self.cli = cli
-        self.executable = shutil.which(cli.command or ("codex" if cli.source == "codex_cli" else "claude"))
+        self.executable = resolve_cli_executable(cli.source, cli.command)
         self._processes = set()
         self._closed = False
         self._supported = False

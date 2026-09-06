@@ -1,5 +1,10 @@
 # Local CLI inference runtime
 
+Follow-up: executable discovery is shared publicly with status checks. PATH
+remains authoritative; only macOS may fall back to the executable in the known
+official ChatGPT app bundle. Explicit commands and non-macOS hosts never use
+that fallback. Five regressions cover these selection boundaries.
+
 - Owner: codex
 - Branch: codex/local-cli-agent-runtime
 - Base: 6759bf80dac2b02c8ed2fbd2eb35ffd49e0ed011

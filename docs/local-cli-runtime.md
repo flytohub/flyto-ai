@@ -48,6 +48,11 @@ paths. It strips provider keys, token environment variables and unrelated
 secrets. It never reads or copies auth-store contents. No CLI setting may be
 supplied through a model tool call. `command` is an optional single executable
 path for a trusted host/test harness, never a client-selected shell command.
+`resolve_cli_executable(source, command=None)` gives execution and status probes
+the same host-owned discovery. PATH takes precedence. On macOS only, Codex may
+fall back to the executable bundled at
+`/Applications/ChatGPT.app/Contents/Resources/codex`. An explicit missing command
+never falls back; the discovered binary must still pass protocol checks.
 
 Codex 0.153.4 or newer must support the app-server protocol and strict config.
 The runtime disables native integrations, hooks, plugins, notifications and

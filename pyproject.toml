@@ -114,3 +114,8 @@ Examples = "https://docs.flyto2.com/ai/"
 
 [tool.hatch.build.targets.wheel]
 packages = ["flyto_ai"]
+
+# Match the existing CI lint contract instead of inheriting version-dependent
+# Ruff defaults. CI already selects exactly these rules explicitly.
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

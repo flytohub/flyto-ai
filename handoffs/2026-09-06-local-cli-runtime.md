@@ -8,7 +8,7 @@ that fallback. Five regressions cover these selection boundaries.
 - Owner: codex
 - Branch: codex/local-cli-agent-runtime
 - Base: 6759bf80dac2b02c8ed2fbd2eb35ffd49e0ed011
-- Status: Reviewable implementation; full SDK CI-equivalent verification pending
+- Status: Full SDK suite and CI-aligned combined task validation passed
 
 ## Contract and scope
 
@@ -34,14 +34,20 @@ supported. No remote branch, PR, package release or live service was changed.
 - New CLI and complexity gate: 33 passed; no budget threshold changed.
 - CI Ruff selector, complete new-file Ruff, compile, build, release drift and
   generated reference checks passed. Strict Indexer: 18/18 passed.
-- Combined task validation runs the 33 tests successfully but remains blocked
-  by pre-existing full-style Ruff debt in agent.py. The five-line credential
-  predicate change passes the repository CI selector. No rule was weakened.
+- Ruff 0.16.6 expanded its upstream defaults to 413 rules. The repository had
+  no Ruff configuration; 155 Agent diagnostics existed equally on the base and
+  changed versions, even with --isolated. Project lint now explicitly selects
+  the exact existing CI rules E9,F63,F7,F82, without changing CI or Agent code.
+  Combined task validation includes the Agent credential seam and passes Ruff
+  plus 40 focused tests under that unchanged CI contract.
 - An initial complete run in the Cloud archive environment returned 4310
   passed, 89 failed and 21 skipped. Missing SDK development dependencies and
   adjacent Blueprint fixtures account for most failures; this is not a green
   SDK CI claim. Its one new constructor-arity failure was fixed and the exact
-  complexity gate now passes. A correctly provisioned full run remains due.
+  complexity gate now passes. The correctly installed SDK environment then
+  completed with 4403 passed and 17 skipped in 1100.42 seconds (Python 3.12,
+  macOS, commit 4e783b5). The later official-bundle discovery change passed its
+  38-test cohort and strict/task gates separately.
 
 ## Rollback
 

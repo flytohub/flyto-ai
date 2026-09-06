@@ -1,5 +1,13 @@
 # State
 
+## Reproducible SDK lint (2026-09-07)
+
+The project now explicitly selects the existing CI Ruff rules E9,F63,F7,F82.
+This removes drift from Ruff's expanded upstream defaults; CI's selection and
+runtime code are unchanged. The SDK CLI implementation full suite passed on
+macOS/Python 3.12: 4403 passed and 17 skipped. Official model-driven product
+goals remain Cloud acceptance, separate from SDK protocol and host-loop tests.
+
 ## Host-controlled CLI inference (2026-09-06)
 
 `flyto_ai.cli_runtime.CliAgent` substitutes official local CLI inference inside

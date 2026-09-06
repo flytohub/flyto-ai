@@ -101,6 +101,11 @@ does not manufacture billing totals for delegated inference.
 
 ## Verification and limits
 
+The project declares the same Ruff selection as its existing CI command:
+`E9,F63,F7,F82`. Ruff 0.16 expanded its upstream defaults, so an unconfigured
+local check otherwise differs from CI. This fixes the existing repository
+contract; it does not reduce CI checks or rewrite unrelated Agent code.
+
 Tests run real child processes with controlled protocol fixtures through the
 native Agent and host dispatcher. They cover sequential dispatch, forbidden
 calls, malformed JSON, unavailable runtimes, partial failures, continuation,

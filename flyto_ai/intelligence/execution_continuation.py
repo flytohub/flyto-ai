@@ -5,6 +5,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import Dict, List
+
+from flyto_ai.permissions import PermissionLevel
 
 from flyto_ai.intelligence.confirmation import (
     ToolIntentDecision,
@@ -96,3 +99,57 @@ def continuation_scope(agent, goal):
     finally:
         _ACTIVE.reset(token)
         agent._continuation_active = False
+
+
+def ensure_routing_state(agent) -> None:
+    """Support lightweight test agents created without ``__init__``."""
+    if not hasattr(agent, "_preferred_language"):
+        agent._preferred_language = None
+    if not hasattr(agent, "_last_routing_decision"):
+        agent._last_routing_decision = None
+    if not hasattr(agent, "_routing_metrics"):
+        agent._routing_metrics = {
+            "turns": 0,
+            "answer_only_turns": 0,
+            "ambiguous_turns": 0,
+            "action_turns": 0,
+            "tool_calls_attempted": 0,
+            "tool_calls_executed": 0,
+            "tool_calls_blocked": 0,
+        }
+
+
+def record_routing_decision(
+    agent,
+    decision: ToolIntentDecision,
+) -> None:
+    agent._ensure_routing_state()
+    agent._last_routing_decision = decision
+    agent._routing_metrics["turns"] += 1
+    key = "{}_turns".format(decision.mode)
+    if key in agent._routing_metrics:
+        agent._routing_metrics[key] += 1
+
+
+def tools_for_route(
+    agent,
+    decision: ToolIntentDecision,
+    mode: str,
+) -> List[Dict]:
+    """Expose the smallest schema set justified by this turn."""
+    tools = list(agent._tools or [])
+    if mode != "execute":
+        return tools
+    if decision.mode == "answer_only":
+        return []
+
+    enforcer = agent._permission_enforcer
+    maximum = (
+        PermissionLevel.READ_ONLY
+        if decision.mode == "ambiguous"
+        else enforcer.level
+    )
+    return [
+        tool for tool in tools
+        if enforcer.required_level(agent._tool_name(tool), {}) <= maximum
+    ]

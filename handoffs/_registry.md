@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-09-06 | Execution scope helper extraction | 2026-09-06-execution-scope-extraction.md |
 | 2026-09-06 | Owned browser execution scopes | 2026-09-06-owned-browser-scope.md |
 | 2026-08-25 | Numbered intent-ledger path authority | 2026-08-25-numbered-intent-ledger-path-authority.md |
 | 2026-08-22 | Amendment ledger-version interoperability | 2026-08-22-amendment-ledger-version-interoperability.md |

@@ -15,6 +15,15 @@ from contextlib import nullcontext
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
+from flyto_ai.tools.browser_scope import (
+    active_browser_sessions as _active_browser_sessions,
+    browser_retry_state as _browser_retry_state,
+    set_browser_retry_state as _set_browser_retry_state,
+    clear_browser_sessions, get_browser_status,
+)
+
+from flyto_ai.tools.module_validation import validate_execute_module_args as _validate_execute_module_args
+
 logger = logging.getLogger(__name__)
 
 CORE_MCP_CONTRACT_VERSION = "flyto-core-mcp.v1"
@@ -74,61 +83,6 @@ CORE_CAPABILITY_MANIFEST_TOOL = {
         },
     },
 }
-
-
-def _active_browser_sessions() -> Dict[str, Any]:
-    from flyto_ai.tools.browser_scope import current_browser_scope
-    scope = current_browser_scope()
-    return scope.sessions if scope is not None else _browser_sessions
-
-
-def _browser_retry_state():
-    from flyto_ai.tools.browser_scope import current_browser_scope
-    scope = current_browser_scope()
-    if scope is not None:
-        return scope.launch_failed, scope.launch_error, scope.goto_failures
-    return _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
-
-
-def _set_browser_retry_state(launch_failed, launch_error, goto_failures):
-    from flyto_ai.tools.browser_scope import current_browser_scope
-    global _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails
-    scope = current_browser_scope()
-    if scope is not None:
-        scope.launch_failed, scope.launch_error, scope.goto_failures = launch_failed, launch_error, goto_failures
-    else:
-        _browser_launch_failed, _browser_launch_error, _goto_consecutive_fails = launch_failed, launch_error, goto_failures
-
-
-def clear_browser_sessions() -> None:
-    """Clear the shared browser session store (call between independent chats)."""
-    with _browser_sessions_lock:
-        _active_browser_sessions().clear()
-    _set_browser_retry_state(False, "", 0)
-
-
-def get_browser_status() -> str:
-    """Get a prompt hint about browser state for the LLM.
-
-    Returns empty string if no browser running, or an instruction
-    telling the LLM to reuse the existing browser.
-    """
-    with _browser_sessions_lock:
-        sessions = _active_browser_sessions()
-        if not sessions:
-            return ""
-        hint = (
-            "BROWSER IS ALREADY RUNNING. Do NOT call browser.launch again. "
-            "Preserve its current page and authenticated state while repairing the goal. "
-            "Use browser.snapshot to observe the current page before changing it. "
-            "A redacted value is not a usable browser session ID."
-        )
-        if len(sessions) == 1:
-            hint += (
-                " There is exactly one browser in this scope. Omit context.browser_session "
-                "and context.browser so Core selects this existing browser automatically."
-            )
-        return hint
 
 
 def _is_ok(result: Dict[str, Any]) -> bool:
@@ -1114,55 +1068,6 @@ async def _dispatch_core_tool_inner(
         )
 
     return {"ok": False, "error": "Unknown core tool: {}".format(name)}
-
-
-def _validate_execute_module_args(
-    handler: Dict[str, Any],
-    module_id: str,
-    params: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    """Validate module params before execution when flyto-core exposes validation."""
-    validate = handler.get("validate_params")
-    if not validate or not module_id:
-        return None
-    try:
-        result = validate(module_id=module_id, params=params or {})
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": "flyto-core validate_params failed before execute_module: {}".format(e),
-            "module_id": module_id,
-            "params_valid": False,
-        }
-
-    if isinstance(result, dict):
-        valid = result.get("valid")
-        ok = result.get("ok")
-        errors = result.get("errors") or result.get("error")
-        if valid is False or ok is False:
-            schema = {}
-            info = handler.get("get_module_info")
-            if callable(info):
-                try:
-                    metadata = info(module_id=module_id)
-                    if isinstance(metadata, dict) and isinstance(metadata.get("params_schema"), dict):
-                        schema = metadata["params_schema"]
-                except Exception:
-                    pass
-            return {
-                "ok": False,
-                "error": "Invalid params for {}: {}".format(module_id, errors or "schema validation failed"),
-                "module_id": module_id,
-                "params_valid": False,
-                "validation": result,
-                "params_schema": schema,
-                "suggestion": (
-                    "No action was executed. Correct the call using this module's canonical "
-                    "params_schema, including method selectors, active fields and defaults. "
-                    "Do not assume generic selector/text arguments fit every browser module."
-                ),
-            }
-    return None
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict
 
 
 @dataclass
@@ -103,3 +103,59 @@ async def browser_session_scope(owner_id: str, *, cleanup_timeout: float = 10.0)
             _SCOPE.reset(token)
         if scope.cleanup_errors:
             raise BrowserCleanupError("Owned browser sessions could not all be confirmed closed")
+
+
+def active_browser_sessions() -> Dict[str, Any]:
+    from flyto_ai.tools import core_tools
+    scope = current_browser_scope()
+    return scope.sessions if scope is not None else core_tools._browser_sessions
+
+
+def browser_retry_state():
+    from flyto_ai.tools import core_tools
+    scope = current_browser_scope()
+    if scope is not None:
+        return scope.launch_failed, scope.launch_error, scope.goto_failures
+    return core_tools._browser_launch_failed, core_tools._browser_launch_error, core_tools._goto_consecutive_fails
+
+
+def set_browser_retry_state(launch_failed, launch_error, goto_failures):
+    from flyto_ai.tools import core_tools
+    scope = current_browser_scope()
+    if scope is not None:
+        scope.launch_failed, scope.launch_error, scope.goto_failures = launch_failed, launch_error, goto_failures
+    else:
+        core_tools._browser_launch_failed, core_tools._browser_launch_error, core_tools._goto_consecutive_fails = launch_failed, launch_error, goto_failures
+
+
+def clear_browser_sessions() -> None:
+    """Clear the shared browser session store (call between independent chats)."""
+    from flyto_ai.tools import core_tools
+    with core_tools._browser_sessions_lock:
+        core_tools._active_browser_sessions().clear()
+    core_tools._set_browser_retry_state(False, "", 0)
+
+
+def get_browser_status() -> str:
+    """Get a prompt hint about browser state for the LLM.
+
+    Returns empty string if no browser running, or an instruction
+    telling the LLM to reuse the existing browser.
+    """
+    from flyto_ai.tools import core_tools
+    with core_tools._browser_sessions_lock:
+        sessions = core_tools._active_browser_sessions()
+        if not sessions:
+            return ""
+        hint = (
+            "BROWSER IS ALREADY RUNNING. Do NOT call browser.launch again. "
+            "Preserve its current page and authenticated state while repairing the goal. "
+            "Use browser.snapshot to observe the current page before changing it. "
+            "A redacted value is not a usable browser session ID."
+        )
+        if len(sessions) == 1:
+            hint += (
+                " There is exactly one browser in this scope. Omit context.browser_session "
+                "and context.browser so Core selects this existing browser automatically."
+            )
+        return hint

@@ -11,6 +11,14 @@ Schema, model, timeout and cancellation failures remain explicit. Delegated
 reasoning creates no local HTTP client in Cloud. Local protocol fixtures do not
 claim production acceptance with a downloaded or real local model.
 
+## Explicit local-computer requests (2026-09-07)
+
+The bounded English preface "Use this computer to" now reaches the existing
+action-verb classifier instead of treating data such as "Invoice status" as
+a status query. It still requires a following action verb; explanations,
+quotations, negation and host permission ceilings are unchanged. Tests also
+retain Traditional Chinese read/modify/save/verify admission.
+
 ## Reproducible SDK lint (2026-09-07)
 
 The project now explicitly selects the existing CI Ruff rules E9,F63,F7,F82.

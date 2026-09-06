@@ -18,7 +18,7 @@ Keep the operative clause after a recognized polite/local-tool preface.
 ### `is_bare_affirmation` (public)
 
 `is_bare_affirmation(message: str) -> bool`
-Source: [`flyto_ai/intelligence/action_verbs.py:153`](../../../flyto_ai/intelligence/action_verbs.py#L153)
+Source: [`flyto_ai/intelligence/action_verbs.py:157`](../../../flyto_ai/intelligence/action_verbs.py#L157)
 
 Whether this message is agreement and nothing else.
 

@@ -43,6 +43,10 @@ def strip_cjk_request_prefix(message: str) -> str:
 _EN_ACTION_RE = re.compile(
     r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+|"
     r"help\s+me(?:\s+to)?\s+)?"
+    # A bounded computer/tool preface must still end in an actual action verb.
+    # It does not promote explanations, quoted logs, or negated instructions.
+    r"(?:use\s+(?:(?:this|my|the\s+current)\s+computer|"
+    r"(?:the\s+)?(?:available\s+)?local\s+tools)\s+to\s+)?"
     r"(?:open|visit|go\s+to|search(?:\s+for)?|run|execute|click|download|"
     r"upload|create|update|delete|remove|fix|repair|push|deploy|send|"
     r"take\s+(?:a\s+)?screenshot|repeat|rewrite|fetch|find|check|write|"

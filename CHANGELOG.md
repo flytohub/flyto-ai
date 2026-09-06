@@ -9,6 +9,10 @@
 - Treat an already-dead macOS process group consistently on every cleanup
   signal; a live child still prevents successful cleanup.
 
+- Recognize explicit computer-local English file tasks without requiring users
+  to remove their natural "Use this computer to" preface. Permission ceilings
+  and read-only discussion remain unchanged.
+
 ## 2026-09-06
 
 - Added opt-in official Codex and Claude CLI inference for the existing Agent,

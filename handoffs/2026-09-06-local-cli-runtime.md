@@ -14,6 +14,13 @@ No local model was downloaded, no live model was called in this phase, and no
 running user service was changed. Full real-model product acceptance is owned
 by Cloud and must not be inferred from these protocol tests.
 
+Follow-up (2026-09-07): computer-local imperative wording now reaches the
+existing action classifier. This fixes an observed English read/replace/save/
+verify request classified as status-only discovery. A bounded preface grammar
+still requires a following imperative verb; it does not grant permissions or
+promote quotations, explanations, negation or logs. Verification is a focused
+routing and real Agent permission regression, not a model-output substitute.
+
 Follow-up: executable discovery is shared publicly with status checks. PATH
 remains authoritative; only macOS may fall back to the executable in the known
 official ChatGPT app bundle. Explicit commands and non-macOS hosts never use
@@ -22,7 +29,7 @@ that fallback. Five regressions cover these selection boundaries.
 - Owner: codex
 - Branch: codex/local-cli-agent-runtime
 - Base: 6759bf80dac2b02c8ed2fbd2eb35ffd49e0ed011
-- Status: Full SDK suite and CI-aligned combined task validation passed
+- Status: Base CLI full suite passed; selected-model/local extension focused gates passed, full rerun pending
 
 ## Contract and scope
 

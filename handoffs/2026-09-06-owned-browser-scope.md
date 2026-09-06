@@ -8,7 +8,7 @@ Status: Ready for integrated acceptance after local verification
 
 The computer-goal consolidation preserves the nine runtime commits through
 7b27d55d7ad114e0fc6fbf8ebe52fde63d2144b3 and pins the shared CI Core dependency
-to 6bb8d45b6dc5db6d78ca17d517c8629bada63780. That source includes canonical
+to 4a76d3dc7d273fe8a044e2f5aec8ce5e0f8af6bd. That source includes canonical
 conditional MCP validation and its unreleased 2.31.3 metadata correction.
 Cloud must pin this SDK source chain and the same Core source; the published
 SDK 0.20.0 lacks owned browser scopes and trusted continuation. No package or

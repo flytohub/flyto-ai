@@ -1064,6 +1064,9 @@ class Agent:
                 dispatch_wrapper=dispatch_wrapper,
             )
 
+    def _has_inference_credentials(self):
+        return bool(self._config.api_key) or self._config.provider == "ollama"
+
     async def chat(
         self,
         message: str,
@@ -1079,7 +1082,7 @@ class Agent:
             raise RuntimeError("agent is closed")
         t0 = time.monotonic()
 
-        if not self._config.api_key and self._config.provider != "ollama":
+        if not self._has_inference_credentials():
             return ChatResponse(
                 ok=False, message="No API key configured.",
                 session_id=self._session_id, error="no_api_key",

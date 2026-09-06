@@ -4,6 +4,8 @@ Use this index to move from product behavior to exact implementation contracts.
 
 ## Start Here
 
+- [Local CLI inference runtime](local-cli-runtime.md): official Codex/Claude sign-in, host-only actions and reasoning delegation.
+
 - [Architecture map](architecture-map.md): the canonical Flytohub product
   topology (ownership and integration), then this repository's internals.
 - [Feature and package map](FEATURES.md): shipped behavior and source ownership.

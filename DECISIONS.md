@@ -1,5 +1,21 @@
 # Decisions
 
+## 2026-09-06 — Local CLI supplies inference while Agent retains authority
+
+Reuse the existing Agent rather than a second CLI-owned action loop. Official
+Codex and Claude authentication remains local to the selected computer. CLI
+JSON can propose only catalogued host tool names and cannot submit receipts.
+Ordinary chat, admitted continuation, permissions, verified workflows and the
+canonical Core adapter retain their existing contracts. A terminal CLI turn
+is not proof that the original goal is complete; the host still verifies it.
+
+Codex has no execution environment and no active inherited MCP. Claude exposes
+only its non-actuating structured-output formatter. Private process groups
+close on completion, error, timeout and cancellation. Unsupported isolation
+fails closed. Do not replace local sign-in with an injected API credential.
+Rollback removes the host's opt-in CliAgent selection; native API Agent remains
+unchanged except for an equivalent credential predicate hook.
+
 ## 2026-09-06 — Browser ownership follows a complete goal turn
 
 Use an async context to isolate Core browser registries and retry state. The

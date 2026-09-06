@@ -2,6 +2,10 @@
 
 ## 2026-09-06
 
+- Added opt-in official Codex and Claude CLI inference for the existing Agent,
+  with guarded host-only tool execution, structured planning/review, preserved
+  continuation, explicit failures and bounded private process cleanup.
+
 - Refuse unresolved workflow references before direct module side effects;
   resolve explicit data bindings through Core and keep diagnostics secret-free.
 

@@ -12,22 +12,22 @@ Inventory: **25 declared symbols** and **39 class methods**.
 
 `class CliAgent(Agent)`
 
-Source: [`flyto_ai/cli_runtime/__init__.py:31`](../../../flyto_ai/cli_runtime/__init__.py#L31)
+Source: [`flyto_ai/cli_runtime/__init__.py:32`](../../../flyto_ai/cli_runtime/__init__.py#L32)
 
 Same admission, continuation and tool dispatch; selected CLI inference.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(config, *, cli: CliRuntimeConfig, tool_executor = None, system_prompt = None, policies = None, completion_fn = None, **agent_options)` | internal | Internal `__init__` implementation on `CliAgent`; the linked source is authoritative. | [`flyto_ai/cli_runtime/__init__.py:34`](../../../flyto_ai/cli_runtime/__init__.py#L34) |
-| `_has_inference_credentials()` | internal | Internal `_has_inference_credentials` implementation on `CliAgent`; the linked source is authoritative. | [`flyto_ai/cli_runtime/__init__.py:60`](../../../flyto_ai/cli_runtime/__init__.py#L60) |
-| `async chat(*args, **kwargs)` | public | Execute a provider-backed chat turn through `CliAgent`. | [`flyto_ai/cli_runtime/__init__.py:63`](../../../flyto_ai/cli_runtime/__init__.py#L63) |
-| `async continue_execution(*args, **kwargs)` | public | Public `continue_execution` implementation on `CliAgent`; the linked source is authoritative. | [`flyto_ai/cli_runtime/__init__.py:79`](../../../flyto_ai/cli_runtime/__init__.py#L79) |
-| `async close()` | public | Release resources owned by `CliAgent`. | [`flyto_ai/cli_runtime/__init__.py:86`](../../../flyto_ai/cli_runtime/__init__.py#L86) |
+| `__init__(config, *, cli: CliRuntimeConfig, tool_executor = None, system_prompt = None, policies = None, completion_fn = None, **agent_options)` | internal | Internal `__init__` implementation on `CliAgent`; the linked source is authoritative. | [`flyto_ai/cli_runtime/__init__.py:35`](../../../flyto_ai/cli_runtime/__init__.py#L35) |
+| `_has_inference_credentials()` | internal | Internal `_has_inference_credentials` implementation on `CliAgent`; the linked source is authoritative. | [`flyto_ai/cli_runtime/__init__.py:61`](../../../flyto_ai/cli_runtime/__init__.py#L61) |
+| `async chat(*args, **kwargs)` | public | Execute a provider-backed chat turn through `CliAgent`. | [`flyto_ai/cli_runtime/__init__.py:64`](../../../flyto_ai/cli_runtime/__init__.py#L64) |
+| `async continue_execution(*args, **kwargs)` | public | Public `continue_execution` implementation on `CliAgent`; the linked source is authoritative. | [`flyto_ai/cli_runtime/__init__.py:81`](../../../flyto_ai/cli_runtime/__init__.py#L81) |
+| `async close()` | public | Release resources owned by `CliAgent`. | [`flyto_ai/cli_runtime/__init__.py:89`](../../../flyto_ai/cli_runtime/__init__.py#L89) |
 
 ### `complete_json` (public)
 
 `async complete_json(cli: CliRuntimeConfig, *, prompt: str, schema: dict, system_prompt: str = '') -> str`
-Source: [`flyto_ai/cli_runtime/__init__.py:93`](../../../flyto_ai/cli_runtime/__init__.py#L93)
+Source: [`flyto_ai/cli_runtime/__init__.py:96`](../../../flyto_ai/cli_runtime/__init__.py#L96)
 
 One fresh, tool-free structured review/plan; host validates its meaning.
 

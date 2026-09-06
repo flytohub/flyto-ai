@@ -21,6 +21,7 @@ from flyto_ai.closed_loop_v3 import (
 from flyto_ai.config import AgentConfig
 from flyto_ai.execute_mode_honesty import guard_narrated_execution, nudge_discovery_only_reply, runnable_tool_names
 from flyto_ai.intelligence.confirmation import ToolIntentDecision, classify_tool_intent, route_with_confirmation
+from flyto_ai.intelligence.execution_continuation import guard_chat_turn
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
@@ -1048,12 +1049,9 @@ class Agent:
         on_tool_call=None, on_stream: Optional[StreamCallback] = None,
         dispatch_wrapper=None,
     ) -> ChatResponse:
-        """Let the trusted host repair this Agent's previously admitted goal.
-
-        The original goal must match exactly and execution policy must remain
-        unchanged. This is not exposed as a model tool or inferred from prose.
-        An ordinary new chat replaces the admission. Current permission and
-        module guards still run for every continuation call.
+        """Continue this Agent's exact goal under its unchanged execution policy.
+        This host entry is not exposed as a tool or inferred from prose.
+        Ordinary chat replaces admission; every call retains all tool guards.
         """
         from flyto_ai.intelligence.execution_continuation import continuation_scope
 
@@ -1064,9 +1062,15 @@ class Agent:
                 dispatch_wrapper=dispatch_wrapper,
             )
 
+    async def start_execution(self, goal: str, **chat_options) -> ChatResponse:
+        """Start one host-authorized goal with this Agent's current tool policy."""
+        from flyto_ai.intelligence.execution_continuation import start_execution
+        return await start_execution(self, goal, **chat_options)
+
     def _has_inference_credentials(self):
         return bool(self._config.api_key) or self._config.provider == "ollama"
 
+    @guard_chat_turn
     async def chat(
         self,
         message: str,

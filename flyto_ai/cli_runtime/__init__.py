@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from flyto_ai.agent import Agent
 from flyto_ai.models import UsageStats
+from flyto_ai.intelligence.execution_continuation import check_chat_available
 
 from .contracts import CliRuntimeConfig, CliRuntimeError, cli_environment, encode_json
 from .process import (
@@ -61,6 +62,7 @@ class CliAgent(Agent):
         return True  # Official CLI owns authentication; no key is fabricated.
 
     async def chat(self, *args, **kwargs):
+        check_chat_available(self)
         self.cli_runtime.reset()
         result = await super().chat(*args, **kwargs)
         runner = self.cli_runtime.runner
@@ -77,6 +79,7 @@ class CliAgent(Agent):
         return result.model_copy(update=updates)
 
     async def continue_execution(self, *args, **kwargs):
+        check_chat_available(self)
         self.cli_runtime.continuation = True
         try:
             return await super().continue_execution(*args, **kwargs)

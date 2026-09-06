@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import wraps
 from typing import Dict, List
 
 from flyto_ai.permissions import PermissionLevel
@@ -15,6 +16,7 @@ from flyto_ai.intelligence.confirmation import (
 )
 
 _ACTIVE = ContextVar("flyto_execution_continuation", default=None)
+_STARTING = ContextVar("flyto_execution_start", default=None)
 
 
 @dataclass(frozen=True)
@@ -24,12 +26,87 @@ class ExecutionAdmission:
     policy: object
 
 
+@dataclass
+class _HostStart:
+    agent: object
+    task: object
+    goal_sha256: str
+    policy: object
+    claimed: bool = False
+    consumed: bool = False
+
+
 def _policy(agent):
     enforcer = agent._permission_enforcer
     return (
         enforcer.level, enforcer._overrides, enforcer.workspace_root,
         agent._policies, agent._tools,
     )
+
+
+def check_chat_available(agent):
+    """Reject interleaving before a facade resets transport or awaits preparation."""
+    if getattr(agent, "_chat_active_task", None) is not None:
+        if getattr(agent, "_continuation_active", False):
+            raise RuntimeError("This Agent is already continuing an execution")
+        raise RuntimeError("This Agent already has an active chat turn")
+    if getattr(agent, "_execution_start_active", False):
+        start = _STARTING.get()
+        if start is None or start.agent is not agent or start.task is not asyncio.current_task() or start.claimed:
+            raise RuntimeError("This Agent is already starting an execution")
+    if getattr(agent, "_continuation_active", False):
+        active = _ACTIVE.get()
+        if active is None or active[0] is not agent or active[2] is not asyncio.current_task():
+            raise RuntimeError("This Agent is already continuing an execution")
+
+
+def guard_chat_turn(chat):
+    """Give one native chat ownership before its first await, including subclasses."""
+    @wraps(chat)
+    async def guarded(agent, *args, **kwargs):
+        check_chat_available(agent)
+        start = _STARTING.get()
+        if getattr(agent, "_execution_start_active", False):
+            message = kwargs.get("message", args[0] if args else None)
+            mode = kwargs.get("mode", args[3] if len(args) > 3 else "execute")
+            if not isinstance(message, str) or hashlib.sha256(message.encode()).hexdigest() != start.goal_sha256 or mode != "execute":
+                raise PermissionError("The host execution goal does not match its chat turn")
+            start.claimed = True
+        agent._chat_active_task = asyncio.current_task()
+        try:
+            return await chat(agent, *args, **kwargs)
+        finally:
+            agent._chat_active_task = None
+    return guarded
+
+
+async def start_execution(agent, goal, **chat_options):
+    """Start a Python-host-authorized task without treating it as conversation.
+
+    Only the host selects this method. No tool, HTTP flag or prompt text can
+    enter its scope; it grants no tool permissions beyond the captured policy.
+    """
+    allowed = {"history", "template_context", "on_tool_call", "on_stream", "dispatch_wrapper"}
+    if set(chat_options) - allowed:
+        raise TypeError("Unsupported host execution chat option")
+    if not isinstance(goal, str) or not goal.strip():
+        raise ValueError("A host execution requires a nonempty goal")
+    if getattr(agent, "_closed", False):
+        raise RuntimeError("agent is closed")
+    if any(getattr(agent, name, False) for name in ("_chat_active_task", "_execution_start_active", "_continuation_active")):
+        raise RuntimeError("This Agent already has an active execution")
+    start = _HostStart(agent, asyncio.current_task(), hashlib.sha256(goal.encode()).hexdigest(), deepcopy(_policy(agent)))
+    agent._execution_admission = agent._execution_assisted_dispatch = None
+    agent._execution_start_active = True
+    token = _STARTING.set(start)
+    try:
+        return await agent.chat(message=goal, mode="execute", **chat_options)
+    except BaseException:
+        agent._execution_admission = agent._execution_assisted_dispatch = None
+        raise
+    finally:
+        _STARTING.reset(token)
+        agent._execution_start_active = False
 
 
 def route_chat(agent, message, history, mode):
@@ -46,10 +123,19 @@ def route_chat(agent, message, history, mode):
         return admission.decision
     if getattr(agent, "_continuation_active", False):
         raise RuntimeError("This Agent is already continuing an execution")
-    decision = (
-        route_with_confirmation(message, history) if mode == "execute"
-        else ToolIntentDecision("action", 1.0, "explicit_non_execute_mode", (mode,))
-    )
+    if getattr(agent, "_execution_start_active", False):
+        start = _STARTING.get()
+        if start is None or start.agent is not agent or start.task is not asyncio.current_task() or not start.claimed or start.consumed:
+            raise PermissionError("Host execution admission is unavailable outside its start call")
+        if start.policy != _policy(agent):
+            raise PermissionError("Execution policy changed during host task preparation")
+        start.consumed = True
+        decision = ToolIntentDecision("action", 1.0, "host_admitted_goal", ("typed_task",))
+    else:
+        decision = (
+            route_with_confirmation(message, history) if mode == "execute"
+            else ToolIntentDecision("action", 1.0, "explicit_non_execute_mode", (mode,))
+        )
     agent._execution_admission = (
         ExecutionAdmission(
             hashlib.sha256(message.encode()).hexdigest(), decision, deepcopy(_policy(agent)),
@@ -83,6 +169,10 @@ def continuation_scope(agent, goal):
     admission = getattr(agent, "_execution_admission", None)
     if getattr(agent, "_closed", False):
         raise RuntimeError("agent is closed")
+    if getattr(agent, "_continuation_active", False):
+        raise RuntimeError("This Agent is already continuing an execution")
+    if getattr(agent, "_chat_active_task", None) is not None or getattr(agent, "_execution_start_active", False):
+        raise RuntimeError("This Agent already has an active execution")
     if (
         not isinstance(admission, ExecutionAdmission) or not isinstance(goal, str)
         or admission.goal_sha256 != hashlib.sha256(goal.encode()).hexdigest()
@@ -90,8 +180,6 @@ def continuation_scope(agent, goal):
         raise PermissionError("No matching action admission exists on this Agent")
     if admission.policy != _policy(agent):
         raise PermissionError("Execution policy changed; a new action admission is required")
-    if getattr(agent, "_continuation_active", False):
-        raise RuntimeError("This Agent is already continuing an execution")
     agent._continuation_active = True
     token = _ACTIVE.set((agent, admission, asyncio.current_task()))
     try:

@@ -2,6 +2,13 @@
 
 ## 2026-09-07
 
+- Added Python-host `Agent.start_execution` for already-authorized computer
+  tasks, retaining exact-goal continuation and current tool permissions. Normal
+  chat still classifies conversation before exposing actions. A per-Agent turn
+  guard refuses interleaving before transport reset or asynchronous preparation.
+  Rollback requires restoring the Cloud TASK caller together with this SDK;
+  missing host-start support must refuse execution rather than fall back to chat.
+
 - Added dynamic official Codex model discovery and manual CLI model selection
   without hardcoded catalogs or false GPT-4o metadata for external defaults.
 - Added explicit loopback Ollama/OpenAI-compatible inference with host-only

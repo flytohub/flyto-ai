@@ -1,6 +1,127 @@
 # State
 
-Last updated: 2026-09-01
+## Selected CLI models and computer-local inference (2026-09-07)
+
+CLI model selection is passed verbatim, with Codex's official dynamic metadata
+catalog and manual entry when no official catalog is available. External
+default model metadata no longer inherits GPT-4o. The new LocalModelAgent keeps
+native Agent permissions and observations while using explicit loopback-only
+Ollama/compatible async HTTP, exact model selection and actual image bytes.
+Schema, model, timeout and cancellation failures remain explicit. Delegated
+reasoning creates no local HTTP client in Cloud. Local protocol fixtures do not
+claim production acceptance with a downloaded or real local model.
+
+Runtime source `2b3abdf84c207ed69202af08a5e2f0379261d3e7` passed the complete
+SDK suite in an isolated installed environment: 4476 passed, 17 skipped in
+323.25 seconds with deprecation/thread warnings treated as errors. Integrated
+focused checks passed 326 cases, the CI Core MCP cohort passed 109, strict
+Indexer passed 18/18, and distribution builds passed. Official Codex model/list
+returned seven current models without starting a thread or a model turn.
+
+## Explicit local-computer requests (2026-09-07)
+
+The bounded English preface "Use this computer to" now reaches the existing
+action-verb classifier instead of treating data such as "Invoice status" as
+a status query. It still requires a following action verb; explanations,
+quotations, negation and host permission ceilings are unchanged. Tests also
+retain Traditional Chinese read/modify/save/verify admission.
+
+## Reproducible SDK lint (2026-09-07)
+
+The project now explicitly selects the existing CI Ruff rules E9,F63,F7,F82.
+This removes drift from Ruff's expanded upstream defaults; CI's selection and
+runtime code are unchanged. The SDK CLI implementation full suite passed on
+macOS/Python 3.12: 4403 passed and 17 skipped. Official model-driven product
+goals remain Cloud acceptance, separate from SDK protocol and host-loop tests.
+
+## Host-controlled CLI inference (2026-09-06)
+
+`flyto_ai.cli_runtime.CliAgent` substitutes official local CLI inference inside
+native Agent admission, policy, continuation and host tool dispatch. The CLI
+returns bounded JSON intents; it never owns a Core tool or execution receipt.
+Codex uses an ephemeral app-server thread with no execution environments,
+no dynamic tools and every inherited MCP disabled before a model turn. Claude
+uses its official no-tools, safe-mode and strict-empty-MCP options. Local
+sign-in stays with each CLI; API keys and injected tokens are not inherited.
+Tool-less `complete_json` supports independent planning and review. Hosts can
+supply a trusted delegated completion function for reasoning on another
+computer; delegated inference never probes or launches a CLI in Cloud.
+See [the runtime contract](docs/local-cli-runtime.md) for limits and verification.
+
+Last updated: 2026-09-07
+
+## Workspace file operation permissions (2026-09-06)
+
+Exact file.read/file.write calls with literal paths contained in the session's
+captured working directory use WORKSPACE_WRITE. READ_ONLY still exposes only
+discovery. Other file operations, environment/shell access, unresolved paths and
+canonical paths outside that root retain their existing danger requirement.
+The root is part of continuation admission. Core's schema and environment path
+sandbox remain authoritative and can impose a narrower bound at execution.
+
+## Natural Chinese local action admission (2026-09-06)
+
+A recognized polite, computer-location or local-tool preface is normalized
+before the existing intent checks. The remaining clause still needs an action
+verb; a preface alone never authorizes execution. File read/replace/save goals
+no longer become discovery-only because an embedded data value contains status.
+Negation, explanation, quotation and the current tool permission policy remain
+authoritative, including after normalization. Real UI acceptance remains a
+separate check from the deterministic routing regression suite.
+
+## Browser state survives goal repair (2026-09-06)
+
+Trusted continuation reuses the admitted middleware closure, retaining its
+first-call preparation, snapshot observations, retry counters and current URL.
+A fresh ordinary chat starts new preparation. Blueprint guidance is explicitly
+nonexecuted and cannot count as a successful requested module operation.
+Custom host prompts include only the current owned browser scope's live status,
+including how to reuse its sole browser without stale/redacted session IDs.
+
+## Admitted goal continuation (2026-09-06)
+
+Trusted hosts continue a goal with `Agent.continue_execution(message=repair,
+goal=original_goal)`. This preserves the same Agent's admitted action routing
+instead of classifying generated review data as a new discovery-only request.
+An exact original-goal digest and unchanged tool/permission policy are required.
+Ordinary chat replaces the admission; cross-Agent, cancelled-context background
+work and missing admissions cannot acquire execution authority from prose.
+
+## Private application audit metadata (2026-09-06)
+
+Default chat audit logs, audit JSONL and in-memory audit history store the full
+goal's digest and length, usage, counts and operation status without task text,
+tool arguments, result previews or exception messages. Provider application
+logs identify the called tool and round without input values. Authorized owner
+chat evidence and the actual model/tool dispatch remain separate and unchanged.
+
+## Recoverable module validation (2026-09-06)
+
+Invalid arguments do not count as executed failures. The retry breaker limits
+repetition of the same parameter fingerprint while corrected calls stay usable.
+Core status=success without an ok or data field is no longer counted as failed
+or empty. Explicit failed actions and empty data retain their bounded breaker.
+Validation errors carry the actual module params_schema for correction, and a
+successful Core snapshot is observed before interaction.
+
+## Ad-hoc parameter references (2026-09-06)
+
+Direct module execution resolves references with Core only when an explicit JSON
+context supplies their roots. Unresolved bindings return a recoverable error
+before any action, including before browser relaunch cleanup. No ambient env
+secret lookup is granted to the model. Literal authorized values and runtime
+handles retain their existing path; no credential is inferred from user prose.
+
+## Owned browser execution scopes (2026-09-06)
+
+- Cloud can enclose a complete goal turn in an async browser scope. Each scope
+  has isolated session and retry state and closes only its owned Core sessions.
+- Terminal cleanup is bounded, cancellation-resistant, and reports acknowledged
+  session IDs. A failed close is an explicit failure; inherited background work
+  cannot launch a browser after closing starts.
+- Unscoped SDK callers retain their existing adapter contract. Coding lanes,
+  outbound permissions, module validation, and product topology are unchanged.
+- Validation and limitations: see `handoffs/2026-09-06-owned-browser-scope.md`.
 
 ## Cardinality-independent coding receipt reads (2026-09-01)
 

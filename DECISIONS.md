@@ -1,5 +1,45 @@
 # Decisions
 
+## 2026-09-07 — Selected local models supply inference, never action authority
+
+Reuse the CLI runtime's guarded JSON-intent loop for explicitly selected local
+Ollama or OpenAI-compatible models. The host retains Agent admission, Core
+permissions, observations, continuation, browser ownership and independent goal
+verification. The HTTP adapter accepts literal loopback only, ignores ambient
+credentials/proxies and closes requests on cancellation. Native provider tool
+calls, output/schema errors and model changes cannot count as completion.
+
+Do not hardcode a current CLI model list: read Codex's official model/list RPC
+without starting inference and offer manual model entry where no official
+catalog exists. Empty external model metadata stays unknown/provider-default,
+never an OpenAI model fallback. Rollback removes opt-in adapter selection;
+product ownership and existing native API authentication remain unchanged.
+
+## 2026-09-06 — Local CLI supplies inference while Agent retains authority
+
+Reuse the existing Agent rather than a second CLI-owned action loop. Official
+Codex and Claude authentication remains local to the selected computer. CLI
+JSON can propose only catalogued host tool names and cannot submit receipts.
+Ordinary chat, admitted continuation, permissions, verified workflows and the
+canonical Core adapter retain their existing contracts. A terminal CLI turn
+is not proof that the original goal is complete; the host still verifies it.
+
+Codex has no execution environment and no active inherited MCP. Claude exposes
+only its non-actuating structured-output formatter. Private process groups
+close on completion, error, timeout and cancellation. Unsupported isolation
+fails closed. Do not replace local sign-in with an injected API credential.
+Rollback removes the host's opt-in CliAgent selection; native API Agent remains
+unchanged except for an equivalent credential predicate hook.
+
+## 2026-09-06 — Browser ownership follows a complete goal turn
+
+Use an async context to isolate Core browser registries and retry state. The
+host owns the scope; a model cannot select another caller's registry. Leave
+verified observations in the response, but confirm actual `browser.close`
+operations before reporting resource cleanup. Never clear a global registry as
+a substitute for closing resources. Preserve the legacy unscoped API during
+Cloud adoption. Revert the Cloud adoption together with this SDK change.
+
 ## 2026-09-01 — Validation-only recovery binds planned dirty bytes without churn
 
 Decision: a strict fresh job with `require_changes=false` may carry an existing

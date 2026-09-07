@@ -652,7 +652,8 @@ class TestDispatchWrapper:
 
         # We can't easily run a full chat without an LLM, but we can verify
         # the wrapper parameter is accepted
-        assert "dispatch_wrapper" in Agent.chat.__code__.co_varnames
+        from inspect import signature
+        assert "dispatch_wrapper" in signature(Agent.chat).parameters
 
 
 # ===================================================================

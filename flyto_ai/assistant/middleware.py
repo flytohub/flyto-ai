@@ -27,6 +27,12 @@ from flyto_ai.assistant.safety import CircuitBreaker, BoundedHistory, mask_sensi
 logger = logging.getLogger(__name__)
 
 
+def _result_ok(result):
+    if not isinstance(result, dict):
+        return False
+    return result["ok"] if isinstance(result.get("ok"), bool) else result.get("status") == "success"
+
+
 def _url_to_context_key(url: str) -> str:
     """Derive a vault context_key from a URL.
 
@@ -237,8 +243,12 @@ class AssistantMiddleware:
             "module_id": "browser.snapshot",
             "params": {},
         })
-        if snap_result.get("ok", False):
+        if _result_ok(snap_result):
             snap_guard.record_snapshot(snap_result)
+            # This observation replaced the requested interaction; it must not
+            # become an execution receipt claiming that interaction succeeded.
+            snap_result = {**snap_result, "ok": False, "status": "observation_required",
+                           "action_executed": False}
             snap_result["_auto_snapshot"] = True
             snap_result["message"] = (
                 "AUTO-SNAPSHOT: You tried to interact without seeing the page first. "
@@ -299,8 +309,9 @@ class AssistantMiddleware:
         if func_name != "execute_module" or not isinstance(func_args, dict):
             return None
         mid = func_args.get("module_id", "")
-        if breaker.is_tripped(mid):
-            return {"ok": False, "error": breaker.get_message(mid)}
+        params = func_args.get("params")
+        if breaker.is_tripped(mid, params):
+            return {"ok": False, "error": breaker.get_message(mid, params)}
         return None
 
     async def _on_result(
@@ -320,7 +331,7 @@ class AssistantMiddleware:
         # Track execution results + circuit breaker
         if func_name == "execute_module" and isinstance(result, dict):
             mid = func_args.get("module_id", "") if isinstance(func_args, dict) else ""
-            breaker.record_result(mid, result.get("ok", False), result)
+            breaker.record_result(mid, _result_ok(result), result, func_args.get("params"))
             history.append(result)
             if self._output_tracker:
                 self._output_tracker.on_tool_call(func_name, func_args, result)

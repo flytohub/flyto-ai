@@ -1,5 +1,29 @@
 # Architecture Map
 
+## Selected local inference boundary (2026-09-07)
+
+Native Agent authority -> validated JSON intent -> guarded host Core dispatch
+remains the execution path for API, official CLI and explicit local models.
+`local_runtime` only connects to the selected loopback Ollama/compatible service
+and supplies actual observed image bytes with inference. It owns cancellable
+HTTP and JSON-schema validation, not receipts or task completion. Delegated
+reasoning in Cloud opens no local endpoint. Source/computer ownership and final
+goal review remain in Cloud; the product topology below is unchanged.
+
+## Host-controlled CLI inference (2026-09-06)
+
+`flyto_ai.cli_runtime.CliAgent` substitutes official local CLI inference inside
+native Agent admission, policy, continuation and host tool dispatch. The CLI
+returns bounded JSON intents; it never owns a Core tool or execution receipt.
+Codex uses an ephemeral app-server thread with no execution environments,
+no dynamic tools and every inherited MCP disabled before a model turn. Claude
+uses its official no-tools, safe-mode and strict-empty-MCP options. Local
+sign-in stays with each CLI; API keys and injected tokens are not inherited.
+Tool-less `complete_json` supports independent planning and review. Hosts can
+supply a trusted delegated completion function for reasoning on another
+computer; delegated inference never probes or launches a CLI in Cloud.
+See [the runtime contract](local-cli-runtime.md) for limits and verification.
+
 ## Canonical Flytohub product topology
 
 Durable product and ownership map for the whole Flytohub line. It records who

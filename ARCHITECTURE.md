@@ -1,5 +1,45 @@
 # Architecture
 
+## Explicit computer-local inference (2026-09-07)
+
+`local_runtime.LocalModelAgent` shares the existing native Agent and guarded
+JSON-intent transport with `cli_runtime.CliAgent`. The selected local model
+supplies decisions through bounded asynchronous loopback HTTP; it does not own
+tools, workflows, receipts or goal verification. Actual image attachments stay
+with observed host results. Native provider tool calls are rejected. Delegated
+reasoning callbacks create neither a CLI process nor a local HTTP connection
+in Cloud. Cloud remains responsible for authenticated source/computer binding.
+
+Codex model metadata is read through official model/list without a model turn.
+Other CLI sources support manual model IDs without a hardcoded model catalog.
+This changes an opt-in inference boundary, not the canonical product topology.
+
+## Host-controlled CLI inference (2026-09-06)
+
+`flyto_ai.cli_runtime.CliAgent` substitutes official local CLI inference inside
+native Agent admission, policy, continuation and host tool dispatch. The CLI
+returns bounded JSON intents; it never owns a Core tool or execution receipt.
+Codex uses an ephemeral app-server thread with no execution environments,
+no dynamic tools and every inherited MCP disabled before a model turn. Claude
+uses its official no-tools, safe-mode and strict-empty-MCP options. Local
+sign-in stays with each CLI; API keys and injected tokens are not inherited.
+Tool-less `complete_json` supports independent planning and review. Hosts can
+supply a trusted delegated completion function for reasoning on another
+computer; delegated inference never probes or launches a CLI in Cloud.
+See [the runtime contract](docs/local-cli-runtime.md) for limits and verification.
+
+## Owned browser execution scopes
+
+Callers serving concurrent computer tasks enter
+`flyto_ai.tools.browser_scope.browser_session_scope(owner_id)` around the
+complete actor/reviewer turn. A ContextVar selects that caller's browser
+registry and retry state inside the canonical Core adapter. The model cannot
+select another scope. Browser relaunch and recipes receive only this registry;
+scope exit closes its owned sessions through the adapter on success, error,
+or cancellation. Cleanup is bounded and failure is explicit. Unscoped callers
+retain the legacy SDK API. This does not change product ownership or coding
+route authority.
+
 ## Canonical Flytohub product topology
 
 This is the durable product and ownership map for the whole Flytohub line. It

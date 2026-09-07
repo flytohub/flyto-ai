@@ -21,6 +21,7 @@ from flyto_ai.closed_loop_v3 import (
 from flyto_ai.config import AgentConfig
 from flyto_ai.execute_mode_honesty import guard_narrated_execution, nudge_discovery_only_reply, runnable_tool_names
 from flyto_ai.intelligence.confirmation import ToolIntentDecision, classify_tool_intent, route_with_confirmation
+from flyto_ai.intelligence.execution_continuation import guard_chat_turn
 from flyto_ai.models import ChatResponse, StreamCallback, StreamEvent, StreamEventType, UsageStats
 from flyto_ai.permissions import PermissionEnforcer, PermissionLevel
 from flyto_ai.prompt.policies import is_module_allowed, is_tool_allowed
@@ -832,7 +833,9 @@ class Agent:
 
         # Wrap with assistant middleware (blueprint guard + selector healing)
         if self._assistant and base_dispatch:
-            assisted_dispatch = self._assistant.wrap(base_dispatch, user_message)
+            from flyto_ai.intelligence.execution_continuation import assisted_dispatch as prepare_dispatch
+
+            assisted_dispatch = prepare_dispatch(self, base_dispatch, user_message)
         else:
             assisted_dispatch = base_dispatch
 
@@ -1039,6 +1042,35 @@ class Agent:
 
     # ── Chat ──────────────────────────────────────────────────────
 
+    async def continue_execution(
+        self, message: str, *, goal: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        template_context: Optional[Dict[str, Any]] = None,
+        on_tool_call=None, on_stream: Optional[StreamCallback] = None,
+        dispatch_wrapper=None,
+    ) -> ChatResponse:
+        """Continue this Agent's exact goal under its unchanged execution policy.
+        This host entry is not exposed as a tool or inferred from prose.
+        Ordinary chat replaces admission; every call retains all tool guards.
+        """
+        from flyto_ai.intelligence.execution_continuation import continuation_scope
+
+        with continuation_scope(self, goal):
+            return await self.chat(
+                message=message, history=history, template_context=template_context,
+                mode="execute", on_tool_call=on_tool_call, on_stream=on_stream,
+                dispatch_wrapper=dispatch_wrapper,
+            )
+
+    async def start_execution(self, goal: str, **chat_options) -> ChatResponse:
+        """Start one host-authorized goal with this Agent's current tool policy."""
+        from flyto_ai.intelligence.execution_continuation import start_execution
+        return await start_execution(self, goal, **chat_options)
+
+    def _has_inference_credentials(self):
+        return bool(self._config.api_key) or self._config.provider == "ollama"
+
+    @guard_chat_turn
     async def chat(
         self,
         message: str,
@@ -1054,7 +1086,7 @@ class Agent:
             raise RuntimeError("agent is closed")
         t0 = time.monotonic()
 
-        if not self._config.api_key and self._config.provider != "ollama":
+        if not self._has_inference_credentials():
             return ChatResponse(
                 ok=False, message="No API key configured.",
                 session_id=self._session_id, error="no_api_key",
@@ -1068,13 +1100,9 @@ class Agent:
 
         await self._init_memory()
 
-        routing_decision = (
-            route_with_confirmation(message, history)
-            if mode == "execute"
-            else ToolIntentDecision(
-                "action", 1.0, "explicit_non_execute_mode", (mode,),
-            )
-        )
+        from flyto_ai.intelligence.execution_continuation import route_chat
+
+        routing_decision = route_chat(self, message, history, mode)
         self._record_routing_decision(routing_decision)
 
         # ── Deterministic pipeline (try before LLM) ──
@@ -1233,32 +1261,15 @@ class Agent:
     # ── Chat phase helpers ────────────────────────────────────────
 
     def _ensure_routing_state(self) -> None:
-        """Support lightweight test agents created without ``__init__``."""
-        if not hasattr(self, "_preferred_language"):
-            self._preferred_language = None
-        if not hasattr(self, "_last_routing_decision"):
-            self._last_routing_decision = None
-        if not hasattr(self, "_routing_metrics"):
-            self._routing_metrics = {
-                "turns": 0,
-                "answer_only_turns": 0,
-                "ambiguous_turns": 0,
-                "action_turns": 0,
-                "tool_calls_attempted": 0,
-                "tool_calls_executed": 0,
-                "tool_calls_blocked": 0,
-            }
+        from flyto_ai.intelligence.execution_continuation import ensure_routing_state
+        return ensure_routing_state(self)
 
     def _record_routing_decision(
         self,
         decision: ToolIntentDecision,
     ) -> None:
-        self._ensure_routing_state()
-        self._last_routing_decision = decision
-        self._routing_metrics["turns"] += 1
-        key = "{}_turns".format(decision.mode)
-        if key in self._routing_metrics:
-            self._routing_metrics[key] += 1
+        from flyto_ai.intelligence.execution_continuation import record_routing_decision
+        return record_routing_decision(self, decision)
 
     @staticmethod
     def _tool_name(tool: Dict[str, Any]) -> str:
@@ -1275,23 +1286,8 @@ class Agent:
         decision: ToolIntentDecision,
         mode: str,
     ) -> List[Dict]:
-        """Expose the smallest schema set justified by this turn."""
-        tools = list(self._tools or [])
-        if mode != "execute":
-            return tools
-        if decision.mode == "answer_only":
-            return []
-
-        enforcer = self._permission_enforcer
-        maximum = (
-            PermissionLevel.READ_ONLY
-            if decision.mode == "ambiguous"
-            else enforcer.level
-        )
-        return [
-            tool for tool in tools
-            if enforcer.required_level(self._tool_name(tool), {}) <= maximum
-        ]
+        from flyto_ai.intelligence.execution_continuation import tools_for_route
+        return tools_for_route(self, decision, mode)
 
     def _resolve_reply_language(
         self,
@@ -1390,7 +1386,13 @@ class Agent:
             (system_prompt, has_blueprint_match)
         """
         if self._system_prompt:
-            return self._system_prompt, False
+            from flyto_ai.tools.browser_scope import current_browser_scope
+            from flyto_ai.tools.core_tools import get_browser_status
+
+            # Custom host prompts must still receive this goal's live state.
+            # Legacy/global sessions are not authority for a scoped host prompt.
+            browser_hint = get_browser_status() if current_browser_scope() is not None else ""
+            return "\n\n".join(part for part in (self._system_prompt, browser_hint) if part), False
 
         reply_language = self._resolve_reply_language(message, history)
 
@@ -1648,7 +1650,7 @@ class Agent:
                 else self._config.resolved_model
             )
             ChatAuditEntry(
-                user_message=user_message[:200], provider=self._config.provider or "openai",
+                user_message=user_message, provider=self._config.provider or "openai",
                 model=routed_model, mode=mode,
                 tool_calls_count=len(tool_calls), execution_count=len(execution_results),
                 duration_ms=duration_ms, prompt_tokens=usage.get("prompt_tokens", 0),

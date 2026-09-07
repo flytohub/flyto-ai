@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-09-07
+
+- Added Python-host `Agent.start_execution` for already-authorized computer
+  tasks, retaining exact-goal continuation and current tool permissions. Normal
+  chat still classifies conversation before exposing actions. A per-Agent turn
+  guard refuses interleaving before transport reset or asynchronous preparation.
+  Rollback requires restoring the Cloud TASK caller together with this SDK;
+  missing host-start support must refuse execution rather than fall back to chat.
+
+- Added dynamic official Codex model discovery and manual CLI model selection
+  without hardcoded catalogs or false GPT-4o metadata for external defaults.
+- Added explicit loopback Ollama/OpenAI-compatible inference with host-only
+  actions, actual image attachments, schema validation and cancellable HTTP.
+- Treat an already-dead macOS process group consistently on every cleanup
+  signal; a live child still prevents successful cleanup.
+
+- Recognize explicit computer-local English file tasks without requiring users
+  to remove their natural "Use this computer to" preface. Permission ceilings
+  and read-only discussion remain unchanged.
+
+## 2026-09-06
+
+- Added opt-in official Codex and Claude CLI inference for the existing Agent,
+  with guarded host-only tool execution, structured planning/review, preserved
+  continuation, explicit failures and bounded private process cleanup.
+
+- Refuse unresolved workflow references before direct module side effects;
+  resolve explicit data bindings through Core and keep diagnostics secret-free.
+
+- Added caller-owned browser scopes with concurrent isolation and acknowledged,
+  bounded cleanup on success, failure, and cancellation.
+
 ## 0.20.0
 
 ### Fixed

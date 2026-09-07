@@ -132,11 +132,14 @@ class TestDispatchAndLogTool:
         assert isinstance(end_event.tool_result, dict)
 
     @pytest.mark.asyncio
-    async def test_dispatch_redacts_sensitive_args(self, caplog):
-        """Sensitive keys like 'password' should be redacted in log output."""
+    async def test_dispatch_logs_metadata_without_sensitive_arguments(self, caplog):
+        """Default logs retain operation identity; only dispatch receives inputs."""
         from flyto_ai.providers.base import dispatch_and_log_tool
 
+        received = []
+
         async def noop(name, args):
+            received.append((name, dict(args)))
             return {"ok": True}
 
         with caplog.at_level(logging.INFO, logger="flyto_ai.providers.base"):
@@ -144,10 +147,11 @@ class TestDispatchAndLogTool:
                 "login", {"username": "admin", "password": "s3cret"}, noop, round_num=0,
             )
 
-        # The log line should contain "***" for password, not "s3cret"
         log_text = " ".join(r.message for r in caplog.records)
-        assert "s3cret" not in log_text
-        assert "***" in log_text
+        assert "Tool call [1]: login" in log_text
+        for private_input in ("username", "admin", "password", "s3cret"):
+            assert private_input not in log_text
+        assert received == [("login", {"username": "admin", "password": "s3cret"})]
 
 
 # =========================================================================

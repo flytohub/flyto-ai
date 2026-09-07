@@ -2,6 +2,14 @@
 
 ## 2026-09-07
 
+- Fixed: the CLI slice deadline bounds inference, not the host's work. A goal
+  whose tools take longer than `timeout_seconds` -- a login waiting on a
+  one-time code, a page that answers in forty seconds -- ended as `cli_timeout`
+  after those side effects had already happened. Time spent inside the host's
+  guarded dispatcher is now given back to the deadline; a CLI that only thinks
+  past its budget still times out. The task's own time budget is unchanged and
+  still bounds the whole run.
+
 - Added Python-host `Agent.start_execution` for already-authorized computer
   tasks, retaining exact-goal continuation and current tool permissions. Normal
   chat still classifies conversation before exposing actions. A per-Agent turn

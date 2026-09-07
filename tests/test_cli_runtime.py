@@ -416,3 +416,61 @@ async def test_terminal_cli_cannot_leave_detached_child_side_effect(tmp_path):
     assert json.loads(result) == {'ok': True}
     await asyncio.sleep(1.1)
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_the_slice_deadline_bounds_thinking_and_gives_back_the_hosts_tool_time():
+    """A goal whose tools take longer than the CLI deadline still finishes.
+
+    「登入kintone 並讀取行事曆」 is two host tools — a login that waits on a
+    one-time code, then a calendar page — each longer than the whole slice
+    deadline. Counting them as inference ended the task as `cli_timeout`
+    after both side effects had already happened. The deadline bounds what
+    the CLI itself spends thinking; the host's own work is given back.
+    """
+    from flyto_ai.cli_runtime.transport import CliTransport
+
+    replies = iter([
+        {"content": "", "tool_calls": [{"name": "login_kintone", "arguments_json": "{}"}]},
+        {"content": "", "tool_calls": [{"name": "read_calendar", "arguments_json": "{}"}]},
+        {"content": "Logged in and read the calendar.", "tool_calls": []},
+    ])
+
+    async def infer(**_kwargs):
+        await asyncio.sleep(0.02)          # thinking: three rounds, well inside
+        return json.dumps(next(replies))
+
+    async def dispatch(name, arguments):
+        await asyncio.sleep(0.12)          # the host's tool, longer than the budget
+        return {"ok": True, "tool": name}
+
+    transport = CliTransport(
+        CliRuntimeConfig("claude_cli", timeout_seconds=0.2), completion_fn=infer,
+    )
+    tools = [{"name": "login_kintone"}, {"name": "read_calendar"}]
+    content, calls, rounds, _usage = await transport.chat(
+        [{"role": "user", "content": "登入kintone 並讀取行事曆"}], "", tools, dispatch,
+    )
+
+    assert transport.last_error is None, "host tool time must not end the slice"
+    assert content == "Logged in and read the calendar."
+    assert [call["function"] for call in calls] == ["login_kintone", "read_calendar"]
+    assert rounds == 3
+
+
+@pytest.mark.asyncio
+async def test_a_cli_that_only_thinks_still_meets_its_deadline():
+    """The bound is real: inference alone past the deadline is `cli_timeout`."""
+    from flyto_ai.cli_runtime.transport import CliTransport
+
+    async def infer(**_kwargs):
+        await asyncio.sleep(0.3)
+        return json.dumps({"content": "late", "tool_calls": []})
+
+    transport = CliTransport(
+        CliRuntimeConfig("claude_cli", timeout_seconds=0.1), completion_fn=infer,
+    )
+    content, _calls, _rounds, _usage = await transport.chat(
+        [{"role": "user", "content": "think"}], "", [], lambda *a, **k: None,
+    )
+    assert content is None and transport.last_error == "cli_timeout"

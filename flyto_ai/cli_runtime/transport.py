@@ -85,6 +85,12 @@ class CliTransport:
             self.context = deepcopy(messages)
         names = {_tool_name(tool) for tool in tools if isinstance(tool, dict)}
         names.discard(None)
+        # This bounds inference, not the work. The host's own tools -- a login
+        # that waits on a one-time code, a page that takes forty seconds to
+        # answer -- run on the host's budget, and their time is given back to
+        # the deadline below. Counting them here ended tasks as `cli_timeout`
+        # after their side effects had already happened, which is the one
+        # outcome this runtime must never produce.
         deadline = time.monotonic() + self.cli.timeout_seconds
         try:
             for round_num in range(max_rounds):
@@ -114,9 +120,13 @@ class CliTransport:
                         raise CliRuntimeError("cli_closed" if self._closed else "cli_timeout")
                     # The exact original host closure still owns permission,
                     # cancellation, current computer and evidence attribution.
-                    text, logged, images = await dispatch_and_log_tool(
-                        name, arguments, dispatch_fn, round_num, on_stream,
-                    )
+                    acted = time.monotonic()
+                    try:
+                        text, logged, images = await dispatch_and_log_tool(
+                            name, arguments, dispatch_fn, round_num, on_stream,
+                        )
+                    finally:
+                        deadline += time.monotonic() - acted
                     self.tool_calls.append(logged)
                     self.context.append({"role": "tool", "tool_name": name, "content": text})
                     if images:

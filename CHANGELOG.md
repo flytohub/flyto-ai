@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Parse Codex structured output at turn completion, keeping intermediate
+  commentary separate from the final JSON intent. Native action restrictions
+  and host verification remain unchanged.
+
 ## 2026-09-07
 
 - Fixed: the CLI slice deadline bounds inference, not the host's work. A goal

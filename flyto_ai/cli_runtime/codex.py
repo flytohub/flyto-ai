@@ -41,6 +41,7 @@ class CodexProtocol:
         self.thread_id = self.turn_id = ''
         self.model = ''
         self.content = None
+        self._answer_text = None
         self.usage = {}
         self.completed = False
         self._expected = 1
@@ -159,13 +160,18 @@ class CodexProtocol:
             if item.get('type') not in ('userMessage', 'reasoning', 'agentMessage'):
                 raise CliRuntimeError('cli_native_action_refused')
             if method == 'item/completed' and item.get('type') == 'agentMessage':
-                self.content = decode_json(item.get('text', ''))
+                # Progress narration is not the structured answer. Legacy
+                # models omit phase, so keep their last message until the
+                # turn seals; a later final answer may follow plain prose.
+                if item.get('phase') != 'commentary':
+                    self._answer_text = item.get('text', '')
         elif method == 'turn/completed':
             turn = params.get('turn') or {}
             if turn.get('status') != 'completed':
                 raise CliRuntimeError(failure_code(turn.get('error')))
             if self.turn_id and turn.get('id') != self.turn_id:
                 raise CliRuntimeError('cli_session_changed')
+            self.content = decode_json(self._answer_text)
             self._finish()
         elif method == 'thread/tokenUsage/updated':
             usage = (params.get('tokenUsage') or {}).get('last', {})

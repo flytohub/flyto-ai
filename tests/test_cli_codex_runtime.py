@@ -2,6 +2,7 @@
 
 import json
 import textwrap
+from unittest.mock import Mock
 
 import pytest
 
@@ -99,6 +100,36 @@ def test_codex_environment_binding_and_native_actions_cannot_arrive_from_another
     protocol.thread_id='owned'
     with pytest.raises(CliRuntimeError,match='cli_session_changed'):
         protocol._notification('item/completed',{'threadId':'other','item':{'type':'agentMessage','text':'{}'}})
+
+
+@pytest.mark.parametrize('phase', ['commentary', None])
+def test_codex_progress_prose_does_not_replace_the_final_json(phase):
+    protocol = CodexProtocol(CliRuntimeConfig('codex_cli'), '/tmp')
+    protocol.writer = Mock()
+    protocol._notification('item/completed', {'item': {
+        'type': 'agentMessage', 'phase': phase, 'text': 'I am checking the available workflows.',
+    }})
+    protocol._notification('item/completed', {'item': {
+        'type': 'agentMessage', 'phase': 'final_answer', 'text': '{"ok":true}',
+    }})
+    protocol._notification('item/completed', {'item': {
+        'type': 'agentMessage', 'phase': 'commentary', 'text': 'Finished checking.',
+    }})
+    assert protocol.content is None
+    protocol._notification('turn/completed', {'turn': {'status': 'completed'}})
+    assert protocol.result()[0] == {'ok': True}
+
+
+@pytest.mark.parametrize('phase', ['commentary', 'final_answer', None])
+def test_codex_prose_alone_never_becomes_a_structured_result(phase):
+    protocol = CodexProtocol(CliRuntimeConfig('codex_cli'), '/tmp')
+    protocol.writer = Mock()
+    protocol._notification('item/completed', {'item': {
+        'type': 'agentMessage', 'phase': phase, 'text': 'Claimed success without JSON',
+    }})
+    with pytest.raises(CliRuntimeError, match='cli_invalid_output'):
+        protocol._notification('turn/completed', {'turn': {'status': 'completed'}})
+    assert not protocol.completed
 
 
 def test_claude_structured_output_is_not_an_execution_capability():

@@ -74,14 +74,14 @@ Fail closed before inference if the installed server cannot isolate tools.
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
 | `__init__(cli, cwd, prompt = None, schema = None, images = ())` | internal | Internal `__init__` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:37`](../../../flyto_ai/cli_runtime/codex.py#L37) |
-| `_wire(identity, method, params)` | internal | Internal `_wire` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:54`](../../../flyto_ai/cli_runtime/codex.py#L54) |
-| `async _send(identity, method, params)` | internal | Internal `_send` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:57`](../../../flyto_ai/cli_runtime/codex.py#L57) |
-| `async read(raw)` | public | Public `read` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:62`](../../../flyto_ai/cli_runtime/codex.py#L62) |
-| `async _response(identity, result)` | internal | Internal `_response` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:79`](../../../flyto_ai/cli_runtime/codex.py#L79) |
-| `_check_config(config)` | internal | Internal `_check_config` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:135`](../../../flyto_ai/cli_runtime/codex.py#L135) |
-| `_notification(method, params)` | internal | Internal `_notification` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:154`](../../../flyto_ai/cli_runtime/codex.py#L154) |
-| `_finish()` | internal | Internal `_finish` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:181`](../../../flyto_ai/cli_runtime/codex.py#L181) |
-| `result()` | public | Public `result` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:185`](../../../flyto_ai/cli_runtime/codex.py#L185) |
+| `_wire(identity, method, params)` | internal | Internal `_wire` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:55`](../../../flyto_ai/cli_runtime/codex.py#L55) |
+| `async _send(identity, method, params)` | internal | Internal `_send` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:58`](../../../flyto_ai/cli_runtime/codex.py#L58) |
+| `async read(raw)` | public | Public `read` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:63`](../../../flyto_ai/cli_runtime/codex.py#L63) |
+| `async _response(identity, result)` | internal | Internal `_response` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:80`](../../../flyto_ai/cli_runtime/codex.py#L80) |
+| `_check_config(config)` | internal | Internal `_check_config` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:136`](../../../flyto_ai/cli_runtime/codex.py#L136) |
+| `_notification(method, params)` | internal | Internal `_notification` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:155`](../../../flyto_ai/cli_runtime/codex.py#L155) |
+| `_finish()` | internal | Internal `_finish` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:187`](../../../flyto_ai/cli_runtime/codex.py#L187) |
+| `result()` | public | Public `result` implementation on `CodexProtocol`; the linked source is authoritative. | [`flyto_ai/cli_runtime/codex.py:191`](../../../flyto_ai/cli_runtime/codex.py#L191) |
 
 ## `flyto_ai.cli_runtime.contracts`
 

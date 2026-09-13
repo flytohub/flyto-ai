@@ -1,5 +1,18 @@
 # State
 
+## Structured CLI message phases (2026-09-13, in progress)
+
+The Codex adapter previously parsed every agent message as final JSON, including
+intermediate commentary. It now retains the last non-commentary answer and
+validates it only when the owning turn completes. Legacy phase-less messages
+remain supported; prose-only completion and native tool actions still fail
+closed. Protocol regression passed 15 cases. With the locked Core revision the
+full SDK suite passed 4,504 tests with 17 skipped and one subprocess cleanup
+warning; the scheduler/CLI cohort passed 40 with that warning promoted to an
+error. Strict verification passed 18 checks. An actual Codex/Core isolated
+file goal passed independent byte verification in 25.27 seconds. Cloud goal
+acceptance is blocked by Firestore read quota; production closure is not proven.
+
 ## Selected CLI models and computer-local inference (2026-09-07)
 
 CLI model selection is passed verbatim, with Codex's official dynamic metadata

@@ -13,6 +13,8 @@ MAX_EVENT_BYTES = 512_000
 MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 5_000_000
 MAX_CALLS = 8
+MAX_CONTENT_CHARS = 50_000
+MAX_ARGUMENT_CHARS = 65_536
 
 
 def valid_model_id(value, *, allow_empty=True):
@@ -28,6 +30,21 @@ class CliRuntimeError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class CliIntentError(CliRuntimeError):
+    """A format-only failure after inference, with no provider text attached."""
+
+    _REASONS = frozenset({
+        "intent_shape", "content_bounds", "calls_shape", "call_limit",
+        "call_shape", "arguments_bounds", "arguments_json", "arguments_object",
+    })
+
+    def __init__(self, reason: str):
+        if reason not in self._REASONS:
+            raise ValueError("Unknown intent validation reason")
+        self.reason = reason
+        super().__init__("cli_invalid_output")
 
 
 @dataclass(frozen=True)
@@ -85,10 +102,10 @@ def decode_json(text):
 INTENT_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
-        "content": {"type": "string"},
-        "tool_calls": {"type": "array", "items": {
+        "content": {"type": "string", "maxLength": MAX_CONTENT_CHARS},
+        "tool_calls": {"type": "array", "maxItems": MAX_CALLS, "items": {
             "type": "object", "additionalProperties": False,
-            "properties": {"name": {"type": "string"}, "arguments_json": {"type": "string"}},
+            "properties": {"name": {"type": "string"}, "arguments_json": {"type": "string", "maxLength": MAX_ARGUMENT_CHARS}},
             "required": ["name", "arguments_json"],
         }},
     }, "required": ["content", "tool_calls"],
@@ -96,22 +113,38 @@ INTENT_SCHEMA = {
 
 
 def checked_intent(value, names: set[str]):
+    # Detect an explicit authority violation before offering format recovery,
+    # including batches whose outer envelope or content is also malformed.
+    supplied_calls = value.get("tool_calls") if isinstance(value, dict) else None
+    if isinstance(supplied_calls, list) and any(
+        isinstance(call, dict) and "name" in call
+        and (not isinstance(call["name"], str) or call["name"] not in names)
+        for call in supplied_calls
+    ):
+        raise CliRuntimeError("cli_tool_not_available")
     if not isinstance(value, dict) or set(value) != {"content", "tool_calls"}:
-        raise CliRuntimeError("cli_invalid_output")
+        raise CliIntentError("intent_shape")
     content, calls = value["content"], value["tool_calls"]
-    if not isinstance(content, str) or len(content) > 50_000 or not isinstance(calls, list) or len(calls) > MAX_CALLS:
-        raise CliRuntimeError("cli_invalid_output")
+    if not isinstance(content, str) or len(content) > MAX_CONTENT_CHARS:
+        raise CliIntentError("content_bounds")
+    if not isinstance(calls, list):
+        raise CliIntentError("calls_shape")
+    if len(calls) > MAX_CALLS:
+        raise CliIntentError("call_limit")
     checked = []
     for call in calls:
         if not isinstance(call, dict) or set(call) != {"name", "arguments_json"}:
-            raise CliRuntimeError("cli_invalid_output")
+            raise CliIntentError("call_shape")
         name, arguments = call["name"], call["arguments_json"]
         if not isinstance(name, str) or name not in names:
             raise CliRuntimeError("cli_tool_not_available")
-        if not isinstance(arguments, str) or len(arguments) > 65_536:
-            raise CliRuntimeError("cli_invalid_output")
-        params = decode_json(arguments)
+        if not isinstance(arguments, str) or len(arguments) > MAX_ARGUMENT_CHARS:
+            raise CliIntentError("arguments_bounds")
+        try:
+            params = decode_json(arguments)
+        except CliRuntimeError:
+            raise CliIntentError("arguments_json") from None
         if not isinstance(params, dict):
-            raise CliRuntimeError("cli_invalid_output")
+            raise CliIntentError("arguments_object")
         checked.append((name, params))
     return content, checked

@@ -1,5 +1,40 @@
 # State
 
+## CLI closure integration (2026-09-20)
+
+The preserved September 13 intent-correction and quota changes are integrated
+in an isolated candidate; the original dirty checkout remains untouched.
+Focused CLI validation passed 106 tests and the Core MCP cohort passed 109.
+Full-suite verification is still in progress. A pre-existing Docker assertion
+that only a loopback interface name exists is being evaluated separately;
+dormant tunnel interfaces do not establish external network access. Cloud
+dependency rollout and real learn/reuse/repair acceptance remain separate.
+
+## CLI quota classification (2026-09-13)
+
+Quota exhaustion requires an explicit exhausted/exceeded quota or reached
+usage/credit limit. A reference to a quota service or its availability alone
+does not establish exhaustion. Public errors remain fixed codes, without raw
+provider diagnostics, credentials or automatic model changes. A quota code may
+refer to the selected model's allowance rather than the entire CLI account;
+hosts must not imply that every model is unavailable.
+
+## Bounded CLI intent correction (2026-09-13)
+
+The inference schema now declares the checker's existing limits: 50,000 content
+characters, eight calls, and 65,536 argument-string characters. Only a format
+failure identified by `checked_intent` can request one correction in the same
+conversation and original deadline/round budget. The entire invalid batch is
+discarded before dispatch; actual earlier observations remain available.
+Unknown tools, native actions, session changes, authentication, quota, and
+transport failures never trigger this correction. No model is changed and
+no completed action is replayed automatically.
+
+Diagnostics retain only a fixed validation-reason enum. The historical live
+`cli_invalid_output` had no retained raw answer, so its exact malformed field
+cannot be established retrospectively. Protocol and dispatcher tests do not
+establish live learn/reuse/repair completion; Cloud owns that acceptance.
+
 ## Structured CLI message phases (2026-09-13, in progress)
 
 The Codex adapter previously parsed every agent message as final JSON, including

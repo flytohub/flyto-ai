@@ -116,11 +116,30 @@ eight host calls. Timeout is host-selected, bounded to 0.1–300 seconds and mus
 fit the enclosing job deadline. No transport failure silently retries a model
 or a previously completed action. Actual partial tool observations survive.
 
+The intent wire schema declares the same bounds as the host checker: at most
+50,000 content characters, eight calls, and 65,536 characters per encoded
+argument string. Each argument must decode to a JSON object without duplicate
+keys or non-finite values. The whole batch passes validation before its first
+dispatch; a valid first call cannot escape an invalid later call.
+
+A format-only failure from `checked_intent` may request one corrected response
+using fixed host feedback and a fixed reason enum. The invalid proposal is not
+retained, while prior real tool observations remain in the same conversation.
+The correction consumes the original inference deadline and round budget;
+there is no additional retry allowance after that correction. Unknown tool
+names, native actions, session/authentication errors, quota exhaustion and
+transport errors are not format corrections. No model is switched and no
+completed action is replayed automatically. Raw provider answers are never
+logged as validation diagnostics.
+
 Errors expose fixed codes, not stdout/stderr or credentials. Examples include
 `cli_auth_required`, `cli_quota_exhausted`, `cli_timeout`,
 `cli_native_action_refused`, `cli_native_tools_exposed`, and
 `cli_nondefault_provider_route`. Missing usage remains unavailable; the runtime
 does not manufacture billing totals for delegated inference.
+`cli_quota_exhausted` identifies an explicit usage/credit limit, which may apply
+only to the selected model. It does not prove that every model on that CLI
+account is exhausted. A quota-service lookup failure alone is not exhaustion.
 
 ## Verification and limits
 

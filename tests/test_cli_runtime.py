@@ -22,8 +22,35 @@ from flyto_ai.cli_runtime import (
     resolve_cli_executable,
 )
 from flyto_ai.cli_runtime.contracts import checked_intent
-from flyto_ai.cli_runtime.events import EventReader
+from flyto_ai.cli_runtime.events import EventReader, failure_code
 from flyto_ai.cli_runtime.process import ProcessRunner
+
+
+@pytest.mark.parametrize("error", [
+    "quota exceeded",
+    {"code": "insufficient_quota"},
+    {"code": "quota_exhausted"},
+    "You exceeded your current quota; check your plan and billing details.",
+    "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model.",
+    "You have reached your usage limit. Try again later.",
+    "Usage limit exceeded for this model.",
+    {"code": "credit_balance_exhausted"},
+    "Your credit balance is too low to access the API.",
+])
+def test_only_explicit_allowance_exhaustion_has_the_quota_code(error):
+    assert failure_code(error) == "cli_quota_exhausted"
+
+
+@pytest.mark.parametrize(("error", "expected"), [
+    ("The quota service is temporarily unavailable.", "cli_provider_failed"),
+    ("Could not check the usage limit because the service timed out.", "cli_provider_failed"),
+    ("Credit balance lookup failed.", "cli_provider_failed"),
+    ("Rate limit: quota service is temporarily unavailable.", "cli_capacity_unavailable"),
+    ("The quota service is overloaded.", "cli_capacity_unavailable"),
+    ("Authentication failed while checking quota.", "cli_auth_required"),
+])
+def test_quota_service_errors_do_not_claim_allowance_exhaustion(error, expected):
+    assert failure_code(error) == expected
 
 
 @pytest.mark.asyncio

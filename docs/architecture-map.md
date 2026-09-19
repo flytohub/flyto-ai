@@ -1,5 +1,16 @@
 # Architecture Map
 
+## Bounded intent correction (2026-09-20)
+
+The host may request one format correction after validating a complete inference
+response, before dispatching any call in that invalid batch. This allowance
+uses the original inference deadline and round budget; completed host actions,
+observations and usage are retained. The wire schema declares the existing
+50,000-character content, eight-call and 65,536-character argument bounds.
+Unknown tools, native actions, session changes, authentication, quota and
+transport failures remain terminal. Fixed reason enums cannot carry provider
+prose into host authority. Product topology and coding-route lanes are unchanged.
+
 ## Selected local inference boundary (2026-09-07)
 
 Native Agent authority -> validated JSON intent -> guarded host Core dispatch

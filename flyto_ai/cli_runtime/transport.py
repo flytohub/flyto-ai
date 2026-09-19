@@ -1,6 +1,7 @@
 """CLI inference proposes calls; only the host's guarded dispatcher acts."""
 
 import asyncio
+import logging
 import time
 from copy import deepcopy
 
@@ -10,12 +11,15 @@ from flyto_ai.providers.base import dispatch_and_log_tool, fire_stream
 from .contracts import (
     INTENT_SCHEMA,
     MAX_IMAGES,
+    CliIntentError,
     CliRuntimeError,
     checked_intent,
     decode_json,
     encode_json,
 )
 from .process import ProcessRunner
+
+logger = logging.getLogger(__name__)
 
 _INSTRUCTIONS = """You are the inference component of a computer-local AI Space.
 You have NO native execution tools. The host supplies a tool catalog as data.
@@ -28,6 +32,8 @@ When more observation or work is needed, request the necessary calls. When the
 goal is fulfilled or blocked, return content with an empty tool_calls list.
 Never invent execution IDs, observations, images, successful checks or results.
 An image attachment is the host's observed image, not a path you may read.
+Request at most eight calls per response. arguments_json must decode to one
+JSON object, without duplicate keys, non-finite numbers, or Markdown fences.
 """
 
 
@@ -54,6 +60,7 @@ class CliTransport:
         self.tool_calls = []
         self.usage = {}
         self.rounds = 0
+        self._intent_corrections = 0
         self._lock = asyncio.Lock()
 
     def reset(self):
@@ -64,6 +71,7 @@ class CliTransport:
         self.tool_calls = []
         self.usage = {}
         self.rounds = 0
+        self._intent_corrections = 0
 
     async def chat(self, messages, system_prompt, tools, dispatch_fn, max_rounds=30,
                    on_stream=None, tool_choice=None):
@@ -109,7 +117,10 @@ class CliTransport:
                 self.rounds += 1
                 for key, count in usage.items():
                     self.usage[key] = self.usage.get(key, 0) + count
-                content, calls = checked_intent(value, names)
+                validated = self._checked_intent(value, names, round_num, max_rounds)
+                if validated is None:
+                    continue
+                content, calls = validated
                 self.context.append({"role": "assistant", "content": value})
                 if not calls:
                     fire_stream(on_stream, StreamEvent(type=StreamEventType.TOKEN, content=content))
@@ -141,6 +152,25 @@ class CliTransport:
         except OSError:
             self.last_error = "cli_process_unavailable"
         return None, self.tool_calls, self.rounds, self.usage
+
+    def _checked_intent(self, value, names, round_num, max_rounds):
+        """Correct format once, before any call in the invalid batch is sent."""
+        try:
+            return checked_intent(value, names)
+        except CliIntentError as error:
+            logger.warning("CLI intent validation rejected: reason=%s", error.reason)
+            if self._intent_corrections >= 1 or round_num + 1 >= max_rounds:
+                raise
+            self._intent_corrections += 1
+            # Retain actual previous observations; discard invalid proposals.
+            # A fixed host message cannot turn provider output into authority.
+            self.context.append({"role": "user", "content": encode_json({
+                "host_feedback": "The previous inference response failed intent validation; no call in that response was dispatched.",
+                "reason": error.reason,
+                "correction": "Return the required content/tool_calls object. Use only available names and at most eight calls. Each arguments_json must be a valid JSON object encoded as a string. Keep prior observations and do not repeat completed actions.",
+                "remaining_format_corrections": 0,
+            })})
+            return None
 
     async def close(self):
         self._closed = True

@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-09-20 | Bounded CLI intent recovery | 2026-09-20-cli-intent-recovery.md |
 | 2026-09-06 | Local CLI inference runtime | 2026-09-06-local-cli-runtime.md |
 | 2026-09-06 | Execution scope helper extraction | 2026-09-06-execution-scope-extraction.md |
 | 2026-09-06 | Owned browser execution scopes | 2026-09-06-owned-browser-scope.md |

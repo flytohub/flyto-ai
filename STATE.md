@@ -1,5 +1,19 @@
 # State
 
+## CLI correction across admitted slices (2026-09-20)
+
+A real Cloud actor failed with the fixed reason `arguments_json` on its fourth
+and final slice round, although the enclosing task still had rounds available.
+The transport now retains safe format feedback and returns the existing slice
+budget outcome without another inference or dispatch. Its single correction
+allowance survives admitted continuation; a second invalid proposal still
+fails, and an expired inference deadline remains a timeout.
+
+The regression first reproduced four failures. Focused CLI tests now pass 78
+cases, including actual Agent admission and continuation with an injected
+inference fixture. This does not establish real model recovery; Cloud owns the
+live acceptance and dependency rollout.
+
 ## CLI closure integration (2026-09-20)
 
 The preserved September 13 intent-correction and quota changes are integrated

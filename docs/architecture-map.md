@@ -11,6 +11,14 @@ Unknown tools, native actions, session changes, authentication, quota and
 transport failures remain terminal. Fixed reason enums cannot carry provider
 prose into host authority. Product topology and coding-route lanes are unchanged.
 
+The one correction allowance belongs to the admitted logical task, including
+its continuation slices. An invalid final-round proposal dispatches nothing and
+returns the existing `cli_round_budget_exhausted` outcome. The host may continue
+only under its remaining total budget; the correction consumes an ordinary next
+round. An expired inference deadline remains `cli_timeout`, and a second invalid
+proposal stays terminal across slices. Completed actions are never replayed by
+this transport.
+
 ## Selected local inference boundary (2026-09-07)
 
 Native Agent authority -> validated JSON intent -> guarded host Core dispatch

@@ -98,7 +98,7 @@ async def test_only_one_correction_is_allowed_and_failed_batch_is_never_dispatch
 @pytest.mark.asyncio
 async def test_correction_cannot_exceed_existing_round_budget():
     transport, _, prompts, dispatched = await drive([intent(call("[]")), intent(content="Must not be reached")], rounds=1)
-    assert transport.last_error == "cli_invalid_output"
+    assert transport.last_error == "cli_round_budget_exhausted"
     assert len(prompts) == 1 and dispatched == []
 
 
@@ -199,7 +199,8 @@ async def test_correction_uses_remaining_deadline_and_counts_both_inferences(mon
 
 
 @pytest.mark.asyncio
-async def test_expired_original_deadline_cannot_start_correction(monkeypatch):
+@pytest.mark.parametrize("rounds", [1, 30])
+async def test_expired_original_deadline_cannot_start_correction(monkeypatch, rounds):
     from types import SimpleNamespace
     import flyto_ai.cli_runtime.transport as runtime
 
@@ -216,11 +217,70 @@ async def test_expired_original_deadline_cannot_start_correction(monkeypatch):
 
     transport = CliTransport(CliRuntimeConfig("codex_cli", timeout_seconds=5), completion_fn=complete)
     try:
-        await transport.chat([{"role": "user", "content": "Read"}], "", TOOLS, dispatch)
+        await transport.chat([{"role": "user", "content": "Read"}], "", TOOLS, dispatch, max_rounds=rounds)
     finally:
         await transport.close()
     assert transport.last_error == "cli_timeout"
     assert len(requests) == 1 and dispatched == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_invalid", [False, True])
+async def test_admitted_slice_continuation_preserves_one_correction_and_actual_actions(second_invalid):
+    from flyto_ai.cli_runtime import CliAgent
+    from flyto_ai.config import AgentConfig
+
+    def read(name):
+        return call(json.dumps({"module_id": "file.read", "params": {"path": name}}), name="execute_module")
+
+    invalid = call('{"private-value":', name="execute_module")
+    # The entire invalid batch, including its valid first proposal, stays inert.
+    responses = ([intent(read("one")), intent(invalid), intent(read("two")), intent(read("three")),
+                  intent(invalid), intent(content="Must not be reached")]
+                 if second_invalid else
+                 [intent(read("one")), intent(read("two")), intent(read("three")),
+                  intent(read("four"), invalid), intent(read("four")), intent(content="Observed four records")])
+    answers = iter(responses)
+    prompts, dispatched = [], []
+
+    async def complete(**request):
+        prompts.append(json.loads(request["prompt"]))
+        return json.dumps(next(answers))
+
+    async def dispatch(name, arguments):
+        dispatched.append(arguments["params"]["path"])
+        return {"ok": True, "data": {"observed": dispatched[-1]}}
+
+    agent = CliAgent(
+        AgentConfig(max_tool_rounds=4, enable_memory=False, enable_pro=False, enable_transcript=False),
+        cli=CliRuntimeConfig("codex_cli"), completion_fn=complete,
+        tools=[{"name": "execute_module", "inputSchema": {"type": "object"}}], dispatch_fn=dispatch,
+        policies={"allowed_tools": ["execute_module"], "allowed_categories": ["file"]},
+    )
+    agent._assistant = None
+    goal = "Read the four local workspace records."
+    try:
+        first = await agent.start_execution(goal)
+        assert first.error == "cli_round_budget_exhausted"
+        assert first.rounds_used == 4
+        assert dispatched == ["one", "two", "three"]
+        assert len(prompts) == 4
+        agent.config.max_tool_rounds = 2
+        second = await agent.continue_execution("Continue from observed records.", goal=goal)
+        if second_invalid:
+            assert second.error == "cli_invalid_output"
+            assert second.rounds_used == 1
+            assert dispatched == ["one", "two", "three"]
+        else:
+            assert second.ok
+            assert second.rounds_used == 2
+            assert dispatched == ["one", "two", "three", "four"]
+            assert any(message.get("role") == "user" and "arguments_json" in str(message.get("content"))
+                       for message in prompts[4]["messages"])
+        assert first.rounds_used + second.rounds_used <= 6
+        assert "private-value" not in json.dumps(prompts)
+    finally:
+        await agent.close()
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,13 @@ do not replay prior completed actions. An explicit unknown tool is an authority
 violation even when its surrounding envelope is malformed. Provider/native tool,
 session, login and exhausted quota failures receive no format retry.
 
+Count this allowance once per admitted logical task, not once per actor slice.
+If the first malformed proposal exhausts a slice, retain only fixed feedback
+and report `cli_round_budget_exhausted`; continuation must spend an ordinary
+round from the host's remaining total budget. Do not convert an expired
+deadline into a resumable budget outcome or reset correction allowance during
+continuation. A fresh admitted task starts with its own allowance.
+
 Declare the checker's existing size bounds in the wire schema and retain only
 fixed validation-reason enums in diagnostics. Classify quota exhaustion from an
 explicit exhausted allowance; quota-service unavailability alone is not proof.

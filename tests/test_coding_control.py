@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -267,7 +268,61 @@ def test_docker_sandbox_masks_protected_files_with_an_unreadable_inode(tmp_path,
     )
 
 
-def test_model_command_os_sandbox_denies_host_read_and_all_workspace_writes(tmp_path):
+_NETWORK_PROBE = """
+import errno, json, socket
+from pathlib import Path
+routes = []
+for table, interface, flags in [('route', 0, 3), ('ipv6_route', -1, 8)]:
+    rows = Path('/proc/net/' + table).read_text().splitlines()
+    for row in rows[1:] if table == 'route' else rows:
+        fields = row.split()
+        state = int(fields[flags], 16)
+        if fields[interface] != 'lo' and state & 1 and not state & 0x200:
+            routes.append(fields[interface])
+connections = []
+rejected = {
+    errno.ENETUNREACH: 'unreachable', errno.EHOSTUNREACH: 'unreachable',
+    errno.EAFNOSUPPORT: 'family-unavailable', errno.EPERM: 'blocked', errno.EACCES: 'blocked',
+}
+for family, target in [(socket.AF_INET, '192.0.2.1'), (socket.AF_INET6, '2001:db8::1')]:
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as connection:
+            connection.settimeout(1)
+            code = connection.connect_ex((target, 9))
+    except OSError as failure:
+        code = failure.errno
+    connections.append(rejected.get(code, 'connected' if code == 0 else 'unexpected-error'))
+print(json.dumps({'outside_routes': routes, 'connections': connections}))
+"""
+
+
+def _assert_sandbox_network_isolated(command, backend, snapshot):
+    if backend == "docker":
+        assert command[command.index("--network") + 1] == "none"
+    else:
+        assert backend == "bwrap" and "--unshare-net" in command
+    assert snapshot["outside_routes"] == []
+    assert len(snapshot["connections"]) == 2
+    assert all(outcome in {"unreachable", "family-unavailable", "blocked"}
+               for outcome in snapshot["connections"])
+
+
+@pytest.mark.parametrize(("mode", "routes", "connections"), [
+    ("host", [], ["unreachable", "unreachable"]),
+    ("none", ["eth0"], ["unreachable", "unreachable"]),
+    ("none", [], ["connected", "unreachable"]),
+    ("none", [], ["unreachable", "connected"]),
+    ("none", [], ["unexpected-error", "unreachable"]),
+])
+def test_network_isolation_proof_rejects_routing_connection_or_wrong_mode(mode, routes, connections):
+    with pytest.raises(AssertionError):
+        _assert_sandbox_network_isolated(
+            ["docker", "run", "--network", mode], "docker",
+            {"outside_routes": routes, "connections": connections},
+        )
+
+
+def test_model_command_os_sandbox_denies_host_read_and_all_workspace_writes(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside-secret.txt"
@@ -277,6 +332,16 @@ def test_model_command_os_sandbox_denies_host_read_and_all_workspace_writes(tmp_
     tools = WorkspaceTools(str(workspace))
     if not tools.command_sandbox_backend:
         pytest.skip("functional OS command sandbox backend is unavailable")
+
+    commands = []
+    original_command = tools._sandbox_command
+
+    def record_command(*args):
+        command = original_command(*args)
+        commands.append(command)
+        return command
+
+    monkeypatch.setattr(tools, "_sandbox_command", record_command)
 
     readable = run(tools.run([
         sys.executable, "-c", "from pathlib import Path; print(Path('source.txt').read_text())",
@@ -292,10 +357,13 @@ def test_model_command_os_sandbox_denies_host_read_and_all_workspace_writes(tmp_
     assert "workspace-secret" not in protected_read["output"]
 
     network = run(tools.run([
-        sys.executable, "-c",
-        "import socket; assert [name for _, name in socket.if_nameindex()] == ['lo']",
+        sys.executable, "-c", _NETWORK_PROBE,
     ], 10))
     assert network["ok"] is True
+    _assert_sandbox_network_isolated(
+        commands[-1], network["sandbox_backend"],
+        json.loads(network["output"].splitlines()[-1]),
+    )
 
     host_read = run(tools.run([
         sys.executable, "-c", "import sys; from pathlib import Path; print(Path(sys.argv[1]).read_text())",

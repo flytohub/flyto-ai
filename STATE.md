@@ -5,10 +5,20 @@
 The preserved September 13 intent-correction and quota changes are integrated
 in an isolated candidate; the original dirty checkout remains untouched.
 Focused CLI validation passed 106 tests and the Core MCP cohort passed 109.
-Full-suite verification is still in progress. A pre-existing Docker assertion
-that only a loopback interface name exists is being evaluated separately;
-dormant tunnel interfaces do not establish external network access. Cloud
-dependency rollout and real learn/reuse/repair acceptance remain separate.
+The complete Python 3.12 suite passed 4,556 tests with 15 skipped, with
+deprecation and thread warnings treated as errors. Strict Indexer verification
+passed 18 checks with the CI-pinned version and 20 with the current version;
+both reported zero warnings or failures. Compile, Ruff, generated reference,
+release drift, the shared dependency lock and distribution builds passed.
+
+A separate test-only maintenance commit replaces the assumption that Docker's
+network-none namespace contains only `lo`: it verifies the actual isolation
+mode, absence of usable outside routes and rejected IPv4/IPv6 connections.
+Five negative cases reject routable or incorrectly configured snapshots;
+host-read and workspace-write denial assertions are unchanged. The existing
+closed-loop repair setting is now documented with its unchanged default and
+range. Cloud dependency rollout and real learn/reuse/repair acceptance remain
+separate from these SDK checks and require their own receipts.
 
 ## CLI quota classification (2026-09-13)
 
@@ -96,7 +106,7 @@ supply a trusted delegated completion function for reasoning on another
 computer; delegated inference never probes or launches a CLI in Cloud.
 See [the runtime contract](docs/local-cli-runtime.md) for limits and verification.
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Workspace file operation permissions (2026-09-06)
 

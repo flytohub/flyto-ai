@@ -67,11 +67,11 @@ class CliTransport:
         if not self.continuation:
             self.context = []
             self.images = []
+            self._intent_corrections = 0
         self.last_error = None
         self.tool_calls = []
         self.usage = {}
         self.rounds = 0
-        self._intent_corrections = 0
 
     async def chat(self, messages, system_prompt, tools, dispatch_fn, max_rounds=30,
                    on_stream=None, tool_choice=None):
@@ -117,7 +117,7 @@ class CliTransport:
                 self.rounds += 1
                 for key, count in usage.items():
                     self.usage[key] = self.usage.get(key, 0) + count
-                validated = self._checked_intent(value, names, round_num, max_rounds)
+                validated = self._checked_intent(value, names)
                 if validated is None:
                     continue
                 content, calls = validated
@@ -144,6 +144,8 @@ class CliTransport:
                         self.images = [*self.images, *deepcopy(images)][-MAX_IMAGES:]
                     if logged.get("result", {}).get("__ASK_USER__"):
                         return "The task needs additional input.", self.tool_calls, self.rounds, self.usage
+            if time.monotonic() >= deadline:
+                raise CliRuntimeError("cli_timeout")
             raise CliRuntimeError("cli_round_budget_exhausted")
         except TimeoutError:
             self.last_error = "cli_timeout"
@@ -153,13 +155,13 @@ class CliTransport:
             self.last_error = "cli_process_unavailable"
         return None, self.tool_calls, self.rounds, self.usage
 
-    def _checked_intent(self, value, names, round_num, max_rounds):
+    def _checked_intent(self, value, names):
         """Correct format once, before any call in the invalid batch is sent."""
         try:
             return checked_intent(value, names)
         except CliIntentError as error:
             logger.warning("CLI intent validation rejected: reason=%s", error.reason)
-            if self._intent_corrections >= 1 or round_num + 1 >= max_rounds:
+            if self._intent_corrections >= 1:
                 raise
             self._intent_corrections += 1
             # Retain actual previous observations; discard invalid proposals.

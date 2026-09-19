@@ -126,7 +126,14 @@ A format-only failure from `checked_intent` may request one corrected response
 using fixed host feedback and a fixed reason enum. The invalid proposal is not
 retained, while prior real tool observations remain in the same conversation.
 The correction consumes the original inference deadline and round budget;
-there is no additional retry allowance after that correction. Unknown tool
+there is no additional retry allowance after that correction. This allowance
+belongs to the admitted logical task and does not reset on `continue_execution`.
+If a first invalid proposal arrives on the final slice round, the SDK dispatches
+nothing from that proposal and returns `cli_round_budget_exhausted` with the
+actual rounds used. A host with remaining total budget may continue the same
+admission; correction then costs a normal round in the next slice. An expired
+deadline still returns `cli_timeout`. No extra inference runs in the exhausted
+slice, and a second invalid proposal remains `cli_invalid_output`. Unknown tool
 names, native actions, session/authentication errors, quota exhaustion and
 transport errors are not format corrections. No model is switched and no
 completed action is replayed automatically. Raw provider answers are never

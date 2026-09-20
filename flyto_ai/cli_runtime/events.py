@@ -11,7 +11,11 @@ def failure_code(value) -> str:
     for words, code in (
         (("model not found", "model_not_found", "invalid model", "unsupported model", "model is not supported", "model does not exist", "not have access to model"), "cli_model_unavailable"),
         (("not logged in", "unauthorized", "authentication", "login required"), "cli_auth_required"),
-        (("quota", "usage limit", "credit balance", "insufficient_quota"), "cli_quota_exhausted"),
+        (("quota exceeded", "quota exhausted", "quota_exceeded", "quota_exhausted",
+          "insufficient_quota", "exceeded your current quota", "exceeded your quota",
+          "hit your usage limit", "reached your usage limit", "usage limit reached",
+          "usage limit exceeded", "credit balance exhausted", "credit_balance_exhausted",
+          "credit balance is too low", "insufficient credits"), "cli_quota_exhausted"),
         (("rate limit", "overloaded"), "cli_capacity_unavailable"),
     ):
         if any(word in text for word in words):

@@ -1,5 +1,24 @@
 # Architecture Map
 
+## Bounded intent correction (2026-09-20)
+
+The host may request one format correction after validating a complete inference
+response, before dispatching any call in that invalid batch. This allowance
+uses the original inference deadline and round budget; completed host actions,
+observations and usage are retained. The wire schema declares the existing
+50,000-character content, eight-call and 65,536-character argument bounds.
+Unknown tools, native actions, session changes, authentication, quota and
+transport failures remain terminal. Fixed reason enums cannot carry provider
+prose into host authority. Product topology and coding-route lanes are unchanged.
+
+The one correction allowance belongs to the admitted logical task, including
+its continuation slices. An invalid final-round proposal dispatches nothing and
+returns the existing `cli_round_budget_exhausted` outcome. The host may continue
+only under its remaining total budget; the correction consumes an ordinary next
+round. An expired inference deadline remains `cli_timeout`, and a second invalid
+proposal stays terminal across slices. Completed actions are never replayed by
+this transport.
+
 ## Selected local inference boundary (2026-09-07)
 
 Native Agent authority -> validated JSON intent -> guarded host Core dispatch

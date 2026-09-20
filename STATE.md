@@ -1,5 +1,71 @@
 # State
 
+## CLI correction across admitted slices (2026-09-20)
+
+A real Cloud actor failed with the fixed reason `arguments_json` on its fourth
+and final slice round, although the enclosing task still had rounds available.
+The transport now retains safe format feedback and returns the existing slice
+budget outcome without another inference or dispatch. Its single correction
+allowance survives admitted continuation; a second invalid proposal still
+fails, and an expired inference deadline remains a timeout.
+
+The regression first reproduced four failures. Focused CLI tests now pass 78
+cases, including actual Agent admission and continuation with an injected
+inference fixture. This does not establish real model recovery; Cloud owns the
+live acceptance and dependency rollout.
+
+The combined PR candidate passed 4,559 tests with 15 skipped, treating CI
+deprecation and thread warnings as errors. The pinned strict Indexer passed
+18 checks; current suppression and environment checks also passed. Core MCP
+smoke passed 109 tests. Pure artifact `bc8eacc561dbb194441c744d84e3173d76856e45`
+retains `75496e4` as its direct parent and excludes the separate test-portability
+maintenance. Merge ancestry keeps that artifact available independently.
+
+## Initial CLI closure integration (2026-09-20)
+
+The preserved September 13 intent-correction and quota changes are integrated
+in an isolated candidate; the original dirty checkout remains untouched.
+Focused CLI validation passed 106 tests and the Core MCP cohort passed 109.
+The complete Python 3.12 suite passed 4,556 tests with 15 skipped, with
+deprecation and thread warnings treated as errors. Strict Indexer verification
+passed 18 checks with the CI-pinned version and 20 with the current version;
+both reported zero warnings or failures. Compile, Ruff, generated reference,
+release drift, the shared dependency lock and distribution builds passed.
+
+A separate test-only maintenance commit replaces the assumption that Docker's
+network-none namespace contains only `lo`: it verifies the actual isolation
+mode, absence of usable outside routes and rejected IPv4/IPv6 connections.
+Five negative cases reject routable or incorrectly configured snapshots;
+host-read and workspace-write denial assertions are unchanged. The existing
+closed-loop repair setting is now documented with its unchanged default and
+range. Cloud dependency rollout and real learn/reuse/repair acceptance remain
+separate from these SDK checks and require their own receipts.
+
+## CLI quota classification (2026-09-13)
+
+Quota exhaustion requires an explicit exhausted/exceeded quota or reached
+usage/credit limit. A reference to a quota service or its availability alone
+does not establish exhaustion. Public errors remain fixed codes, without raw
+provider diagnostics, credentials or automatic model changes. A quota code may
+refer to the selected model's allowance rather than the entire CLI account;
+hosts must not imply that every model is unavailable.
+
+## Bounded CLI intent correction (2026-09-13)
+
+The inference schema now declares the checker's existing limits: 50,000 content
+characters, eight calls, and 65,536 argument-string characters. Only a format
+failure identified by `checked_intent` can request one correction in the same
+conversation and original deadline/round budget. The entire invalid batch is
+discarded before dispatch; actual earlier observations remain available.
+Unknown tools, native actions, session changes, authentication, quota, and
+transport failures never trigger this correction. No model is changed and
+no completed action is replayed automatically.
+
+Diagnostics retain only a fixed validation-reason enum. The historical live
+`cli_invalid_output` had no retained raw answer, so its exact malformed field
+cannot be established retrospectively. Protocol and dispatcher tests do not
+establish live learn/reuse/repair completion; Cloud owns that acceptance.
+
 ## Structured CLI message phases (2026-09-13, in progress)
 
 The Codex adapter previously parsed every agent message as final JSON, including
@@ -61,7 +127,7 @@ supply a trusted delegated completion function for reasoning on another
 computer; delegated inference never probes or launches a CLI in Cloud.
 See [the runtime contract](docs/local-cli-runtime.md) for limits and verification.
 
-Last updated: 2026-09-07
+Last updated: 2026-09-20
 
 ## Workspace file operation permissions (2026-09-06)
 

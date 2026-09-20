@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Allow one format-only CLI intent correction within the existing inference
+  deadline and round budget. Invalid batches never dispatch; unknown tools,
+  native actions, session failures, authentication and quota failures still stop.
+- Classify quota exhaustion only when the provider explicitly reports an
+  exhausted allowance, rather than when its quota service is unavailable.
+
 - Parse Codex structured output at turn completion, keeping intermediate
   commentary separate from the final JSON intent. Native action restrictions
   and host verification remain unchanged.

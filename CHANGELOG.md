@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Robotics capability-plan contract
+
+- Rename the structured Robotics plan to `flyto.capability-plan.v1` and use
+  `resource_id` for commanded equipment, removing the retired robot-local plan
+  identity from the AI planning boundary.
+
+
 ## Unreleased
 
 - Allow one format-only CLI intent correction within the existing inference

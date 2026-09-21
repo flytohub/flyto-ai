@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-09-21: Robotics planning names resources, not execution hosts
+
+Decision: the structured Robotics planner emits `flyto.capability-plan.v1` and
+uses `resource_id` for commanded equipment. The older
+`flyto.robotics.plan.v1` / `robot_id` pair is retired from this planner.
+
+Reason: a robot/resource identity is not an execution-computer identity. The
+external adapter and Cloud policy choose where execution runs; the planner only
+proposes approved capabilities for the commanded resource. Reusing the old
+robot-local plan name made two different authority layers look like one.
+
+
 ## 2026-09-20 — Correct malformed intent without expanding action authority
 
 Accept at most one corrected format proposal from `checked_intent`, within the

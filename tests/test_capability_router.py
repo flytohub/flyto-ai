@@ -1330,7 +1330,7 @@ async def test_prepare_planner_request_replaces_catalog_with_verified_shortlist(
                 "trigger_events": [],
                 "constraints": [],
             },
-            "robot_id": "robot.test",
+            "resource_id": "robot.test",
             "capabilities": manifests,
             "observations": {},
         },
@@ -1370,7 +1370,7 @@ async def test_production_policy_can_require_language_neutral_goal_frame() -> No
             {
                 "planner_contract": "flyto.robotics.planner-request.v1",
                 "goal": "任意語言",
-                "robot_id": "robot.test",
+                "resource_id": "robot.test",
                 "capabilities": [_manifest("one")],
             },
             require_goal_frame=True,
@@ -1408,7 +1408,7 @@ def _planner_request() -> dict[str, object]:
     return {
         "planner_contract": "flyto.robotics.planner-request.v1",
         "goal": "沿藍線前進後停止",
-        "robot_id": "robot.test",
+        "resource_id": "robot.test",
         "capabilities": [
             _manifest("follow_line", aliases=["藍線"]),
             _manifest("safe_stop", aliases=["停止"], control_class="safety"),
@@ -2222,7 +2222,7 @@ async def test_planner_receives_selected_manifests_by_full_provider_identity() -
     request = {
         "planner_contract": "flyto.robotics.planner-request.v1",
         "goal": "detect objects",
-        "robot_id": "robot.test",
+        "resource_id": "robot.test",
         "capabilities": [
             # Same runtime name as the discovered provider, but a different
             # capability identity, and hard-filtered out of the route.
@@ -2356,7 +2356,7 @@ async def test_planner_propagates_two_providers_of_one_capability_in_order() -> 
         {
             "planner_contract": "flyto.robotics.planner-request.v1",
             "goal": "detect objects",
-            "robot_id": "robot.test",
+            "resource_id": "robot.test",
             "capabilities": [],
             "observations": {},
         },

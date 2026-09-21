@@ -22,7 +22,7 @@ def request_payload() -> dict:
         "instructions": "Use only shortlisted capabilities and stop safely.",
         "goal": "Go through one available branch and ask for approval.",
         "goal_frame": None,
-        "robot_id": "robot.test",
+        "resource_id": "robot.test",
         "capability_route": {
             "registry_snapshot": "a" * 64,
             "confidence": 1.0,
@@ -112,9 +112,9 @@ def request_payload() -> dict:
 def valid_plan() -> dict:
     goal = request_payload()["goal"]
     return {
-        "contract_version": "flyto.robotics.plan.v1",
+        "contract_version": "flyto.capability-plan.v1",
         "plan_id": "plan.test.1",
-        "robot_id": "robot.test",
+        "resource_id": "robot.test",
         "goal": goal,
         "generated_by": {
             "kind": "llm",

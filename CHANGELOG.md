@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Robotics capability-plan contract
+
+- Rename the structured Robotics plan to `flyto.capability-plan.v1` and use
+  `resource_id` for commanded equipment, removing the retired robot-local plan
+  identity from the AI planning boundary.
+
+
 ## Unreleased
 
 - The Claude CLI runtime no longer fails a slice with

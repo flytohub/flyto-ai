@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 
 REQUEST_CONTRACT = "flyto.robotics.planner-request.v1"
-PLAN_CONTRACT = "flyto.robotics.plan.v1"
+PLAN_CONTRACT = "flyto.capability-plan.v1"
 RESPONSE_CONTRACT = "flyto.ai.robotics-plan-response.v1"
 ATTESTATION_CONTRACT = "flyto.ai.robotics-planning-attestation.v1"
 MAX_REQUEST_BYTES = 256 * 1024
@@ -170,7 +170,7 @@ def validate_request(value: object) -> ValidatedRequest:
     if payload.get("planner_contract") != REQUEST_CONTRACT:
         raise RoboticsPlanningError(f"planner_contract must be {REQUEST_CONTRACT}")
     _text(payload.get("goal"), "goal", 2000)
-    _text(payload.get("robot_id"), "robot_id", 256)
+    _text(payload.get("resource_id"), "resource_id", 256)
     _text(payload.get("instructions"), "instructions", 16_000)
     route = payload.get("capability_route")
     if not isinstance(route, Mapping):
@@ -427,7 +427,7 @@ def build_plan_schema(
         "properties": {
             "contract_version": {"type": "string", "const": PLAN_CONTRACT},
             "plan_id": {"type": "string", "minLength": 1, "maxLength": 256},
-            "robot_id": {"type": "string", "const": request.payload["robot_id"]},
+            "resource_id": {"type": "string", "const": request.payload["resource_id"]},
             "goal": {"type": "string", "const": request.payload["goal"]},
             "generated_by": {
                 "type": "object",
@@ -444,7 +444,7 @@ def build_plan_schema(
         "required": [
             "contract_version",
             "plan_id",
-            "robot_id",
+            "resource_id",
             "goal",
             "generated_by",
             "steps",
@@ -483,8 +483,8 @@ def validate_plan(
     normalized = dict(plan)
     if normalized.get("contract_version") != PLAN_CONTRACT:
         raise RoboticsPlanningError(f"contract_version must be {PLAN_CONTRACT}")
-    if normalized.get("robot_id") != request.payload["robot_id"]:
-        raise RoboticsPlanningError("plan robot_id does not match request")
+    if normalized.get("resource_id") != request.payload["resource_id"]:
+        raise RoboticsPlanningError("plan resource_id does not match request")
     if normalized.get("goal") != request.payload["goal"]:
         raise RoboticsPlanningError("plan goal does not match request")
     source = normalized.get("generated_by")

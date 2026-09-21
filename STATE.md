@@ -1,5 +1,15 @@
 # State
 
+## Robotics capability-plan alignment (2026-09-21)
+
+The structured Robotics planner now names commanded equipment with `resource_id`
+and emits `flyto.capability-plan.v1`. It no longer reuses the retired
+robot-local `flyto.robotics.plan.v1` identity or the ambiguous `robot_id` field.
+This remains an advisory, attested planning boundary: execution authority stays
+with Cloud/Core capability admission and the external adapter, and plan success
+never decides Task completion.
+
+
 ## CLI correction across admitted slices (2026-09-20)
 
 A real Cloud actor failed with the fixed reason `arguments_json` on its fourth

@@ -129,7 +129,8 @@ does not authorize execution or decide Task completion.
 {
   "contract_version": "flyto.ai.robotics-plan-response.v1",
   "plan": {
-    "contract_version": "flyto.robotics.plan.v1",
+    "contract_version": "flyto.capability-plan.v1",
+    "resource_id": "robot.test",
     "generated_by": {
       "kind": "llm",
       "provider": "flyto-ai",

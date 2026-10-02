@@ -40,3 +40,22 @@ def test_user_and_assistant_messages_are_never_cut():
     long = "y" * 50_000
     context = [{"role": "user", "content": long}, {"role": "assistant", "content": long}]
     assert bounded_context(context) == context
+
+
+def test_only_the_newest_screenshots_are_sent_with_a_turn():
+    import asyncio
+    import json
+
+    from flyto_ai.cli_runtime.transport import IMAGES_PER_TURN, CliTransport
+
+    sent = []
+
+    async def complete(**kwargs):
+        sent.append(kwargs["images"])
+        return json.dumps({"content": "done", "tool_calls": []})
+
+    transport = CliTransport(object(), completion_fn=complete)
+    transport.image_completion_fn = complete
+    transport.images = [{"media_type": "image/png", "base64": str(index)} for index in range(8)]
+    asyncio.run(transport._infer("prompt"))
+    assert [image["base64"] for image in sent[0]] == [str(index) for index in range(8 - IMAGES_PER_TURN, 8)]

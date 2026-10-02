@@ -257,21 +257,21 @@ Public `inspect_cli_runtime` implementation on this module; the linked source is
 ### `_cut` (internal)
 
 `_cut(text, limit)`
-Source: [`flyto_ai/cli_runtime/transport.py:36`](../../../flyto_ai/cli_runtime/transport.py#L36)
+Source: [`flyto_ai/cli_runtime/transport.py:41`](../../../flyto_ai/cli_runtime/transport.py#L41)
 
 Internal `_cut` implementation on this module; the linked source is authoritative.
 
 ### `bounded_context` (public)
 
 `bounded_context(context)`
-Source: [`flyto_ai/cli_runtime/transport.py:42`](../../../flyto_ai/cli_runtime/transport.py#L42)
+Source: [`flyto_ai/cli_runtime/transport.py:47`](../../../flyto_ai/cli_runtime/transport.py#L47)
 
 The conversation as sent: recent tool results whole, older ones short.
 
 ### `_tool_name` (internal)
 
 `_tool_name(tool)`
-Source: [`flyto_ai/cli_runtime/transport.py:70`](../../../flyto_ai/cli_runtime/transport.py#L70)
+Source: [`flyto_ai/cli_runtime/transport.py:75`](../../../flyto_ai/cli_runtime/transport.py#L75)
 
 Internal `_tool_name` implementation on this module; the linked source is authoritative.
 
@@ -279,16 +279,16 @@ Internal `_tool_name` implementation on this module; the linked source is author
 
 `class CliTransport`
 
-Source: [`flyto_ai/cli_runtime/transport.py:74`](../../../flyto_ai/cli_runtime/transport.py#L74)
+Source: [`flyto_ai/cli_runtime/transport.py:79`](../../../flyto_ai/cli_runtime/transport.py#L79)
 
 An ApiClient-shaped transport without any API client or CLI tool action.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `__init__(cli, *, completion_fn = None)` | internal | Internal `__init__` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:79`](../../../flyto_ai/cli_runtime/transport.py#L79) |
-| `reset()` | public | Public `reset` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:96`](../../../flyto_ai/cli_runtime/transport.py#L96) |
-| `async chat(messages, system_prompt, tools, dispatch_fn, max_rounds = 30, on_stream = None, tool_choice = None)` | public | Execute a provider-backed chat turn through `CliTransport`. | [`flyto_ai/cli_runtime/transport.py:106`](../../../flyto_ai/cli_runtime/transport.py#L106) |
-| `async _chat(messages, system_prompt, tools, dispatch_fn, max_rounds, on_stream)` | internal | Internal `_chat` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:115`](../../../flyto_ai/cli_runtime/transport.py#L115) |
-| `_checked_intent(value, names)` | internal | Correct format once, before any call in the invalid batch is sent. | [`flyto_ai/cli_runtime/transport.py:188`](../../../flyto_ai/cli_runtime/transport.py#L188) |
-| `async close()` | public | Release resources owned by `CliTransport`. | [`flyto_ai/cli_runtime/transport.py:207`](../../../flyto_ai/cli_runtime/transport.py#L207) |
-| `async _infer(prompt)` | internal | Internal `_infer` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:217`](../../../flyto_ai/cli_runtime/transport.py#L217) |
+| `__init__(cli, *, completion_fn = None)` | internal | Internal `__init__` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:84`](../../../flyto_ai/cli_runtime/transport.py#L84) |
+| `reset()` | public | Public `reset` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:101`](../../../flyto_ai/cli_runtime/transport.py#L101) |
+| `async chat(messages, system_prompt, tools, dispatch_fn, max_rounds = 30, on_stream = None, tool_choice = None)` | public | Execute a provider-backed chat turn through `CliTransport`. | [`flyto_ai/cli_runtime/transport.py:111`](../../../flyto_ai/cli_runtime/transport.py#L111) |
+| `async _chat(messages, system_prompt, tools, dispatch_fn, max_rounds, on_stream)` | internal | Internal `_chat` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:120`](../../../flyto_ai/cli_runtime/transport.py#L120) |
+| `_checked_intent(value, names)` | internal | Correct format once, before any call in the invalid batch is sent. | [`flyto_ai/cli_runtime/transport.py:193`](../../../flyto_ai/cli_runtime/transport.py#L193) |
+| `async close()` | public | Release resources owned by `CliTransport`. | [`flyto_ai/cli_runtime/transport.py:212`](../../../flyto_ai/cli_runtime/transport.py#L212) |
+| `async _infer(prompt)` | internal | Internal `_infer` implementation on `CliTransport`; the linked source is authoritative. | [`flyto_ai/cli_runtime/transport.py:222`](../../../flyto_ai/cli_runtime/transport.py#L222) |

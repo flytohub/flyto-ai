@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 # before the task could finish. The latest results stay whole; older ones are
 # cut to a stub that still says what they were.
 KEEP_RECENT_TOOL_RESULTS = 3
+# The Codex app server echoes the turn's input -- images included, as data
+# URLs -- in its item events, so eight full screenshots made the CLI's own
+# output pass MAX_OUTPUT_BYTES (`cli_output_too_large`) before it answered.
+# The newest screenshots are the ones that describe the page now.
+IMAGES_PER_TURN = 2
 OLD_TOOL_RESULT_CHARS = 1_500
 TOOL_RESULT_CHARS = 20_000
 _CUT = "\n... [{} more characters of this earlier tool result were omitted]"
@@ -216,10 +221,11 @@ class CliTransport:
 
     async def _infer(self, prompt):
         if self.completion_fn is None:
-            return await self.runner.infer(prompt, INTENT_SCHEMA, self.images)
+            return await self.runner.infer(prompt, INTENT_SCHEMA, self.images[-IMAGES_PER_TURN:])
         if self.image_completion_fn:
             text = await self.image_completion_fn(prompt=prompt, schema=INTENT_SCHEMA,
-                                                   system_prompt=_INSTRUCTIONS, images=self.images)
+                                                   system_prompt=_INSTRUCTIONS,
+                                                   images=self.images[-IMAGES_PER_TURN:])
             return decode_json(text), {}
         if self.images:
             raise CliRuntimeError("cli_delegated_images_unsupported")

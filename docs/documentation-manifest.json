@@ -62,7 +62,7 @@
     },
     {
       "id": "physical-mission-planning",
-      "description": "Judge-card Mission interpretation, deterministic fallback, approved-capability selection, and structured Robotics planning attestations.",
+      "description": "Judge-card Mission interpretation, deterministic fallback, approved-capability selection, and the legacy lab robotics planner kept for released lab tooling.",
       "paths": ["flyto_ai/mission_interpretation.py", "flyto_ai/robotics_planning.py", "flyto_ai/robotics_planner_server.py"],
       "documentation": ["docs/FEATURES.md#physical-mission-interpretation-and-planning", "docs/API.md#structured-robotics-planner", "ARCHITECTURE.md#mission-stations-interpretation-boundary"]
     },
@@ -182,7 +182,17 @@
       "description": "Preserves distinct Blueprint request/page/candidate and Cloud context/feasibility/result digest meanings under frozen host validation; narrows installed manifests with candidate-only evidence, exact producer bounds, an independent 32-group limit, and an atomic 32-provider-row ceiling.",
       "source": ["flyto_ai/capability_router.py"],
       "documentation": ["docs/CAPABILITY_ROUTING.md#bounded-retrieval-handoff", "ARCHITECTURE.md#capability-retrieval-to-routing-boundary-phase-2-2026-08-13", "docs/reference/python/package-root.md"],
-      "tests": ["tests/test_capability_router.py"]
+      "tests": ["tests/test_capability_router.py", "tests/test_provider_neutral_planning.py"]
+    },
+    {
+      "id": "contract-recovery-guidance",
+      "title": "Contract-declared recovery guidance",
+      "kind": "library",
+      "status": "active",
+      "description": "Reads the optional recovery declaration of registered capability contracts and offers only installed, declared substitutes with their own grades; no declaration means no substitute.",
+      "source": ["flyto_ai/contract_recovery.py", "flyto_ai/structured_provider.py"],
+      "documentation": ["docs/CAPABILITY_ROUTING.md#contract-declared-recovery"],
+      "tests": ["tests/test_contract_recovery.py", "tests/test_provider_neutral_planning.py"]
     }
   ]
 }

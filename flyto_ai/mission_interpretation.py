@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .robotics_planning import StructuredJsonProvider
+from .structured_provider import StructuredJsonProvider
 
 REQUEST_CONTRACT = "flyto.ai.mission-interpretation-request.v1"
 RESPONSE_CONTRACT = "flyto.ai.mission-interpretation-response.v1"

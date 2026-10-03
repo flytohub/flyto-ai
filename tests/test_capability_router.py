@@ -2301,9 +2301,7 @@ def _candidate(manifest: dict[str, object]) -> dict[str, object]:
         "source": str(
             manifest.get(
                 "source",
-                "flyto-robotics"
-                if canonical_id.startswith("robotics.")
-                else "external",
+                "flyto-core" if canonical_id.startswith("core.") else "external",
             )
         ),
         "score": 1.0,

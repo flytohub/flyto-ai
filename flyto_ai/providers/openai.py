@@ -239,7 +239,7 @@ class OpenAIProvider(LLMProvider):
         """Return a schema-constrained completion, shaped like the other providers.
 
         Satisfies the StructuredJsonProvider boundary that
-        ``flyto_ai.robotics_planning`` defines, so bounded planning has one
+        ``flyto_ai.structured_provider`` defines, so bounded planning has one
         provider interface rather than one per vendor.
 
         ``strict`` structured outputs rather than a prompt asking for JSON:

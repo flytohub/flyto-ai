@@ -1,6 +1,14 @@
 # Copyright 2024 Flyto2
 # Licensed under the Apache License, Version 2.0
-"""Bounded structured planning adapter for versioned Flyto2 robotics contracts."""
+"""Bounded structured planning adapter for the legacy lab robotics contracts.
+
+Legacy lab protocol (``flyto.robotics.planner-request.v1``). It is kept only so
+released flyto-robotics lab tooling keeps working over its loopback HTTP
+boundary. Platform planning does not go through this module: Flyto2 hosts plan
+from installed module packs and their declared capability contracts
+(``flyto_ai.tools.pack_tools`` and ``flyto_ai.contract_recovery``), and no
+generic module may import from here.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +20,11 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any
+
+# Re-exported for released callers that imported the provider boundary from
+# this module; the boundary itself is provider- and domain-neutral.
+from .structured_provider import StructuredJsonProvider
 
 
 REQUEST_CONTRACT = "flyto.robotics.planner-request.v1"
@@ -45,17 +57,6 @@ class RoboticsPlanningError(ValueError):
     """Raised when a planning request or every model proposal is invalid."""
 
 
-class StructuredJsonProvider(Protocol):
-    """Minimal provider boundary required by the robotics planning adapter."""
-
-    async def complete_json_schema(
-        self,
-        *,
-        messages: Sequence[Mapping[str, str]],
-        schema: Mapping[str, Any],
-        timeout_seconds: float = 120.0,
-    ) -> dict[str, Any]:
-        """Return a provider-native completion containing message.content."""
 
 
 @dataclass(frozen=True)

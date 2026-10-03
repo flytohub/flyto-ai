@@ -132,7 +132,7 @@ def test_the_provider_satisfies_the_structured_boundary():
     import inspect
 
     from flyto_ai.providers.ollama import OllamaProvider
-    from flyto_ai.robotics_planning import StructuredJsonProvider
+    from flyto_ai.structured_provider import StructuredJsonProvider
 
     def names(fn):
         return [p.name for p in inspect.signature(fn).parameters.values()]

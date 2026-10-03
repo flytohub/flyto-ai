@@ -7,7 +7,7 @@ compatibility, permission, or safety authority.
 ```text
 goal in any language, modality, or upstream event format
   → flyto.goal-frame.v1 (canonical intents, affordances, effects, events)
-  → source/domain/robot/sensor/resource/permission hard filters
+  → source/domain/resource-model/observation/resource/permission hard filters
   → exact semantic-frame rank
   → trusted Blueprint module hints
   → scoped Core discovery through core_tools
@@ -97,6 +97,19 @@ verified at least one registry-declared Core capability provider. Arbitrary Core
 search results cannot enter that default scope, because an ordinary module is
 never projected into a manifest in the first place.
 
+### Provider-neutral hard filters
+
+The router names no provider. A manifest's `source` is the value it declares
+(or the value the registry stamped); only the platform's own `core.` namespace
+is recognised without one, and every other unsourced manifest is `external`. No
+identifier prefix ever turns into a provider name.
+
+Resource compatibility uses neutral fields: `context.resource_model` against
+`manifest.compatible_resources` (`["*"]` when absent), excluded with
+`resource_incompatible`. The legacy lab fields `robot_model` and
+`compatible_robots` are read as aliases so released lab tooling keeps its
+filtering; when both spellings are present the neutral one wins.
+
 ### Discovery status is a lane outcome, not an empty list
 
 Both discovery lanes report a bounded machine-readable `status` and a bounded
@@ -147,8 +160,10 @@ rather than a raw provider or transport exception.
 
 ### Planner propagation
 
-`prepare_planner_request()` applies this boundary to
-`flyto.robotics.planner-request.v1`. It replaces the catalog with the verified
+`prepare_planner_request()` applies this boundary to the legacy lab contract
+`flyto.robotics.planner-request.v1`, kept only for released lab tooling;
+platform planning reads installed module packs and their capability contracts
+(see [Contract-declared recovery](#contract-declared-recovery)). It replaces the catalog with the verified
 shortlist before provider dispatch and attaches the full routing decision as
 evidence.
 
@@ -179,7 +194,7 @@ order. Callers must therefore de-duplicate provider identities before routing;
 supplying a manifest that exactly repeats a discovered Core provider identity is
 an ambiguous catalog, not a hint.
 
-Production robot entry points should set `require_goal_frame=True`; the default
+Production entry points should set `require_goal_frame=True`; the default
 remains backwards compatible with older planner clients, including callers whose
 environment exposes no discoverable Core capabilities at all.
 
@@ -189,8 +204,8 @@ environment exposes no discoverable Core capabilities at all.
 be in `{applied, not_applicable}`. An `unavailable` or `failed` lane raises a
 bounded `CapabilityRoutingError` naming only the two statuses, and it raises
 before any provider could run, so a degraded discovery lane cannot silently
-become a narrower shortlist that a model then plans against. Production robot
-and coding entry points that treat Blueprint and Core as required lanes should
+become a narrower shortlist that a model then plans against. Production
+entry points that treat Blueprint and Core as required lanes should
 set it alongside `require_goal_frame=True`.
 
 **Compatibility and rollback.** `require_discovery` defaults to `False`, which
@@ -204,9 +219,35 @@ reverting `flyto_ai/capability_router.py`; the evidence fields are additive, so
 no persisted route or planner request needs rewriting.
 
 Missing semantic coverage or a low-confidence legacy route sets
-`needs_clarification=true`. Robot-side policy must then require a human gate or
+`needs_clarification=true`. The executing host's policy must then require a human gate or
 reject the plan. A provider cannot select a capability that was filtered out
 or absent from the exact registry snapshot.
+
+## Contract-declared recovery
+
+When a step fails, a planner may only propose a way round that the provider
+declared. `flyto_ai.contract_recovery` reads the optional `recovery` key of a
+registered capability contract (flyto-core 2.36+):
+
+```json
+"recovery": {"substitutes": ["<capability id>"], "context": "<observation id>"}
+```
+
+`recovery_guidance(failed_capability, candidates)` offers a substitute only
+when a module in the host's candidate set (one pack group, or one resource's
+approved capabilities) provides it, never offers the failed capability itself,
+and carries each substitute's own module id, contract grade and tool name so
+the host still runs its approval and safe-stop path. A malformed declaration is
+ignored as a whole (fail closed). Without a declaration the guidance says so
+(`source: "none"`) and `render_recovery_guidance()` tells the planner not to
+invent a substitute. Older cores reject the key at registration, so no stored
+contract carries it there; that is the feature detection, and
+`core_supports_recovery()` reports it for display only.
+
+The structured provider boundary every bounded planner uses lives in
+`flyto_ai.structured_provider`; generic modules never import the legacy lab
+planner (`flyto_ai.robotics_planning`), which re-exports the boundary for
+released callers.
 
 ## Stack profiles and routing manifests are separate layers
 

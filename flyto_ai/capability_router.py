@@ -2,8 +2,8 @@
 # Licensed under the Apache License, Version 2.0
 """Provider-neutral, deterministic-first routing for large capability catalogs.
 
-This module is deliberately independent of robot source trees.  It consumes
-versioned JSON manifests, optionally enriches discovery through the existing
+This module is deliberately independent of any provider's source tree and
+names no provider.  It consumes versioned JSON manifests, optionally enriches discovery through the existing
 Flyto Core and Blueprint bridges, and returns a bounded shortlist for an LLM.
 """
 
@@ -740,12 +740,8 @@ def _manifest_source(manifest: Mapping[str, Any]) -> str:
     explicit = manifest.get("source", "")
     if isinstance(explicit, str) and explicit:
         return explicit
-    canonical_id = _canonical_id(manifest)
-    if canonical_id.startswith("robotics."):
-        return "flyto-robotics"
-    if canonical_id.startswith("core."):
-        return "flyto-core"
-    return "external"
+    # Never infer a provider from a prefix; only ``core.`` is the platform's.
+    return "flyto-core" if _canonical_id(manifest).startswith("core.") else "external"
 
 
 def _manifest_plugin(manifest: Mapping[str, Any]) -> str:
@@ -818,8 +814,11 @@ def _hard_filter(
     runtime_name = _runtime_name(manifest)
     source = _manifest_source(manifest)
     domain = str(manifest.get("domain") or manifest.get("category") or "")
-    robot_model = str(context.get("robot_model", ""))
-    compatible_robots = _string_list(manifest.get("compatible_robots", ("*",)))
+    # Neutral fields; legacy lab robot_model/compatible_robots are aliases.
+    resource_model = str(context.get("resource_model", context.get("robot_model", "")))
+    compatible_models = _string_list(
+        manifest.get("compatible_resources", manifest.get("compatible_robots", ("*",)))
+    )
 
     allowed_sources = _context_set(context, "allowed_sources")
     allowed_domains = _context_set(context, "allowed_domains")
@@ -831,11 +830,11 @@ def _hard_filter(
     if enabled is not None and runtime_name not in enabled:
         failures.append("not_enabled")
     if (
-        robot_model
-        and "*" not in compatible_robots
-        and robot_model not in compatible_robots
+        resource_model
+        and "*" not in compatible_models
+        and resource_model not in compatible_models
     ):
-        failures.append("robot_incompatible")
+        failures.append("resource_incompatible")
 
     checks = (
         (
@@ -1411,7 +1410,7 @@ def _core_capability_providers(result: Mapping[str, Any]) -> list[dict[str, Any]
                 "required_observations": [],
                 "required_resources": [],
                 "required_permissions": [],
-                "compatible_robots": [],
+                "compatible_resources": [],
                 "positive_examples": [],
                 "negative_examples": [],
                 "intent_ids": list(item.get("semantics", {}).get("intent_ids", [])),
@@ -1753,7 +1752,7 @@ async def prepare_planner_request(
     core_dispatch: CoreDispatch | None = None,
     blueprint_search: BlueprintSearch | None = None,
 ) -> dict[str, Any]:
-    """Apply Flyto2 routing to a Robotics planner request before provider dispatch."""
+    """Apply Flyto2 routing to a legacy lab planner request before dispatch."""
     if request.get("planner_contract") != "flyto.robotics.planner-request.v1":
         raise CapabilityRoutingError("unsupported planner_contract")
     goal = request.get("goal")

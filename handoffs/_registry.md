@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-10-04 | Contract-aware grading and pack capability groups | 2026-10-04-pack-capability-grouping.md |
 | 2026-10-03 | inspect_page DOM settle and task-browser reuse | 2026-10-03-inspect-page-dom-settle.md |
 | 2026-09-20 | Bounded CLI intent recovery | 2026-09-20-cli-intent-recovery.md |
 | 2026-09-06 | Local CLI inference runtime | 2026-09-06-local-cli-runtime.md |

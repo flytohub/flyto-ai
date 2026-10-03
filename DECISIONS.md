@@ -2214,3 +2214,32 @@ confirmed restart gap and is not operationally safe during rework.
   query-context/requirements/feasibility/result meanings. Frozen host
   validation preserves both, but every result remains candidate-only with
   `execution_authority=false`.
+
+## 2026-10-04 — Capability contracts grade module packs; packs are grouped whole
+
+A provider package registered through `flyto.modules` now describes what each
+capability does to the world in a `flyto.capability-contract.v1` contract
+(flyto-core 2.35.0). flyto-ai grades from that declaration instead of a module
+category prefix, so a provider needs no row in any host table:
+
+- `actuates: true` or `safety_class` `movement` / `dangerous` is
+  `DANGER_FULL` with consequence level 4 / 5, never `WORKSPACE_WRITE`.
+- A non-core package module without a readable contract fails closed as
+  actuating (level 4). A contract lookup that raises also fails closed.
+- Contracts only raise the legacy grade; Core modules without a contract keep
+  category grading, and `DANGER_MODULE_CATEGORIES` stays as the floor.
+- A stop capability (`motion.halt`, with a contract that is not movement or
+  dangerous, needs no safe stop and is not cancellable) grades `READ_ONLY` /
+  level 1 and is marked `immediate`. A host keeps it on its immediate path; it
+  must never be routed through proposals or approvals. The id alone is not
+  enough, so a package cannot borrow it for an actuating capability.
+
+`flyto_ai.tools.pack_tools` groups each non-core package whole, with each
+module's own contract from `get_module_info`, never the manifest's
+per-capability `contracts` map, which collapses two providers of one
+capability to the lowest module id. Tool names are `<plugin>__<capability>`;
+a name two bindings would share is withheld and reported, never resolved by
+guessing. Rejected: lowering a level for simulation here (the host owns the
+deployment mode), and executing pack tools directly (hosts propose them as
+tasks under their own approval and safe-stop path).
+

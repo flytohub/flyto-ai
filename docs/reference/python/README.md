@@ -15,11 +15,11 @@ All module-level functions/classes, nested classes, and direct class methods are
 - [local_runtime](local_runtime.md): 3 modules, 9 top-level symbols, 3 methods
 - [memory](memory.md): 6 modules, 14 top-level symbols, 43 methods
 - [orchestration](orchestration.md): 6 modules, 105 top-level symbols, 160 methods
-- [package-root](package-root.md): 39 modules, 375 top-level symbols, 302 methods
+- [package-root](package-root.md): 39 modules, 381 top-level symbols, 303 methods
 - [prompt](prompt.md): 3 modules, 13 top-level symbols, 0 methods
 - [providers](providers.md): 6 modules, 26 top-level symbols, 34 methods
 - [sandbox](sandbox.md): 2 modules, 2 top-level symbols, 3 methods
 - [scheduler](scheduler.md): 3 modules, 16 top-level symbols, 59 methods
 - [security](security.md): 16 modules, 49 top-level symbols, 0 methods
 - [telegram](telegram.md): 6 modules, 14 top-level symbols, 54 methods
-- [tools](tools.md): 9 modules, 98 top-level symbols, 8 methods
+- [tools](tools.md): 10 modules, 114 top-level symbols, 8 methods

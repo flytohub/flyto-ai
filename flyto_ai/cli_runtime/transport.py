@@ -21,6 +21,41 @@ from .process import ProcessRunner
 
 logger = logging.getLogger(__name__)
 
+# Every round re-sends the whole conversation, so a page read early in a task
+# is paid for again in every later round. In a live run the prompt grew from
+# 1.4k to 52k characters (about 150k tokens) in four rounds, and the CLI then
+# answered with output that was not the intent JSON (`cli_invalid_output`)
+# before the task could finish. The latest results stay whole; older ones are
+# cut to a stub that still says what they were.
+KEEP_RECENT_TOOL_RESULTS = 3
+# The Codex app server echoes the turn's input -- images included, as data
+# URLs -- in its item events, so eight full screenshots made the CLI's own
+# output pass MAX_OUTPUT_BYTES (`cli_output_too_large`) before it answered.
+# The newest screenshots are the ones that describe the page now.
+IMAGES_PER_TURN = 2
+OLD_TOOL_RESULT_CHARS = 1_500
+TOOL_RESULT_CHARS = 20_000
+_CUT = "\n... [{} more characters of this earlier tool result were omitted]"
+
+
+def _cut(text, limit):
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    return text[:limit] + _CUT.format(len(text) - limit)
+
+
+def bounded_context(context):
+    """The conversation as sent: recent tool results whole, older ones short."""
+    tool_positions = [index for index, item in enumerate(context) if item.get("role") == "tool"]
+    recent = set(tool_positions[-KEEP_RECENT_TOOL_RESULTS:])
+    bounded = []
+    for index, item in enumerate(context):
+        if item.get("role") == "tool":
+            limit = TOOL_RESULT_CHARS if index in recent else OLD_TOOL_RESULT_CHARS
+            item = {**item, "content": _cut(item.get("content"), limit)}
+        bounded.append(item)
+    return bounded
+
 _INSTRUCTIONS = """You are the inference component of a computer-local AI Space.
 You have NO native execution tools. The host supplies a tool catalog as data.
 Return only the required JSON object with content and tool_calls. Each tool call
@@ -103,7 +138,7 @@ class CliTransport:
         try:
             for round_num in range(max_rounds):
                 prompt = encode_json({"system_prompt": _INSTRUCTIONS + "\n" + system_prompt,
-                                      "messages": self.context, "tools": tools})
+                                      "messages": bounded_context(self.context), "tools": tools})
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise CliRuntimeError("cli_timeout")
@@ -186,10 +221,11 @@ class CliTransport:
 
     async def _infer(self, prompt):
         if self.completion_fn is None:
-            return await self.runner.infer(prompt, INTENT_SCHEMA, self.images)
+            return await self.runner.infer(prompt, INTENT_SCHEMA, self.images[-IMAGES_PER_TURN:])
         if self.image_completion_fn:
             text = await self.image_completion_fn(prompt=prompt, schema=INTENT_SCHEMA,
-                                                   system_prompt=_INSTRUCTIONS, images=self.images)
+                                                   system_prompt=_INSTRUCTIONS,
+                                                   images=self.images[-IMAGES_PER_TURN:])
             return decode_json(text), {}
         if self.images:
             raise CliRuntimeError("cli_delegated_images_unsupported")

@@ -18,9 +18,10 @@ Status: Done (pending merge)
   `build_pack_tools`, `pack_tool_name`, `pack_tool_permission_overrides`,
   `resolve_pack_tool_call`, `bind_resource_capabilities`,
   `params_schema_to_json_schema`, `get_pack_tool_catalog`.
-- `stack-lock.json`: CI Core revision `4a76d3d` -> `82a87fd` (2.35.0).
-- `pyproject.toml`: flyto-core floor 2.31.1 -> 2.33.0 (security floor derived
-  from Core's advisories at `82a87fd`; first CI run failed on it).
+- `stack-lock.json` and the Core floor are unchanged. Advancing the lock to
+  `82a87fd` was tried and reverted: Core's advisories at that revision put the
+  security floor at 2.33.0, and `test_stack_security_floor` also checks
+  flyto-blueprint's pyproject (`flyto-core>=2.31.1` at `b4228b6` and main).
 - Tests: `tests/test_contract_grading.py`, `tests/test_pack_tools.py`
   (two packages providing `motion.advance`, collisions, fail-closed grading,
   stop immediacy, and one test against the real Core registry).
@@ -51,6 +52,8 @@ host's resource tier needs each package whole, with per-module contracts
 - `ruff --select E9,F63,F7,F82`, `compileall`, `generate_reference.py --check`,
   `check_release_drift.py`: pass.
 - `flyto-index verify . --full-scan --strict`: 21 PASS.
+- GitHub CI runs on Core `4a76d3d` (2.31.3): the real-registry test skips
+  there; it ran and passed only locally on 2.35.0.
 
 ## Not verified
 
@@ -65,4 +68,6 @@ host's resource tier needs each package whole, with per-module contracts
   merge `permission_overrides` into `SpaceToolExecutor` levels (do not grade
   pack tool names by prefix), route `immediate` bindings to the existing stop
   path, and propose every other call as a Space task step.
+- Raise flyto-blueprint's Core floor to 2.33.0, then advance this repo's
+  `stack-lock.json` Core to 2.35.0+ and its floor to 2.33.0.
 - Phase C: remove `_DANGER_MODULE_CATEGORIES` duplicate in `core_tools.py`.

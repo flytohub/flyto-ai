@@ -6,8 +6,10 @@
 `get_module_info`: actuating or movement/dangerous contracts require
 `DANGER_FULL`, uncontracted non-core package modules fail closed, and
 `motion.halt` stop contracts stay immediate. `flyto_ai.tools.pack_tools`
-groups non-core packages whole for a host's resource tier. CI pins Core
-`82a87fd` (2.35.0). Cloud has not adopted either API yet; see
+groups non-core packages whole for a host's resource tier. CI still pins Core
+`4a76d3d` (2.31.3), where the real-registry contract test skips; advancing
+the lock to 2.35.0 first needs flyto-blueprint's Core floor raised to 2.33.0.
+Cloud has not adopted either API yet; see
 `handoffs/2026-10-04-pack-capability-grouping.md`.
 
 ## CLI correction across admitted slices (2026-09-20)

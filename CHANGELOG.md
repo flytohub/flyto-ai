@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `declared_recovery` now ignores the `recovery` key of a contract the grader
+  cannot read (missing required keys, unknown `safety_class`, non-boolean
+  `actuates`): a contract graded fail-closed declares no substitutes. Repaired
+  merge-conflict markers in `handoffs/_registry.md` and added a test that keeps
+  the handoff registry parseable.
 - The agent is told to fill a web form with one `browser.fill_form` call when
   the installed flyto-core provides it (2.38.0+): the running-browser prompt
   hint (`get_browser_status`) and the `execute_module` tool description carry

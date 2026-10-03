@@ -61,3 +61,12 @@ See the PR body for exact counts (full pytest, ruff E9/F63/F7/F82,
 - Cloud mission recovery should call `recovery_guidance` with the resource's
   approved pack modules once Cloud consumes flyto-ai contract grouping.
 - Phase C: move the legacy lab planner into flyto-robotics lab tooling.
+
+## Follow-up (review, Owner: claude, branch `claude/recovery-fail-closed`)
+
+- `declared_recovery` now returns `None` for a contract that
+  `grade_module_contract` grades `missing_contract` / `invalid_contract`. Before,
+  a contract the grader rejected could still supply a trusted substitute list.
+- `handoffs/_registry.md` on main carried unresolved merge-conflict markers from
+  the #59/#60 rebase; resolved, and `tests/test_handoff_registry.py` now fails on
+  conflict markers or rows that name a missing file.

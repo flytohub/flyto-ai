@@ -19,6 +19,8 @@ Status: Done (pending merge)
   `resolve_pack_tool_call`, `bind_resource_capabilities`,
   `params_schema_to_json_schema`, `get_pack_tool_catalog`.
 - `stack-lock.json`: CI Core revision `4a76d3d` -> `82a87fd` (2.35.0).
+- `pyproject.toml`: flyto-core floor 2.31.1 -> 2.33.0 (security floor derived
+  from Core's advisories at `82a87fd`; first CI run failed on it).
 - Tests: `tests/test_contract_grading.py`, `tests/test_pack_tools.py`
   (two packages providing `motion.advance`, collisions, fail-closed grading,
   stop immediacy, and one test against the real Core registry).

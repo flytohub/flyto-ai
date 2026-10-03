@@ -20,6 +20,8 @@
   modules keep the existing meta-tools plus search. Nothing in the module
   executes; hosts route calls through their own approval path.
 - CI now checks flyto-core out at `82a87fd` (2.35.0, capability contracts).
+  The declared flyto-core floor moves from 2.31.1 to 2.33.0, the lowest
+  release that Core's advisories manifest at that revision marks unaffected.
 
 - Allow one format-only CLI intent correction within the existing inference
   deadline and round budget. Invalid batches never dispatch; unknown tools,

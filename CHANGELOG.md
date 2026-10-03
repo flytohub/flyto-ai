@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Grade module execution by its capability contract. `execute_module` on a
+  module whose contract actuates, or whose `safety_class` is `movement` or
+  `dangerous`, now requires `DANGER_FULL` (confirmation at the default
+  session level) with consequence level 4 or 5; it is never
+  `WORKSPACE_WRITE`. A module from a non-core package with no contract fails
+  closed as actuating. A stop capability (`motion.halt` whose contract
+  describes a stop) is never graded into a confirmation. Contracts can only
+  raise the legacy category grade. Core modules without a contract keep the
+  existing category grading.
+- Add `flyto_ai.tools.pack_tools`: per-package capability groups
+  (`{plugin, description, modules: [{module_id, provides_capability,
+  params_schema, contract}]}`) built from Core's capability manifest and
+  per-module `get_module_info`, collision-checked tool names
+  `<plugin>__<capability>`, a name-to-binding index, permission overrides, and
+  a resource binding helper that reports ambiguity instead of guessing. Core
+  modules keep the existing meta-tools plus search. Nothing in the module
+  executes; hosts route calls through their own approval path.
+- CI now checks flyto-core out at `82a87fd` (2.35.0, capability contracts).
+
 - Allow one format-only CLI intent correction within the existing inference
   deadline and round budget. Invalid batches never dispatch; unknown tools,
   native actions, session failures, authentication and quota failures still stop.

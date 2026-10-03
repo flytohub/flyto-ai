@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, FrozenSet, Mapping, Optional
 
 from flyto_ai.workspace_permissions import is_workspace_file_call
 
@@ -95,6 +95,210 @@ def _required_level_for_module(
     return PermissionLevel.WORKSPACE_WRITE
 
 
+# ── Capability-contract grading ───────────────────────────────────────
+#
+# A module registered with a ``flyto.capability-contract.v1`` contract says
+# what it does to the world as data. That declaration -- not the module's
+# category prefix -- decides its grade, so a provider package needs no entry in
+# any host table to be graded correctly. The scale mirrors the five
+# consequence levels hosts already use: 1 observe, 2 reversible, 3 external
+# write, 4 real-world effect, 5 irreversible or high-impact. Lowering a level
+# for a simulated deployment is the host's job (it knows the deployment mode);
+# this grade is always the real-world one.
+
+RISK_OBSERVE = 1
+RISK_REVERSIBLE = 2
+RISK_EXTERNAL_WRITE = 3
+RISK_REAL_WORLD = 4
+RISK_IRREVERSIBLE = 5
+
+_CONTRACT_SAFETY_RISK = {
+    "read_only": RISK_OBSERVE,
+    "controlled": RISK_EXTERNAL_WRITE,
+    "movement": RISK_REAL_WORLD,
+    "dangerous": RISK_IRREVERSIBLE,
+}
+
+_CONTRACT_REQUIRED_KEYS = frozenset({
+    "actuates", "safety_class", "requires_safe_stop", "cancellable",
+})
+
+#: Capabilities that ARE the stop. Their risk is in not running them, so they
+#: are never graded into a confirmation and a host keeps them on its immediate
+#: path (never a proposal or approval queue). The name alone is not enough:
+#: the contract must also describe a stop -- not movement or dangerous, no
+#: safe stop of its own, not cancellable -- so a package cannot borrow the id
+#: to slip an actuating capability past confirmation.
+IMMEDIATE_STOP_CAPABILITIES: FrozenSet[str] = frozenset({"motion.halt"})
+
+
+@dataclass(frozen=True)
+class ContractGrade:
+    """What one module's capability contract (or its absence) costs.
+
+    ``permission_level`` is the flyto-ai tier; ``risk_level`` is the 1-5
+    consequence level; ``actuating`` is True when the module may change the
+    world (always True for a fail-closed grade); ``immediate`` marks a stop
+    capability that must bypass proposals and approvals; ``source`` is one of
+    ``contract``, ``immediate_stop``, ``missing_contract`` or
+    ``invalid_contract``.
+    """
+
+    permission_level: PermissionLevel
+    risk_level: int
+    actuating: bool
+    immediate: bool
+    source: str
+    reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "permission_level": self.permission_level.name,
+            "risk_level": self.risk_level,
+            "actuating": self.actuating,
+            "immediate": self.immediate,
+            "source": self.source,
+            "reason": self.reason,
+        }
+
+
+def _fail_closed(source: str, reason: str) -> ContractGrade:
+    return ContractGrade(
+        permission_level=PermissionLevel.DANGER_FULL,
+        risk_level=RISK_REAL_WORLD,
+        actuating=True,
+        immediate=False,
+        source=source,
+        reason=reason,
+    )
+
+
+def _is_stop_contract(contract: Mapping[str, Any]) -> bool:
+    return (
+        contract.get("safety_class") in ("read_only", "controlled")
+        and contract.get("requires_safe_stop") is False
+        and contract.get("cancellable") is False
+    )
+
+
+def grade_module_contract(
+    module_info: Optional[Mapping[str, Any]],
+    *,
+    immediate_capabilities: FrozenSet[str] = IMMEDIATE_STOP_CAPABILITIES,
+) -> Optional[ContractGrade]:
+    """Grade one module from its catalog detail (``get_module_info`` shape).
+
+    Reads ``plugin``, ``provides_capability`` and ``contract``. Pure: no Core
+    import, so a host that only holds reported data can call it.
+
+    Returns None only for a module flyto-core itself registered (empty
+    ``plugin``) that declares no contract -- legacy grading applies there.
+    A module from a non-core package without a valid contract fails closed:
+    actuating, real-world, ``DANGER_FULL``. An actuating contract, or one whose
+    ``safety_class`` is ``movement`` / ``dangerous``, is ``DANGER_FULL`` with
+    risk 4 / 5 and is never ``WORKSPACE_WRITE``.
+    """
+    if not isinstance(module_info, Mapping):
+        return None
+    plugin = module_info.get("plugin")
+    plugin = plugin.strip() if isinstance(plugin, str) else ""
+    capability = module_info.get("provides_capability")
+    capability = capability if isinstance(capability, str) else ""
+    contract = module_info.get("contract")
+
+    if contract is None:
+        if not plugin:
+            return None
+        return _fail_closed(
+            "missing_contract",
+            "module from package '{}' declares no capability contract; "
+            "treated as actuating".format(plugin),
+        )
+    if (
+        not isinstance(contract, Mapping)
+        or not _CONTRACT_REQUIRED_KEYS.issubset(contract)
+        or contract.get("safety_class") not in _CONTRACT_SAFETY_RISK
+        or not isinstance(contract.get("actuates"), bool)
+    ):
+        return _fail_closed(
+            "invalid_contract", "capability contract is unreadable; treated as actuating",
+        )
+
+    safety_class = contract["safety_class"]
+    actuates = contract["actuates"]
+    if capability in immediate_capabilities and _is_stop_contract(contract):
+        return ContractGrade(
+            permission_level=PermissionLevel.READ_ONLY,
+            risk_level=RISK_OBSERVE,
+            actuating=actuates,
+            immediate=True,
+            source="immediate_stop",
+            reason="{} is a stop; its risk is in not running it".format(capability),
+        )
+
+    risk = _CONTRACT_SAFETY_RISK[safety_class]
+    if actuates and risk < RISK_REAL_WORLD:
+        risk = RISK_REAL_WORLD
+    if risk >= RISK_REAL_WORLD:
+        level = PermissionLevel.DANGER_FULL
+    elif risk == RISK_OBSERVE:
+        level = PermissionLevel.READ_ONLY
+    else:
+        level = PermissionLevel.WORKSPACE_WRITE
+    return ContractGrade(
+        permission_level=level,
+        risk_level=risk,
+        actuating=bool(actuates or risk >= RISK_REAL_WORLD),
+        immediate=False,
+        source="contract",
+        reason="contract safety_class={} actuates={}".format(
+            safety_class, str(actuates).lower(),
+        ),
+    )
+
+
+ModuleInfoResolver = Callable[[str], Optional[Mapping[str, Any]]]
+
+
+def core_module_info(module_id: str) -> Optional[Mapping[str, Any]]:
+    """Catalog detail for ``module_id`` from the installed flyto-core.
+
+    Returns None when Core is absent or does not know the module. Imported
+    lazily so this module stays importable on hosts without Core.
+    """
+    from flyto_ai.tools.core_tools import _get_mcp_handler
+
+    handler = _get_mcp_handler()
+    if not handler or not callable(handler.get("get_module_info")):
+        return None
+    detail = handler["get_module_info"](module_id=module_id)
+    if not isinstance(detail, Mapping) or detail.get("error"):
+        return None
+    return detail
+
+
+def resolve_module_grade(
+    module_id: str,
+    resolver: Optional[ModuleInfoResolver] = None,
+) -> Optional[ContractGrade]:
+    """Grade ``module_id`` by looking its contract up through ``resolver``.
+
+    ``resolver`` defaults to :func:`core_module_info`. A lookup that raises is
+    graded fail-closed rather than silently falling back to category rules.
+    """
+    if not module_id:
+        return None
+    lookup = resolver or core_module_info
+    try:
+        info = lookup(module_id)
+    except Exception as exc:
+        logger.warning("Contract lookup for %s failed: %s", module_id, exc)
+        return _fail_closed(
+            "invalid_contract", "contract lookup failed; treated as actuating",
+        )
+    return grade_module_contract(info)
+
+
 class PermissionEnforcer:
     """Runtime permission gate — checked at tool dispatch time.
 
@@ -107,16 +311,21 @@ class PermissionEnforcer:
         The maximum permission level for this session.
     overrides : dict, optional
         Per-tool overrides: ``{"tool_name": PermissionLevel}``.
+    module_info_resolver : callable, optional
+        ``module_id -> catalog detail``, used to read a module's capability
+        contract for ``execute_module``. Defaults to the installed flyto-core.
     """
 
     def __init__(
         self,
         level: PermissionLevel = PermissionLevel.WORKSPACE_WRITE,
         overrides: Optional[Dict[str, PermissionLevel]] = None,
+        module_info_resolver: Optional[ModuleInfoResolver] = None,
     ) -> None:
         self._level = level
         self._overrides = overrides or {}
         self._workspace_root = Path.cwd().resolve()
+        self._module_info_resolver = module_info_resolver
 
     @property
     def level(self) -> PermissionLevel:
@@ -141,10 +350,16 @@ class PermissionEnforcer:
             )
 
         if tool_name == "execute_module":
+            module_id = str(arguments.get("module_id", ""))
             module_level = _required_level_for_module(
-                str(arguments.get("module_id", "")),
-                arguments, self._workspace_root,
+                module_id, arguments, self._workspace_root,
             )
+            # The contract can only raise the grade. An actuating module is
+            # DANGER_FULL even when its category or a workspace path would
+            # have read as WORKSPACE_WRITE.
+            grade = resolve_module_grade(module_id, self._module_info_resolver)
+            if grade is not None and grade.permission_level > module_level:
+                module_level = grade.permission_level
             if module_level > required:
                 required = module_level
         return required

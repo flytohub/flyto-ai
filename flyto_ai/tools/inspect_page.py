@@ -53,37 +53,116 @@ _BROWSER_CHANNELS = ("auto", "chromium", "chrome", "msedge")
 # Upper bound for the settle, kept from the old fixed wait's cap so a model
 # asking for more cannot stall a task.
 _MAX_SETTLE_MS = 5000
-# How long the DOM must stay unchanged before it counts as rendered. Short
+# How long the page must stay unchanged before it counts as rendered. Short
 # enough that a static page is inspected almost at once, long enough to span
 # the gap between a framework's first paint and its data-driven re-render.
 _QUIET_MS = 200
 
-# Waits for the page's own state instead of a clock: a MutationObserver
-# resolves once the document has been quiet for QUIET ms. CAP only bounds a
-# page that never stops changing (tickers, animations); reaching it is still a
-# settled page, so extraction runs and no error is reported.
+# Waits for the page's own state instead of a clock. Settled is a conjunction
+# of state signals, because a DOM that is merely quiet can be a spinner waiting
+# on an API call: the load event has fired, no fetch/XHR started during the
+# settle is still in flight, nothing visible says it is busy (aria-busy,
+# progressbar, spinner/skeleton/loading classes), at least one interactive
+# element exists, and none of that has changed for QUIET ms. Every DOM
+# mutation, finished resource, request start/end and the load event restarts
+# the quiet window; a quiet window that ends while a signal is still pending
+# does not re-arm itself, so the next state change is what wakes it. CAP only
+# bounds a page that never gets there (tickers, a page with no controls);
+# reaching it is still a settled page, so extraction runs and no error is
+# reported, with ``pending`` naming the signal that held it ('mutating' when
+# the DOM itself never went quiet).
 _SETTLE_JS = """
+  const INTERACTIVE =
+    'input, button, a, select, textarea, [role="button"], [role="link"], ' +
+    '[role="tab"], [role="menuitem"], [role="search"], [contenteditable="true"]';
+  const BUSY =
+    '[aria-busy="true"], [role="progressbar"], progress, ' +
+    '[class*="spinner" i], [class*="skeleton" i], [class*="loading" i]';
+  const visible = (el) => {
+    if (!el.getClientRects().length) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  };
   const settle = (quietMs, capMs) => new Promise((resolve) => {
     if (capMs <= 0) { resolve({ by: 'skipped', ms: 0 }); return; }
     const started = performance.now();
+    const undo = [];
+    let finished = false;
+    let inflight = 0;
     let quietTimer = null;
     let capTimer = null;
-    let observer = null;
+    const pending = () => {
+      if (document.readyState !== 'complete') return 'load';
+      if (inflight > 0) return 'network';
+      if (Array.from(document.querySelectorAll(BUSY)).some(visible)) return 'busy';
+      if (!document.querySelector(INTERACTIVE)) return 'empty';
+      return null;
+    };
     const done = (by) => {
-      if (observer) observer.disconnect();
+      if (finished) return;
+      finished = true;
       clearTimeout(quietTimer);
       clearTimeout(capTimer);
-      resolve({ by, ms: Math.round(performance.now() - started) });
+      for (const fn of undo) { try { fn(); } catch (e) { /* page already tore it down */ } }
+      const out = { by, ms: Math.round(performance.now() - started) };
+      if (by === 'cap') out.pending = pending() || 'mutating';
+      resolve(out);
     };
-    const armQuiet = () => {
+    const onQuiet = () => {
+      quietTimer = null;
+      if (!pending()) done('quiet');
+    };
+    const changed = () => {
+      if (finished) return;
       clearTimeout(quietTimer);
-      quietTimer = setTimeout(() => done('quiet'), Math.min(quietMs, capMs));
+      quietTimer = setTimeout(onQuiet, Math.min(quietMs, capMs));
     };
-    observer = new MutationObserver(armQuiet);
+
+    const observer = new MutationObserver(changed);
     observer.observe(document.documentElement || document, {
       childList: true, subtree: true, attributes: true, characterData: true
     });
-    armQuiet();
+    undo.push(() => observer.disconnect());
+    if (typeof PerformanceObserver === 'function') {
+      try {
+        const resources = new PerformanceObserver(changed);
+        resources.observe({ type: 'resource' });
+        undo.push(() => resources.disconnect());
+      } catch (e) { /* no resource timing here */ }
+    }
+    window.addEventListener('load', changed);
+    undo.push(() => window.removeEventListener('load', changed));
+
+    // Count requests the page starts while settling (an app chaining its
+    // data calls); the originals are put back as soon as the settle ends.
+    const ended = () => { inflight = Math.max(0, inflight - 1); changed(); };
+    const originalFetch = window.fetch;
+    if (typeof originalFetch === 'function') {
+      const countedFetch = function (...args) {
+        inflight += 1;
+        changed();
+        let request;
+        try { request = originalFetch.apply(this, args); } catch (e) { ended(); throw e; }
+        Promise.resolve(request).then(ended, ended);
+        return request;
+      };
+      window.fetch = countedFetch;
+      undo.push(() => { if (window.fetch === countedFetch) window.fetch = originalFetch; });
+    }
+    const xhr = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+    if (xhr && typeof xhr.send === 'function') {
+      const originalSend = xhr.send;
+      const countedSend = function (...args) {
+        inflight += 1;
+        changed();
+        this.addEventListener('loadend', ended, { once: true });
+        try { return originalSend.apply(this, args); } catch (e) { ended(); throw e; }
+      };
+      xhr.send = countedSend;
+      undo.push(() => { if (xhr.send === countedSend) xhr.send = originalSend; });
+    }
+
+    changed();
     capTimer = setTimeout(() => done('cap'), capMs);
   });
 """
@@ -97,10 +176,7 @@ _INSPECT_JS = """
   const MAX = 80;
   const seen = new Set();
   const results = [];
-  const els = document.querySelectorAll(
-    'input, button, a, select, textarea, [role="button"], [role="link"], ' +
-    '[role="tab"], [role="menuitem"], [role="search"], [contenteditable="true"]'
-  );
+  const els = document.querySelectorAll(INTERACTIVE);
   for (const el of els) {
     if (results.length >= MAX) break;
     const tag = el.tagName.toLowerCase();
@@ -196,6 +272,26 @@ def _reusable_task_sessions() -> Dict[str, Any] | None:
     return scope.sessions
 
 
+def _tab_field(result: Any, key: str) -> Any:
+    """Core puts tab fields at the top level; a wrapped result nests them."""
+    if not isinstance(result, dict):
+        return None
+    value = result.get(key)
+    if value is None and isinstance(result.get("data"), dict):
+        value = result["data"].get(key)
+    return value
+
+
+async def _restore_task_tabs(execute: Any, call: Dict[str, Any], close: Dict[str, Any], index: Any) -> None:
+    """Close only the tab opened here and put the operator's page back in front."""
+    try:
+        await execute(module_id="browser.tab", params=close, **call)
+        if isinstance(index, int) and index >= 0:
+            await execute(module_id="browser.tab", params={"action": "switch", "index": index}, **call)
+    except Exception as exc:
+        logger.debug("inspect_page tab restore failed: %s", exc)
+
+
 async def _inspect_in_task_browser(
     execute: Any,
     sessions: Dict[str, Any],
@@ -204,8 +300,11 @@ async def _inspect_in_task_browser(
 ) -> Dict[str, Any] | None:
     """Inspect in a new tab of the task's browser, then restore its tab.
 
-    Returns None when the tab could not be opened, so the caller can fall
-    back to a cold launch: nothing in the task browser changed by then.
+    Returns None only when no tab was opened (browser.tab missing or the
+    context refused a page), so the caller can fall back to a cold launch
+    with the task browser untouched. A tab that opened but failed to
+    navigate is closed here and its error returned: a cold launch would only
+    repeat the same failing navigation.
     """
     from flyto_ai.tools.core_tools import _is_ok
 
@@ -214,14 +313,22 @@ async def _inspect_in_task_browser(
     listed = await execute(module_id="browser.tab", params={"action": "list"}, **call)
     if not _is_ok(listed):
         return None
-    original_index = listed.get("current_index")
-    if not isinstance(original_index, int):
-        original_index = (listed.get("data") or {}).get("current_index")
+    original_index = _tab_field(listed, "current_index")
+    tabs_before = _tab_field(listed, "tab_count")
     opened = await execute(module_id="browser.tab", params={"action": "new", "url": url}, **call)
     if not _is_ok(opened):
+        error = opened.get("error", "unknown") if isinstance(opened, dict) else "unknown"
         if isinstance(opened, dict) and opened.get("error_code") == "SSRF_BLOCKED":
-            return {"ok": False, "error": "Failed to navigate: {}".format(opened.get("error", "blocked"))}
-        return None
+            return {"ok": False, "error": "Failed to navigate: {}".format(error)}
+        # Core opens the page before navigating it, so a failed goto leaves
+        # a tab behind (and keeps the original page current). Find it by the
+        # tab count growing and close exactly that one.
+        relisted = await execute(module_id="browser.tab", params={"action": "list"}, **call)
+        tabs_after = _tab_field(relisted, "tab_count") if _is_ok(relisted) else None
+        if not (isinstance(tabs_before, int) and isinstance(tabs_after, int) and tabs_after > tabs_before):
+            return None
+        await _restore_task_tabs(execute, call, {"action": "close", "index": tabs_after - 1}, original_index)
+        return {"ok": False, "error": "Failed to navigate: {}".format(error)}
     try:
         eval_result = await _evaluate_settled(execute, wait_ms, **call)
         if not _is_ok(eval_result):
@@ -230,18 +337,7 @@ async def _inspect_in_task_browser(
             )}
         return {"ok": True, "data": _page_data(eval_result), "browser_reused": True}
     finally:
-        # Leave the task exactly where it was: close only the tab opened here
-        # and put the operator's page back in front.
-        try:
-            await execute(module_id="browser.tab", params={"action": "close"}, **call)
-            if isinstance(original_index, int) and original_index >= 0:
-                await execute(
-                    module_id="browser.tab",
-                    params={"action": "switch", "index": original_index},
-                    **call,
-                )
-        except Exception as exc:
-            logger.debug("inspect_page tab restore failed: %s", exc)
+        await _restore_task_tabs(execute, call, {"action": "close"}, original_index)
 
 
 async def _launch_browser(

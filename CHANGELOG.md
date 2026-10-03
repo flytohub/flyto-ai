@@ -15,6 +15,9 @@
 - Moved the `StructuredJsonProvider` boundary to `flyto_ai.structured_provider`.
   `flyto_ai.robotics_planning` re-exports it and is now documented as the legacy
   lab planner kept for released flyto-robotics lab tooling.
+- Pack capability groups now carry each module's declared `recovery`, and pack
+  tool descriptions name the declared substitutes. Removed the unread
+  `_DANGER_MODULE_CATEGORIES` duplicate from `tools/core_tools.py`.
 - Grade module execution by its capability contract. `execute_module` on a
   module whose contract actuates, or whose `safety_class` is `movement` or
   `dangerous`, now requires `DANGER_FULL` (confirmation at the default

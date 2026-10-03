@@ -244,6 +244,11 @@ invent a substitute. Older cores reject the key at registration, so no stored
 contract carries it there; that is the feature detection, and
 `core_supports_recovery()` reports it for display only.
 
+`flyto_ai.tools.pack_tools` puts the declaration on every pack module entry
+(`recovery`, or `None`) and names declared substitutes in the pack tool
+description, so `recovery_guidance(failed, group["modules"])` runs directly on
+one pack group.
+
 The structured provider boundary every bounded planner uses lives in
 `flyto_ai.structured_provider`; generic modules never import the legacy lab
 planner (`flyto_ai.robotics_planning`), which re-exports the boundary for

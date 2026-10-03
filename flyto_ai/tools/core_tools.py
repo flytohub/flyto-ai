@@ -55,11 +55,6 @@ _READ_ONLY_CORE_TOOLS = frozenset({
 
 _EXECUTION_CORE_TOOLS = frozenset({"execute_module", "run_recipe"})
 
-_DANGER_MODULE_CATEGORIES = frozenset({
-    "shell", "process", "docker", "k8s", "ssh", "network", "port", "dns",
-    "file", "path", "env", "git",
-})
-
 CORE_CAPABILITY_MANIFEST_TOOL = {
     "name": "get_core_capability_manifest",
     "description": (

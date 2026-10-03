@@ -188,3 +188,47 @@ def test_core_support_absent_core(monkeypatch):
     monkeypatch.setitem(sys.modules, "core.capability_contract", None)
     monkeypatch.setattr(contract_recovery, "_core_support", None)
     assert core_supports_recovery() is False
+
+
+def test_pack_groups_carry_declared_recovery_into_entries_and_tools():
+    from flyto_ai.tools.pack_tools import build_pack_tools, get_pack_capability_groups
+
+    move = {
+        "module_id": "vendor.lift.move",
+        "provides_capability": "lift.move",
+        "plugin": "vendor-lift",
+        "params_schema": {},
+        "contract": _contract(actuates=False, safety_class="controlled",
+                              requires_safe_stop=False, recovery=RECOVERY),
+    }
+    reroute = {
+        "module_id": "vendor.lift.reroute",
+        "provides_capability": "lift.reroute",
+        "plugin": "vendor-lift",
+        "params_schema": {},
+        "contract": _contract(actuates=False, safety_class="controlled",
+                              requires_safe_stop=False),
+    }
+    infos = {item["module_id"]: item for item in (move, reroute)}
+    manifest = {
+        "plugins": [{"id": "vendor-lift", "version": "1.0.0",
+                     "module_ids": list(infos)}],
+        "capabilities": [],
+    }
+    result = get_pack_capability_groups(
+        manifest=manifest, module_info=infos.get, plugin_modules=lambda _p: None
+    )
+    modules = {m["provides_capability"]: m for m in result["groups"][0]["modules"]}
+    assert modules["lift.move"]["recovery"] == {
+        "substitutes": ["lift.reroute", "lift.wait"], "context": "door.state",
+    }
+    assert modules["lift.reroute"]["recovery"] is None
+
+    guidance = recovery_guidance("lift.move", result["groups"][0]["modules"])
+    assert [item["module_id"] for item in guidance["substitutes"]] == [
+        "vendor.lift.reroute"
+    ]
+
+    tools = {t["name"]: t for t in build_pack_tools(result["groups"])["tools"]}
+    move_tool = next(t for n, t in tools.items() if n.endswith("lift_move"))
+    assert "may be replaced only by: lift.reroute, lift.wait" in move_tool["description"]

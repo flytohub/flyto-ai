@@ -42,6 +42,7 @@ import re
 from copy import deepcopy
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
+from flyto_ai.contract_recovery import declared_recovery
 from flyto_ai.permissions import PermissionLevel, grade_module_contract
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,7 @@ def _module_entry(module_id: str, info: Mapping[str, Any]) -> Dict[str, Any]:
     capability = info.get("provides_capability")
     params_schema = info.get("params_schema")
     contract = info.get("contract")
+    recovery = declared_recovery(contract)
     return {
         "module_id": module_id,
         "provides_capability": capability if isinstance(capability, str) else "",
@@ -173,6 +175,8 @@ def _module_entry(module_id: str, info: Mapping[str, Any]) -> Dict[str, Any]:
         "description": str(info.get("description") or ""),
         # A pack module always grades (missing contract fails closed).
         "grade": grade.to_dict() if grade is not None else None,
+        # Declared recovery (contract ``recovery`` key, core 2.36+) or None.
+        "recovery": recovery.to_dict() if recovery is not None else None,
     }
 
 
@@ -204,6 +208,7 @@ def get_pack_capability_groups(
                   "label": str,
                   "description": str,
                   "grade": ContractGrade.to_dict(),
+                  "recovery": {"substitutes": [...], "context": str} | None,
                 },
               ],
             },
@@ -328,6 +333,10 @@ def _tool_description(group: Mapping[str, Any], module: Mapping[str, Any]) -> st
         notes.append("stop: runs immediately")
     elif grade.get("actuating"):
         notes.append("acts on the real world: requires confirmation")
+    recovery = module.get("recovery") or {}
+    if recovery.get("substitutes"):
+        notes.append("on failure may be replaced only by: {}".format(
+            ", ".join(recovery["substitutes"])))
     return "{} ({}).".format(str(text).rstrip("."), "; ".join(notes))
 
 

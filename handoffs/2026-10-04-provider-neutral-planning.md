@@ -25,6 +25,12 @@ Date: 2026-10-04
 - `robotics_planning.py` / `robotics_planner_server.py` documented as the
   legacy lab protocol kept for released flyto-robotics lab tooling (HTTP
   caller in flyto-robotics `ai_planner.py`). Not deleted.
+- `flyto_ai/tools/pack_tools.py` (after PR #59 merged): each pack module entry
+  carries `recovery` (declared or `None`), and the tool description names the
+  declared substitutes. `recovery_guidance(failed, group["modules"])` works on
+  pack group modules directly.
+- `flyto_ai/tools/core_tools.py`: removed the unread `_DANGER_MODULE_CATEGORIES`
+  duplicate; `flyto_ai.permissions.DANGER_MODULE_CATEGORIES` stays the authority.
 - Docs: `docs/CAPABILITY_ROUTING.md` (provider-neutral filters, contract-declared
   recovery), `docs/documentation-manifest.json`, CHANGELOG, regenerated reference.
 
@@ -49,14 +55,9 @@ See the PR body for exact counts (full pytest, ruff E9/F63/F7/F82,
   follows the Phase B plan shape (`substitutes`, `context`). If core lands a
   different key name, `declared_recovery` must follow it.
 - No live run against flyto-robotics lab planner; its tests were not run.
-- Not yet wired into `tools/pack_tools.py` (Phase A PR #59 was still open).
-- `_DANGER_MODULE_CATEGORIES` in `tools/core_tools.py` was left in place
-  (unread, but Phase A had not merged).
 
 ## Follow-ups
 
-- After PR #59 merges: add `recovery` (from `declared_recovery`) to pack
-  module entries / tool descriptions, then remove `_DANGER_MODULE_CATEGORIES`.
 - Cloud mission recovery should call `recovery_guidance` with the resource's
   approved pack modules once Cloud consumes flyto-ai contract grouping.
 - Phase C: move the legacy lab planner into flyto-robotics lab tooling.

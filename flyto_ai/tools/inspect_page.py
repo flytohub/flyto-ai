@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """Browser page inspection tool — extracts interactive elements."""
 import logging
+import time
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -9,11 +10,14 @@ logger = logging.getLogger(__name__)
 INSPECT_PAGE_TOOL = {
     "name": "inspect_page",
     "description": (
-        "Launch a headless browser, navigate to a URL, and return a compact list "
+        "Navigate to a URL and return a compact list "
         "of interactive elements (inputs, buttons, links, selects, textareas) with "
         "their tag, id, class, text, placeholder, aria-label, href, type, and name. "
         "Use this BEFORE generating browser workflow YAML so you can pick correct "
-        "selectors from real page structure instead of guessing."
+        "selectors from real page structure instead of guessing. Inside a task "
+        "that already has a browser, the page opens in a new tab of that browser "
+        "(so signed-in pages are visible) and the original tab is restored; "
+        "otherwise a headless browser is launched and closed."
     ),
     "inputSchema": {
         "type": "object",
@@ -24,7 +28,12 @@ INSPECT_PAGE_TOOL = {
             },
             "wait_ms": {
                 "type": "number",
-                "description": "Wait time in ms after page load for dynamic content (default 2000)",
+                "description": (
+                    "Upper bound in ms for dynamic content to settle after page load. "
+                    "Inspection starts as soon as the network is idle and the page "
+                    "stops changing, so this is only reached on pages that keep "
+                    "loading or mutating (default 2000, max 5000)"
+                ),
                 "default": 2000,
             },
             "browser_channel": {
@@ -43,15 +52,135 @@ INSPECT_PAGE_TOOL = {
 
 _BROWSER_CHANNELS = ("auto", "chromium", "chrome", "msedge")
 
+# Upper bound for the settle, kept from the old fixed wait's cap so a model
+# asking for more cannot stall a task.
+_MAX_SETTLE_MS = 5000
+# How long the page must stay unchanged before it counts as rendered. Short
+# enough that a static page is inspected almost at once, long enough to span
+# the gap between a framework's first paint and its data-driven re-render.
+_QUIET_MS = 200
+
+# Waits for the page's own state instead of a clock. Settled is a conjunction
+# of state signals, because a DOM that is merely quiet can be a spinner waiting
+# on an API call: the load event has fired, no fetch/XHR started during the
+# settle is still in flight, nothing visible says it is busy (aria-busy,
+# progressbar, spin/loader/skeleton/loading classes such as Tailwind's
+# animate-spin), at least one interactive
+# element exists, and none of that has changed for QUIET ms. Every DOM
+# mutation, finished resource, request start/end and the load event restarts
+# the quiet window; a quiet window that ends while a signal is still pending
+# does not re-arm itself, so the next state change is what wakes it. CAP only
+# bounds a page that never gets there (tickers, a page with no controls);
+# reaching it is still a settled page, so extraction runs and no error is
+# reported, with ``pending`` naming the signal that held it ('mutating' when
+# the DOM itself never went quiet).
+_SETTLE_JS = """
+  const INTERACTIVE =
+    'input, button, a, select, textarea, [role="button"], [role="link"], ' +
+    '[role="tab"], [role="menuitem"], [role="search"], [contenteditable="true"]';
+  const BUSY =
+    '[aria-busy="true"], [role="progressbar"], progress, ' +
+    '[class*="spin" i], [class*="loader" i], [class*="skeleton" i], ' +
+    '[class*="loading" i]';
+  const visible = (el) => {
+    if (!el.getClientRects().length) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  };
+  const settle = (quietMs, capMs) => new Promise((resolve) => {
+    if (capMs <= 0) { resolve({ by: 'skipped', ms: 0 }); return; }
+    const started = performance.now();
+    const undo = [];
+    let finished = false;
+    let inflight = 0;
+    let quietTimer = null;
+    let capTimer = null;
+    const pending = () => {
+      if (document.readyState !== 'complete') return 'load';
+      if (inflight > 0) return 'network';
+      if (Array.from(document.querySelectorAll(BUSY)).some(visible)) return 'busy';
+      if (!document.querySelector(INTERACTIVE)) return 'empty';
+      return null;
+    };
+    const done = (by) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(quietTimer);
+      clearTimeout(capTimer);
+      for (const fn of undo) { try { fn(); } catch (e) { /* page already tore it down */ } }
+      const out = { by, ms: Math.round(performance.now() - started) };
+      if (by === 'cap') out.pending = pending() || 'mutating';
+      resolve(out);
+    };
+    const onQuiet = () => {
+      quietTimer = null;
+      if (!pending()) done('quiet');
+    };
+    const changed = () => {
+      if (finished) return;
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(onQuiet, Math.min(quietMs, capMs));
+    };
+
+    const observer = new MutationObserver(changed);
+    observer.observe(document.documentElement || document, {
+      childList: true, subtree: true, attributes: true, characterData: true
+    });
+    undo.push(() => observer.disconnect());
+    if (typeof PerformanceObserver === 'function') {
+      try {
+        const resources = new PerformanceObserver(changed);
+        resources.observe({ type: 'resource' });
+        undo.push(() => resources.disconnect());
+      } catch (e) { /* no resource timing here */ }
+    }
+    window.addEventListener('load', changed);
+    undo.push(() => window.removeEventListener('load', changed));
+
+    // Count requests the page starts while settling (an app chaining its
+    // data calls); the originals are put back as soon as the settle ends.
+    const ended = () => { inflight = Math.max(0, inflight - 1); changed(); };
+    const originalFetch = window.fetch;
+    if (typeof originalFetch === 'function') {
+      const countedFetch = function (...args) {
+        inflight += 1;
+        changed();
+        let request;
+        try { request = originalFetch.apply(this, args); } catch (e) { ended(); throw e; }
+        Promise.resolve(request).then(ended, ended);
+        return request;
+      };
+      window.fetch = countedFetch;
+      undo.push(() => { if (window.fetch === countedFetch) window.fetch = originalFetch; });
+    }
+    const xhr = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+    if (xhr && typeof xhr.send === 'function') {
+      const originalSend = xhr.send;
+      const countedSend = function (...args) {
+        inflight += 1;
+        changed();
+        this.addEventListener('loadend', ended, { once: true });
+        try { return originalSend.apply(this, args); } catch (e) { ended(); throw e; }
+      };
+      xhr.send = countedSend;
+      undo.push(() => { if (xhr.send === countedSend) xhr.send = originalSend; });
+    }
+
+    changed();
+    capTimer = setTimeout(() => done('cap'), capMs);
+  });
+"""
+
 _INSPECT_JS = """
-(() => {
+(async () => {
+  const QUIET = __QUIET_MS__;
+  const CAP = __CAP_MS__;
+""" + _SETTLE_JS + """
+  const settled = await settle(QUIET, CAP);
   const MAX = 80;
   const seen = new Set();
   const results = [];
-  const els = document.querySelectorAll(
-    'input, button, a, select, textarea, [role="button"], [role="link"], ' +
-    '[role="tab"], [role="menuitem"], [role="search"], [contenteditable="true"]'
-  );
+  const els = document.querySelectorAll(INTERACTIVE);
   for (const el of els) {
     if (results.length >= MAX) break;
     const tag = el.tagName.toLowerCase();
@@ -87,10 +216,228 @@ _INSPECT_JS = """
     url: location.href,
     title: document.title,
     count: results.length,
-    elements: results
+    elements: results,
+    settle: settled
   };
 })()
 """
+
+
+def _settle_cap(wait_ms: Any) -> int:
+    """``wait_ms`` as a bounded integer; anything unreadable is the default."""
+    try:
+        cap = int(wait_ms)
+    except (TypeError, ValueError):
+        cap = 2000
+    return max(0, min(cap, _MAX_SETTLE_MS))
+
+
+def _inspect_script(cap_ms: int) -> str:
+    """The inspection script, settling in the page for at most ``cap_ms``."""
+    return (
+        _INSPECT_JS
+        .replace("__QUIET_MS__", str(_QUIET_MS))
+        .replace("__CAP_MS__", str(max(0, int(cap_ms))))
+    )
+
+
+def _page_data(eval_result: Dict[str, Any]) -> Dict[str, Any]:
+    data = eval_result.get("data", {})
+    page_data = data.get("result", {}) if isinstance(data, dict) else {}
+    return page_data or eval_result.get("result", {})
+
+
+def _navigated_away(eval_result: Any) -> bool:
+    """A redirect during the settle destroys the script's document."""
+    if not isinstance(eval_result, dict):
+        return False
+    error = str(eval_result.get("error", "")).lower()
+    return "context was destroyed" in error or "navigat" in error
+
+
+def _current_page(sessions: Dict[str, Any]) -> Any:
+    """The Playwright page Core's browser session is on, when it exposes one."""
+    try:
+        driver = next(iter(sessions.values()))
+        return getattr(driver, "page", None)
+    except Exception:  # noqa: BLE001 - a session without a live page has none to read
+        return None
+
+
+async def _wait_network_idle(sessions: Dict[str, Any], cap_ms: int) -> tuple[str, int]:
+    """Wait for the browser's own network-idle state, bounded by ``cap_ms``.
+
+    The in-page settle can only count requests started after it was
+    injected, but an SPA issues its data fetch while the document parses.
+    Playwright tracks every request of the navigation from its start, so its
+    networkidle lifecycle state (no request for 500 ms) is the signal that
+    covers those. It is a state the browser reports, not a clock: a page
+    whose requests already finished returns at once. Returns 'idle', 'busy'
+    when the bound was reached first, or 'unobserved' when the session has
+    no Playwright page to ask (a non-Core or remote driver), in which case
+    the in-page settle is the only gate, as before.
+    """
+    page = _current_page(sessions)
+    wait = getattr(page, "wait_for_load_state", None)
+    if cap_ms <= 0 or not callable(wait):
+        return "unobserved", 0
+    started = time.monotonic()
+    try:
+        await wait("networkidle", timeout=cap_ms)
+        state = "idle"
+    except Exception as exc:  # noqa: BLE001 - a timeout (or closed page) is a bound, not a failure
+        logger.debug("inspect_page network idle not reached: %s", exc)
+        state = "busy"
+    return state, int((time.monotonic() - started) * 1000)
+
+
+async def _evaluate_settled(
+    execute: Any,
+    sessions: Dict[str, Any],
+    wait_ms: Any,
+    **call: Any,
+) -> Any:
+    """Settle on network idle, then on the page's own state, and extract.
+
+    Both gates share the one ``wait_ms`` bound. A redirect that destroys the
+    settle's document is re-inspected once on the page it landed on.
+    """
+    cap = _settle_cap(wait_ms)
+    network, network_ms = await _wait_network_idle(sessions, cap)
+    # The network gate spent part of the bound; a page still busy at the
+    # bound is read as it stands rather than waited on twice.
+    remaining = 0 if network == "busy" else max(0, cap - network_ms)
+    script = _inspect_script(remaining)
+    result = await execute(module_id="browser.evaluate", params={"script": script}, **call)
+    if _navigated_away(result):
+        result = await execute(module_id="browser.evaluate", params={"script": script}, **call)
+    if cap > 0 and isinstance(result, dict):
+        settle = _page_data(result).get("settle")
+        if isinstance(settle, dict):
+            settle["network"] = network
+            settle["network_ms"] = network_ms
+            if network == "busy":
+                settle["by"] = "cap"
+                settle["pending"] = "network"
+    return result
+
+
+def _reusable_task_sessions() -> Dict[str, Any] | None:
+    """The caller's own browser registry when it holds exactly one browser.
+
+    A Space task or scoped chat runs inside a browser_session_scope; its
+    browser carries the operator's signed-in state. The scope is caller
+    authority, never a model parameter, and an ambiguous registry (several
+    browsers) or a scope already shutting down is not reused.
+    """
+    from flyto_ai.tools.browser_scope import current_browser_scope
+
+    scope = current_browser_scope()
+    if scope is None or scope.closing or scope.closed or len(scope.sessions) != 1:
+        return None
+    return scope.sessions
+
+
+def _tab_field(result: Any, key: str) -> Any:
+    """Core puts tab fields at the top level; a wrapped result nests them."""
+    if not isinstance(result, dict):
+        return None
+    value = result.get(key)
+    if value is None and isinstance(result.get("data"), dict):
+        value = result["data"].get(key)
+    return value
+
+
+async def _restore_task_tabs(
+    execute: Any,
+    call: Dict[str, Any],
+    tabs_before: Any,
+    original_index: Any,
+    opened_current: bool,
+) -> None:
+    """Close every tab this inspection added and put the operator's page back.
+
+    Tabs at or above ``tabs_before`` were opened here: the inspection tab,
+    one a failed navigation left behind, or a popup the inspected page
+    raised. They are closed from the highest index down so the remaining
+    indexes stay valid. Without a tab count to compare, only a tab known to
+    be current and ours is closed, never the operator's page.
+    """
+    tabs_after = None
+    try:
+        listed = await execute(module_id="browser.tab", params={"action": "list"}, **call)
+        tabs_after = _tab_field(listed, "tab_count")
+    except Exception as exc:
+        logger.debug("inspect_page tab list failed: %s", exc)
+    closes = []
+    if isinstance(tabs_before, int) and isinstance(tabs_after, int):
+        closes = [{"action": "close", "index": index} for index in range(tabs_after - 1, tabs_before - 1, -1)]
+    elif opened_current:
+        closes = [{"action": "close"}]
+    for close in closes:
+        try:
+            await execute(module_id="browser.tab", params=close, **call)
+        except Exception as exc:
+            logger.debug("inspect_page tab close failed: %s", exc)
+    if closes and isinstance(original_index, int) and original_index >= 0:
+        try:
+            await execute(module_id="browser.tab", params={"action": "switch", "index": original_index}, **call)
+        except Exception as exc:
+            logger.debug("inspect_page tab switch back failed: %s", exc)
+
+
+async def _inspect_in_task_browser(
+    execute: Any,
+    sessions: Dict[str, Any],
+    url: str,
+    wait_ms: Any,
+) -> Dict[str, Any] | None:
+    """Inspect in a new tab of the task's browser, then restore its tabs.
+
+    Returns None only when no tab was opened (browser.tab missing or the
+    context refused a page), so the caller can fall back to a cold launch
+    with the task browser untouched. A tab that opened but failed to
+    navigate is closed here and its error returned: a cold launch would only
+    repeat the same failing navigation. The restore runs in ``finally``, so
+    an exception from Core after the tab opened still closes it.
+    """
+    from flyto_ai.tools.core_tools import _is_ok
+
+    session_id = next(iter(sessions))
+    call = {"context": {"browser_session": session_id}, "browser_sessions": sessions}
+    listed = await execute(module_id="browser.tab", params={"action": "list"}, **call)
+    if not _is_ok(listed):
+        return None
+    original_index = _tab_field(listed, "current_index")
+    tabs_before = _tab_field(listed, "tab_count")
+    opened_current = False
+    added_tab = True
+    try:
+        opened = await execute(module_id="browser.tab", params={"action": "new", "url": url}, **call)
+        if not _is_ok(opened):
+            error = opened.get("error", "unknown") if isinstance(opened, dict) else "unknown"
+            if isinstance(opened, dict) and opened.get("error_code") == "SSRF_BLOCKED":
+                # Core closed the page itself before any request left.
+                added_tab = False
+                return {"ok": False, "error": "Failed to navigate: {}".format(error)}
+            # Core opens the page before navigating it, so a failed goto
+            # leaves a tab behind (and keeps the original page current).
+            relisted = await execute(module_id="browser.tab", params={"action": "list"}, **call)
+            tabs_after = _tab_field(relisted, "tab_count") if _is_ok(relisted) else None
+            if not (isinstance(tabs_before, int) and isinstance(tabs_after, int) and tabs_after > tabs_before):
+                added_tab = False
+                return None
+            return {"ok": False, "error": "Failed to navigate: {}".format(error)}
+        opened_current = True
+        eval_result = await _evaluate_settled(execute, sessions, wait_ms, **call)
+        if not _is_ok(eval_result):
+            return {"ok": False, "error": "Failed to inspect: {}".format(
+                eval_result.get("error", "unknown")
+            )}
+        return {"ok": True, "data": _page_data(eval_result), "browser_reused": True}
+    finally:
+        if added_tab:
+            await _restore_task_tabs(execute, call, tabs_before, original_index, opened_current)
 
 
 async def _launch_browser(
@@ -138,7 +485,11 @@ async def inspect_page(
     wait_ms: int = 2000,
     browser_channel: str = "auto",
 ) -> Dict[str, Any]:
-    """Launch browser, go to URL, extract interactive elements, close browser."""
+    """Go to URL and extract interactive elements once the page has settled.
+
+    Reuses the caller's scoped task browser in a new tab when there is one;
+    otherwise launches a headless browser and closes it afterwards.
+    """
     from flyto_ai.prompt.policies import is_safe_url
     from flyto_ai.tools.core_tools import _get_mcp_handler, _is_ok
 
@@ -154,6 +505,17 @@ async def inspect_page(
     if not handler:
         return {"ok": False, "error": "flyto-core not installed. Run: pip install flyto-core"}
     execute = handler["execute_module"]
+
+    task_sessions = _reusable_task_sessions()
+    if task_sessions is not None:
+        try:
+            reused = await _inspect_in_task_browser(execute, task_sessions, url, wait_ms)
+        except Exception as e:
+            logger.warning("inspect_page in task browser failed: %s", e)
+            reused = None
+        if reused is not None:
+            return reused
+
     sessions: Dict[str, Any] = {}
 
     try:
@@ -175,29 +537,16 @@ async def inspect_page(
                 goto_result.get("error", "unknown")
             )}
 
-        if wait_ms > 0:
-            await execute(
-                module_id="browser.wait",
-                params={"duration_ms": min(wait_ms, 5000)},
-                browser_sessions=sessions,
-            )
-
-        eval_result = await execute(
-            module_id="browser.evaluate",
-            params={"script": _INSPECT_JS},
-            browser_sessions=sessions,
-        )
+        # Network idle and then the page's own state (not a fixed sleep)
+        # decide when the elements are read.
+        eval_result = await _evaluate_settled(execute, sessions, wait_ms, browser_sessions=sessions)
 
         if not _is_ok(eval_result):
             return {"ok": False, "error": "Failed to inspect: {}".format(
                 eval_result.get("error", "unknown")
             )}
 
-        page_data = eval_result.get("data", {}).get("result", {})
-        if not page_data:
-            page_data = eval_result.get("result", {})
-
-        return {"ok": True, "data": page_data, "browser_channel": selected_channel}
+        return {"ok": True, "data": _page_data(eval_result), "browser_channel": selected_channel}
 
     except Exception as e:
         logger.warning("inspect_page failed: %s", e)

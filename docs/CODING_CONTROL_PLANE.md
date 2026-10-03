@@ -116,6 +116,7 @@ TypeScript visual-diff worker. `inspect_page` accepts a typed
 `browser_channel` (`auto`, `chromium`, `chrome`, or `msedge`). The default
 tries Core's bundled Chromium and then the installed Google Chrome, reports the
 selected channel in its evidence, and still fails closed if neither launches.
+It reads the page once the DOM has been quiet for a short window (a MutationObserver inside the extraction script); `wait_ms` is only the upper bound for pages that never stop changing, and reaching it still returns the elements. Inside a caller-owned browser scope holding exactly one browser (a Space task), it inspects in a new tab of that browser, so signed-in pages are visible, then closes the tab and restores the original one instead of launching a cold headless browser.
 
 Probe the exact installed composition without invoking a model, opening a page,
 or reading credentials:

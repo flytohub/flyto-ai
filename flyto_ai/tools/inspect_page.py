@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """Browser page inspection tool — extracts interactive elements."""
 import logging
+import time
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -29,8 +30,9 @@ INSPECT_PAGE_TOOL = {
                 "type": "number",
                 "description": (
                     "Upper bound in ms for dynamic content to settle after page load. "
-                    "Inspection starts as soon as the DOM stops changing, so this is "
-                    "only reached on pages that keep mutating (default 2000, max 5000)"
+                    "Inspection starts as soon as the network is idle and the page "
+                    "stops changing, so this is only reached on pages that keep "
+                    "loading or mutating (default 2000, max 5000)"
                 ),
                 "default": 2000,
             },
@@ -62,7 +64,8 @@ _QUIET_MS = 200
 # of state signals, because a DOM that is merely quiet can be a spinner waiting
 # on an API call: the load event has fired, no fetch/XHR started during the
 # settle is still in flight, nothing visible says it is busy (aria-busy,
-# progressbar, spinner/skeleton/loading classes), at least one interactive
+# progressbar, spin/loader/skeleton/loading classes such as Tailwind's
+# animate-spin), at least one interactive
 # element exists, and none of that has changed for QUIET ms. Every DOM
 # mutation, finished resource, request start/end and the load event restarts
 # the quiet window; a quiet window that ends while a signal is still pending
@@ -77,7 +80,8 @@ _SETTLE_JS = """
     '[role="tab"], [role="menuitem"], [role="search"], [contenteditable="true"]';
   const BUSY =
     '[aria-busy="true"], [role="progressbar"], progress, ' +
-    '[class*="spinner" i], [class*="skeleton" i], [class*="loading" i]';
+    '[class*="spin" i], [class*="loader" i], [class*="skeleton" i], ' +
+    '[class*="loading" i]';
   const visible = (el) => {
     if (!el.getClientRects().length) return false;
     const style = getComputedStyle(el);
@@ -219,17 +223,21 @@ _INSPECT_JS = """
 """
 
 
-def _inspect_script(wait_ms: Any) -> str:
-    """The inspection script, settling for at most ``wait_ms`` (capped)."""
+def _settle_cap(wait_ms: Any) -> int:
+    """``wait_ms`` as a bounded integer; anything unreadable is the default."""
     try:
         cap = int(wait_ms)
     except (TypeError, ValueError):
         cap = 2000
-    cap = max(0, min(cap, _MAX_SETTLE_MS))
+    return max(0, min(cap, _MAX_SETTLE_MS))
+
+
+def _inspect_script(cap_ms: int) -> str:
+    """The inspection script, settling in the page for at most ``cap_ms``."""
     return (
         _INSPECT_JS
         .replace("__QUIET_MS__", str(_QUIET_MS))
-        .replace("__CAP_MS__", str(cap))
+        .replace("__CAP_MS__", str(max(0, int(cap_ms))))
     )
 
 
@@ -247,12 +255,70 @@ def _navigated_away(eval_result: Any) -> bool:
     return "context was destroyed" in error or "navigat" in error
 
 
-async def _evaluate_settled(execute: Any, wait_ms: Any, **call: Any) -> Any:
-    """Settle and extract; re-run once on the document a redirect landed on."""
-    script = _inspect_script(wait_ms)
+def _current_page(sessions: Dict[str, Any]) -> Any:
+    """The Playwright page Core's browser session is on, when it exposes one."""
+    try:
+        driver = next(iter(sessions.values()))
+        return getattr(driver, "page", None)
+    except Exception:  # noqa: BLE001 - a session without a live page has none to read
+        return None
+
+
+async def _wait_network_idle(sessions: Dict[str, Any], cap_ms: int) -> tuple[str, int]:
+    """Wait for the browser's own network-idle state, bounded by ``cap_ms``.
+
+    The in-page settle can only count requests started after it was
+    injected, but an SPA issues its data fetch while the document parses.
+    Playwright tracks every request of the navigation from its start, so its
+    networkidle lifecycle state (no request for 500 ms) is the signal that
+    covers those. It is a state the browser reports, not a clock: a page
+    whose requests already finished returns at once. Returns 'idle', 'busy'
+    when the bound was reached first, or 'unobserved' when the session has
+    no Playwright page to ask (a non-Core or remote driver), in which case
+    the in-page settle is the only gate, as before.
+    """
+    page = _current_page(sessions)
+    wait = getattr(page, "wait_for_load_state", None)
+    if cap_ms <= 0 or not callable(wait):
+        return "unobserved", 0
+    started = time.monotonic()
+    try:
+        await wait("networkidle", timeout=cap_ms)
+        state = "idle"
+    except Exception as exc:  # noqa: BLE001 - a timeout (or closed page) is a bound, not a failure
+        logger.debug("inspect_page network idle not reached: %s", exc)
+        state = "busy"
+    return state, int((time.monotonic() - started) * 1000)
+
+
+async def _evaluate_settled(
+    execute: Any,
+    sessions: Dict[str, Any],
+    wait_ms: Any,
+    **call: Any,
+) -> Any:
+    """Settle on network idle, then on the page's own state, and extract.
+
+    Both gates share the one ``wait_ms`` bound. A redirect that destroys the
+    settle's document is re-inspected once on the page it landed on.
+    """
+    cap = _settle_cap(wait_ms)
+    network, network_ms = await _wait_network_idle(sessions, cap)
+    # The network gate spent part of the bound; a page still busy at the
+    # bound is read as it stands rather than waited on twice.
+    remaining = 0 if network == "busy" else max(0, cap - network_ms)
+    script = _inspect_script(remaining)
     result = await execute(module_id="browser.evaluate", params={"script": script}, **call)
     if _navigated_away(result):
         result = await execute(module_id="browser.evaluate", params={"script": script}, **call)
+    if cap > 0 and isinstance(result, dict):
+        settle = _page_data(result).get("settle")
+        if isinstance(settle, dict):
+            settle["network"] = network
+            settle["network_ms"] = network_ms
+            if network == "busy":
+                settle["by"] = "cap"
+                settle["pending"] = "network"
     return result
 
 
@@ -282,14 +348,42 @@ def _tab_field(result: Any, key: str) -> Any:
     return value
 
 
-async def _restore_task_tabs(execute: Any, call: Dict[str, Any], close: Dict[str, Any], index: Any) -> None:
-    """Close only the tab opened here and put the operator's page back in front."""
+async def _restore_task_tabs(
+    execute: Any,
+    call: Dict[str, Any],
+    tabs_before: Any,
+    original_index: Any,
+    opened_current: bool,
+) -> None:
+    """Close every tab this inspection added and put the operator's page back.
+
+    Tabs at or above ``tabs_before`` were opened here: the inspection tab,
+    one a failed navigation left behind, or a popup the inspected page
+    raised. They are closed from the highest index down so the remaining
+    indexes stay valid. Without a tab count to compare, only a tab known to
+    be current and ours is closed, never the operator's page.
+    """
+    tabs_after = None
     try:
-        await execute(module_id="browser.tab", params=close, **call)
-        if isinstance(index, int) and index >= 0:
-            await execute(module_id="browser.tab", params={"action": "switch", "index": index}, **call)
+        listed = await execute(module_id="browser.tab", params={"action": "list"}, **call)
+        tabs_after = _tab_field(listed, "tab_count")
     except Exception as exc:
-        logger.debug("inspect_page tab restore failed: %s", exc)
+        logger.debug("inspect_page tab list failed: %s", exc)
+    closes = []
+    if isinstance(tabs_before, int) and isinstance(tabs_after, int):
+        closes = [{"action": "close", "index": index} for index in range(tabs_after - 1, tabs_before - 1, -1)]
+    elif opened_current:
+        closes = [{"action": "close"}]
+    for close in closes:
+        try:
+            await execute(module_id="browser.tab", params=close, **call)
+        except Exception as exc:
+            logger.debug("inspect_page tab close failed: %s", exc)
+    if closes and isinstance(original_index, int) and original_index >= 0:
+        try:
+            await execute(module_id="browser.tab", params={"action": "switch", "index": original_index}, **call)
+        except Exception as exc:
+            logger.debug("inspect_page tab switch back failed: %s", exc)
 
 
 async def _inspect_in_task_browser(
@@ -298,13 +392,14 @@ async def _inspect_in_task_browser(
     url: str,
     wait_ms: Any,
 ) -> Dict[str, Any] | None:
-    """Inspect in a new tab of the task's browser, then restore its tab.
+    """Inspect in a new tab of the task's browser, then restore its tabs.
 
     Returns None only when no tab was opened (browser.tab missing or the
     context refused a page), so the caller can fall back to a cold launch
     with the task browser untouched. A tab that opened but failed to
     navigate is closed here and its error returned: a cold launch would only
-    repeat the same failing navigation.
+    repeat the same failing navigation. The restore runs in ``finally``, so
+    an exception from Core after the tab opened still closes it.
     """
     from flyto_ai.tools.core_tools import _is_ok
 
@@ -315,29 +410,34 @@ async def _inspect_in_task_browser(
         return None
     original_index = _tab_field(listed, "current_index")
     tabs_before = _tab_field(listed, "tab_count")
-    opened = await execute(module_id="browser.tab", params={"action": "new", "url": url}, **call)
-    if not _is_ok(opened):
-        error = opened.get("error", "unknown") if isinstance(opened, dict) else "unknown"
-        if isinstance(opened, dict) and opened.get("error_code") == "SSRF_BLOCKED":
-            return {"ok": False, "error": "Failed to navigate: {}".format(error)}
-        # Core opens the page before navigating it, so a failed goto leaves
-        # a tab behind (and keeps the original page current). Find it by the
-        # tab count growing and close exactly that one.
-        relisted = await execute(module_id="browser.tab", params={"action": "list"}, **call)
-        tabs_after = _tab_field(relisted, "tab_count") if _is_ok(relisted) else None
-        if not (isinstance(tabs_before, int) and isinstance(tabs_after, int) and tabs_after > tabs_before):
-            return None
-        await _restore_task_tabs(execute, call, {"action": "close", "index": tabs_after - 1}, original_index)
-        return {"ok": False, "error": "Failed to navigate: {}".format(error)}
+    opened_current = False
+    added_tab = True
     try:
-        eval_result = await _evaluate_settled(execute, wait_ms, **call)
+        opened = await execute(module_id="browser.tab", params={"action": "new", "url": url}, **call)
+        if not _is_ok(opened):
+            error = opened.get("error", "unknown") if isinstance(opened, dict) else "unknown"
+            if isinstance(opened, dict) and opened.get("error_code") == "SSRF_BLOCKED":
+                # Core closed the page itself before any request left.
+                added_tab = False
+                return {"ok": False, "error": "Failed to navigate: {}".format(error)}
+            # Core opens the page before navigating it, so a failed goto
+            # leaves a tab behind (and keeps the original page current).
+            relisted = await execute(module_id="browser.tab", params={"action": "list"}, **call)
+            tabs_after = _tab_field(relisted, "tab_count") if _is_ok(relisted) else None
+            if not (isinstance(tabs_before, int) and isinstance(tabs_after, int) and tabs_after > tabs_before):
+                added_tab = False
+                return None
+            return {"ok": False, "error": "Failed to navigate: {}".format(error)}
+        opened_current = True
+        eval_result = await _evaluate_settled(execute, sessions, wait_ms, **call)
         if not _is_ok(eval_result):
             return {"ok": False, "error": "Failed to inspect: {}".format(
                 eval_result.get("error", "unknown")
             )}
         return {"ok": True, "data": _page_data(eval_result), "browser_reused": True}
     finally:
-        await _restore_task_tabs(execute, call, {"action": "close"}, original_index)
+        if added_tab:
+            await _restore_task_tabs(execute, call, tabs_before, original_index, opened_current)
 
 
 async def _launch_browser(
@@ -385,7 +485,7 @@ async def inspect_page(
     wait_ms: int = 2000,
     browser_channel: str = "auto",
 ) -> Dict[str, Any]:
-    """Go to URL and extract interactive elements once the DOM has settled.
+    """Go to URL and extract interactive elements once the page has settled.
 
     Reuses the caller's scoped task browser in a new tab when there is one;
     otherwise launches a headless browser and closes it afterwards.
@@ -437,9 +537,9 @@ async def inspect_page(
                 goto_result.get("error", "unknown")
             )}
 
-        # The settle runs inside the extraction script, so the page's own DOM
-        # state (not a fixed sleep) decides when the elements are read.
-        eval_result = await _evaluate_settled(execute, wait_ms, browser_sessions=sessions)
+        # Network idle and then the page's own state (not a fixed sleep)
+        # decide when the elements are read.
+        eval_result = await _evaluate_settled(execute, sessions, wait_ms, browser_sessions=sessions)
 
         if not _is_ok(eval_result):
             return {"ok": False, "error": "Failed to inspect: {}".format(

@@ -50,11 +50,37 @@ page that renders its form 600 ms later, with no DOM change in between, came
 back as the spinner. The conjunction above fixes that; the probe is now a
 regression test.
 
-Known limit: a request the page started *before* the settle began (in-page
-JS cannot see an in-flight request it did not wrap) on a page that already
-has controls and shows no busy indicator can still settle early. Spinners,
-skeletons, `aria-busy`, a page with no controls yet, and chained requests are
-all covered.
+## Second review follow-up (same branch)
+
+A second review showed the in-page settle could not see a request the page
+started before the script was injected (the usual SPA boot fetch), so a page
+with a nav link and no spinner settled at ~200 ms without its form. The first
+version of this handoff called that a known limit needing a Core hook "not in
+Core today"; that was wrong. Core's `browser.goto` has offered
+`wait_until='networkidle'`, and its driver exposes the Playwright page.
+
+- Before the in-page settle, `_wait_network_idle` waits on the session's
+  Playwright page with `wait_for_load_state("networkidle", timeout=cap)`.
+  Playwright tracks every request of the navigation from its start, so the
+  boot fetch is seen. It is feature-detected: a driver without a Playwright
+  `page` keeps the in-page settle alone (`settle.network == "unobserved"`).
+  `browser.goto(wait_until='networkidle')` was not used because Core's
+  driver then also waits up to 5 s for 50 characters of body text, which a
+  short login page never has, and a goto timeout would also fail the
+  navigation itself.
+- Both gates share one `wait_ms` bound. A network that never idles is read
+  at the bound with `settle.by == "cap"`, `pending == "network"`, and the
+  in-page settle is not paid again. `settle.network` and `settle.network_ms`
+  are added to the result.
+- The cost: Playwright's idle definition is 500 ms with no request, so a
+  static page now takes ~500 ms + one 200 ms quiet window instead of ~200 ms.
+  Still well under the old fixed 2 s, and it ends on state.
+- `BUSY` now also matches `spin` and `loader` classes (Tailwind
+  `animate-spin`, `.loader`).
+- The reuse path restores tabs in `finally`: it relists and closes every tab
+  at or above the pre-inspection count, highest index first, then switches
+  back. An exception from Core after `tab new`, and a `window.open` popup the
+  page raised, no longer leave tabs in the operator's browser.
 
 ## Verified
 
@@ -62,7 +88,7 @@ all covered.
   tests/test_audit_fixes.py tests/test_sprint1_sprint2.py tests/test_browser_scope.py
   tests/test_auto_discover.py tests/test_browser_retry.py tests/test_complexity_budget.py
   tests/test_policies.py tests/test_orchestration.py tests/test_agent_stack.py`:
-  259 passed; the settle file alone (16 tests) passed three runs in a row.
+  259 passed.
   The settle tests run the real script on headless Chromium with
   `asyncio.sleep` (from inspect_page / Core wait) and `browser.wait` set to fail:
   static page < 300 ms; a page mutating for 400 ms settles at ~400 ms + quiet
@@ -76,15 +102,16 @@ all covered.
   inspection tab is closed and the operator's page is current again.
 - A failed navigation in the task tab closes the leaked tab by index and does
   not cold-launch (Core protocol fake).
-- 8 of the 16 tests fail against the first commit's source.
 - `ruff check` on touched files and the CI ruff selection: clean.
 - `scripts/generate_reference.py` then `--check`: current.
 - `flyto-index verify --strict` in the worktree: no FAIL or WARN.
 
 ## Not verified
 
-- `task(action='validate')` through the MCP server (the server is pinned to
-  another root this session).
+- `task(action='validate')` through the MCP server was not run (the server is
+  pinned to another root this session). The repo's ruff, targeted pytest and
+  `flyto-index verify --strict` were run instead.
+- The full flyto-ai pytest suite was not run, only the targeted files above.
 - A live Space task against a signed-in ERP page; the reuse path is proven
   with Core's real tab module on a test Chromium context, not a Cloud task
   browser.

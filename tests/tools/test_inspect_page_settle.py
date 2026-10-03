@@ -16,6 +16,7 @@ Core's real browser.tab module.
 import asyncio
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -90,6 +91,27 @@ FORM_ON_LOAD = """
 </script></body></html>
 """
 
+# The usual SPA boot: navigation is already interactive, there is no spinner,
+# and the data fetch is issued while the document parses, before any settle
+# script can be injected. Only the browser's own network state sees it.
+EARLY_FETCH = """
+<html><body><a id='home' href='/'>Home</a><div id='main'></div><script>
+  fetch('/api/form').then((r) => r.text()).then((html) => {
+    document.getElementById('main').innerHTML = html;
+  });
+</script></body></html>
+"""
+
+# A Tailwind spinner (svg.animate-spin) next to the nav, no request at all.
+TAILWIND_SPINNER = """
+<html><body><a id='home' href='/'>Home</a>
+<div id='main'><svg class='animate-spin h-5 w-5'></svg></div><script>
+  setTimeout(() => {
+    document.getElementById('main').innerHTML = "<input id='email' name='email'>";
+  }, 700);
+</script></body></html>
+"""
+
 FORM_FRAGMENT = "<input id='email' name='email'><button id='login'>Sign in</button>"
 _PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
@@ -144,7 +166,8 @@ class PageBackedCore:
         if module_id == "browser.wait":
             raise AssertionError("browser.wait must not be used to settle the page")
         if module_id == "browser.launch":
-            browser_sessions["s1"] = object()
+            # Core's driver exposes its current Playwright page as ``page``.
+            browser_sessions["s1"] = SimpleNamespace(page=self.page)
             return {"ok": True}
         if module_id == "browser.goto":
             assert params.get("wait_until") == "domcontentloaded"
@@ -200,6 +223,15 @@ async def _serve(page, document, *, delayed=None, delay_s=0.6):
     await page.route("https://app.test/**", handle)
 
 
+# Playwright's networkidle means no request for this long.
+_NETWORK_IDLE_MS = 500
+
+
+def _waited_ms(settle):
+    """Total settle time: the network-idle gate plus the in-page settle."""
+    return settle.get("network_ms", 0) + settle["ms"]
+
+
 def _ids(result):
     return {element.get("id") for element in result["data"]["elements"]}
 
@@ -230,9 +262,9 @@ async def test_page_that_mutates_then_stops_is_read_when_it_stops(monkeypatch, c
     assert result["ok"] is True
     settle = result["data"]["settle"]
     assert settle["by"] == "quiet"
-    # About 400 ms of mutation plus one quiet window: driven by the last
-    # mutation, not by the 2000 ms bound.
-    assert 400 <= settle["ms"] < 400 + _QUIET_MS + 300
+    # About 400 ms of mutation (Playwright's 500 ms network idle overlaps it)
+    # plus one quiet window: driven by the page, not by the 2000 ms bound.
+    assert 400 <= _waited_ms(settle) < _NETWORK_IDLE_MS + _QUIET_MS + 600
     assert core.evaluate_seconds < 1.2
     ids = {element.get("id") for element in result["data"]["elements"]}
     assert "late" in ids, "elements rendered by the last mutation must be captured"
@@ -247,7 +279,7 @@ async def test_spinner_without_controls_is_not_mistaken_for_the_page(monkeypatch
     assert {"email", "login"} <= _ids(result)
     settle = result["data"]["settle"]
     assert settle["by"] == "quiet", "the form appearing is what ended the wait"
-    assert 600 <= settle["ms"] < 600 + _QUIET_MS + 300
+    assert 600 <= _waited_ms(settle) < 600 + _NETWORK_IDLE_MS + _QUIET_MS + 300
     assert "browser.wait" not in core.calls
 
 
@@ -278,7 +310,8 @@ async def test_request_started_while_settling_holds_it_until_it_lands(monkeypatc
     assert {"email", "login"} <= _ids(result), "an in-flight request must not count as settled"
     settle = result["data"]["settle"]
     assert settle["by"] == "quiet"
-    assert 600 <= settle["ms"] < 100 + 600 + _QUIET_MS + 400
+    # The request starts at 100 ms and lands 600 ms later.
+    assert 700 <= _waited_ms(settle) < 700 + _NETWORK_IDLE_MS + _QUIET_MS + 500
     # The page's own fetch is handed back once the settle ends.
     assert await chromium_page.evaluate("String(window.fetch).includes('[native code]')")
 
@@ -315,7 +348,7 @@ async def test_page_that_never_settles_returns_elements_at_the_bound(monkeypatch
     settle = result["data"]["settle"]
     assert settle["by"] == "cap"
     assert settle["pending"] == "mutating"
-    assert 650 <= settle["ms"] < 1000
+    assert 650 <= _waited_ms(settle) < 1000
     assert any(element.get("id") == "home" for element in result["data"]["elements"])
 
 
@@ -330,8 +363,18 @@ async def test_wait_ms_zero_skips_the_settle(monkeypatch, chromium_page):
 class RecordingCore:
     """Core protocol fake for the browser-reuse wiring."""
 
-    def __init__(self, *, tab_new_ok=True, tab_new_leaves_tab=False, first_evaluate_navigates=False):
+    def __init__(
+        self,
+        *,
+        tab_new_ok=True,
+        tab_new_leaves_tab=False,
+        first_evaluate_navigates=False,
+        evaluate_raises=False,
+        evaluate_opens_popup=False,
+    ):
         self.tab_new_ok = tab_new_ok
+        self.evaluate_raises = evaluate_raises
+        self.evaluate_opens_popup = evaluate_opens_popup
         # Core's tab.new opens the page and then navigates it; a failed goto
         # leaves that page open.
         self.tab_new_leaves_tab = tab_new_leaves_tab
@@ -362,6 +405,11 @@ class RecordingCore:
                 self.tab_count -= 1
             return {"ok": True}
         if module_id == "browser.evaluate":
+            if self.evaluate_opens_popup:
+                # The inspected page called window.open during the settle.
+                self.tab_count += 1
+            if self.evaluate_raises:
+                raise RuntimeError("Target page, context or browser has been closed")
             if self.first_evaluate_navigates:
                 self.first_evaluate_navigates = False
                 return {"ok": False, "error": "Execution context was destroyed, most likely because of a navigation"}
@@ -403,9 +451,11 @@ async def test_task_browser_is_reused_in_a_new_tab_and_restored(monkeypatch, tas
     assert tab_actions == [
         {"action": "list"},
         {"action": "new", "url": "https://erp.example/orders"},
-        {"action": "close"},
+        {"action": "list"},
+        {"action": "close", "index": 2},
         {"action": "switch", "index": 1},
     ]
+    assert core.tab_count == 2
     assert all(ctx == {"browser_session": "workflow-exec-1"} for _m, _p, ctx in core.calls)
     # The task's browser stays registered and open for the task's next step.
     assert scope.sessions == {"workflow-exec-1": task_browser}
@@ -465,6 +515,7 @@ async def test_failed_navigation_closes_its_tab_and_does_not_relaunch(monkeypatc
     assert tab_actions == [
         {"action": "list"},
         {"action": "new", "url": "https://erp.example/"},
+        {"action": "list"},
         {"action": "list"},
         {"action": "close", "index": 2},
         {"action": "switch", "index": 1},
@@ -530,3 +581,116 @@ async def test_real_core_tab_module_restores_the_operator_page(monkeypatch, chro
     assert driver.page is operator_page, "the operator's page is current again"
     assert context.pages == [operator_page], "the inspection tab is closed"
     assert ("browser.tab", "switch") in calls
+
+
+@pytest.mark.asyncio
+async def test_fetch_issued_at_boot_holds_the_settle_until_it_lands(monkeypatch, chromium_page):
+    # The second review's probe: the fetch starts before inspect_page can
+    # inject anything, the nav link already counts as a control, and there
+    # is no spinner. In-page counting alone settled at ~200 ms without the form.
+    await _serve(chromium_page, EARLY_FETCH, delayed={"/api/form": (FORM_FRAGMENT, "text/html")}, delay_s=0.8)
+
+    core, result = await _inspect_fixture(
+        monkeypatch, chromium_page, None, wait_ms=3000, url="https://app.test/",
+    )
+
+    assert result["ok"] is True
+    assert {"home", "email", "login"} <= _ids(result), "the boot-time fetch must be waited on"
+    settle = result["data"]["settle"]
+    assert settle["network"] == "idle"
+    assert settle["by"] == "quiet"
+    # The response landing is what ended the network gate: it cannot have
+    # returned before the 800 ms response, and it did not run to the bound.
+    assert 800 <= settle["network_ms"] < 3000
+    assert "browser.wait" not in core.calls
+
+
+@pytest.mark.asyncio
+async def test_idle_network_returns_at_once_on_a_loaded_page(monkeypatch, chromium_page):
+    await _serve(chromium_page, STATIC_PAGE)
+
+    _core, result = await _inspect_fixture(
+        monkeypatch, chromium_page, None, wait_ms=3000, url="https://app.test/",
+    )
+
+    settle = result["data"]["settle"]
+    assert settle["network"] == "idle"
+    # Playwright's own idle definition (500 ms with no request), never the bound.
+    assert settle["network_ms"] < 1500
+    assert {"q", "go"} <= _ids(result)
+
+
+@pytest.mark.asyncio
+async def test_network_that_never_idles_is_read_at_the_bound(monkeypatch, chromium_page):
+    await _serve(chromium_page, EARLY_FETCH, delayed={"/api/form": (FORM_FRAGMENT, "text/html")}, delay_s=5)
+
+    core, result = await _inspect_fixture(
+        monkeypatch, chromium_page, None, wait_ms=700, url="https://app.test/",
+    )
+
+    assert result["ok"] is True, "reaching wait_ms is a settled page, not an error"
+    settle = result["data"]["settle"]
+    assert settle["by"] == "cap"
+    assert settle["pending"] == "network"
+    assert settle["network"] == "busy"
+    assert 650 <= settle["network_ms"] < 1200
+    # The bound is shared, not paid again inside the page.
+    assert core.evaluate_seconds < 0.3
+    assert "home" in _ids(result)
+
+
+@pytest.mark.asyncio
+async def test_tailwind_spinner_counts_as_busy(monkeypatch, chromium_page):
+    _core, result = await _inspect_fixture(monkeypatch, chromium_page, TAILWIND_SPINNER, wait_ms=2000)
+
+    assert result["ok"] is True
+    assert "email" in _ids(result), "an animate-spin svg must hold the settle"
+    assert result["data"]["settle"]["by"] == "quiet"
+
+
+@pytest.mark.asyncio
+async def test_driver_without_a_page_keeps_the_in_page_settle(monkeypatch):
+    # RecordingCore registers a bare object, as a non-Core driver would.
+    core = RecordingCore()
+    _install_core(monkeypatch, core)
+    _forbid_sleep(monkeypatch)
+
+    result = await inspect_page("https://example.com", wait_ms=2000)
+
+    assert result["ok"] is True
+    assert core.modules().count("browser.evaluate") == 1
+
+
+@pytest.mark.asyncio
+async def test_exception_after_the_tab_opened_still_closes_it(monkeypatch, task_scope):
+    scope, task_browser = task_scope
+    core = RecordingCore(evaluate_raises=True)
+    _install_core(monkeypatch, core)
+
+    await inspect_page("https://erp.example/", wait_ms=500)
+
+    tab_calls = [params for module, params, ctx in core.calls if module == "browser.tab" and ctx]
+    assert {"action": "close", "index": 2} in tab_calls
+    assert {"action": "switch", "index": 1} in tab_calls
+    # Only the inspection tab went; the operator's two tabs are untouched.
+    assert core.tab_count == 2
+    assert scope.sessions == {"workflow-exec-1": task_browser}
+
+
+@pytest.mark.asyncio
+async def test_popup_raised_by_the_inspected_page_is_closed(monkeypatch, task_scope):
+    _scope, _task_browser = task_scope
+    core = RecordingCore(evaluate_opens_popup=True)
+    _install_core(monkeypatch, core)
+    _forbid_sleep(monkeypatch)
+
+    result = await inspect_page("https://erp.example/orders", wait_ms=2000)
+
+    assert result["ok"] is True
+    tab_actions = [params for module, params, _ctx in core.calls if module == "browser.tab"]
+    assert tab_actions[-3:] == [
+        {"action": "close", "index": 3},
+        {"action": "close", "index": 2},
+        {"action": "switch", "index": 1},
+    ]
+    assert core.tab_count == 2

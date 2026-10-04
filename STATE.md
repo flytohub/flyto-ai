@@ -1,5 +1,16 @@
 # State
 
+## One-call form filling guidance (2026-10-04)
+
+When the installed Core registers `browser.fill_form` (flyto-core 2.38.0),
+`get_browser_status()` and the `execute_module` tool description tell the
+agent to read a form once and fill it with one `browser.fill_form` call; the
+Cloud space-task agent reads both. Core's contract for the module is
+`controlled` without `actuates`, which `grade_module_contract` grades
+`WORKSPACE_WRITE` (risk 3), the same tier as the per-field `browser.type` it
+replaces. CI's Core lock is unchanged, so CI exercises the guidance with fakes;
+see `handoffs/2026-10-04-fill-form-guidance.md`.
+
 ## Contract-aware grading and pack capability groups (2026-10-04)
 
 `execute_module` reads a module's capability contract through Core's

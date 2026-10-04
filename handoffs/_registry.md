@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-10-04 | One-call form filling guidance (browser.fill_form) | 2026-10-04-fill-form-guidance.md |
 <<<<<<< HEAD
 | 2026-10-04 | Contract-aware grading and pack capability groups | 2026-10-04-pack-capability-grouping.md |
 =======

@@ -37,10 +37,15 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from flyto_ai.permissions import grade_module_contract
+
 RECOVERY_KEY = "recovery"
 GUIDANCE_VERSION = "flyto.ai.contract-recovery-guidance.v1"
 SOURCE_CONTRACT = "contract"
 SOURCE_NONE = "none"
+
+# Grades of a contract the grader could not read; its recovery is not trusted.
+_UNTRUSTED_GRADES = frozenset({"missing_contract", "invalid_contract"})
 
 # The registry's bounded identifier grammar (flyto.capability-contract.v1).
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
@@ -79,6 +84,11 @@ def declared_recovery(contract: Any) -> Optional[RecoveryDeclaration]:
     an alternative action.
     """
     if not isinstance(contract, Mapping):
+        return None
+    # A contract the grader rejects (and so treats as actuating) declares
+    # nothing else either: its substitute list is not authority.
+    grade = grade_module_contract({"plugin": "-", "contract": contract})
+    if grade is None or grade.source in _UNTRUSTED_GRADES:
         return None
     raw = contract.get(RECOVERY_KEY)
     if not isinstance(raw, Mapping):

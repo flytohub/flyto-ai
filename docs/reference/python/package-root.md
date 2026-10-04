@@ -1918,60 +1918,60 @@ Load layered config: global → agent-specific.
 
 `class RecoveryDeclaration`
 
-Source: [`flyto_ai/contract_recovery.py:54`](../../../flyto_ai/contract_recovery.py#L54)
+Source: [`flyto_ai/contract_recovery.py:59`](../../../flyto_ai/contract_recovery.py#L59)
 
 The recovery part of one capability contract, normalized.
 
 | Method | Visibility | Purpose | Source |
 |---|---|---|---|
-| `to_dict() -> Dict[str, Any]` | public | Serialize `RecoveryDeclaration` to a dictionary. | [`flyto_ai/contract_recovery.py:60`](../../../flyto_ai/contract_recovery.py#L60) |
+| `to_dict() -> Dict[str, Any]` | public | Serialize `RecoveryDeclaration` to a dictionary. | [`flyto_ai/contract_recovery.py:65`](../../../flyto_ai/contract_recovery.py#L65) |
 
 ### `_identifier` (internal)
 
 `_identifier(value: Any) -> str`
-Source: [`flyto_ai/contract_recovery.py:64`](../../../flyto_ai/contract_recovery.py#L64)
+Source: [`flyto_ai/contract_recovery.py:69`](../../../flyto_ai/contract_recovery.py#L69)
 
 Internal `_identifier` implementation on this module; the linked source is authoritative.
 
 ### `declared_recovery` (public)
 
 `declared_recovery(contract: Any) -> Optional[RecoveryDeclaration]`
-Source: [`flyto_ai/contract_recovery.py:74`](../../../flyto_ai/contract_recovery.py#L74)
+Source: [`flyto_ai/contract_recovery.py:79`](../../../flyto_ai/contract_recovery.py#L79)
 
 Return the contract's recovery declaration, or ``None``.
 
 ### `core_supports_recovery` (public)
 
 `core_supports_recovery() -> bool`
-Source: [`flyto_ai/contract_recovery.py:112`](../../../flyto_ai/contract_recovery.py#L112)
+Source: [`flyto_ai/contract_recovery.py:122`](../../../flyto_ai/contract_recovery.py#L122)
 
 Whether the installed flyto-core accepts a ``recovery`` contract key.
 
 ### `_module_capability` (internal)
 
 `_module_capability(module: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/contract_recovery.py:138`](../../../flyto_ai/contract_recovery.py#L138)
+Source: [`flyto_ai/contract_recovery.py:148`](../../../flyto_ai/contract_recovery.py#L148)
 
 Internal `_module_capability` implementation on this module; the linked source is authoritative.
 
 ### `_offer` (internal)
 
 `_offer(module: Mapping[str, Any]) -> Dict[str, Any]`
-Source: [`flyto_ai/contract_recovery.py:143`](../../../flyto_ai/contract_recovery.py#L143)
+Source: [`flyto_ai/contract_recovery.py:153`](../../../flyto_ai/contract_recovery.py#L153)
 
 Internal `_offer` implementation on this module; the linked source is authoritative.
 
 ### `recovery_guidance` (public)
 
 `recovery_guidance(failed_capability: str, candidates: Iterable[Mapping[str, Any]]) -> Dict[str, Any]`
-Source: [`flyto_ai/contract_recovery.py:154`](../../../flyto_ai/contract_recovery.py#L154)
+Source: [`flyto_ai/contract_recovery.py:164`](../../../flyto_ai/contract_recovery.py#L164)
 
 Build recovery guidance for one failed capability.
 
 ### `render_recovery_guidance` (public)
 
 `render_recovery_guidance(guidance: Mapping[str, Any]) -> str`
-Source: [`flyto_ai/contract_recovery.py:206`](../../../flyto_ai/contract_recovery.py#L206)
+Source: [`flyto_ai/contract_recovery.py:216`](../../../flyto_ai/contract_recovery.py#L216)
 
 Render guidance as domain-neutral planner text.
 

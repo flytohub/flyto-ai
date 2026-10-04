@@ -88,6 +88,26 @@ def test_malformed_or_empty_declaration_fails_closed(recovery):
     assert declared_recovery(contract) is None
 
 
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"recovery": RECOVERY},
+        {"actuates": "yes", "safety_class": "movement", "requires_safe_stop": True,
+         "cancellable": True, "recovery": RECOVERY},
+        {"actuates": True, "safety_class": "unknown", "requires_safe_stop": True,
+         "cancellable": True, "recovery": RECOVERY},
+    ],
+)
+def test_recovery_from_an_unreadable_contract_is_not_trusted(broken):
+    assert declared_recovery(broken) is None
+    guidance = recovery_guidance(
+        "lift.move",
+        [_module("lift.move", contract=broken), _module("lift.reroute", contract=_contract())],
+    )
+    assert guidance["source"] == "none"
+    assert guidance["substitutes"] == []
+
+
 def test_non_mapping_contract():
     assert declared_recovery(None) is None
     assert declared_recovery(["recovery"]) is None

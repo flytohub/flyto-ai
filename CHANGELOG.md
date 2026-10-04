@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The agent is told to fill a web form with one `browser.fill_form` call when
+  the installed flyto-core provides it (2.38.0+): the running-browser prompt
+  hint (`get_browser_status`) and the `execute_module` tool description carry
+  "read the form once, then call browser.fill_form once with every field,
+  upload and the submit", so the path is visible without `search_modules`.
+  Presence is read from Core's `get_module_info` (`core_provides_module`); an
+  older Core gets no mention. Filling field by field cost one model round-trip
+  per field.
 - Planning no longer names a provider. The capability router stops inferring a
   `flyto-robotics` source from a `robotics.` identifier prefix (unsourced
   manifests are `external`), and filters resource compatibility with neutral

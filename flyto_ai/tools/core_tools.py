@@ -175,6 +175,9 @@ def _enrich_core_tool_def(tool_def: Dict[str, Any]) -> Dict[str, Any]:
     tool = deepcopy(tool_def)
     name = tool.get("name", "")
     tool.setdefault("description", "")
+    if name == "execute_module":
+        from flyto_ai.tools.form_guidance import execute_module_description
+        tool["description"] = execute_module_description(str(tool["description"]))
     tool.setdefault("inputSchema", {"type": "object", "properties": {}})
     tool["annotations"] = _tool_annotations(name)
     tool["metadata"] = {

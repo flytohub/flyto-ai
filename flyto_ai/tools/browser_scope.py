@@ -140,7 +140,8 @@ def get_browser_status() -> str:
     """Get a prompt hint about browser state for the LLM.
 
     Returns empty string if no browser running, or an instruction
-    telling the LLM to reuse the existing browser.
+    telling the LLM to reuse the existing browser -- and, when the installed
+    Core provides browser.fill_form, to fill a form with one call.
     """
     from flyto_ai.tools import core_tools
     with core_tools._browser_sessions_lock:
@@ -158,4 +159,7 @@ def get_browser_status() -> str:
                 " There is exactly one browser in this scope. Omit context.browser_session "
                 "and context.browser so Core selects this existing browser automatically."
             )
-        return hint
+    from flyto_ai.tools import form_guidance
+    if form_guidance.core_provides_module(form_guidance.FILL_FORM_MODULE):
+        hint += " " + form_guidance.FILL_FORM_GUIDANCE
+    return hint

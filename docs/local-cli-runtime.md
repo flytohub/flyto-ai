@@ -139,6 +139,15 @@ transport errors are not format corrections. No model is switched and no
 completed action is replayed automatically. Raw provider answers are never
 logged as validation diagnostics.
 
+Claude Code asks for its JSON-schema formatter itself when a turn ends in prose:
+it appends a synthetic user message (`isSynthetic: true`) holding only text
+(`[structured-output-enforce] You MUST call the StructuredOutput tool ...`),
+and the model answers again. That message carries no tool result, so it cannot
+acknowledge any action, and the reader accepts it. Any tool result in it, any
+non-text block, or a text-only user message the CLI did not mark synthetic is
+still `cli_native_action_refused`. Before 2026-10-05 this reminder was read as
+a native action and failed a slice that had proposed nothing.
+
 Errors expose fixed codes, not stdout/stderr or credentials. Examples include
 `cli_auth_required`, `cli_quota_exhausted`, `cli_timeout`,
 `cli_native_action_refused`, `cli_native_tools_exposed`, and

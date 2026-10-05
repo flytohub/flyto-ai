@@ -23,6 +23,23 @@ def failure_code(value) -> str:
     return "cli_provider_failed"
 
 
+def _cli_reminder(event, content) -> bool:
+    """Text the CLI itself injects into the turn, which acknowledges nothing.
+
+    When a turn ends in prose instead of the JSON-schema formatter, Claude
+    Code appends a synthetic user message (``isSynthetic``) holding only text
+    that asks for the formatter, and the model answers again. It carries no
+    tool result, so it cannot report that any tool ran; reading it as a
+    native action failed a slice that had proposed nothing. Any tool result,
+    and any block other than text, keeps the strict path below.
+    """
+    return event.get("isSynthetic") is True and all(
+        isinstance(block, dict) and set(block) == {"type", "text"}
+        and block["type"] == "text" and isinstance(block["text"], str)
+        for block in content
+    )
+
+
 class EventReader:
     """The CLI's answer is a proposed decision, never an action receipt."""
 
@@ -91,6 +108,8 @@ class EventReader:
             content = (event.get("message") or {}).get("content", [])
             if not isinstance(content, list) or not content:
                 raise CliRuntimeError("cli_invalid_output")
+            if _cli_reminder(event, content):
+                return
             for block in content:
                 if (not isinstance(block, dict) or block.get("type") != "tool_result"
                         or block.get("tool_use_id") not in self._structured_calls):

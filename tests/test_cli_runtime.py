@@ -290,6 +290,22 @@ async def test_native_action_event_aborts_without_accepting_later_success(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_prose_turn_reminded_by_the_cli_still_completes(tmp_path):
+    # The live sequence of a turn that answered in prose first: the CLI's own
+    # synthetic reminder, then the formatter call it asked for.
+    command = binary(tmp_path, '''
+        emit({'type':'assistant','message':{'content':[{'type':'text','text':'Map reported.'}]}})
+        emit({'type':'user','isSynthetic':True,'message':{'role':'user','content':[{'type':'text',
+              'text':'[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request.'}]}})
+        emit({'type':'assistant','message':{'content':[{'type':'tool_use','id':'toolu_1','name':'StructuredOutput','input':{}}]}})
+        emit({'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'toolu_1','content':'ok'}]}})
+        finish({'content':'Map reported.','tool_calls':[]})
+    ''')
+    text = await complete_json(CliRuntimeConfig("claude_cli", command=command), prompt="Return JSON.", schema={"type": "object"})
+    assert json.loads(text) == {"content": "Map reported.", "tool_calls": []}
+
+
+@pytest.mark.asyncio
 async def test_installed_cli_without_required_protocol_is_not_ready(tmp_path):
     command = binary(tmp_path, "raise AssertionError('Inference must not launch')\n")
     text = Path(command).read_text().replace(" ".join(required_cli_flags("claude_cli")), " ".join(required_cli_flags("codex_cli")))

@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-10-05 | Claude CLI formatter reminder is not a native action (Owner: claude, Branch: claude/native-refusal) | 2026-10-05-cli-formatter-reminder.md |
 | 2026-10-04 | One-call form filling guidance (browser.fill_form) | 2026-10-04-fill-form-guidance.md |
 | 2026-10-04 | Provider-neutral planning and contract-declared recovery | 2026-10-04-provider-neutral-planning.md |
 | 2026-10-04 | Contract-aware grading and pack capability groups | 2026-10-04-pack-capability-grouping.md |

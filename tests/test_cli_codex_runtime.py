@@ -149,6 +149,41 @@ def test_claude_formatter_acknowledgement_is_bound_to_observed_call_id():
         reader.read(json.dumps({'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'foreign-execution','content':'claimed success'}]}}).encode())
 
 
+# Recorded from Claude Code 2.1.289 (2026-10-05) when a turn ended in prose:
+# the CLI asks for its formatter with a synthetic, text-only user message.
+_CLI_REMINDER = {'type': 'user', 'isSynthetic': True, 'parent_tool_use_id': None, 'session_id': 's', 'message': {
+    'role': 'user', 'content': [{'type': 'text', 'text': '[structured-output-enforce] You MUST call the '
+                                'StructuredOutput tool to complete this request. Call this tool now.'}]}}
+
+
+def test_claude_formatter_reminder_is_not_a_native_action():
+    from flyto_ai.cli_runtime.events import EventReader
+    reader = EventReader('claude_cli')
+    reader.read(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': 'Reported.'}]}}).encode())
+    reader.read(json.dumps(_CLI_REMINDER).encode())
+    reader.read(json.dumps({'type': 'assistant', 'message': {'content': [
+        {'type': 'tool_use', 'name': 'StructuredOutput', 'id': 'formatter-1', 'input': {}}]}}).encode())
+    reader.read(json.dumps({'type': 'user', 'message': {'content': [
+        {'type': 'tool_result', 'tool_use_id': 'formatter-1', 'content': 'accepted'}]}}).encode())
+    reader.read(json.dumps({'type': 'result', 'subtype': 'success', 'session_id': 's',
+                            'structured_output': {'content': 'Reported.', 'tool_calls': []}}).encode())
+    assert reader.result()[0] == {'content': 'Reported.', 'tool_calls': []}
+
+
+@pytest.mark.parametrize('event', [
+    {**_CLI_REMINDER, 'isSynthetic': False},
+    {key: value for key, value in _CLI_REMINDER.items() if key != 'isSynthetic'},
+    {**_CLI_REMINDER, 'message': {'content': [*_CLI_REMINDER['message']['content'],
+                                              {'type': 'tool_result', 'tool_use_id': 'foreign', 'content': 'ran'}]}},
+    {**_CLI_REMINDER, 'message': {'content': [{'type': 'image', 'source': {}}]}},
+    {**_CLI_REMINDER, 'message': {'content': [{'type': 'text', 'text': 'x', 'tool_use_id': 'foreign'}]}},
+])
+def test_only_a_synthetic_text_reminder_is_exempt(event):
+    from flyto_ai.cli_runtime.events import EventReader
+    with pytest.raises(CliRuntimeError, match='cli_native_action_refused'):
+        EventReader('claude_cli').read(json.dumps(event).encode())
+
+
 @pytest.mark.asyncio
 async def test_complete_json_byte_limit_is_not_character_count(tmp_path):
     cli=CliRuntimeConfig('codex_cli',command=codex_binary(tmp_path))

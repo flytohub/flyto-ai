@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The Claude CLI runtime no longer fails a slice with
+  `cli_native_action_refused` when Claude Code reminds the model to call its
+  JSON-schema formatter. A turn that ends in prose gets a synthetic, text-only
+  user message from the CLI (`isSynthetic: true`); it acknowledges no tool and
+  is now accepted. Tool results still have to answer an observed
+  StructuredOutput call, and any other user content is still refused.
+  Reproduced against the installed Claude Code 2.1.289.
 - `declared_recovery` now ignores the `recovery` key of a contract the grader
   cannot read (missing required keys, unknown `safety_class`, non-boolean
   `actuates`): a contract graded fail-closed declares no substitutes. Repaired

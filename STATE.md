@@ -32,7 +32,6 @@ This remains an advisory, attested planning boundary: execution authority stays
 with Cloud/Core capability admission and the external adapter, and plan success
 never decides Task completion.
 
-
 ## CLI correction across admitted slices (2026-09-20)
 
 A real Cloud actor failed with the fixed reason `arguments_json` on its fourth

@@ -17,7 +17,7 @@ from types import MappingProxyType
 # ``flyto.capability-plan.v1`` plan.
 PLANNER_REQUEST_CONTRACT = "flyto.robotics.planner-request.v2"
 
-# No compatibility window: no released Desktop reaches the lab planner (Flyto
+# No compatibility window: no released Desktop reaches the lab planner (Flyto2
 # Cloud imports neither it nor flyto-robotics' planner client), and the only v1
 # callers are flyto-robotics lab tools up to 0.6.6, run against a loopback
 # planner started beside them. Remove an entry once no supported flyto-robotics

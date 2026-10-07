@@ -9,8 +9,8 @@ Date: 2026-10-07
 - PR #64 renamed the plan to `flyto.capability-plan.v1` and `robot_id` to
   `resource_id`. This branch also bumps the request contract to
   `flyto.robotics.planner-request.v2` (its field changed) and refuses v1 by name
-  from `capability_router.RETIRED_PLANNER_REQUEST_CONTRACTS` through
-  `planner_contract_refusal()`, used by both `prepare_planner_request()` and
+  from `flyto_ai/planner_contract.py` (`RETIRED_PLANNER_REQUEST_CONTRACTS`) through
+  `require_planner_contract()`, used by both `prepare_planner_request()` and
   `robotics_planning.validate_request()`.
 - `tests/fixtures/capability-plan-exchange.v1.json` +
   `tests/test_capability_plan_exchange.py`: byte-identical copy of

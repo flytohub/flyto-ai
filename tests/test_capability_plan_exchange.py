@@ -17,11 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from flyto_ai.capability_router import (
+from flyto_ai.capability_router import CapabilityRoutingError, prepare_planner_request
+from flyto_ai.planner_contract import (
     PLANNER_REQUEST_CONTRACT,
     RETIRED_PLANNER_REQUEST_CONTRACTS,
-    CapabilityRoutingError,
-    prepare_planner_request,
 )
 from flyto_ai.robotics_planning import (
     PLAN_CONTRACT,

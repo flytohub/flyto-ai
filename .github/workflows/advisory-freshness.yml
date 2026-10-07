@@ -13,7 +13,7 @@ name: Advisory freshness
 # because an unrelated repository published an advisory an hour earlier, but
 # somebody does need to be told within a day.
 #
-# It is green when it lands. If it goes red, the fix is to raise the floors in
+# If it goes red, the fix is to raise the floors in
 # `pyproject.toml` and `../flyto-blueprint/pyproject.toml` to the version the
 # failure names -- a real, actionable red, not a dead-man switch nobody wired.
 
@@ -60,12 +60,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pytest only
-        run: python -m pip install --upgrade pip pytest
-
-      # The floor test reads the two pyprojects and Core's manifest off disk and
-      # imports nothing from this package, so it needs no install of flyto-ai
-      # itself and no sibling packages.
+      # The floor test itself reads the two pyprojects and Core's manifest off
+      # disk, but pytest loads `tests/conftest.py` first and that imports
+      # `flyto_ai`, which needs the package's base dependencies (pydantic among
+      # them). Install this checkout with no extras: its declared base
+      # dependencies are exactly what the import needs, and no extra pulls in
+      # Core, Blueprint or a browser. Hand-listing packages here is what kept
+      # this job red from the day it landed -- the list said "pytest only"
+      # while the conftest needed the package.
+      - name: Install flyto-ai (base dependencies) and pytest
+        run: python -m pip install --upgrade pip ./flyto-ai pytest
       - name: Floors must clear every advisory Core has published
         working-directory: flyto-ai
         run: >-

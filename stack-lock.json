@@ -4,12 +4,12 @@
     "flyto-blueprint": {
       "repository": "flytohub/flyto-blueprint",
       "path": "flyto-blueprint",
-      "revision": "b4228b61e0818e39d8ae2e7c565952728e042658"
+      "revision": "be6811f13deceb7af0d593ec387d6dd6b77321c3"
     },
     "flyto-core": {
       "repository": "flytohub/flyto-core",
       "path": "flyto-core",
-      "revision": "4a76d3dc7d273fe8a044e2f5aec8ce5e0f8af6bd"
+      "revision": "940c36862c14d79b94ba5c9040595de5a551def6"
     },
     "flyto-indexer": {
       "repository": "flytohub/flyto-indexer",

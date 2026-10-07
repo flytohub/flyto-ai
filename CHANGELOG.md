@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Core advisory floor 2.33.0
+
+- Raised the `flyto-core` floors (`browser`, `full`, `dev`) to `>=2.33.0`.
+  Core published six advisories on 2026-09-30 against `< 2.33.0`, three high
+  (SSRF via `base_url`, `env.set` secret disclosure, `HF_TOKEN` exfiltration).
+- The advisory-freshness workflow now installs this package before running
+  pytest; it had failed every scheduled run on `No module named 'pydantic'`
+  and never reached the gate it exists to run.
+
 ## Unreleased — Robotics capability-plan contract
 
 - Rename the structured Robotics plan to `flyto.capability-plan.v1` and use

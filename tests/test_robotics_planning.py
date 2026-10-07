@@ -18,7 +18,7 @@ from flyto_ai.robotics_planning import (
 
 def request_payload() -> dict:
     return {
-        "planner_contract": "flyto.robotics.planner-request.v1",
+        "planner_contract": "flyto.robotics.planner-request.v2",
         "instructions": "Use only shortlisted capabilities and stop safely.",
         "goal": "Go through one available branch and ask for approval.",
         "goal_frame": None,

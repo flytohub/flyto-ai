@@ -19,6 +19,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import islice
+from types import MappingProxyType
 from typing import Any
 
 CAPABILITY_ROUTE_VERSION = "flyto.capability-route.v1"
@@ -27,6 +28,36 @@ GOAL_FRAME_VERSION = "flyto.goal-frame.v1"
 GOAL_FRAME_REQUEST_VERSION = "flyto.goal-frame-request.v1"
 CAPABILITY_RETRIEVAL_VERSION = "flyto.ai.capability-retrieval-handoff.v2"
 CAPABILITY_RETRIEVAL_EVIDENCE_VERSION = "flyto.capability-retrieval-evidence.v1"
+
+# The planner request a lab caller sends. v2 names the commanded equipment
+# ``resource_id`` and asks for a ``flyto.capability-plan.v1`` plan.
+PLANNER_REQUEST_CONTRACT = "flyto.robotics.planner-request.v2"
+# Request contracts this planner refuses by name, each with what replaced it.
+# There is no compatibility window: no released Desktop reaches this planner
+# (Flyto Cloud imports neither it nor flyto-robotics' planner client), and the
+# only v1 callers are flyto-robotics lab tools up to 0.6.6, which run against a
+# loopback planner started beside them. Remove an entry once no supported
+# flyto-robotics release can send that contract.
+RETIRED_PLANNER_REQUEST_CONTRACTS: Mapping[str, str] = MappingProxyType(
+    {
+        "flyto.robotics.planner-request.v1": (
+            "robot_id became resource_id and plans became "
+            "flyto.capability-plan.v1; upgrade flyto-robotics to 0.7.0 or later"
+        ),
+    }
+)
+
+
+def planner_contract_refusal(value: object) -> str | None:
+    """Return why ``value`` is not the current planner request contract."""
+    if value == PLANNER_REQUEST_CONTRACT:
+        return None
+    if isinstance(value, str) and value in RETIRED_PLANNER_REQUEST_CONTRACTS:
+        return (
+            f"planner_contract {value} is retired: "
+            f"{RETIRED_PLANNER_REQUEST_CONTRACTS[value]}"
+        )
+    return f"planner_contract must be {PLANNER_REQUEST_CONTRACT}"
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,191}$")
 _RETRIEVAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]*$")
@@ -1753,8 +1784,9 @@ async def prepare_planner_request(
     blueprint_search: BlueprintSearch | None = None,
 ) -> dict[str, Any]:
     """Apply Flyto2 routing to a legacy lab planner request before dispatch."""
-    if request.get("planner_contract") != "flyto.robotics.planner-request.v1":
-        raise CapabilityRoutingError("unsupported planner_contract")
+    refusal = planner_contract_refusal(request.get("planner_contract"))
+    if refusal is not None:
+        raise CapabilityRoutingError(refusal)
     goal = request.get("goal")
     goal_frame = request.get("goal_frame")
     manifests = request.get("capabilities")

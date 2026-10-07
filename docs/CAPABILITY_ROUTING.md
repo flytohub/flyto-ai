@@ -160,8 +160,12 @@ rather than a raw provider or transport exception.
 
 ### Planner propagation
 
-`prepare_planner_request()` applies this boundary to the legacy lab contract
-`flyto.robotics.planner-request.v1`, kept only for released lab tooling;
+`prepare_planner_request()` applies this boundary to the lab contract
+`flyto.robotics.planner-request.v2`, which flyto-robotics 0.7.0 and later send.
+A `flyto.robotics.planner-request.v1` request (flyto-robotics up to 0.6.6, which
+named the equipment `robot_id`) is refused by name from
+`RETIRED_PLANNER_REQUEST_CONTRACTS`; no released Desktop reaches this planner, so
+there is no compatibility window;
 platform planning reads installed module packs and their capability contracts
 (see [Contract-declared recovery](#contract-declared-recovery)). It replaces the catalog with the verified
 shortlist before provider dispatch and attaches the full routing decision as

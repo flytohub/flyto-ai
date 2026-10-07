@@ -30,7 +30,9 @@ and emits `flyto.capability-plan.v1`. It no longer reuses the retired
 robot-local `flyto.robotics.plan.v1` identity or the ambiguous `robot_id` field.
 This remains an advisory, attested planning boundary: execution authority stays
 with Cloud/Core capability admission and the external adapter, and plan success
-never decides Task completion.
+never decides Task completion. Requests are `flyto.robotics.planner-request.v2`;
+v1 (flyto-robotics <= 0.6.6) is refused by name. flyto-robotics 0.7.0 is the
+matching client, held to the same exchange by a shared, digest-pinned fixture.
 
 ## CLI correction across admitted slices (2026-09-20)
 

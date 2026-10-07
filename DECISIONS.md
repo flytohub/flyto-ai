@@ -11,6 +11,15 @@ external adapter and Cloud policy choose where execution runs; the planner only
 proposes approved capabilities for the commanded resource. Reusing the old
 robot-local plan name made two different authority layers look like one.
 
+Amended 2026-10-07: the request field changed too, so the request contract is
+bumped to `flyto.robotics.planner-request.v2` rather than changing v1 in place.
+v1 is refused by name with an upgrade instruction, not accepted through a
+compatibility window: no released Desktop reaches this planner (Flyto Cloud
+imports neither it nor flyto-robotics' planner client), and its only v1 callers
+are flyto-robotics lab tools up to 0.6.6 run beside a loopback planner. The
+retired-contract table lists each refused version with its replacement; an
+entry is removed once no supported flyto-robotics release can send it.
+
 
 ## 2026-09-20 — Correct malformed intent without expanding action authority
 

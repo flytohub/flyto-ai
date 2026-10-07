@@ -1,0 +1,337 @@
+{
+  "about": "One request flyto-robotics sends and one plan flyto-ai's planner may return for it. Byte-identical copies live in flyto-robotics tests/fixtures/ and flyto-ai tests/fixtures/; each repo pins this file's sha256, so changing the wire contract fails both suites until both copies move together.",
+  "exchange": "flyto.robotics.planner-request.v2 -> flyto.capability-plan.v1",
+  "plan": {
+    "contract_version": "flyto.capability-plan.v1",
+    "generated_by": {
+      "kind": "llm",
+      "model": "planner-demo",
+      "provider": "flyto-ai"
+    },
+    "goal": "先去藍線終點，再去黃線終點，最後去紫線終點並安全停止。",
+    "plan_id": "semantic-location-sequence.v1",
+    "resource_id": "flyto-rover-sim-001",
+    "steps": [
+      {
+        "arguments": {
+          "location_id": "hospital.route.blue_end"
+        },
+        "capability": "navigate_to_location",
+        "on_failure": "request_replan",
+        "step_id": "route.blue",
+        "timeout_seconds": 30.0
+      },
+      {
+        "arguments": {
+          "location_id": "hospital.route.yellow_end"
+        },
+        "capability": "navigate_to_location",
+        "on_failure": "request_replan",
+        "step_id": "route.yellow",
+        "timeout_seconds": 30.0
+      },
+      {
+        "arguments": {
+          "location_id": "hospital.route.purple_end"
+        },
+        "capability": "navigate_to_location",
+        "on_failure": "request_replan",
+        "step_id": "route.purple",
+        "timeout_seconds": 30.0
+      },
+      {
+        "arguments": {
+          "seconds": 1.0
+        },
+        "capability": "safe_stop",
+        "on_failure": "abort",
+        "step_id": "stop.finish",
+        "timeout_seconds": 2.0
+      }
+    ]
+  },
+  "request": {
+    "capabilities": [
+      {
+        "affordances": [
+          "motion.navigate.semantic_location"
+        ],
+        "aliases": [
+          "navigate to saved location",
+          "go to remembered place",
+          "navigate by location id"
+        ],
+        "arguments": [
+          {
+            "description": "Stable map-scoped ID; trusted coordinates are resolved outside the planner.",
+            "name": "location_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "canonical_id": "robotics.motion.navigate_to_location@1",
+        "compatible_robots": [
+          "*"
+        ],
+        "control_class": "motion",
+        "description": "Resolve one stable semantic location ID through the trusted map store, then navigate to its stored pose.",
+        "domain": "robotics",
+        "effects": [
+          "robot.location.reached"
+        ],
+        "handled_events": [
+          "obstacle.detected",
+          "location.missing"
+        ],
+        "intent_ids": [
+          "route.navigate.location"
+        ],
+        "manifest_contract": "flyto.capability-manifest.v1",
+        "name": "navigate_to_location",
+        "negative_examples": [
+          "navigate to raw x y coordinates",
+          "follow a colored line"
+        ],
+        "positive_examples": [
+          "navigate to hospital.nurse_station.1",
+          "go to a previously remembered location"
+        ],
+        "recovery_capabilities": [
+          "safe_stop",
+          "ask_human"
+        ],
+        "required_observations": [
+          "odometry",
+          "minimum_range"
+        ],
+        "required_permissions": [
+          "location.read"
+        ],
+        "required_resources": [
+          "base_controller",
+          "semantic_map"
+        ],
+        "runtime_name": "navigate_to_location",
+        "safety_class": "motion_bounded",
+        "safety_notes": "The planner cannot provide x, y, or yaw. Compilation resolves the location_id against the configured map and fails closed on mismatch.",
+        "side_effects": [
+          "robot_motion"
+        ],
+        "tags": [
+          "semantic-map",
+          "saved-location",
+          "named-place"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "affordances": [
+          "safety.stop.motion"
+        ],
+        "aliases": [
+          "safe stop",
+          "stop",
+          "emergency stop",
+          "安全停止",
+          "立即停止",
+          "停下來",
+          "煞停"
+        ],
+        "arguments": [
+          {
+            "default": 0.0,
+            "description": "",
+            "maximum": 300.0,
+            "minimum": 0.0,
+            "name": "seconds",
+            "required": false,
+            "type": "number"
+          }
+        ],
+        "canonical_id": "robotics.safety.safe_stop@1",
+        "compatible_robots": [
+          "*"
+        ],
+        "control_class": "safety",
+        "description": "Stop motion and optionally hold the stopped state.",
+        "domain": "robotics",
+        "effects": [
+          "robot.motion.stopped"
+        ],
+        "handled_events": [
+          "emergency.requested",
+          "human.detected",
+          "obstacle.detected"
+        ],
+        "intent_ids": [
+          "safety.stop"
+        ],
+        "manifest_contract": "flyto.capability-manifest.v1",
+        "name": "safe_stop",
+        "negative_examples": [],
+        "positive_examples": [
+          "最後安全停止",
+          "stop immediately"
+        ],
+        "recovery_capabilities": [],
+        "required_observations": [],
+        "required_permissions": [],
+        "required_resources": [],
+        "runtime_name": "safe_stop",
+        "safety_class": "safety_stop",
+        "safety_notes": "Always emits zero velocity and cannot be bypassed by the planner.",
+        "side_effects": [],
+        "tags": [
+          "stop",
+          "safety",
+          "emergency",
+          "停止",
+          "安全",
+          "煞停"
+        ],
+        "version": "1.0.0"
+      }
+    ],
+    "capability_route": {
+      "candidates": [
+        {
+          "canonical_id": "robotics.motion.navigate_to_location@1",
+          "reasons": [
+            "intent_match",
+            "affordance_match",
+            "effect_match"
+          ],
+          "runtime_name": "navigate_to_location",
+          "score": 36.0,
+          "selected_by": "deterministic_semantic_frame_v1"
+        },
+        {
+          "canonical_id": "robotics.safety.safe_stop@1",
+          "reasons": [
+            "effect_match"
+          ],
+          "runtime_name": "safe_stop",
+          "score": 8.0,
+          "selected_by": "deterministic_semantic_frame_v1"
+        }
+      ],
+      "confidence": 1.0,
+      "contract_version": "flyto.capability-route.v1",
+      "excluded": [],
+      "excluded_count": 0,
+      "goal_frame": {
+        "constraints": [
+          {
+            "key": "route.location.sequence",
+            "operator": "ordered",
+            "value": [
+              "hospital.route.blue_end",
+              "hospital.route.yellow_end",
+              "hospital.route.purple_end"
+            ]
+          }
+        ],
+        "contract_version": "flyto.goal-frame.v1",
+        "desired_effects": [
+          "robot.location.reached",
+          "robot.motion.stopped"
+        ],
+        "intent_ids": [
+          "route.navigate.location"
+        ],
+        "required_affordances": [
+          "motion.navigate.semantic_location"
+        ],
+        "trigger_events": []
+      },
+      "needs_clarification": false,
+      "registry_snapshot": "sha256:8b8a4129eec5c52a7ab851371d5d3cf0873476ee3043b4266ea5241d88c07e65",
+      "routing_context": {},
+      "selection_method": "hard_filter_then_semantic_frame_rank_v1",
+      "semantic_coverage": {
+        "matched": [
+          "affordance:motion.navigate.semantic_location",
+          "effect:robot.location.reached",
+          "effect:robot.motion.stopped",
+          "intent:route.navigate.location"
+        ],
+        "missing": [],
+        "ratio": 1.0,
+        "required": [
+          "affordance:motion.navigate.semantic_location",
+          "effect:robot.location.reached",
+          "effect:robot.motion.stopped",
+          "intent:route.navigate.location"
+        ]
+      }
+    },
+    "goal": "先去藍線終點，再去黃線終點，最後去紫線終點並安全停止。",
+    "goal_frame": {
+      "constraints": [
+        {
+          "key": "route.location.sequence",
+          "operator": "ordered",
+          "value": [
+            "hospital.route.blue_end",
+            "hospital.route.yellow_end",
+            "hospital.route.purple_end"
+          ]
+        }
+      ],
+      "contract_version": "flyto.goal-frame.v1",
+      "desired_effects": [
+        "robot.location.reached",
+        "robot.motion.stopped"
+      ],
+      "intent_ids": [
+        "route.navigate.location"
+      ],
+      "required_affordances": [
+        "motion.navigate.semantic_location"
+      ],
+      "trigger_events": []
+    },
+    "instructions": "Return one JSON object only using flyto.capability-plan.v1. Select and order only the shortlisted capabilities below and emit each capability's runtime_name in plan steps. Never emit wheel speeds, PWM, shell commands, ROS topics, source code, canonical IDs, or unregistered tools. Every motion plan must end with safe_stop. For navigate_to_location, select only one location_id from observations.semantic_map and never emit x, y, or yaw. Use ask_human followed by matching resume when capability_route.needs_clarification is true or the goal requires approval. Use request_replan when runtime observations may require a new semantic plan.",
+    "observations": {
+      "semantic_map": {
+        "contract_version": "flyto.robotics.semantic-location-catalog.v1",
+        "locations": [
+          {
+            "labels": [
+              "藍線終點",
+              "Blue route endpoint",
+              "青ルート終点"
+            ],
+            "location_id": "hospital.route.blue_end"
+          },
+          {
+            "labels": [
+              "紫線終點",
+              "Purple route endpoint",
+              "紫ルート終点"
+            ],
+            "location_id": "hospital.route.purple_end"
+          },
+          {
+            "labels": [
+              "黃線終點",
+              "Yellow route endpoint",
+              "黄ルート終点"
+            ],
+            "location_id": "hospital.route.yellow_end"
+          }
+        ],
+        "map_id": "gazebo.atomic-color-route.v1",
+        "revision": 1
+      }
+    },
+    "planner_contract": "flyto.robotics.planner-request.v2",
+    "resource_id": "flyto-rover-sim-001"
+  },
+  "sources": {
+    "goal_frame": "examples/goal-frames/semantic-location-sequence.json",
+    "plan": "examples/plans/semantic-location-sequence.json",
+    "semantic_map": "examples/maps/atomic-color-route.json",
+    "semantic_map_id": "gazebo.atomic-color-route.v1"
+  }
+}

@@ -2,11 +2,12 @@
 # Licensed under the Apache License, Version 2.0
 """Bounded structured planning adapter for the legacy lab robotics contracts.
 
-Legacy lab protocol (``flyto.robotics.planner-request.v1``). It is kept only so
-released flyto-robotics lab tooling keeps working over its loopback HTTP
-boundary. Platform planning does not go through this module: Flyto2 hosts plan
-from installed module packs and their declared capability contracts
-(``flyto_ai.tools.pack_tools`` and ``flyto_ai.contract_recovery``), and no
+Lab protocol (``flyto.robotics.planner-request.v2`` in, a
+``flyto.capability-plan.v1`` plan out) served to flyto-robotics lab tooling over
+its loopback HTTP boundary; v1 requests are refused by name (see
+``capability_router.RETIRED_PLANNER_REQUEST_CONTRACTS``). Platform planning
+does not go through this module: Flyto2 hosts plan from installed module packs
+and their declared capability contracts (``flyto_ai.tools.pack_tools`` and ``flyto_ai.contract_recovery``), and no
 generic module may import from here.
 """
 
@@ -25,9 +26,10 @@ from typing import Any
 # Re-exported for released callers that imported the provider boundary from
 # this module; the boundary itself is provider- and domain-neutral.
 from .structured_provider import StructuredJsonProvider
+from .capability_router import PLANNER_REQUEST_CONTRACT, planner_contract_refusal
 
 
-REQUEST_CONTRACT = "flyto.robotics.planner-request.v1"
+REQUEST_CONTRACT = PLANNER_REQUEST_CONTRACT
 PLAN_CONTRACT = "flyto.capability-plan.v1"
 RESPONSE_CONTRACT = "flyto.ai.robotics-plan-response.v1"
 ATTESTATION_CONTRACT = "flyto.ai.robotics-planning-attestation.v1"
@@ -168,8 +170,9 @@ def validate_request(value: object) -> ValidatedRequest:
     payload = dict(value)
     if len(_canonical(payload)) > MAX_REQUEST_BYTES:
         raise RoboticsPlanningError("planner request exceeds the byte limit")
-    if payload.get("planner_contract") != REQUEST_CONTRACT:
-        raise RoboticsPlanningError(f"planner_contract must be {REQUEST_CONTRACT}")
+    refusal = planner_contract_refusal(payload.get("planner_contract"))
+    if refusal is not None:
+        raise RoboticsPlanningError(refusal)
     _text(payload.get("goal"), "goal", 2000)
     _text(payload.get("resource_id"), "resource_id", 256)
     _text(payload.get("instructions"), "instructions", 16_000)

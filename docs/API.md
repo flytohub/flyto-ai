@@ -123,13 +123,15 @@ recorded without raw provider errors. This service interprets a challenge; it
 does not authorize execution or decide Task completion.
 
 `flyto_ai.robotics_planning.RoboticsPlanningService` accepts
-`flyto.robotics.planner-request.v1` and returns:
+`flyto.robotics.planner-request.v2` (the commanded equipment is `resource_id`)
+and returns:
 
 ```json
 {
   "contract_version": "flyto.ai.robotics-plan-response.v1",
   "plan": {
-    "contract_version": "flyto.robotics.plan.v1",
+    "contract_version": "flyto.capability-plan.v1",
+    "resource_id": "robot.test",
     "generated_by": {
       "kind": "llm",
       "provider": "flyto-ai",

@@ -2,6 +2,7 @@
 
 | Date | Topic | File |
 | --- | --- | --- |
+| 2026-10-07 | Capability-plan wire contract on both sides; planner request v2, v1 refused by name (Owner: claude, Branch: claude/capability-plan-contract) | 2026-10-07-capability-plan-wire-contract.md |
 | 2026-10-05 | Claude CLI formatter reminder is not a native action (Owner: claude, Branch: claude/native-refusal) | 2026-10-05-cli-formatter-reminder.md |
 | 2026-10-04 | One-call form filling guidance (browser.fill_form) | 2026-10-04-fill-form-guidance.md |
 | 2026-10-04 | Provider-neutral planning and contract-declared recovery | 2026-10-04-provider-neutral-planning.md |

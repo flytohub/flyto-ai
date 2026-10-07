@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Robotics capability-plan contract
+
+- Rename the structured Robotics plan to `flyto.capability-plan.v1` and use
+  `resource_id` for commanded equipment, removing the retired robot-local plan
+  identity from the AI planning boundary.
+- The planner request is now `flyto.robotics.planner-request.v2` (it carries
+  `resource_id`). A `flyto.robotics.planner-request.v1` request is refused by
+  name, before any discovery, from the declarative
+  `planner_contract.RETIRED_PLANNER_REQUEST_CONTRACTS` table, with an
+  instruction to upgrade flyto-robotics to 0.7.0. flyto-robotics 0.7.0 speaks
+  this contract; `tests/fixtures/capability-plan-exchange.v1.json` is shared
+  byte-identically with it and pinned by digest in both repos.
+
+
 ## Unreleased
 
 - The Claude CLI runtime no longer fails a slice with

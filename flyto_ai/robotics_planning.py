@@ -2,11 +2,12 @@
 # Licensed under the Apache License, Version 2.0
 """Bounded structured planning adapter for the legacy lab robotics contracts.
 
-Legacy lab protocol (``flyto.robotics.planner-request.v1``). It is kept only so
-released flyto-robotics lab tooling keeps working over its loopback HTTP
-boundary. Platform planning does not go through this module: Flyto2 hosts plan
-from installed module packs and their declared capability contracts
-(``flyto_ai.tools.pack_tools`` and ``flyto_ai.contract_recovery``), and no
+Lab protocol (``flyto.robotics.planner-request.v2`` in, a
+``flyto.capability-plan.v1`` plan out) served to flyto-robotics lab tooling over
+its loopback HTTP boundary; v1 requests are refused by name (see
+``planner_contract.RETIRED_PLANNER_REQUEST_CONTRACTS``). Platform planning
+does not go through this module: Flyto2 hosts plan from installed module packs
+and their declared capability contracts (``flyto_ai.tools.pack_tools`` and ``flyto_ai.contract_recovery``), and no
 generic module may import from here.
 """
 
@@ -25,10 +26,11 @@ from typing import Any
 # Re-exported for released callers that imported the provider boundary from
 # this module; the boundary itself is provider- and domain-neutral.
 from .structured_provider import StructuredJsonProvider
+from .planner_contract import PLANNER_REQUEST_CONTRACT, require_planner_contract
 
 
-REQUEST_CONTRACT = "flyto.robotics.planner-request.v1"
-PLAN_CONTRACT = "flyto.robotics.plan.v1"
+REQUEST_CONTRACT = PLANNER_REQUEST_CONTRACT
+PLAN_CONTRACT = "flyto.capability-plan.v1"
 RESPONSE_CONTRACT = "flyto.ai.robotics-plan-response.v1"
 ATTESTATION_CONTRACT = "flyto.ai.robotics-planning-attestation.v1"
 MAX_REQUEST_BYTES = 256 * 1024
@@ -168,10 +170,9 @@ def validate_request(value: object) -> ValidatedRequest:
     payload = dict(value)
     if len(_canonical(payload)) > MAX_REQUEST_BYTES:
         raise RoboticsPlanningError("planner request exceeds the byte limit")
-    if payload.get("planner_contract") != REQUEST_CONTRACT:
-        raise RoboticsPlanningError(f"planner_contract must be {REQUEST_CONTRACT}")
+    require_planner_contract(payload.get("planner_contract"), RoboticsPlanningError)
     _text(payload.get("goal"), "goal", 2000)
-    _text(payload.get("robot_id"), "robot_id", 256)
+    _text(payload.get("resource_id"), "resource_id", 256)
     _text(payload.get("instructions"), "instructions", 16_000)
     route = payload.get("capability_route")
     if not isinstance(route, Mapping):
@@ -428,7 +429,7 @@ def build_plan_schema(
         "properties": {
             "contract_version": {"type": "string", "const": PLAN_CONTRACT},
             "plan_id": {"type": "string", "minLength": 1, "maxLength": 256},
-            "robot_id": {"type": "string", "const": request.payload["robot_id"]},
+            "resource_id": {"type": "string", "const": request.payload["resource_id"]},
             "goal": {"type": "string", "const": request.payload["goal"]},
             "generated_by": {
                 "type": "object",
@@ -445,7 +446,7 @@ def build_plan_schema(
         "required": [
             "contract_version",
             "plan_id",
-            "robot_id",
+            "resource_id",
             "goal",
             "generated_by",
             "steps",
@@ -484,8 +485,8 @@ def validate_plan(
     normalized = dict(plan)
     if normalized.get("contract_version") != PLAN_CONTRACT:
         raise RoboticsPlanningError(f"contract_version must be {PLAN_CONTRACT}")
-    if normalized.get("robot_id") != request.payload["robot_id"]:
-        raise RoboticsPlanningError("plan robot_id does not match request")
+    if normalized.get("resource_id") != request.payload["resource_id"]:
+        raise RoboticsPlanningError("plan resource_id does not match request")
     if normalized.get("goal") != request.payload["goal"]:
         raise RoboticsPlanningError("plan goal does not match request")
     source = normalized.get("generated_by")

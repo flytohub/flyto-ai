@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
+from .planner_contract import require_planner_contract
+
 CAPABILITY_ROUTE_VERSION = "flyto.capability-route.v1"
 ROUTING_DECISION_VERSION = "flyto.capability-routing-decision.v1"
 GOAL_FRAME_VERSION = "flyto.goal-frame.v1"
@@ -1753,8 +1755,7 @@ async def prepare_planner_request(
     blueprint_search: BlueprintSearch | None = None,
 ) -> dict[str, Any]:
     """Apply Flyto2 routing to a legacy lab planner request before dispatch."""
-    if request.get("planner_contract") != "flyto.robotics.planner-request.v1":
-        raise CapabilityRoutingError("unsupported planner_contract")
+    require_planner_contract(request.get("planner_contract"), CapabilityRoutingError)
     goal = request.get("goal")
     goal_frame = request.get("goal_frame")
     manifests = request.get("capabilities")

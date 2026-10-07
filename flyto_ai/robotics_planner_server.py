@@ -2,8 +2,9 @@
 # Licensed under the Apache License, Version 2.0
 """Loopback HTTP boundary for the legacy lab robotics planner.
 
-Legacy lab protocol, kept so released flyto-robotics lab tooling keeps
-working. Flyto2 platform planning does not use it; see ``flyto_ai.robotics_planning``.
+Lab protocol for flyto-robotics lab tooling (0.7.0 and later speak
+``flyto.robotics.planner-request.v2``). Flyto2 platform planning does not use
+it; see ``flyto_ai.robotics_planning``.
 """
 
 from __future__ import annotations
